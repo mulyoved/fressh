@@ -18,6 +18,9 @@ coverage
 .next/
 out/
 dist
+# Allow pre-built dist folders for workspace packages (needed for EAS)
+!packages/react-native-xtermjs-webview/dist/
+!packages/react-native-xtermjs-webview/dist-internal/
 
 
 # Debug

@@ -8,8 +8,8 @@ pnpm-debug.log*
 lerna-debug.log*
 
 node_modules
-dist
-dist-internal
+# dist  # Commented out - need pre-built dist for EAS builds
+# dist-internal  # Commented out - need pre-built dist-internal for EAS builds
 dist-ssr
 *.local
 

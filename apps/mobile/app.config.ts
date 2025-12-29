@@ -32,7 +32,7 @@ const config: ExpoConfig = {
 		// }
 	},
 	android: {
-		package: 'dev.fressh.app',
+		package: 'com.finalapp.vibe2',
 		versionCode,
 		adaptiveIcon: {
 			foregroundImage: '../../packages/assets/android-adaptive-icon.png',
@@ -61,6 +61,11 @@ const config: ExpoConfig = {
 		'expo-dev-client',
 	],
 	experiments: { typedRoutes: true, reactCompiler: true },
+	extra: {
+		eas: {
+			projectId: '5e4aaebd-05a4-4032-adad-f3c27cc7ab71',
+		},
+	},
 };
 
 export default config;
