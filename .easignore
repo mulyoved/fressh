@@ -1,0 +1,35 @@
+# EAS Build ignore file
+# This is similar to .gitignore but controls what goes into EAS builds
+
+# Dependencies - these are installed on build servers
+node_modules
+
+# Build caches that shouldn't be uploaded
+.turbo
+.next/
+.vercel
+coverage
+.pnp
+.pnp.js
+
+# Debug files
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*.log
+
+# Misc
+.DS_Store
+*.pem
+tmp/
+**/tsconfig.tsbuildinfo
+dep-log.json
+mnt/*
+.direnv/
+.cache/
+
+# IMPORTANT: Do NOT ignore dist folders - we need pre-built JS for workspace packages
+# The following dist folders are required for EAS builds:
+# - packages/react-native-xtermjs-webview/dist/
+# - packages/react-native-xtermjs-webview/dist-internal/
+# - packages/react-native-uniffi-russh/lib/
