@@ -22,16 +22,17 @@ import React, {
 } from 'react';
 import {
 	KeyboardAvoidingView,
+	Platform,
 	Pressable,
 	Text,
 	View,
 	type StyleProp,
 	type ViewStyle,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { rootLogger } from '@/lib/logger';
 import { useSshStore } from '@/lib/ssh-store';
 import { useTheme } from '@/lib/theme';
-import { useBottomTabSpacing } from '@/lib/useBottomTabSpacing';
 import { useContextSafe } from '@/lib/utils';
 
 type IconName = keyof typeof Ionicons.glyphMap;
@@ -98,6 +99,7 @@ function ShellDetail() {
 
 	const router = useRouter();
 	const theme = useTheme();
+	const insets = useSafeAreaInsets();
 
 	const shell = useSshStore(
 		(s) => s.shells[`${connectionId}-${channelId}` as const],
@@ -119,8 +121,6 @@ function ShellDetail() {
 			if (xterm) xterm.flush();
 		};
 	}, [shell]);
-
-	const marginBottom = useBottomTabSpacing();
 
 	const [modifierKeysActive, setModifierKeysActive] = useState<
 		KeyboardToolbarModifierButtonProps[]
@@ -155,135 +155,89 @@ function ShellDetail() {
 
 	return (
 		<>
-			<View
+			<Stack.Screen options={{ headerShown: false }} />
+			<KeyboardAvoidingView
+				// On Android, window resizing already handles keyboard avoidance.
+				// Keep KeyboardAvoidingView behavior only for iOS.
+				behavior={Platform.OS === 'ios' ? 'height' : undefined}
+				keyboardVerticalOffset={0}
 				style={{
-					justifyContent: 'flex-start',
-					backgroundColor: theme.colors.background,
-					paddingTop: 2,
-					paddingLeft: 8,
-					paddingRight: 8,
-					paddingBottom: 0,
-					marginBottom,
 					flex: 1,
+					backgroundColor: theme.colors.background,
+					// Respect system status/navigation bars on Android.
+					paddingTop: Platform.OS === 'android' ? insets.top : 0,
+					// Keep a small breathing gap above the Android navigation bar.
+					paddingBottom: Platform.OS === 'android' ? insets.bottom + 4 : 0,
 				}}
 			>
-				<Stack.Screen
-					options={{
-						headerBackVisible: true,
-						title: `${connection?.connectionDetails.username}@${connection?.connectionDetails.host}`,
-						headerRight: () => (
-							<Pressable
-								accessibilityLabel="Close Shell"
-								hitSlop={10}
-								onPress={async () => {
-									logger.info('Close Shell button pressed');
-									if (!shell) return;
-									try {
-										await shell.close();
-									} catch (e) {
-										logger.warn('Failed to close shell', e);
-									}
-								}}
-								style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}
-							>
-								<Ionicons
-									name="close"
-									size={20}
-									color={theme.colors.textPrimary}
-								/>
-								<Text style={{ color: theme.colors.textPrimary }}>
-									Close Shell
-								</Text>
-							</Pressable>
-						),
-					}}
-				/>
-				<KeyboardAvoidingView
-					behavior="height"
-					keyboardVerticalOffset={120}
-					style={{ flex: 1, gap: 4 }}
-				>
-					<KeyboardToolBarContext value={toolbarContext}>
-						<View
-							style={{
-								flex: 1,
-								borderWidth: 2,
-								borderColor: theme.colors.border,
-							}}
-						>
-							<XtermJsWebView
-								ref={xtermRef}
-								style={{ flex: 1 }}
-								webViewOptions={{
-									// Prevent iOS from adding automatic top inset inside WebView
-									contentInsetAdjustmentBehavior: 'never',
-								}}
-								logger={{
-									log: logger.info,
-									// debug: logger.debug,
-									warn: logger.warn,
-									error: logger.error,
-								}}
-								xtermOptions={{
-									theme: {
-										background: theme.colors.background,
-										foreground: theme.colors.textPrimary,
-									},
-								}}
-								onInitialized={() => {
-									if (!shell) throw new Error('Shell not found');
+				{/* Provide toolbar context to buttons and modifier state. */}
+				<KeyboardToolBarContext.Provider value={toolbarContext}>
+					<XtermJsWebView
+						ref={xtermRef}
+						style={{ flex: 1 }}
+						webViewOptions={{
+							// Prevent iOS from adding automatic top inset inside WebView
+							contentInsetAdjustmentBehavior: 'never',
+						}}
+						logger={{
+							log: logger.info,
+							// debug: logger.debug,
+							warn: logger.warn,
+							error: logger.error,
+						}}
+						xtermOptions={{
+							theme: {
+								background: theme.colors.background,
+								foreground: theme.colors.textPrimary,
+							},
+						}}
+						onInitialized={() => {
+							if (!shell) throw new Error('Shell not found');
 
-									// Replay from head, then attach live listener
-									void (async () => {
-										const res = shell.readBuffer({ mode: 'head' });
-										logger.info('readBuffer(head)', {
-											chunks: res.chunks.length,
-											nextSeq: res.nextSeq,
-											dropped: res.dropped,
-										});
-										if (res.chunks.length) {
-											const chunks = res.chunks.map((c) => c.bytes);
-											const xr = xtermRef.current;
-											if (xr) {
-												xr.writeMany(chunks.map((c) => new Uint8Array(c)));
-												xr.flush();
-											}
+							// Replay from head, then attach live listener
+							void (async () => {
+								const res = shell.readBuffer({ mode: 'head' });
+								logger.info('readBuffer(head)', {
+									chunks: res.chunks.length,
+									nextSeq: res.nextSeq,
+									dropped: res.dropped,
+								});
+								if (res.chunks.length) {
+									const chunks = res.chunks.map((c) => c.bytes);
+									const xr = xtermRef.current;
+									if (xr) {
+										xr.writeMany(chunks.map((c) => new Uint8Array(c)));
+										xr.flush();
+									}
+								}
+								const id = shell.addListener(
+									(ev: ListenerEvent) => {
+										if ('kind' in ev) {
+											logger.warn('listener.dropped', ev);
+											return;
 										}
-										const id = shell.addListener(
-											(ev: ListenerEvent) => {
-												if ('kind' in ev) {
-													logger.warn('listener.dropped', ev);
-													return;
-												}
-												const chunk = ev;
-												const xr3 = xtermRef.current;
-												if (xr3) xr3.write(new Uint8Array(chunk.bytes));
-											},
-											{ cursor: { mode: 'seq', seq: res.nextSeq } },
-										);
-										logger.info('shell listener attached', id.toString());
-										listenerIdRef.current = id;
-									})();
-									// Focus to pop the keyboard (iOS needs the prop we set)
-									const xr2 = xtermRef.current;
-									if (xr2) xr2.focus();
-								}}
-								onData={(terminalMessage) => {
-									if (!shell) return;
-									const bytes = encoder.encode(terminalMessage);
-									sendBytes(bytes);
-								}}
-							/>
-						</View>
-						<KeyboardToolbar />
-					</KeyboardToolBarContext>
-				</KeyboardAvoidingView>
-			</View>
-			{/* <KeyboardToolbar
-				offset={{
-					opened: -80,
-				}}
-			/> */}
+										const chunk = ev;
+										const xr3 = xtermRef.current;
+										if (xr3) xr3.write(new Uint8Array(chunk.bytes));
+									},
+									{ cursor: { mode: 'seq', seq: res.nextSeq } },
+								);
+								logger.info('shell listener attached', id.toString());
+								listenerIdRef.current = id;
+							})();
+							// Focus to pop the keyboard (iOS needs the prop we set)
+							const xr2 = xtermRef.current;
+							if (xr2) xr2.focus();
+						}}
+						onData={(terminalMessage) => {
+							if (!shell) return;
+							const bytes = encoder.encode(terminalMessage);
+							sendBytes(bytes);
+						}}
+					/>
+					<KeyboardToolbar />
+				</KeyboardToolBarContext.Provider>
+			</KeyboardAvoidingView>
 		</>
 	);
 }
@@ -300,13 +254,10 @@ const KeyboardToolBarContext = createContext<KeyboardToolbarContextType | null>(
 );
 
 function KeyboardToolbar() {
-	const theme = useTheme();
 	return (
 		<View
 			style={{
 				height: 100,
-				borderWidth: 1,
-				borderColor: theme.colors.border,
 			}}
 		>
 			<KeyboardToolbarRow>

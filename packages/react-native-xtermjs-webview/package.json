@@ -42,10 +42,12 @@
     "lint": "eslint --fix --max-warnings 0 --report-unused-disable-directives .",
     "lint:check": "eslint --max-warnings 0 --report-unused-disable-directives .",
     "typecheck": "tsc --noEmit",
+    "build": "pnpm run build:main && pnpm run build:internal",
     "build:main": "tsc -b && vite build",
     "build:internal": "tsc -b && vite build --config vite.config.internal.ts",
     "dev": "vite --config vite.config.internal.ts",
     "preview": "vite preview",
+    "prepack": "pnpm run build",
     "release": "GITHUB_TOKEN=$(gh auth token) release-it",
     "release:dry": "release-it --dry-run"
   },

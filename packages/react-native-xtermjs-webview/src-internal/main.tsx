@@ -12,6 +12,7 @@ declare global {
 		terminal?: Terminal;
 		fitAddon?: FitAddon;
 		terminalWriteBase64?: (data: string) => void;
+		__FRESSH_XTERM_OPTIONS__?: ITerminalOptions;
 		ReactNativeWebView?: {
 			postMessage?: (data: string) => void;
 			injectedObjectJson?: () => string | undefined;
@@ -42,17 +43,41 @@ window.onload = () => {
 
 		const injectedObjectJson =
 			window.ReactNativeWebView?.injectedObjectJson?.();
-		if (!injectedObjectJson) {
+		let injectedObject: ITerminalOptions = {};
+		if (injectedObjectJson) {
+			try {
+				injectedObject = JSON.parse(injectedObjectJson) as ITerminalOptions;
+			} catch (err) {
+				if (window.__FRESSH_XTERM_OPTIONS__) {
+					injectedObject = window.__FRESSH_XTERM_OPTIONS__;
+					sendToRn({
+						type: 'debug',
+						message:
+							'injectedObjectJson invalid; using preloaded options',
+					});
+				} else {
+					sendToRn({
+						type: 'debug',
+						message: `injectedObjectJson invalid; using defaults (${String(
+							err,
+						)})`,
+					});
+				}
+			}
+		} else if (window.__FRESSH_XTERM_OPTIONS__) {
+			injectedObject = window.__FRESSH_XTERM_OPTIONS__;
 			sendToRn({
 				type: 'debug',
-				message: 'injectedObjectJson not found; ignoring duplicate boot',
+				message: 'injectedObjectJson not found; using preloaded options',
 			});
-			return;
+		} else {
+			sendToRn({
+				type: 'debug',
+				message: 'injectedObjectJson not found; using defaults',
+			});
 		}
 
 		window.__FRESSH_XTERM_BRIDGE__ = true;
-
-		const injectedObject = JSON.parse(injectedObjectJson) as ITerminalOptions;
 
 		// ---- Xterm setup
 		const term = new Terminal(injectedObject);
@@ -62,6 +87,23 @@ window.onload = () => {
 		const root = document.getElementById('terminal')!;
 		term.open(root);
 		fitAddon.fit();
+
+		const applyFontFamily = (family?: string) => {
+			if (!family) return;
+			const rootEl = (term.element ??
+				document.querySelector('.xterm')) as HTMLElement | null;
+			if (rootEl) rootEl.style.fontFamily = family;
+			const helper = document.querySelector(
+				'.xterm-helper-textarea',
+			) as HTMLElement | null;
+			if (helper) helper.style.fontFamily = family;
+			const measure = document.querySelector(
+				'.xterm-char-measure-element',
+			) as HTMLElement | null;
+			if (measure) measure.style.fontFamily = family;
+		};
+
+		applyFontFamily(injectedObject.fontFamily);
 
 		// Expose for debugging (typed)
 		window.terminal = term;
@@ -122,6 +164,7 @@ window.onload = () => {
 						delete newOpts.cols;
 						delete newOpts.rows;
 						term.options = newOpts;
+						applyFontFamily(newOpts.fontFamily);
 						if (
 							'theme' in newOpts &&
 							newOpts.theme &&

@@ -14,6 +14,7 @@ import {
 	type BridgeInboundMessage,
 	type BridgeOutboundMessage,
 } from './bridge';
+import { jetBrainsMonoTtfBase64 } from './jetbrains-mono';
 
 export { bStrToBinary, binaryToBStr };
 
@@ -22,6 +23,16 @@ type ITerminalOptions = import('@xterm/xterm').ITerminalOptions;
 type WebViewOptions = React.ComponentProps<typeof WebView>;
 
 const defaultCoalescingThreshold = 8 * 1024;
+const jetBrainsMonoStyleId = 'fressh-jetbrains-mono';
+const jetBrainsMonoFontCss = `
+@font-face {
+	font-family: 'JetBrains Mono';
+	src: url(data:font/ttf;base64,${jetBrainsMonoTtfBase64}) format('truetype');
+	font-weight: 400;
+	font-style: normal;
+	font-display: swap;
+}
+`;
 
 /**
  * Message from this pkg to calling RN
@@ -67,8 +78,11 @@ const defaultXtermOptions: Partial<ITerminalOptions> = {
 	convertEol: true,
 	scrollback: 10000,
 	cursorBlink: true,
-	fontFamily: 'Menlo, ui-monospace, monospace',
-	fontSize: 10,
+	// Tablet focus-mode defaults (JetBrains Mono preferred).
+	// Note: WebView must have the font available or it will fall back.
+	fontFamily:
+		'"JetBrains Mono", "Roboto Mono", ui-monospace, Menlo, Monaco, "Cascadia Mono", "Segoe UI Mono", monospace',
+	fontSize: 16,
 };
 
 type UserControllableWebViewProps = StrictOmit<
@@ -343,6 +357,33 @@ export function XtermJsWebView({
 		],
 	);
 
+	// Inject JetBrains Mono into the WebView document so xterm can use it reliably,
+	// and set the background early to avoid white flashes.
+	const injectedJavaScriptBeforeContentLoaded = useMemo(() => {
+		const backgroundScript = mergedXTermOptions.theme?.background
+			? `document.body.style.backgroundColor = '${mergedXTermOptions.theme.background}';`
+			: '';
+		const optionsScript = `window.__FRESSH_XTERM_OPTIONS__ = ${JSON.stringify(
+			mergedXTermOptions,
+		)};`;
+
+		return `
+			(function () {
+				var styleId = '${jetBrainsMonoStyleId}';
+				if (!document.getElementById(styleId)) {
+					var style = document.createElement('style');
+					style.id = styleId;
+					style.type = 'text/css';
+					style.textContent = ${JSON.stringify(jetBrainsMonoFontCss)};
+					(document.head || document.documentElement).appendChild(style);
+				}
+				${optionsScript}
+				${backgroundScript}
+			})();
+			true;
+		`;
+	}, [mergedXTermOptions]);
+
 	return (
 		<WebView
 			ref={webRef}
@@ -351,12 +392,7 @@ export function XtermJsWebView({
 			style={style}
 			injectedJavaScriptObject={mergedXTermOptions}
 			injectedJavaScriptBeforeContentLoaded={
-				mergedXTermOptions.theme?.background
-					? `
-					document.body.style.backgroundColor = '${mergedXTermOptions.theme.background}';
-					true;
-					`
-					: undefined
+				injectedJavaScriptBeforeContentLoaded
 			}
 			{...mergedWebViewOptions}
 		/>
