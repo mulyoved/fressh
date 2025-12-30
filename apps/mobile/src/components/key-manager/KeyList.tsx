@@ -1,6 +1,7 @@
 import { RnRussh } from '@fressh/react-native-uniffi-russh';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import * as DocumentPicker from 'expo-document-picker';
+import * as FileSystem from 'expo-file-system';
 import React from 'react';
 import { Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { secretsManager } from '@/lib/secrets-manager';
@@ -119,10 +120,10 @@ function ImportKeyCard({ onImported }: { onImported: () => void }) {
 		const canceled = 'canceled' in res ? res.canceled : false;
 		if (canceled) return;
 		const asset = res.assets?.[0];
-		const file = asset?.file;
-		if (!file) return;
+		if (!asset?.uri) return;
 		setFileName(asset.name ?? null);
-		const data = await file.text();
+		// Use expo-file-system to read file content (asset.file is Web API only)
+		const data = await FileSystem.readAsStringAsync(asset.uri);
 		setContent(data);
 		if (asset.name && (!label || label === 'Imported Key')) {
 			setLabel(String(asset.name).replace(/\.[^.]+$/, ''));
