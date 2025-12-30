@@ -217,6 +217,8 @@ uniffi_uniffi_russh_fn_func_generate_key_pair(RustBuffer key_type,
                                               RustCallStatus *uniffi_out_err);
 RustBuffer uniffi_uniffi_russh_fn_func_validate_private_key(
     RustBuffer private_key_content, RustCallStatus *uniffi_out_err);
+RustBuffer uniffi_uniffi_russh_fn_func_extract_public_key(
+    RustBuffer private_key_content, RustCallStatus *uniffi_out_err);
 RustBuffer ffi_uniffi_russh_rustbuffer_alloc(uint64_t size,
                                              RustCallStatus *uniffi_out_err);
 RustBuffer
@@ -347,6 +349,7 @@ void ffi_uniffi_russh_rust_future_complete_void(
 uint16_t uniffi_uniffi_russh_checksum_func_connect();
 uint16_t uniffi_uniffi_russh_checksum_func_generate_key_pair();
 uint16_t uniffi_uniffi_russh_checksum_func_validate_private_key();
+uint16_t uniffi_uniffi_russh_checksum_func_extract_public_key();
 uint16_t
 uniffi_uniffi_russh_checksum_method_connectprogresscallback_on_change();
 uint16_t
@@ -3664,6 +3667,17 @@ NativeUniffiRussh::NativeUniffiRussh(
             return this->cpp_uniffi_uniffi_russh_fn_func_validate_private_key(
                 rt, thisVal, args, count);
           });
+  props["ubrn_uniffi_uniffi_russh_fn_func_extract_public_key"] =
+      jsi::Function::createFromHostFunction(
+          rt,
+          jsi::PropNameID::forAscii(
+              rt, "ubrn_uniffi_uniffi_russh_fn_func_extract_public_key"),
+          2,
+          [this](jsi::Runtime &rt, const jsi::Value &thisVal,
+                 const jsi::Value *args, size_t count) -> jsi::Value {
+            return this->cpp_uniffi_uniffi_russh_fn_func_extract_public_key(
+                rt, thisVal, args, count);
+          });
   props["ubrn_ffi_uniffi_russh_rust_future_poll_u8"] =
       jsi::Function::createFromHostFunction(
           rt,
@@ -4270,6 +4284,19 @@ NativeUniffiRussh::NativeUniffiRussh(
                  const jsi::Value *args, size_t count) -> jsi::Value {
             return this
                 ->cpp_uniffi_uniffi_russh_checksum_func_validate_private_key(
+                    rt, thisVal, args, count);
+          });
+  props["ubrn_uniffi_uniffi_russh_checksum_func_extract_public_key"] =
+      jsi::Function::createFromHostFunction(
+          rt,
+          jsi::PropNameID::forAscii(
+              rt,
+              "ubrn_uniffi_uniffi_russh_checksum_func_extract_public_key"),
+          0,
+          [this](jsi::Runtime &rt, const jsi::Value &thisVal,
+                 const jsi::Value *args, size_t count) -> jsi::Value {
+            return this
+                ->cpp_uniffi_uniffi_russh_checksum_func_extract_public_key(
                     rt, thisVal, args, count);
           });
   props["ubrn_uniffi_uniffi_russh_checksum_method_connectprogresscallback_on_"
@@ -5289,6 +5316,22 @@ NativeUniffiRussh::cpp_uniffi_uniffi_russh_fn_func_validate_private_key(
   return uniffi::uniffi_russh::Bridging<RustBuffer>::toJs(rt, callInvoker,
                                                           value);
 }
+jsi::Value
+NativeUniffiRussh::cpp_uniffi_uniffi_russh_fn_func_extract_public_key(
+    jsi::Runtime &rt, const jsi::Value &thisVal, const jsi::Value *args,
+    size_t count) {
+  RustCallStatus status =
+      uniffi::uniffi_russh::Bridging<RustCallStatus>::rustSuccess(rt);
+  auto value = uniffi_uniffi_russh_fn_func_extract_public_key(
+      uniffi::uniffi_russh::Bridging<RustBuffer>::fromJs(rt, callInvoker,
+                                                         args[0]),
+      &status);
+  uniffi::uniffi_russh::Bridging<RustCallStatus>::copyIntoJs(
+      rt, callInvoker, status, args[count - 1]);
+
+  return uniffi::uniffi_russh::Bridging<RustBuffer>::toJs(rt, callInvoker,
+                                                          value);
+}
 jsi::Value NativeUniffiRussh::cpp_ffi_uniffi_russh_rust_future_poll_u8(
     jsi::Runtime &rt, const jsi::Value &thisVal, const jsi::Value *args,
     size_t count) {
@@ -5910,6 +5953,14 @@ NativeUniffiRussh::cpp_uniffi_uniffi_russh_checksum_func_validate_private_key(
     jsi::Runtime &rt, const jsi::Value &thisVal, const jsi::Value *args,
     size_t count) {
   auto value = uniffi_uniffi_russh_checksum_func_validate_private_key();
+
+  return uniffi_jsi::Bridging<uint16_t>::toJs(rt, callInvoker, value);
+}
+jsi::Value
+NativeUniffiRussh::cpp_uniffi_uniffi_russh_checksum_func_extract_public_key(
+    jsi::Runtime &rt, const jsi::Value &thisVal, const jsi::Value *args,
+    size_t count) {
+  auto value = uniffi_uniffi_russh_checksum_func_extract_public_key();
 
   return uniffi_jsi::Bridging<uint16_t>::toJs(rt, callInvoker, value);
 }

@@ -148,6 +148,9 @@ protected:
   jsi::Value cpp_uniffi_uniffi_russh_fn_func_validate_private_key(
       jsi::Runtime &rt, const jsi::Value &thisVal, const jsi::Value *args,
       size_t count);
+  jsi::Value cpp_uniffi_uniffi_russh_fn_func_extract_public_key(
+      jsi::Runtime &rt, const jsi::Value &thisVal, const jsi::Value *args,
+      size_t count);
   jsi::Value cpp_ffi_uniffi_russh_rust_future_poll_u8(jsi::Runtime &rt,
                                                       const jsi::Value &thisVal,
                                                       const jsi::Value *args,
@@ -315,6 +318,9 @@ protected:
       jsi::Runtime &rt, const jsi::Value &thisVal, const jsi::Value *args,
       size_t count);
   jsi::Value cpp_uniffi_uniffi_russh_checksum_func_validate_private_key(
+      jsi::Runtime &rt, const jsi::Value &thisVal, const jsi::Value *args,
+      size_t count);
+  jsi::Value cpp_uniffi_uniffi_russh_checksum_func_extract_public_key(
       jsi::Runtime &rt, const jsi::Value &thisVal, const jsi::Value *args,
       size_t count);
   jsi::Value
