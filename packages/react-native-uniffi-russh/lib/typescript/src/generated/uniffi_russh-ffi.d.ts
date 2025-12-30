@@ -39,9 +39,9 @@ interface NativeModuleInterface {
     ubrn_uniffi_uniffi_russh_fn_method_sshconnection_get_info(ptr: bigint, uniffi_out_err: UniffiRustCallStatus): Uint8Array;
     ubrn_uniffi_uniffi_russh_fn_method_sshconnection_start_shell(ptr: bigint, opts: Uint8Array): bigint;
     ubrn_uniffi_uniffi_russh_fn_func_connect(options: Uint8Array): bigint;
+    ubrn_uniffi_uniffi_russh_fn_func_extract_public_key(privateKeyContent: Uint8Array, uniffi_out_err: UniffiRustCallStatus): Uint8Array;
     ubrn_uniffi_uniffi_russh_fn_func_generate_key_pair(keyType: Uint8Array, uniffi_out_err: UniffiRustCallStatus): Uint8Array;
     ubrn_uniffi_uniffi_russh_fn_func_validate_private_key(privateKeyContent: Uint8Array, uniffi_out_err: UniffiRustCallStatus): Uint8Array;
-    ubrn_uniffi_uniffi_russh_fn_func_extract_public_key(privateKeyContent: Uint8Array, uniffi_out_err: UniffiRustCallStatus): Uint8Array;
     ubrn_ffi_uniffi_russh_rust_future_poll_u8(handle: bigint, callback: UniffiRustFutureContinuationCallback, callbackData: bigint): void;
     ubrn_ffi_uniffi_russh_rust_future_cancel_u8(handle: bigint): void;
     ubrn_ffi_uniffi_russh_rust_future_free_u8(handle: bigint): void;
@@ -95,6 +95,7 @@ interface NativeModuleInterface {
     ubrn_ffi_uniffi_russh_rust_future_free_void(handle: bigint): void;
     ubrn_ffi_uniffi_russh_rust_future_complete_void(handle: bigint, uniffi_out_err: UniffiRustCallStatus): void;
     ubrn_uniffi_uniffi_russh_checksum_func_connect(): number;
+    ubrn_uniffi_uniffi_russh_checksum_func_extract_public_key(): number;
     ubrn_uniffi_uniffi_russh_checksum_func_generate_key_pair(): number;
     ubrn_uniffi_uniffi_russh_checksum_func_validate_private_key(): number;
     ubrn_uniffi_uniffi_russh_checksum_method_connectprogresscallback_on_change(): number;

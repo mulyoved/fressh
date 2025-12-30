@@ -7,6 +7,4 @@ export interface Spec extends TurboModule {
   cleanupRustCrate(): boolean;
 }
 
-export default TurboModuleRegistry.getEnforcing<Spec>(
-  'ReactNativeUniffiRussh',
-);
+export default TurboModuleRegistry.getEnforcing<Spec>('ReactNativeUniffiRussh');

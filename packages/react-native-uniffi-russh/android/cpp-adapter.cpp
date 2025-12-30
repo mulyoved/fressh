@@ -2,7 +2,6 @@
 #include <jni.h>
 #include <jsi/jsi.h>
 #include <ReactCommon/CallInvokerHolder.h>
-#include <fbjni/fbjni.h>
 #include "fressh-react-native-uniffi-russh.h"
 
 namespace jsi = facebook::jsi;
@@ -25,27 +24,15 @@ Java_com_uniffirussh_ReactNativeUniffiRusshModule_nativeInstallRustCrate(
     jlong rtPtr,
     jobject callInvokerHolderJavaObj
 ) {
-    try {
-        if (callInvokerHolderJavaObj == nullptr) {
-            return false;
-        }
+    using JCallInvokerHolder = facebook::react::CallInvokerHolder;
 
-        auto alias = facebook::jni::alias_ref<jobject>(callInvokerHolderJavaObj);
-        auto holder = facebook::jni::static_ref_cast<facebook::react::CallInvokerHolder::javaobject>(alias);
-        if (!holder) {
-            return false;
-        }
+    auto holderLocal = facebook::jni::make_local(callInvokerHolderJavaObj);
+    auto holderRef = facebook::jni::static_ref_cast<JCallInvokerHolder::javaobject>(holderLocal);
+    auto* holderCxx = holderRef->cthis();
+    auto jsCallInvoker = holderCxx->getCallInvoker();
+    auto runtime = reinterpret_cast<jsi::Runtime *>(rtPtr);
 
-        auto jsCallInvoker = holder->cthis()->getCallInvoker();
-        if (!jsCallInvoker) {
-            return false;
-        }
-
-        auto runtime = reinterpret_cast<jsi::Runtime *>(rtPtr);
-        return fressh_reactnativeuniffirussh::installRustCrate(*runtime, jsCallInvoker);
-    } catch (...) {
-        return false;
-    }
+    return fressh_reactnativeuniffirussh::installRustCrate(*runtime, jsCallInvoker);
 }
 
 extern "C"

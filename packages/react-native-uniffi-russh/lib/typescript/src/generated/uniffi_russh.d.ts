@@ -2,9 +2,13 @@ import { type UniffiByteArray, type UniffiRustArcPtr, type UnsafeMutableRawPoint
 export declare function connect(options: ConnectOptions, asyncOpts_?: {
     signal: AbortSignal;
 }): Promise<SshConnectionInterface>;
+/**
+ * Extract the public key from a private key in OpenSSH format.
+ * Returns the public key in the standard "ssh-xxx AAAA... comment" format.
+ */
+export declare function extractPublicKey(privateKeyContent: string): string;
 export declare function generateKeyPair(keyType: KeyType): string;
 export declare function validatePrivateKey(privateKeyContent: string): string;
-export declare function extractPublicKey(privateKeyContent: string): string;
 export type BufferReadResult = {
     chunks: Array<TerminalChunk>;
     nextSeq: bigint;
