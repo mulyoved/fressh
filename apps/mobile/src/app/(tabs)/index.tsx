@@ -31,9 +31,9 @@ export default function TabsIndex() {
 }
 
 const defaultValues: InputConnectionDetails = {
-	host: '',
+	host: 'dev-remote-machine-1',
 	port: 22,
-	username: '',
+	username: 'muly',
 	security: {
 		type: 'password',
 		password: '',
