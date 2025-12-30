@@ -163,6 +163,11 @@ type RusshApi = {
 	) =>
 		| { valid: true; error?: never }
 		| { valid: false; error: GeneratedRussh.SshError };
+	extractPublicKey: (
+		privateKey: string,
+	) =>
+		| { publicKey: string; error?: never }
+		| { publicKey?: never; error: GeneratedRussh.SshError };
 };
 
 // #endregion
@@ -408,6 +413,19 @@ function validatePrivateKey(
 	}
 }
 
+function extractPublicKey(
+	privateKey: string,
+):
+	| { publicKey: string; error?: never }
+	| { publicKey?: never; error: GeneratedRussh.SshError } {
+	try {
+		const publicKey = GeneratedRussh.extractPublicKey(privateKey);
+		return { publicKey };
+	} catch (e) {
+		return { error: e as GeneratedRussh.SshError };
+	}
+}
+
 // #endregion
 
 export { SshError, SshError_Tags } from './generated/uniffi_russh';
@@ -417,4 +435,5 @@ export const RnRussh = {
 	connect,
 	generateKeyPair,
 	validatePrivateKey,
+	extractPublicKey,
 } satisfies RusshApi;

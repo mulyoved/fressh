@@ -1,7 +1,8 @@
 import { RnRussh } from '@fressh/react-native-uniffi-russh';
 import { useMutation, useQuery } from '@tanstack/react-query';
+import * as Clipboard from 'expo-clipboard';
 import * as DocumentPicker from 'expo-document-picker';
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 import React from 'react';
 import { Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { secretsManager } from '@/lib/secrets-manager';
@@ -334,6 +335,22 @@ function KeyRow(props: {
 	const [label, setLabel] = React.useState(
 		entry?.manifestEntry.metadata.label ?? '',
 	);
+	const [showPublicKey, setShowPublicKey] = React.useState(false);
+	const [copied, setCopied] = React.useState(false);
+
+	// Extract public key from private key
+	const publicKeyResult = React.useMemo(() => {
+		if (!entry?.value) return null;
+		return RnRussh.extractPublicKey(entry.value);
+	}, [entry?.value]);
+
+	const handleCopyPublicKey = React.useCallback(async () => {
+		if (publicKeyResult?.publicKey) {
+			await Clipboard.setStringAsync(publicKeyResult.publicKey);
+			setCopied(true);
+			setTimeout(() => setCopied(false), 2000);
+		}
+	}, [publicKeyResult?.publicKey]);
 
 	const renameMutation = useMutation({
 		mutationFn: async (newLabel: string) => {
@@ -413,6 +430,66 @@ function KeyRow(props: {
 				<Text style={{ color: theme.colors.muted, fontSize: 12, marginTop: 2 }}>
 					ID: {entry.manifestEntry.id}
 				</Text>
+				{/* Public Key Section */}
+				<View style={{ marginTop: 8, gap: 6 }}>
+					<Pressable
+						onPress={() => setShowPublicKey((v) => !v)}
+						style={{
+							flexDirection: 'row',
+							alignItems: 'center',
+							gap: 6,
+						}}
+					>
+						<Text style={{ color: theme.colors.textSecondary, fontSize: 12 }}>
+							{showPublicKey ? '▼' : '▶'} Public Key
+						</Text>
+					</Pressable>
+					{showPublicKey && publicKeyResult?.publicKey ? (
+						<View style={{ gap: 6 }}>
+							<TextInput
+								editable={false}
+								multiline
+								value={publicKeyResult.publicKey}
+								style={{
+									backgroundColor: theme.colors.inputBackground,
+									color: theme.colors.textSecondary,
+									borderWidth: 1,
+									borderColor: theme.colors.border,
+									borderRadius: 8,
+									padding: 8,
+									fontSize: 10,
+									fontFamily: 'Menlo, ui-monospace, monospace',
+								}}
+							/>
+							<Pressable
+								onPress={handleCopyPublicKey}
+								style={{
+									backgroundColor: copied
+										? theme.colors.success ?? '#22c55e'
+										: theme.colors.primary,
+									borderRadius: 8,
+									paddingVertical: 8,
+									paddingHorizontal: 12,
+									alignItems: 'center',
+								}}
+							>
+								<Text
+									style={{
+										color: theme.colors.buttonTextOnPrimary,
+										fontWeight: '600',
+										fontSize: 12,
+									}}
+								>
+									{copied ? 'Copied!' : 'Copy Public Key'}
+								</Text>
+							</Pressable>
+						</View>
+					) : showPublicKey && publicKeyResult?.error ? (
+						<Text style={{ color: theme.colors.danger, fontSize: 11 }}>
+							Error extracting public key
+						</Text>
+					) : null}
+				</View>
 				{props.mode === 'manage' ? (
 					<TextInput
 						style={{

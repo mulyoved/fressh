@@ -43,6 +43,15 @@ pub fn generate_key_pair(key_type: KeyType) -> Result<String, SshError> {
         .to_string())
 }
 
+/// Extract the public key from a private key in OpenSSH format.
+/// Returns the public key in the standard "ssh-xxx AAAA... comment" format.
+#[uniffi::export]
+pub fn extract_public_key(private_key_content: String) -> Result<String, SshError> {
+    let (_canonical, parsed) = normalize_openssh_ed25519_seed_key(&private_key_content)?;
+    let public_key = parsed.public_key();
+    Ok(public_key.to_openssh()?)
+}
+
 // Best-effort fix for OpenSSH ed25519 keys that store only a 32-byte seed in
 // the private section (instead of 64 bytes consisting of seed || public).
 // If the input matches an unencrypted OpenSSH ed25519 key with a 32-byte

@@ -39,6 +39,11 @@ export function validatePrivateKey(privateKeyContent) /*throws*/{
     return nativeModule().ubrn_uniffi_uniffi_russh_fn_func_validate_private_key(FfiConverterString.lower(privateKeyContent), callStatus);
   }, /*liftString:*/FfiConverterString.lift));
 }
+export function extractPublicKey(privateKeyContent) /*throws*/{
+  return FfiConverterString.lift(uniffiCaller.rustCallWithError(/*liftError:*/FfiConverterTypeSshError.lift.bind(FfiConverterTypeSshError), /*caller:*/callStatus => {
+    return nativeModule().ubrn_uniffi_uniffi_russh_fn_func_extract_public_key(FfiConverterString.lower(privateKeyContent), callStatus);
+  }, /*liftString:*/FfiConverterString.lift));
+}
 /**
  * Generated factory for {@link BufferReadResult} record objects.
  */

@@ -251,6 +251,18 @@ function validatePrivateKey(key) {
     };
   }
 }
+function extractPublicKey(privateKey) {
+  try {
+    const publicKey = GeneratedRussh.extractPublicKey(privateKey);
+    return {
+      publicKey
+    };
+  } catch (e) {
+    return {
+      error: e
+    };
+  }
+}
 
 // #endregion
 
@@ -259,6 +271,7 @@ export const RnRussh = {
   uniffiInitAsync: GeneratedRussh.uniffiInitAsync,
   connect,
   generateKeyPair,
-  validatePrivateKey
+  validatePrivateKey,
+  extractPublicKey
 };
 //# sourceMappingURL=api.js.map

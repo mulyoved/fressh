@@ -128,11 +128,19 @@ declare function validatePrivateKey(key: string): {
     valid: false;
     error: GeneratedRussh.SshError;
 };
+declare function extractPublicKey(privateKey: string): {
+    publicKey: string;
+    error?: never;
+} | {
+    publicKey?: never;
+    error: GeneratedRussh.SshError;
+};
 export { SshError, SshError_Tags } from './generated/uniffi_russh';
 export declare const RnRussh: {
     uniffiInitAsync: typeof GeneratedRussh.uniffiInitAsync;
     connect: typeof connect;
     generateKeyPair: typeof generateKeyPair;
     validatePrivateKey: typeof validatePrivateKey;
+    extractPublicKey: typeof extractPublicKey;
 };
 //# sourceMappingURL=api.d.ts.map

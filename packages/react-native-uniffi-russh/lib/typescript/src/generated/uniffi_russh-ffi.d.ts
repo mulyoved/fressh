@@ -41,6 +41,7 @@ interface NativeModuleInterface {
     ubrn_uniffi_uniffi_russh_fn_func_connect(options: Uint8Array): bigint;
     ubrn_uniffi_uniffi_russh_fn_func_generate_key_pair(keyType: Uint8Array, uniffi_out_err: UniffiRustCallStatus): Uint8Array;
     ubrn_uniffi_uniffi_russh_fn_func_validate_private_key(privateKeyContent: Uint8Array, uniffi_out_err: UniffiRustCallStatus): Uint8Array;
+    ubrn_uniffi_uniffi_russh_fn_func_extract_public_key(privateKeyContent: Uint8Array, uniffi_out_err: UniffiRustCallStatus): Uint8Array;
     ubrn_ffi_uniffi_russh_rust_future_poll_u8(handle: bigint, callback: UniffiRustFutureContinuationCallback, callbackData: bigint): void;
     ubrn_ffi_uniffi_russh_rust_future_cancel_u8(handle: bigint): void;
     ubrn_ffi_uniffi_russh_rust_future_free_u8(handle: bigint): void;

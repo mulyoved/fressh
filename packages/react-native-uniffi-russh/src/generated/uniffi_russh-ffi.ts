@@ -172,6 +172,10 @@ interface NativeModuleInterface {
 		privateKeyContent: Uint8Array,
 		uniffi_out_err: UniffiRustCallStatus,
 	): Uint8Array;
+	ubrn_uniffi_uniffi_russh_fn_func_extract_public_key(
+		privateKeyContent: Uint8Array,
+		uniffi_out_err: UniffiRustCallStatus,
+	): Uint8Array;
 	ubrn_ffi_uniffi_russh_rust_future_poll_u8(
 		handle: bigint,
 		callback: UniffiRustFutureContinuationCallback,

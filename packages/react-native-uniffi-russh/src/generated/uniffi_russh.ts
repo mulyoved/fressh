@@ -157,6 +157,24 @@ export function validatePrivateKey(
 		),
 	);
 }
+export function extractPublicKey(
+	privateKeyContent: string,
+): string /*throws*/ {
+	return FfiConverterString.lift(
+		uniffiCaller.rustCallWithError(
+			/*liftError:*/ FfiConverterTypeSshError.lift.bind(
+				FfiConverterTypeSshError,
+			),
+			/*caller:*/ (callStatus) => {
+				return nativeModule().ubrn_uniffi_uniffi_russh_fn_func_extract_public_key(
+					FfiConverterString.lower(privateKeyContent),
+					callStatus,
+				);
+			},
+			/*liftString:*/ FfiConverterString.lift,
+		),
+	);
+}
 
 export type BufferReadResult = {
 	chunks: Array<TerminalChunk>;

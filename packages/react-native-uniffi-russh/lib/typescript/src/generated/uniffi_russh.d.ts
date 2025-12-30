@@ -4,6 +4,7 @@ export declare function connect(options: ConnectOptions, asyncOpts_?: {
 }): Promise<SshConnectionInterface>;
 export declare function generateKeyPair(keyType: KeyType): string;
 export declare function validatePrivateKey(privateKeyContent: string): string;
+export declare function extractPublicKey(privateKeyContent: string): string;
 export type BufferReadResult = {
     chunks: Array<TerminalChunk>;
     nextSeq: bigint;
