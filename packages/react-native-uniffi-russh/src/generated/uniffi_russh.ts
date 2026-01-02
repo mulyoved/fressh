@@ -3126,21 +3126,22 @@ export interface ShellSessionInterface {
 	): BufferReadResult;
 	removeListener(id: /*u64*/ bigint): void;
 	/**
+	 * Resize the PTY window. Call when the terminal UI size changes.
+	 * This sends an SSH "window-change" request to the server, which will
+	 * deliver SIGWINCH to the remote process (e.g., tmux, vim).
+	 */
+	resizePty(
+		cols: /*u32*/ number,
+		rows: /*u32*/ number,
+		pixelWidth: /*u32*/ number | undefined,
+		pixelHeight: /*u32*/ number | undefined,
+		asyncOpts_?: { signal: AbortSignal },
+	) /*throws*/ : Promise<void>;
+	/**
 	 * Send bytes to the active shell (stdin).
 	 */
 	sendData(
 		data: ArrayBuffer,
-		asyncOpts_?: { signal: AbortSignal },
-	) /*throws*/ : Promise<void>;
-	/**
-	 * Resize the PTY window. Call when the terminal UI size changes.
-	 * This sends an SSH "window-change" request to the server.
-	 */
-	resizePty(
-		cols: number,
-		rows: number,
-		pixelWidth: number | null,
-		pixelHeight: number | null,
 		asyncOpts_?: { signal: AbortSignal },
 	) /*throws*/ : Promise<void>;
 }
@@ -3307,10 +3308,15 @@ export class ShellSession
 	}
 
 	/**
-	 * Send bytes to the active shell (stdin).
+	 * Resize the PTY window. Call when the terminal UI size changes.
+	 * This sends an SSH "window-change" request to the server, which will
+	 * deliver SIGWINCH to the remote process (e.g., tmux, vim).
 	 */
-	public async sendData(
-		data: ArrayBuffer,
+	public async resizePty(
+		cols: /*u32*/ number,
+		rows: /*u32*/ number,
+		pixelWidth: /*u32*/ number | undefined,
+		pixelHeight: /*u32*/ number | undefined,
 		asyncOpts_?: { signal: AbortSignal },
 	): Promise<void> /*throws*/ {
 		const __stack = uniffiIsDebug ? new Error().stack : undefined;
@@ -3318,9 +3324,12 @@ export class ShellSession
 			return await uniffiRustCallAsync(
 				/*rustCaller:*/ uniffiCaller,
 				/*rustFutureFunc:*/ () => {
-					return nativeModule().ubrn_uniffi_uniffi_russh_fn_method_shellsession_send_data(
+					return nativeModule().ubrn_uniffi_uniffi_russh_fn_method_shellsession_resize_pty(
 						uniffiTypeShellSessionObjectFactory.clonePointer(this),
-						FfiConverterArrayBuffer.lower(data),
+						FfiConverterUInt32.lower(cols),
+						FfiConverterUInt32.lower(rows),
+						FfiConverterOptionalUInt32.lower(pixelWidth),
+						FfiConverterOptionalUInt32.lower(pixelHeight),
 					);
 				},
 				/*pollFunc:*/ nativeModule()
@@ -3347,14 +3356,10 @@ export class ShellSession
 	}
 
 	/**
-	 * Resize the PTY window. Call when the terminal UI size changes.
-	 * NOTE: This stub will be replaced by generated code after native rebuild.
+	 * Send bytes to the active shell (stdin).
 	 */
-	public async resizePty(
-		cols: number,
-		rows: number,
-		pixelWidth: number | null,
-		pixelHeight: number | null,
+	public async sendData(
+		data: ArrayBuffer,
 		asyncOpts_?: { signal: AbortSignal },
 	): Promise<void> /*throws*/ {
 		const __stack = uniffiIsDebug ? new Error().stack : undefined;
@@ -3362,12 +3367,9 @@ export class ShellSession
 			return await uniffiRustCallAsync(
 				/*rustCaller:*/ uniffiCaller,
 				/*rustFutureFunc:*/ () => {
-					return nativeModule().ubrn_uniffi_uniffi_russh_fn_method_shellsession_resize_pty(
+					return nativeModule().ubrn_uniffi_uniffi_russh_fn_method_shellsession_send_data(
 						uniffiTypeShellSessionObjectFactory.clonePointer(this),
-						FfiConverterUInt32.lower(cols),
-						FfiConverterUInt32.lower(rows),
-						FfiConverterOptionalUInt32.lower(pixelWidth),
-						FfiConverterOptionalUInt32.lower(pixelHeight),
+						FfiConverterArrayBuffer.lower(data),
 					);
 				},
 				/*pollFunc:*/ nativeModule()
@@ -3884,6 +3886,14 @@ function uniffiEnsureInitialized() {
 	) {
 		throw new UniffiInternalError.ApiChecksumMismatch(
 			'uniffi_uniffi_russh_checksum_method_shellsession_remove_listener',
+		);
+	}
+	if (
+		nativeModule().ubrn_uniffi_uniffi_russh_checksum_method_shellsession_resize_pty() !==
+		27901
+	) {
+		throw new UniffiInternalError.ApiChecksumMismatch(
+			'uniffi_uniffi_russh_checksum_method_shellsession_resize_pty',
 		);
 	}
 	if (
