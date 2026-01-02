@@ -28,6 +28,12 @@ mnt/*
 .direnv/
 .cache/
 
+# Rust build cache (rebuilt on EAS)
+**/rust/target/
+
+# Git directory
+.git
+
 # IMPORTANT: Do NOT ignore dist folders - we need pre-built JS for workspace packages
 # The following dist folders are required for EAS builds:
 # - packages/react-native-xtermjs-webview/dist/

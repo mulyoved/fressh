@@ -21,6 +21,7 @@ This is a pnpm + Turbo monorepo.
 - Web: `cd apps/web && pnpm run dev` for local site.
 - Optional dev shells: `nix develop .#default` (or `.#android-emulator`).
 - Docker: `just docker-build`.
+- Dev client builds (EAS): see `docs/dev-builds.md`.
 
 ## Coding Style & Naming Conventions
 - Formatting is Prettier-based (`prettier.config.mjs` / per-package configs).

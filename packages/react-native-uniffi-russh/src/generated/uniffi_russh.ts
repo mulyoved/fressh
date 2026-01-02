@@ -3132,6 +3132,17 @@ export interface ShellSessionInterface {
 		data: ArrayBuffer,
 		asyncOpts_?: { signal: AbortSignal },
 	) /*throws*/ : Promise<void>;
+	/**
+	 * Resize the PTY window. Call when the terminal UI size changes.
+	 * This sends an SSH "window-change" request to the server.
+	 */
+	resizePty(
+		cols: number,
+		rows: number,
+		pixelWidth: number | null,
+		pixelHeight: number | null,
+		asyncOpts_?: { signal: AbortSignal },
+	) /*throws*/ : Promise<void>;
 }
 
 export class ShellSession
@@ -3310,6 +3321,53 @@ export class ShellSession
 					return nativeModule().ubrn_uniffi_uniffi_russh_fn_method_shellsession_send_data(
 						uniffiTypeShellSessionObjectFactory.clonePointer(this),
 						FfiConverterArrayBuffer.lower(data),
+					);
+				},
+				/*pollFunc:*/ nativeModule()
+					.ubrn_ffi_uniffi_russh_rust_future_poll_void,
+				/*cancelFunc:*/ nativeModule()
+					.ubrn_ffi_uniffi_russh_rust_future_cancel_void,
+				/*completeFunc:*/ nativeModule()
+					.ubrn_ffi_uniffi_russh_rust_future_complete_void,
+				/*freeFunc:*/ nativeModule()
+					.ubrn_ffi_uniffi_russh_rust_future_free_void,
+				/*liftFunc:*/ (_v) => {},
+				/*liftString:*/ FfiConverterString.lift,
+				/*asyncOpts:*/ asyncOpts_,
+				/*errorHandler:*/ FfiConverterTypeSshError.lift.bind(
+					FfiConverterTypeSshError,
+				),
+			);
+		} catch (__error: any) {
+			if (uniffiIsDebug && __error instanceof Error) {
+				__error.stack = __stack;
+			}
+			throw __error;
+		}
+	}
+
+	/**
+	 * Resize the PTY window. Call when the terminal UI size changes.
+	 * NOTE: This stub will be replaced by generated code after native rebuild.
+	 */
+	public async resizePty(
+		cols: number,
+		rows: number,
+		pixelWidth: number | null,
+		pixelHeight: number | null,
+		asyncOpts_?: { signal: AbortSignal },
+	): Promise<void> /*throws*/ {
+		const __stack = uniffiIsDebug ? new Error().stack : undefined;
+		try {
+			return await uniffiRustCallAsync(
+				/*rustCaller:*/ uniffiCaller,
+				/*rustFutureFunc:*/ () => {
+					return nativeModule().ubrn_uniffi_uniffi_russh_fn_method_shellsession_resize_pty(
+						uniffiTypeShellSessionObjectFactory.clonePointer(this),
+						FfiConverterUInt32.lower(cols),
+						FfiConverterUInt32.lower(rows),
+						FfiConverterOptionalUInt32.lower(pixelWidth),
+						FfiConverterOptionalUInt32.lower(pixelHeight),
 					);
 				},
 				/*pollFunc:*/ nativeModule()

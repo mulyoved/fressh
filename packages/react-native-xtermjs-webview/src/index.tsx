@@ -97,6 +97,8 @@ export type XtermJsWebViewProps = {
 	xtermOptions?: Partial<ITerminalOptions>;
 	onInitialized?: () => void;
 	onData?: (data: string) => void;
+	/** Called when terminal size changes (cols/rows). Use for PTY resize. */
+	onResize?: (cols: number, rows: number) => void;
 	logger?: {
 		debug?: (...args: unknown[]) => void;
 		log?: (...args: unknown[]) => void;
@@ -136,6 +138,7 @@ export function XtermJsWebView({
 	xtermOptions = defaultXtermOptions,
 	onInitialized,
 	onData,
+	onResize,
 	coalescingThreshold = defaultCoalescingThreshold,
 	logger,
 	size,
@@ -301,6 +304,11 @@ export function XtermJsWebView({
 					logger?.log?.(`received debug msg from webview: `, msg.message);
 					return;
 				}
+				if (msg.type === 'sizeChanged') {
+					logger?.log?.(`terminal size changed: ${msg.cols}x${msg.rows}`);
+					onResize?.(msg.cols, msg.rows);
+					return;
+				}
 				webViewOptions?.onMessage?.(e);
 			} catch (error) {
 				logger?.warn?.(
@@ -310,7 +318,7 @@ export function XtermJsWebView({
 				);
 			}
 		},
-		[logger, webViewOptions, onInitialized, autoFitFn, onData],
+		[logger, webViewOptions, onInitialized, autoFitFn, onData, onResize],
 	);
 
 	const onContentProcessDidTerminate = useCallback<

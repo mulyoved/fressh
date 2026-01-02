@@ -8,6 +8,10 @@ export type BridgeInboundMessage = {
 } | {
     type: 'debug';
     message: string;
+} | {
+    type: 'sizeChanged';
+    cols: number;
+    rows: number;
 };
 export type BridgeOutboundMessage = {
     type: 'write';

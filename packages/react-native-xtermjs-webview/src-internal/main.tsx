@@ -88,6 +88,11 @@ window.onload = () => {
 		term.open(root);
 		fitAddon.fit();
 
+		// Send initial size after first fit
+		if (term.cols >= 2 && term.rows >= 1) {
+			sendToRn({ type: 'sizeChanged', cols: term.cols, rows: term.rows });
+		}
+
 		const applyFontFamily = (family?: string) => {
 			if (!family) return;
 			const rootEl = (term.element ??
@@ -111,6 +116,13 @@ window.onload = () => {
 
 		term.onData((data) => {
 			sendToRn({ type: 'input', str: data });
+		});
+
+		// Report terminal size changes back to RN (for PTY resize)
+		term.onResize(({ cols, rows }) => {
+			if (cols >= 2 && rows >= 1) {
+				sendToRn({ type: 'sizeChanged', cols, rows });
+			}
 		});
 
 		// Remove old handler if any (just in case)
@@ -150,6 +162,10 @@ window.onload = () => {
 					}
 					case 'fit': {
 						fitAddon.fit();
+						// Report new size after fit (onResize may not fire if size unchanged)
+						if (term.cols >= 2 && term.rows >= 1) {
+							sendToRn({ type: 'sizeChanged', cols: term.cols, rows: term.rows });
+						}
 						break;
 					}
 					case 'setOptions': {

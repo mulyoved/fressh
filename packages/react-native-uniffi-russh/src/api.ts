@@ -131,6 +131,16 @@ export type SshShell = {
 	) => Promise<void>;
 	close: (opts?: { signal?: AbortSignal }) => Promise<void>;
 
+	/**
+	 * Resize the PTY window. Call when terminal UI size changes.
+	 * Sends SSH "window-change" request to deliver SIGWINCH to remote process.
+	 */
+	resizePty: (
+		cols: number,
+		rows: number,
+		opts?: { pixelWidth?: number; pixelHeight?: number; signal?: AbortSignal },
+	) => Promise<void>;
+
 	// Buffer policy & stats
 	// setBufferPolicy: (policy: {
 	//   ringBytes?: number;
@@ -304,6 +314,14 @@ function wrapShellSession(
 		sendData: (data, o) =>
 			shell.sendData(data, o?.signal ? { signal: o.signal } : undefined),
 		close: (o) => shell.close(o?.signal ? { signal: o.signal } : undefined),
+		resizePty: (cols, rows, o) =>
+			shell.resizePty(
+				cols,
+				rows,
+				o?.pixelWidth ?? null,
+				o?.pixelHeight ?? null,
+				o?.signal ? { signal: o.signal } : undefined,
+			),
 		// setBufferPolicy,
 		bufferStats: shell.bufferStats,
 		currentSeq: () => Number(shell.currentSeq()),

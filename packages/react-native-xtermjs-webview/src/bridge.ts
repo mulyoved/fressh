@@ -5,7 +5,8 @@ type ITerminalInitOnlyOptions = import('@xterm/xterm').ITerminalInitOnlyOptions;
 export type BridgeInboundMessage =
 	| { type: 'initialized' }
 	| { type: 'input'; str: string }
-	| { type: 'debug'; message: string };
+	| { type: 'debug'; message: string }
+	| { type: 'sizeChanged'; cols: number; rows: number };
 
 // Messages injected from React Native into the WebView (xterm page)
 export type BridgeOutboundMessage =

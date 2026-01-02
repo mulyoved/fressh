@@ -12,7 +12,13 @@
 		"strictNullChecks": true,
 		"baseUrl": ".",
 		"paths": {
-			"@/*": ["src/*"]
+			"@/*": ["src/*"],
+			"expo-file-system": [
+				"../../node_modules/expo-file-system/build/index.d.ts"
+			],
+			"expo-file-system/legacy": [
+				"../../node_modules/expo-file-system/build/legacy/index.d.ts"
+			]
 		}
 	},
 	"include": [

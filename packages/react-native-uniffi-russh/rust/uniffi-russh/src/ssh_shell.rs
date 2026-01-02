@@ -236,6 +236,27 @@ impl ShellSession {
         Ok(())
     }
 
+    /// Resize the PTY window. Call when the terminal UI size changes.
+    /// This sends an SSH "window-change" request to the server, which will
+    /// deliver SIGWINCH to the remote process (e.g., tmux, vim).
+    pub async fn resize_pty(
+        &self,
+        cols: u32,
+        rows: u32,
+        pixel_width: Option<u32>,
+        pixel_height: Option<u32>,
+    ) -> Result<(), SshError> {
+        let w = self.writer.lock().await;
+        w.window_change(
+            cols,
+            rows,
+            pixel_width.unwrap_or(0),
+            pixel_height.unwrap_or(0),
+        )
+        .await?;
+        Ok(())
+    }
+
     /// Close the associated shell channel and stop its reader task.
     pub async fn close(&self) -> Result<(), SshError> {
         self.close_internal().await

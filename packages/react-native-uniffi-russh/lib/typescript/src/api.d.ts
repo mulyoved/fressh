@@ -113,6 +113,15 @@ export type SshShell = {
     close: (opts?: {
         signal?: AbortSignal;
     }) => Promise<void>;
+    /**
+     * Resize the PTY window. Call when terminal UI size changes.
+     * Sends SSH "window-change" request to deliver SIGWINCH to remote process.
+     */
+    resizePty: (cols: number, rows: number, opts?: {
+        pixelWidth?: number;
+        pixelHeight?: number;
+        signal?: AbortSignal;
+    }) => Promise<void>;
     bufferStats: () => GeneratedRussh.BufferStats;
     currentSeq: () => number;
     readBuffer: (cursor: Cursor, maxBytes?: bigint) => BufferReadResult;

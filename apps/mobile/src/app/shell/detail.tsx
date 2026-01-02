@@ -1,18 +1,19 @@
-import { Ionicons } from '@expo/vector-icons';
 import { type ListenerEvent } from '@fressh/react-native-uniffi-russh';
 import {
 	XtermJsWebView,
 	type XtermWebViewHandle,
 } from '@fressh/react-native-xtermjs-webview';
 
+import * as Clipboard from 'expo-clipboard';
+import * as Linking from 'expo-linking';
 import {
 	Stack,
 	useLocalSearchParams,
 	useRouter,
 	useFocusEffect,
 } from 'expo-router';
+import * as LucideIcons from 'lucide-react-native';
 import React, {
-	createContext,
 	startTransition,
 	useCallback,
 	useEffect,
@@ -21,21 +22,34 @@ import React, {
 	useState,
 } from 'react';
 import {
+	Animated,
 	KeyboardAvoidingView,
 	Platform,
 	Pressable,
 	Text,
 	View,
-	type StyleProp,
-	type ViewStyle,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import {
+	ACTIVE_KEYBOARD_IDS,
+	DEFAULT_KEYBOARD_ID,
+	KEYBOARDS_BY_ID,
+	MACROS_BY_KEYBOARD_ID,
+	type KeyboardDefinition,
+	type KeyboardSlot,
+	type MacroDef,
+	type ModifierKey,
+} from '@/generated/keyboard-config';
+import {
+	CONFIGURATOR_URL,
+	runAction,
+	type ActionContext,
+	type ActionId,
+} from '@/lib/keyboard-actions';
+import { runMacro } from '@/lib/keyboard-runtime';
 import { rootLogger } from '@/lib/logger';
 import { useSshStore } from '@/lib/ssh-store';
 import { useTheme } from '@/lib/theme';
-import { useContextSafe } from '@/lib/utils';
-
-type IconName = keyof typeof Ionicons.glyphMap;
 
 const logger = rootLogger.extend('TabsShellDetail');
 
@@ -81,6 +95,11 @@ function RouteSkeleton() {
 }
 
 const encoder = new TextEncoder();
+const ALL_KEYBOARD_IDS = Object.keys(KEYBOARDS_BY_ID);
+const ACTIVE_KEYBOARD_IDS_FALLBACK: readonly string[] =
+	ACTIVE_KEYBOARD_IDS.length > 0 ? ACTIVE_KEYBOARD_IDS : ALL_KEYBOARD_IDS;
+const DEFAULT_KEYBOARD_ID_FALLBACK =
+	DEFAULT_KEYBOARD_ID || ACTIVE_KEYBOARD_IDS_FALLBACK[0] || '';
 
 function ShellDetail() {
 	const xtermRef = useRef<XtermWebViewHandle>(null);
@@ -122,36 +141,264 @@ function ShellDetail() {
 		};
 	}, [shell]);
 
-	const [modifierKeysActive, setModifierKeysActive] = useState<
-		KeyboardToolbarModifierButtonProps[]
-	>([]);
+	const [selectedKeyboardId, setSelectedKeyboardId] =
+		useState<string>(DEFAULT_KEYBOARD_ID_FALLBACK);
+	const availableKeyboardIds = useMemo(
+		() => new Set(ALL_KEYBOARD_IDS),
+		[],
+	);
 
-	const sendBytes = useCallback(
+	const currentKeyboard = useMemo<KeyboardDefinition | null>(() => {
+		if (selectedKeyboardId && KEYBOARDS_BY_ID[selectedKeyboardId]) {
+			return KEYBOARDS_BY_ID[selectedKeyboardId];
+		}
+		if (
+			DEFAULT_KEYBOARD_ID_FALLBACK &&
+			KEYBOARDS_BY_ID[DEFAULT_KEYBOARD_ID_FALLBACK]
+		) {
+			return KEYBOARDS_BY_ID[DEFAULT_KEYBOARD_ID_FALLBACK];
+		}
+		const fallbackId = ACTIVE_KEYBOARD_IDS_FALLBACK[0];
+		return fallbackId ? KEYBOARDS_BY_ID[fallbackId] ?? null : null;
+	}, [selectedKeyboardId]);
+
+	const currentMacros = useMemo<MacroDef[]>(
+		() =>
+			currentKeyboard
+				? MACROS_BY_KEYBOARD_ID[currentKeyboard.id] ?? []
+				: [],
+		[currentKeyboard],
+	);
+
+	// Flash message for keyboard switching
+	const [flashKeyboardName, setFlashKeyboardName] = useState<string | null>(
+		null,
+	);
+	const flashOpacity = useRef(new Animated.Value(0)).current;
+	const isFirstMount = useRef(true);
+
+	useEffect(() => {
+		// Skip the flash on first mount
+		if (isFirstMount.current) {
+			isFirstMount.current = false;
+			return;
+		}
+
+		if (!currentKeyboard) return;
+
+		setFlashKeyboardName(currentKeyboard.name);
+		flashOpacity.setValue(1);
+
+		Animated.timing(flashOpacity, {
+			toValue: 0,
+			duration: 800,
+			delay: 400,
+			useNativeDriver: true,
+		}).start(() => {
+			setFlashKeyboardName(null);
+		});
+	}, [currentKeyboard, flashOpacity]);
+
+	const [modifierKeysActive, setModifierKeysActive] = useState<ModifierKey[]>(
+		[],
+	);
+
+	const sendBytesRaw = useCallback(
 		(bytes: Uint8Array<ArrayBuffer>) => {
 			if (!shell) return;
-
-			modifierKeysActive
-				.sort((a, b) => a.orderPreference - b.orderPreference)
-				.forEach((m) => {
-					if (!m.canApplyModifierToBytes(bytes)) return;
-					bytes = m.applyModifierToBytes(bytes);
-				});
-
 			shell.sendData(bytes.buffer).catch((e: unknown) => {
 				logger.warn('sendData failed', e);
 				router.back();
 			});
 		},
-		[shell, router, modifierKeysActive],
+		[shell, router],
 	);
-	const toolbarContext: KeyboardToolbarContextType = useMemo(
+
+	const sendBytesWithModifiers = useCallback(
+		(bytes: Uint8Array<ArrayBuffer>) => {
+			if (!shell) return;
+			let next = bytes;
+			modifierKeysActive
+				.map((key) => MODIFIER_DEFS[key])
+				.sort((a, b) => a.orderPreference - b.orderPreference)
+				.forEach((modifier) => {
+					if (!modifier.canApplyModifierToBytes(next)) return;
+					next = modifier.applyModifierToBytes(next);
+				});
+			sendBytesRaw(next);
+		},
+		[modifierKeysActive, sendBytesRaw, shell],
+	);
+
+	const sendTextRaw = useCallback(
+		(value: string) => {
+			sendBytesRaw(encoder.encode(value));
+		},
+		[sendBytesRaw],
+	);
+
+	const sendTextWithModifiers = useCallback(
+		(value: string) => {
+			sendBytesWithModifiers(encoder.encode(value));
+		},
+		[sendBytesWithModifiers],
+	);
+
+	const toggleModifier = useCallback((modifier: ModifierKey) => {
+		setModifierKeysActive((prev) =>
+			prev.includes(modifier)
+				? prev.filter((entry) => entry !== modifier)
+				: [...prev, modifier],
+		);
+	}, []);
+
+	const rotateKeyboard = useCallback(() => {
+		if (ACTIVE_KEYBOARD_IDS_FALLBACK.length <= 1) return;
+		setSelectedKeyboardId((current) => {
+			const idx = Math.max(0, ACTIVE_KEYBOARD_IDS_FALLBACK.indexOf(current));
+			const nextIdx = (idx + 1) % ACTIVE_KEYBOARD_IDS_FALLBACK.length;
+			return ACTIVE_KEYBOARD_IDS_FALLBACK[nextIdx] ?? current;
+		});
+	}, []);
+
+	const selectKeyboardIfExists = useCallback(
+		(id: string) => {
+			if (!availableKeyboardIds.has(id)) return;
+			setSelectedKeyboardId(id);
+		},
+		[availableKeyboardIds],
+	);
+
+	const handlePasteClipboard = useCallback(async () => {
+		try {
+			const text = await Clipboard.getStringAsync();
+			if (text) sendTextRaw(text);
+		} catch (error) {
+			logger.warn('clipboard read failed', error);
+		}
+	}, [sendTextRaw]);
+
+	const handleCopySelection = useCallback(() => {
+		logger.warn('copy selection not supported on native terminal');
+	}, []);
+
+	const actionContext = useMemo<ActionContext>(
 		() => ({
-			modifierKeysActive,
-			setModifierKeysActive,
-			sendBytes,
+			availableKeyboardIds,
+			selectKeyboard: selectKeyboardIfExists,
+			rotateKeyboard,
+			openConfigurator: () => {
+				void Linking.openURL(CONFIGURATOR_URL);
+			},
+			sendBytes: sendBytesRaw,
+			pasteClipboard: handlePasteClipboard,
+			copySelection: handleCopySelection,
+			toggleCommandPresets: () => {
+				logger.warn('command presets not available');
+			},
+			openCommander: () => {
+				logger.warn('commander not available');
+			},
 		}),
-		[sendBytes, modifierKeysActive],
+		[
+			availableKeyboardIds,
+			handleCopySelection,
+			handlePasteClipboard,
+			rotateKeyboard,
+			selectKeyboardIfExists,
+			sendBytesRaw,
+		],
 	);
+
+	const handleAction = useCallback(
+		(actionId: ActionId) => {
+			void runAction(actionId, actionContext);
+		},
+		[actionContext],
+	);
+
+	const handleSlotPress = useCallback(
+		(slot: KeyboardSlot) => {
+			if (slot.type === 'modifier') {
+				toggleModifier(slot.modifier);
+				return;
+			}
+			if (slot.type === 'text') {
+				sendTextWithModifiers(slot.text);
+				return;
+			}
+			if (slot.type === 'bytes') {
+				sendBytesWithModifiers(new Uint8Array(slot.bytes));
+				return;
+			}
+			if (slot.type === 'macro') {
+				const macro = currentMacros.find(
+					(entry) => entry.id === slot.macroId,
+				);
+				if (!macro) return;
+				runMacro(macro, {
+					sendBytes: sendBytesRaw,
+					sendText: sendTextRaw,
+					onAction: handleAction,
+				});
+				return;
+			}
+			if (slot.type === 'action') {
+				handleAction(slot.actionId);
+				return;
+			}
+		},
+		[
+			currentMacros,
+			handleAction,
+			sendBytesRaw,
+			sendBytesWithModifiers,
+			sendTextRaw,
+			sendTextWithModifiers,
+			toggleModifier,
+		],
+	);
+
+	// Debounced PTY resize handler
+	const resizeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const lastSizeRef = useRef<{ cols: number; rows: number } | null>(null);
+
+	const handleTerminalResize = useCallback(
+		(cols: number, rows: number) => {
+			// Skip if same size
+			if (
+				lastSizeRef.current?.cols === cols &&
+				lastSizeRef.current?.rows === rows
+			) {
+				return;
+			}
+			lastSizeRef.current = { cols, rows };
+
+			// Clear pending resize
+			if (resizeTimeoutRef.current) {
+				clearTimeout(resizeTimeoutRef.current);
+			}
+
+			// Debounce resize calls (100ms)
+			resizeTimeoutRef.current = setTimeout(() => {
+				if (!shell) return;
+				logger.info(`Resizing PTY to ${cols}x${rows}`);
+				shell.resizePty(cols, rows).catch((e: unknown) => {
+					logger.warn('resizePty failed', e);
+				});
+			}, 100);
+		},
+		[shell],
+	);
+
+	// Cleanup resize timeout on unmount
+	useEffect(() => {
+		return () => {
+			if (resizeTimeoutRef.current) {
+				clearTimeout(resizeTimeoutRef.current);
+			}
+		};
+	}, []);
 
 	return (
 		<>
@@ -170,157 +417,114 @@ function ShellDetail() {
 					paddingBottom: Platform.OS === 'android' ? insets.bottom + 4 : 0,
 				}}
 			>
-				{/* Provide toolbar context to buttons and modifier state. */}
-				<KeyboardToolBarContext.Provider value={toolbarContext}>
-					<XtermJsWebView
-						ref={xtermRef}
-						style={{ flex: 1 }}
-						webViewOptions={{
-							// Prevent iOS from adding automatic top inset inside WebView
-							contentInsetAdjustmentBehavior: 'never',
-						}}
-						logger={{
-							log: logger.info,
-							// debug: logger.debug,
-							warn: logger.warn,
-							error: logger.error,
-						}}
-						xtermOptions={{
-							theme: {
-								background: theme.colors.background,
-								foreground: theme.colors.textPrimary,
-							},
-						}}
-						onInitialized={() => {
-							if (!shell) throw new Error('Shell not found');
+				<XtermJsWebView
+					ref={xtermRef}
+					style={{ flex: 1 }}
+					webViewOptions={{
+						// Prevent iOS from adding automatic top inset inside WebView
+						contentInsetAdjustmentBehavior: 'never',
+						onLayout: () => {
+							// Refit terminal when container size changes
+							xtermRef.current?.fit();
+						},
+					}}
+					logger={{
+						log: logger.info,
+						// debug: logger.debug,
+						warn: logger.warn,
+						error: logger.error,
+					}}
+					xtermOptions={{
+						theme: {
+							background: theme.colors.background,
+							foreground: theme.colors.textPrimary,
+						},
+					}}
+					onResize={handleTerminalResize}
+					onInitialized={() => {
+						if (!shell) throw new Error('Shell not found');
 
-							// Replay from head, then attach live listener
-							void (async () => {
-								const res = shell.readBuffer({ mode: 'head' });
-								logger.info('readBuffer(head)', {
-									chunks: res.chunks.length,
-									nextSeq: res.nextSeq,
-									dropped: res.dropped,
-								});
-								if (res.chunks.length) {
-									const chunks = res.chunks.map((c) => c.bytes);
-									const xr = xtermRef.current;
-									if (xr) {
-										xr.writeMany(chunks.map((c) => new Uint8Array(c)));
-										xr.flush();
-									}
+						// Replay from head, then attach live listener
+						void (async () => {
+							const res = shell.readBuffer({ mode: 'head' });
+							logger.info('readBuffer(head)', {
+								chunks: res.chunks.length,
+								nextSeq: res.nextSeq,
+								dropped: res.dropped,
+							});
+							if (res.chunks.length) {
+								const chunks = res.chunks.map((c) => c.bytes);
+								const xr = xtermRef.current;
+								if (xr) {
+									xr.writeMany(chunks.map((c) => new Uint8Array(c)));
+									xr.flush();
 								}
-								const id = shell.addListener(
-									(ev: ListenerEvent) => {
-										if ('kind' in ev) {
-											logger.warn('listener.dropped', ev);
-											return;
-										}
-										const chunk = ev;
-										const xr3 = xtermRef.current;
-										if (xr3) xr3.write(new Uint8Array(chunk.bytes));
-									},
-									{ cursor: { mode: 'seq', seq: res.nextSeq } },
-								);
-								logger.info('shell listener attached', id.toString());
-								listenerIdRef.current = id;
-							})();
-							// Focus to pop the keyboard (iOS needs the prop we set)
-							const xr2 = xtermRef.current;
-							if (xr2) xr2.focus();
+							}
+							const id = shell.addListener(
+								(ev: ListenerEvent) => {
+									if ('kind' in ev) {
+										logger.warn('listener.dropped', ev);
+										return;
+									}
+									const chunk = ev;
+									const xr3 = xtermRef.current;
+									if (xr3) xr3.write(new Uint8Array(chunk.bytes));
+								},
+								{ cursor: { mode: 'seq', seq: res.nextSeq } },
+							);
+							logger.info('shell listener attached', id.toString());
+							listenerIdRef.current = id;
+						})();
+						// Focus to pop the keyboard (iOS needs the prop we set)
+						const xr2 = xtermRef.current;
+						if (xr2) xr2.focus();
+					}}
+					onData={(terminalMessage) => {
+						if (!shell) return;
+						sendBytesRaw(encoder.encode(terminalMessage));
+					}}
+				/>
+				<TerminalKeyboard
+					keyboard={currentKeyboard}
+					modifierKeysActive={modifierKeysActive}
+					onSlotPress={handleSlotPress}
+				/>
+				{flashKeyboardName && (
+					<Animated.View
+						pointerEvents="none"
+						style={{
+							position: 'absolute',
+							top: '40%',
+							left: 0,
+							right: 0,
+							alignItems: 'center',
+							opacity: flashOpacity,
 						}}
-						onData={(terminalMessage) => {
-							if (!shell) return;
-							const bytes = encoder.encode(terminalMessage);
-							sendBytes(bytes);
-						}}
-					/>
-					<KeyboardToolbar />
-				</KeyboardToolBarContext.Provider>
+					>
+						<View
+							style={{
+								backgroundColor: 'rgba(0, 0, 0, 0.75)',
+								paddingHorizontal: 20,
+								paddingVertical: 10,
+								borderRadius: 8,
+							}}
+						>
+							<Text
+								style={{
+									color: '#fff',
+									fontSize: 16,
+									fontWeight: '600',
+								}}
+							>
+								{flashKeyboardName}
+							</Text>
+						</View>
+					</Animated.View>
+				)}
 			</KeyboardAvoidingView>
 		</>
 	);
 }
-
-type KeyboardToolbarContextType = {
-	modifierKeysActive: KeyboardToolbarModifierButtonProps[];
-	setModifierKeysActive: React.Dispatch<
-		React.SetStateAction<KeyboardToolbarModifierButtonProps[]>
-	>;
-	sendBytes: (bytes: Uint8Array<ArrayBuffer>) => void;
-};
-const KeyboardToolBarContext = createContext<KeyboardToolbarContextType | null>(
-	null,
-);
-
-function KeyboardToolbar() {
-	return (
-		<View
-			style={{
-				height: 100,
-			}}
-		>
-			<KeyboardToolbarRow>
-				<KeyboardToolbarButtonPreset preset="esc" />
-				<KeyboardToolbarButtonPreset preset="/" />
-				<KeyboardToolbarButtonPreset preset="|" />
-				<KeyboardToolbarButtonPreset preset="home" />
-				<KeyboardToolbarButtonPreset preset="up" />
-				<KeyboardToolbarButtonPreset preset="end" />
-				<KeyboardToolbarButtonPreset preset="pgup" />
-			</KeyboardToolbarRow>
-			<KeyboardToolbarRow>
-				<KeyboardToolbarButtonPreset preset="tab" />
-				<KeyboardToolbarButtonPreset preset="ctrl" />
-				<KeyboardToolbarButtonPreset preset="alt" />
-				<KeyboardToolbarButtonPreset preset="left" />
-				<KeyboardToolbarButtonPreset preset="down" />
-				<KeyboardToolbarButtonPreset preset="right" />
-				<KeyboardToolbarButtonPreset preset="pgdn" />
-			</KeyboardToolbarRow>
-		</View>
-	);
-}
-
-function KeyboardToolbarRow({ children }: { children?: React.ReactNode }) {
-	return <View style={{ flexDirection: 'row', flex: 1 }}>{children}</View>;
-}
-
-type KeyboardToolbarButtonPresetType =
-	| 'esc'
-	| '/'
-	| '|'
-	| 'home'
-	| 'up'
-	| 'end'
-	| 'pgup'
-	| 'pgdn'
-	| 'tab'
-	| 'ctrl'
-	| 'alt'
-	| 'left'
-	| 'down'
-	| 'right'
-	| 'insert'
-	| 'delete'
-	| 'pageup'
-	| 'pagedown';
-
-function KeyboardToolbarButtonPreset({
-	preset,
-	style,
-}: {
-	style?: StyleProp<ViewStyle>;
-	preset: KeyboardToolbarButtonPresetType;
-}) {
-	return (
-		<KeyboardToolbarButton
-			{...keyboardToolbarButtonPresetToProps[preset]}
-			style={style}
-		/>
-	);
-}
-
 type ModifierContract = {
 	canApplyModifierToBytes: (bytes: Uint8Array<ArrayBuffer>) => boolean;
 	applyModifierToBytes: (
@@ -330,6 +534,21 @@ type ModifierContract = {
 };
 
 const escapeByte = 27;
+
+const shiftModifier: ModifierContract = {
+	orderPreference: 5,
+	canApplyModifierToBytes: (bytes) =>
+		bytes.some((byte) => byte >= 97 && byte <= 122),
+	applyModifierToBytes: (bytes) => {
+		const next = new Uint8Array(bytes.length);
+		for (let i = 0; i < bytes.length; i += 1) {
+			const byte = bytes[i];
+			if (byte === undefined) continue;
+			next[i] = byte >= 97 && byte <= 122 ? byte - 32 : byte;
+		}
+		return next;
+	},
+};
 
 const ctrlModifier: ModifierContract = {
 	orderPreference: 10,
@@ -370,113 +589,126 @@ function mapByteToCtrl(byte: number): number | null {
 	return null;
 }
 
-const keyboardToolbarButtonPresetToProps: Record<
-	KeyboardToolbarButtonPresetType,
-	KeyboardToolbarButtonProps
-> = {
-	esc: { label: 'ESC', sendBytes: new Uint8Array([27]) },
-	'/': { label: '/', sendBytes: new Uint8Array([47]) },
-	'|': { label: '|', sendBytes: new Uint8Array([124]) },
-	home: { label: 'HOME', sendBytes: new Uint8Array([27, 91, 72]) },
-	end: { label: 'END', sendBytes: new Uint8Array([27, 91, 70]) },
-	pgup: { label: 'PGUP', sendBytes: new Uint8Array([27, 91, 53, 126]) },
-	pgdn: { label: 'PGDN', sendBytes: new Uint8Array([27, 91, 54, 126]) },
-	tab: { label: 'TAB', sendBytes: new Uint8Array([9]) },
-	left: { iconName: 'arrow-back', sendBytes: new Uint8Array([27, 91, 68]) },
-	up: { iconName: 'arrow-up', sendBytes: new Uint8Array([27, 91, 65]) },
-	down: { iconName: 'arrow-down', sendBytes: new Uint8Array([27, 91, 66]) },
-	right: {
-		iconName: 'arrow-forward',
-		sendBytes: new Uint8Array([27, 91, 67]),
-	},
-	insert: { label: 'INSERT', sendBytes: new Uint8Array([27, 91, 50, 126]) },
-	delete: { label: 'DELETE', sendBytes: new Uint8Array([27, 91, 51, 126]) },
-	pageup: { label: 'PAGEUP', sendBytes: new Uint8Array([27, 91, 53, 126]) },
-	pagedown: { label: 'PAGEDOWN', sendBytes: new Uint8Array([27, 91, 54, 126]) },
-	ctrl: { label: 'CTRL', type: 'modifier', ...ctrlModifier },
-	alt: { label: 'ALT', type: 'modifier', ...altModifier },
+const cmdModifier: ModifierContract = {
+	orderPreference: 30,
+	canApplyModifierToBytes: () => false,
+	applyModifierToBytes: (bytes) => bytes,
 };
 
-type KeyboardToolbarButtonViewProps =
-	| {
-			label: string;
-	  }
-	| {
-			iconName: IconName;
-	  };
+const MODIFIER_DEFS: Record<ModifierKey, ModifierContract> = {
+	SHIFT: shiftModifier,
+	CTRL: ctrlModifier,
+	ALT: altModifier,
+	CMD: cmdModifier,
+};
 
-type KeyboardToolbarModifierButtonProps = {
-	type: 'modifier';
-} & ModifierContract &
-	KeyboardToolbarButtonViewProps;
-type KeyboardToolbarInstantButtonProps = {
-	type?: 'sendBytes';
-	sendBytes: Uint8Array<ArrayBuffer>;
-} & KeyboardToolbarButtonViewProps;
+type LucideIconComponent = React.ComponentType<{
+	color?: string;
+	size?: number;
+}>;
 
-type KeyboardToolbarButtonProps =
-	| KeyboardToolbarModifierButtonProps
-	| KeyboardToolbarInstantButtonProps;
+function resolveLucideIcon(name: string | null): LucideIconComponent | null {
+	if (!name) return null;
+	const iconMap =
+		LucideIcons as unknown as Record<string, LucideIconComponent>;
+	const Icon = iconMap[name];
+	return Icon ?? null;
+}
 
-const propsToKey = (props: KeyboardToolbarButtonProps) =>
-	'label' in props ? props.label : props.iconName;
-
-function KeyboardToolbarButton({
-	style,
-	...props
-}: KeyboardToolbarButtonProps & { style?: StyleProp<ViewStyle> }) {
+function TerminalKeyboard({
+	keyboard,
+	modifierKeysActive,
+	onSlotPress,
+}: {
+	keyboard: KeyboardDefinition | null;
+	modifierKeysActive: ModifierKey[];
+	onSlotPress: (slot: KeyboardSlot) => void;
+}) {
 	const theme = useTheme();
-	const { sendBytes, modifierKeysActive, setModifierKeysActive } =
-		useContextSafe(KeyboardToolBarContext);
 
-	const isTextLabel = 'label' in props;
-	const children = isTextLabel ? (
-		<Text style={{ color: theme.colors.textPrimary }}>{props.label}</Text>
-	) : (
-		<Ionicons
-			name={props.iconName}
-			size={20}
-			color={theme.colors.textPrimary}
-		/>
-	);
+	if (!keyboard) {
+		return (
+			<View
+				style={{
+					borderTopWidth: 1,
+					borderColor: theme.colors.border,
+					padding: 12,
+				}}
+			>
+				<Text style={{ color: theme.colors.textSecondary }}>
+					No keyboard configuration. Generate code to enable shortcuts.
+				</Text>
+			</View>
+		);
+	}
 
-	const modifierActive =
-		props.type === 'modifier' &&
-		!!modifierKeysActive.find((m) => propsToKey(m) === propsToKey(props));
+	/* eslint-disable @eslint-react/no-array-index-key */
+	const rows = keyboard.grid.map((row, rowIndex) => (
+		<View key={`row-${rowIndex}`} style={{ flexDirection: 'row' }}>
+			{row.map((slot, colIndex) => {
+				if (!slot) {
+					return (
+						<View
+							key={`slot-${rowIndex}-${colIndex}`}
+							style={{ flex: 1, margin: 2 }}
+						/>
+					);
+				}
+
+				const modifierActive =
+					slot.type === 'modifier' &&
+					modifierKeysActive.includes(slot.modifier);
+				const Icon = resolveLucideIcon(slot.icon);
+
+				return (
+					<Pressable
+						key={`slot-${rowIndex}-${colIndex}`}
+						onPress={() => onSlotPress(slot)}
+						style={[
+							{
+								flex: 1,
+								margin: 2,
+								paddingVertical: 6,
+								borderRadius: 8,
+								borderWidth: 1,
+								borderColor: theme.colors.border,
+								alignItems: 'center',
+								justifyContent: 'center',
+							},
+							modifierActive && {
+								backgroundColor: theme.colors.primary,
+							},
+						]}
+					>
+						{Icon ? (
+							<Icon color={theme.colors.textPrimary} size={18} />
+						) : null}
+						<Text
+							numberOfLines={1}
+							style={{
+								color: theme.colors.textPrimary,
+								fontSize: 10,
+								marginTop: Icon ? 2 : 0,
+							}}
+						>
+							{slot.label}
+						</Text>
+					</Pressable>
+				);
+			})}
+		</View>
+	));
+	/* eslint-enable @eslint-react/no-array-index-key */
 
 	return (
-		<Pressable
-			style={[
-				{
-					flex: 1,
-					alignItems: 'center',
-					justifyContent: 'center',
-					borderWidth: 1,
-					borderColor: theme.colors.border,
-				},
-				modifierActive && { backgroundColor: theme.colors.primary },
-				style,
-			]}
-			onPress={() => {
-				if (props.type === 'modifier') {
-					setModifierKeysActive((modifierKeysActive) =>
-						modifierKeysActive.find((m) => propsToKey(m) === propsToKey(props))
-							? modifierKeysActive.filter(
-									(m) => propsToKey(m) !== propsToKey(props),
-								)
-							: [...modifierKeysActive, props],
-					);
-					return;
-				}
-
-				if ('sendBytes' in props) {
-					sendBytes(new Uint8Array(props.sendBytes));
-					return;
-				}
-				throw new Error('Invalid button type');
+		<View
+			style={{
+				borderTopWidth: 1,
+				borderColor: theme.colors.border,
+				padding: 6,
 			}}
 		>
-			{children}
-		</Pressable>
+			{rows}
+		</View>
 	);
 }

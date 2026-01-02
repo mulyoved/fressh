@@ -1248,6 +1248,13 @@ export interface ShellSessionInterface {
     sendData(data: ArrayBuffer, asyncOpts_?: {
         signal: AbortSignal;
     }): Promise<void>;
+    /**
+     * Resize the PTY window. Call when the terminal UI size changes.
+     * This sends an SSH "window-change" request to the server.
+     */
+    resizePty(cols: number, rows: number, pixelWidth: number | null, pixelHeight: number | null, asyncOpts_?: {
+        signal: AbortSignal;
+    }): Promise<void>;
 }
 export declare class ShellSession extends UniffiAbstractObject implements ShellSessionInterface {
     readonly [uniffiTypeNameSymbol] = "ShellSession";
@@ -1282,6 +1289,13 @@ export declare class ShellSession extends UniffiAbstractObject implements ShellS
      * Send bytes to the active shell (stdin).
      */
     sendData(data: ArrayBuffer, asyncOpts_?: {
+        signal: AbortSignal;
+    }): Promise<void>;
+    /**
+     * Resize the PTY window. Call when the terminal UI size changes.
+     * NOTE: This stub will be replaced by generated code after native rebuild.
+     */
+    resizePty(cols: number, rows: number, pixelWidth: number | null, pixelHeight: number | null, asyncOpts_?: {
         signal: AbortSignal;
     }): Promise<void>;
     /**

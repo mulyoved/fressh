@@ -2212,6 +2212,24 @@ export class ShellSession extends UniffiAbstractObject {
   }
 
   /**
+   * Resize the PTY window. Call when the terminal UI size changes.
+   * NOTE: This stub will be replaced by generated code after native rebuild.
+   */
+  async resizePty(cols, rows, pixelWidth, pixelHeight, asyncOpts_) /*throws*/{
+    const __stack = uniffiIsDebug ? new Error().stack : undefined;
+    try {
+      return await uniffiRustCallAsync(/*rustCaller:*/uniffiCaller, /*rustFutureFunc:*/() => {
+        return nativeModule().ubrn_uniffi_uniffi_russh_fn_method_shellsession_resize_pty(uniffiTypeShellSessionObjectFactory.clonePointer(this), FfiConverterUInt32.lower(cols), FfiConverterUInt32.lower(rows), FfiConverterOptionalUInt32.lower(pixelWidth), FfiConverterOptionalUInt32.lower(pixelHeight));
+      }, /*pollFunc:*/nativeModule().ubrn_ffi_uniffi_russh_rust_future_poll_void, /*cancelFunc:*/nativeModule().ubrn_ffi_uniffi_russh_rust_future_cancel_void, /*completeFunc:*/nativeModule().ubrn_ffi_uniffi_russh_rust_future_complete_void, /*freeFunc:*/nativeModule().ubrn_ffi_uniffi_russh_rust_future_free_void, /*liftFunc:*/_v => {}, /*liftString:*/FfiConverterString.lift, /*asyncOpts:*/asyncOpts_, /*errorHandler:*/FfiConverterTypeSshError.lift.bind(FfiConverterTypeSshError));
+    } catch (__error) {
+      if (uniffiIsDebug && __error instanceof Error) {
+        __error.stack = __stack;
+      }
+      throw __error;
+    }
+  }
+
+  /**
    * {@inheritDoc uniffi-bindgen-react-native#UniffiAbstractObject.uniffiDestroy}
    */
   uniffiDestroy() {
