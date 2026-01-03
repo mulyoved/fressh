@@ -259,11 +259,11 @@ function ShellDetail() {
 		storedConnectionId?: string;
 	}>();
 
-	if (!searchParams.connectionId || !searchParams.channelId)
-		throw new Error('Missing connectionId or channelId');
-
 	const connectionId = searchParams.connectionId;
-	const channelId = parseInt(searchParams.channelId);
+	const channelId = parseInt(searchParams.channelId ?? '');
+
+	if (!connectionId || isNaN(channelId))
+		throw new Error('Missing or invalid connectionId/channelId');
 	const hasTmuxAttachError = searchParams.tmuxError === 'attach-failed';
 	const tmuxSessionName = searchParams.tmuxSessionName;
 

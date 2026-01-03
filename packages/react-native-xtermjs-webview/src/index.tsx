@@ -223,11 +223,12 @@ export function XtermJsWebView({
 
 	// Cleanup pending rAF on unmount
 	useEffect(() => {
+		const pendingSelectionMap = pendingSelectionRef.current;
 		return () => {
 			if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
 			rafRef.current = null;
 			bufRef.current = null;
-			pendingSelectionRef.current.clear();
+			pendingSelectionMap.clear();
 		};
 	}, []);
 
