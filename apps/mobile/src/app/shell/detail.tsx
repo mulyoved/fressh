@@ -26,9 +26,12 @@ import {
 	AppState,
 	Keyboard,
 	KeyboardAvoidingView,
+	Modal,
 	Platform,
 	Pressable,
+	ScrollView,
 	Text,
+	TextInput,
 	View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -43,6 +46,11 @@ import {
 	type ModifierKey,
 } from '@/generated/keyboard-config';
 import { useAutoConnectStore } from '@/lib/auto-connect';
+import {
+	commandPresets,
+	type CommandPreset,
+	type CommandStep,
+} from '@/lib/command-presets';
 import { getStoredConnectionId } from '@/lib/connection-utils';
 import {
 	CONFIGURATOR_URL,
@@ -137,8 +145,8 @@ function TmuxAttachErrorScreen({
 					marginBottom: 20,
 				}}
 			>
-				We could not attach to tmux session &quot;{sessionName}&quot;. Create it on
-				the server and try again.
+				We could not attach to tmux session &quot;{sessionName}&quot;. Create it
+				on the server and try again.
 			</Text>
 			<Pressable
 				onPress={onEdit}
@@ -301,12 +309,19 @@ function ShellDetail() {
 		};
 	}, [shell]);
 
-	const [selectedKeyboardId, setSelectedKeyboardId] =
-		useState<string>(DEFAULT_KEYBOARD_ID_FALLBACK);
-	const availableKeyboardIds = useMemo(
-		() => new Set(ALL_KEYBOARD_IDS),
-		[],
+	useEffect(() => {
+		return () => {
+			commandTimeoutsRef.current.forEach((timeout) => {
+				clearTimeout(timeout);
+			});
+			commandTimeoutsRef.current = [];
+		};
+	}, []);
+
+	const [selectedKeyboardId, setSelectedKeyboardId] = useState<string>(
+		DEFAULT_KEYBOARD_ID_FALLBACK,
 	);
+	const availableKeyboardIds = useMemo(() => new Set(ALL_KEYBOARD_IDS), []);
 
 	const currentKeyboard = useMemo<KeyboardDefinition | null>(() => {
 		if (selectedKeyboardId && KEYBOARDS_BY_ID[selectedKeyboardId]) {
@@ -319,14 +334,12 @@ function ShellDetail() {
 			return KEYBOARDS_BY_ID[DEFAULT_KEYBOARD_ID_FALLBACK];
 		}
 		const fallbackId = ACTIVE_KEYBOARD_IDS_FALLBACK[0];
-		return fallbackId ? KEYBOARDS_BY_ID[fallbackId] ?? null : null;
+		return fallbackId ? (KEYBOARDS_BY_ID[fallbackId] ?? null) : null;
 	}, [selectedKeyboardId]);
 
 	const currentMacros = useMemo<MacroDef[]>(
 		() =>
-			currentKeyboard
-				? MACROS_BY_KEYBOARD_ID[currentKeyboard.id] ?? []
-				: [],
+			currentKeyboard ? (MACROS_BY_KEYBOARD_ID[currentKeyboard.id] ?? []) : [],
 		[currentKeyboard],
 	);
 
@@ -373,6 +386,9 @@ function ShellDetail() {
 	);
 	const [systemKeyboardEnabled, setSystemKeyboardEnabled] = useState(false);
 	const [selectionModeEnabled, setSelectionModeEnabled] = useState(false);
+	const [commandPresetsOpen, setCommandPresetsOpen] = useState(false);
+	const [commanderOpen, setCommanderOpen] = useState(false);
+	const commandTimeoutsRef = useRef<ReturnType<typeof setTimeout>[]>([]);
 	const lastSelectionRef = useRef<{ text: string; at: number } | null>(null);
 
 	const sendBytesRaw = useCallback(
@@ -414,6 +430,65 @@ function ShellDetail() {
 			sendBytesWithModifiers(encoder.encode(value));
 		},
 		[sendBytesWithModifiers],
+	);
+
+	const clearCommandTimeouts = useCallback(() => {
+		commandTimeoutsRef.current.forEach((timeout) => {
+			clearTimeout(timeout);
+		});
+		commandTimeoutsRef.current = [];
+	}, []);
+
+	const sendCommandStep = useCallback(
+		(step: CommandStep) => {
+			const times = step.repeat ?? 1;
+			for (let i = 0; i < times; i += 1) {
+				switch (step.type) {
+					case 'text':
+						sendTextRaw(step.data);
+						break;
+					case 'enter':
+						sendBytesRaw(encoder.encode('\r'));
+						break;
+					case 'arrowDown':
+						sendBytesRaw(encoder.encode('\x1b[B'));
+						break;
+					case 'arrowUp':
+						sendBytesRaw(encoder.encode('\x1b[A'));
+						break;
+					case 'esc':
+						sendBytesRaw(encoder.encode('\x1b'));
+						break;
+					case 'space':
+						sendBytesRaw(encoder.encode(' '));
+						break;
+					case 'tab':
+						sendBytesRaw(encoder.encode('\t'));
+						break;
+					default:
+						break;
+				}
+			}
+		},
+		[sendBytesRaw, sendTextRaw],
+	);
+
+	const runCommandPreset = useCallback(
+		(preset: CommandPreset) => {
+			clearCommandTimeouts();
+			let delay = 0;
+			const baseDelay = 50;
+			preset.steps.forEach((step) => {
+				const stepDelay = step.delayMs ?? baseDelay;
+				const timeoutId = setTimeout(() => {
+					sendCommandStep(step);
+				}, delay);
+				commandTimeoutsRef.current.push(timeoutId);
+				delay += stepDelay * (step.repeat ?? 1);
+			});
+			setCommandPresetsOpen(false);
+		},
+		[clearCommandTimeouts, sendCommandStep],
 	);
 
 	const toggleModifier = useCallback((modifier: ModifierKey) => {
@@ -479,23 +554,20 @@ function ShellDetail() {
 		})();
 	}, []);
 
-	const handleSelectionChanged = useCallback(
-		(text: string) => {
-			if (!text) return;
-			const now = Date.now();
-			if (lastSelectionRef.current?.text === text) return;
-			lastSelectionRef.current = { text, at: now };
-			void (async () => {
-				try {
-					await Clipboard.setStringAsync(text);
-					logger.info('copied selection', text.length);
-				} catch (error) {
-					logger.warn('clipboard write failed', error);
-				}
-			})();
-		},
-		[],
-	);
+	const handleSelectionChanged = useCallback((text: string) => {
+		if (!text) return;
+		const now = Date.now();
+		if (lastSelectionRef.current?.text === text) return;
+		lastSelectionRef.current = { text, at: now };
+		void (async () => {
+			try {
+				await Clipboard.setStringAsync(text);
+				logger.info('copied selection', text.length);
+			} catch (error) {
+				logger.warn('clipboard write failed', error);
+			}
+		})();
+	}, []);
 
 	const actionContext = useMemo<ActionContext>(
 		() => ({
@@ -509,10 +581,12 @@ function ShellDetail() {
 			pasteClipboard: handlePasteClipboard,
 			copySelection: handleCopySelection,
 			toggleCommandPresets: () => {
-				logger.warn('command presets not available');
+				setCommanderOpen(false);
+				setCommandPresetsOpen((prev) => !prev);
 			},
 			openCommander: () => {
-				logger.warn('commander not available');
+				setCommandPresetsOpen(false);
+				setCommanderOpen(true);
 			},
 		}),
 		[
@@ -547,9 +621,7 @@ function ShellDetail() {
 				return;
 			}
 			if (slot.type === 'macro') {
-				const macro = currentMacros.find(
-					(entry) => entry.id === slot.macroId,
-				);
+				const macro = currentMacros.find((entry) => entry.id === slot.macroId);
 				if (!macro) return;
 				runMacro(macro, {
 					sendBytes: sendBytesRaw,
@@ -648,7 +720,16 @@ function ShellDetail() {
 		setSystemKeyboardEnabled((prev) => {
 			const next = !prev;
 			xtermRef.current?.setSystemKeyboardEnabled(next);
-			if (!next) Keyboard.dismiss();
+			if (next) {
+				setSelectionModeEnabled(false);
+				xtermRef.current?.setSelectionModeEnabled(false);
+				// Defer focus until after the button press releases.
+				setTimeout(() => {
+					xtermRef.current?.focus();
+				}, 0);
+			} else {
+				Keyboard.dismiss();
+			}
 			return next;
 		});
 	}, []);
@@ -799,6 +880,34 @@ function ShellDetail() {
 					systemKeyboardEnabled={systemKeyboardEnabled}
 					onToggleSystemKeyboard={toggleSystemKeyboard}
 				/>
+				<CommandPresetsModal
+					open={commandPresetsOpen}
+					presets={commandPresets}
+					bottomOffset={Platform.OS === 'android' ? insets.bottom + 24 : 24}
+					onClose={() => {
+						setCommandPresetsOpen(false);
+					}}
+					onSelect={runCommandPreset}
+				/>
+				<TerminalCommanderModal
+					open={commanderOpen}
+					bottomOffset={Platform.OS === 'android' ? insets.bottom + 24 : 24}
+					onClose={() => {
+						setCommanderOpen(false);
+					}}
+					onExecuteCommand={(value) => {
+						if (!value.trim()) return;
+						sendTextRaw(value);
+						sendBytesRaw(encoder.encode('\r'));
+					}}
+					onPasteText={(value) => {
+						if (!value.trim()) return;
+						sendTextRaw(value);
+					}}
+					onSendShortcut={(sequence) => {
+						sendBytesRaw(encoder.encode(sequence));
+					}}
+				/>
 				{flashKeyboardName && (
 					<Animated.View
 						pointerEvents="none"
@@ -919,8 +1028,7 @@ type LucideIconComponent = React.ComponentType<{
 
 function resolveLucideIcon(name: string | null): LucideIconComponent | null {
 	if (!name) return null;
-	const iconMap =
-		LucideIcons as unknown as Record<string, LucideIconComponent>;
+	const iconMap = LucideIcons as unknown as Record<string, LucideIconComponent>;
 	const Icon = iconMap[name];
 	return Icon ?? null;
 }
@@ -1010,9 +1118,7 @@ function TerminalKeyboard({
 							},
 						]}
 					>
-						{Icon ? (
-							<Icon color={theme.colors.textPrimary} size={18} />
-						) : null}
+						{Icon ? <Icon color={theme.colors.textPrimary} size={18} /> : null}
 						<Text
 							numberOfLines={1}
 							style={{
@@ -1077,7 +1183,9 @@ function TerminalKeyboard({
 				justifyContent: 'center',
 			}}
 		>
-			{CopyIcon ? <CopyIcon color={theme.colors.textPrimary} size={18} /> : null}
+			{CopyIcon ? (
+				<CopyIcon color={theme.colors.textPrimary} size={18} />
+			) : null}
 			<Text
 				numberOfLines={1}
 				style={{
@@ -1175,5 +1283,440 @@ function TerminalKeyboard({
 			{toggleRow}
 			{rows}
 		</View>
+	);
+}
+
+const COMMANDER_SHORTCUTS = [
+	{
+		name: 'Ctrl+C',
+		sequence: '\x03',
+		description: 'Interrupt/Cancel current process',
+	},
+	{
+		name: 'Ctrl+D',
+		sequence: '\x04',
+		description: 'End of file (EOF) / Exit',
+	},
+	{
+		name: 'Ctrl+Z',
+		sequence: '\x1a',
+		description: 'Suspend current process',
+	},
+	{
+		name: 'Ctrl+A',
+		sequence: '\x01',
+		description: 'Move cursor to beginning of line',
+	},
+	{
+		name: 'Ctrl+E',
+		sequence: '\x05',
+		description: 'Move cursor to end of line',
+	},
+	{
+		name: 'Ctrl+K',
+		sequence: '\x0b',
+		description: 'Kill/Delete from cursor to end of line',
+	},
+	{
+		name: 'Ctrl+U',
+		sequence: '\x15',
+		description: 'Kill/Delete from cursor to beginning of line',
+	},
+	{
+		name: 'Ctrl+W',
+		sequence: '\x17',
+		description: 'Delete word before cursor',
+	},
+	{
+		name: 'Ctrl+L',
+		sequence: '\x0c',
+		description: 'Clear screen',
+	},
+	{
+		name: 'Ctrl+R',
+		sequence: '\x12',
+		description: 'Reverse search command history',
+	},
+	{
+		name: 'Tab',
+		sequence: '\t',
+		description: 'Auto-complete',
+	},
+	{
+		name: 'Escape',
+		sequence: '\x1b',
+		description: 'Escape key',
+	},
+];
+
+function CommandPresetsModal({
+	open,
+	presets,
+	bottomOffset,
+	onClose,
+	onSelect,
+}: {
+	open: boolean;
+	presets: CommandPreset[];
+	bottomOffset: number;
+	onClose: () => void;
+	onSelect: (preset: CommandPreset) => void;
+}) {
+	const theme = useTheme();
+	const uniquePresets = useMemo(() => {
+		const seen = new Set<string>();
+		return presets.filter((preset) => {
+			const key = preset.label.trim();
+			if (seen.has(key)) return false;
+			seen.add(key);
+			return true;
+		});
+	}, [presets]);
+
+	return (
+		<Modal
+			transparent
+			visible={open}
+			animationType="slide"
+			onRequestClose={onClose}
+		>
+			<Pressable
+				onPress={onClose}
+				style={{
+					flex: 1,
+					backgroundColor: theme.colors.overlay,
+					justifyContent: 'flex-end',
+					alignItems: 'flex-end',
+				}}
+			>
+				<View
+					onStartShouldSetResponder={() => true}
+					style={{
+						backgroundColor: theme.colors.background,
+						borderTopLeftRadius: 16,
+						padding: 16,
+						borderColor: theme.colors.borderStrong,
+						borderWidth: 1,
+						maxHeight: '80%',
+						width: '70%',
+						maxWidth: 320,
+						minWidth: 240,
+						marginRight: 8,
+						marginBottom: bottomOffset,
+					}}
+				>
+					<View
+						style={{
+							flexDirection: 'row',
+							alignItems: 'center',
+							justifyContent: 'space-between',
+							marginBottom: 12,
+						}}
+					>
+						<Text
+							style={{
+								color: theme.colors.textPrimary,
+								fontSize: 18,
+								fontWeight: '700',
+							}}
+						>
+							Command Presets
+						</Text>
+						<Pressable
+							onPress={onClose}
+							style={{
+								paddingHorizontal: 10,
+								paddingVertical: 6,
+								borderRadius: 8,
+								borderWidth: 1,
+								borderColor: theme.colors.border,
+							}}
+						>
+							<Text style={{ color: theme.colors.textSecondary }}>Close</Text>
+						</Pressable>
+					</View>
+					{uniquePresets.length === 0 ? (
+						<Text style={{ color: theme.colors.textSecondary }}>
+							No command presets configured.
+						</Text>
+					) : (
+						<ScrollView>
+							{uniquePresets.map((preset, index) => (
+								<Pressable
+									key={`${preset.label}-${index.toString()}`}
+									onPress={() => onSelect(preset)}
+									style={{
+										paddingVertical: 12,
+										paddingHorizontal: 12,
+										borderRadius: 10,
+										borderWidth: 1,
+										borderColor: theme.colors.border,
+										backgroundColor: theme.colors.surface,
+										marginBottom: 8,
+									}}
+								>
+									<Text
+										style={{
+											color: theme.colors.textPrimary,
+											fontSize: 14,
+											fontWeight: '600',
+										}}
+									>
+										{preset.label}
+									</Text>
+								</Pressable>
+							))}
+						</ScrollView>
+					)}
+				</View>
+			</Pressable>
+		</Modal>
+	);
+}
+
+function TerminalCommanderModal({
+	open,
+	bottomOffset,
+	onClose,
+	onExecuteCommand,
+	onPasteText,
+	onSendShortcut,
+}: {
+	open: boolean;
+	bottomOffset: number;
+	onClose: () => void;
+	onExecuteCommand: (value: string) => void;
+	onPasteText: (value: string) => void;
+	onSendShortcut: (sequence: string) => void;
+}) {
+	const theme = useTheme();
+	const [commandInput, setCommandInput] = useState('');
+	const [pasteInput, setPasteInput] = useState('');
+
+	const handleClose = useCallback(() => {
+		setCommandInput('');
+		setPasteInput('');
+		onClose();
+	}, [onClose]);
+
+	return (
+		<Modal
+			transparent
+			visible={open}
+			animationType="slide"
+			onRequestClose={handleClose}
+		>
+			<Pressable
+				onPress={handleClose}
+				style={{
+					flex: 1,
+					backgroundColor: theme.colors.overlay,
+				}}
+			>
+				<KeyboardAvoidingView
+					behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+					style={{ flex: 1, justifyContent: 'flex-end' }}
+				>
+					<View
+						onStartShouldSetResponder={() => true}
+						style={{
+							backgroundColor: theme.colors.background,
+							borderTopLeftRadius: 16,
+							padding: 16,
+							borderColor: theme.colors.borderStrong,
+							borderWidth: 1,
+							maxHeight: '85%',
+							width: '70%',
+							maxWidth: 360,
+							minWidth: 260,
+							alignSelf: 'flex-end',
+							marginRight: 8,
+							marginBottom: bottomOffset,
+						}}
+					>
+						<View
+							style={{
+								flexDirection: 'row',
+								alignItems: 'center',
+								justifyContent: 'space-between',
+								marginBottom: 12,
+							}}
+						>
+							<Text
+								style={{
+									color: theme.colors.textPrimary,
+									fontSize: 18,
+									fontWeight: '700',
+								}}
+							>
+								Terminal Commander
+							</Text>
+							<Pressable
+								onPress={handleClose}
+								style={{
+									paddingHorizontal: 10,
+									paddingVertical: 6,
+									borderRadius: 8,
+									borderWidth: 1,
+									borderColor: theme.colors.border,
+								}}
+							>
+								<Text style={{ color: theme.colors.textSecondary }}>Close</Text>
+							</Pressable>
+						</View>
+						<ScrollView>
+							<Text
+								style={{
+									color: theme.colors.textSecondary,
+									fontSize: 14,
+									fontWeight: '600',
+									marginBottom: 6,
+								}}
+							>
+								Execute Command
+							</Text>
+							<TextInput
+								value={commandInput}
+								onChangeText={setCommandInput}
+								placeholder="ls -la"
+								placeholderTextColor={theme.colors.muted}
+								style={{
+									borderWidth: 1,
+									borderColor: theme.colors.border,
+									backgroundColor: theme.colors.inputBackground,
+									color: theme.colors.textPrimary,
+									borderRadius: 10,
+									paddingHorizontal: 12,
+									paddingVertical: 10,
+									marginBottom: 10,
+								}}
+							/>
+							<Pressable
+								onPress={() => {
+									if (!commandInput.trim()) return;
+									onExecuteCommand(commandInput);
+									handleClose();
+								}}
+								style={{
+									backgroundColor: theme.colors.primary,
+									borderRadius: 10,
+									paddingVertical: 12,
+									alignItems: 'center',
+									marginBottom: 16,
+								}}
+							>
+								<Text
+									style={{
+										color: theme.colors.buttonTextOnPrimary,
+										fontWeight: '700',
+									}}
+								>
+									Execute
+								</Text>
+							</Pressable>
+							<Text
+								style={{
+									color: theme.colors.textSecondary,
+									fontSize: 14,
+									fontWeight: '600',
+									marginBottom: 6,
+								}}
+							>
+								Paste Text
+							</Text>
+							<TextInput
+								value={pasteInput}
+								onChangeText={setPasteInput}
+								placeholder="Enter text to paste..."
+								placeholderTextColor={theme.colors.muted}
+								style={{
+									borderWidth: 1,
+									borderColor: theme.colors.border,
+									backgroundColor: theme.colors.inputBackground,
+									color: theme.colors.textPrimary,
+									borderRadius: 10,
+									paddingHorizontal: 12,
+									paddingVertical: 10,
+									minHeight: 90,
+									textAlignVertical: 'top',
+									marginBottom: 10,
+								}}
+								multiline
+							/>
+							<Pressable
+								onPress={() => {
+									if (!pasteInput.trim()) return;
+									onPasteText(pasteInput);
+									handleClose();
+								}}
+								style={{
+									backgroundColor: theme.colors.primary,
+									borderRadius: 10,
+									paddingVertical: 12,
+									alignItems: 'center',
+									marginBottom: 16,
+								}}
+							>
+								<Text
+									style={{
+										color: theme.colors.buttonTextOnPrimary,
+										fontWeight: '700',
+									}}
+								>
+									Paste
+								</Text>
+							</Pressable>
+							<Text
+								style={{
+									color: theme.colors.textSecondary,
+									fontSize: 14,
+									fontWeight: '600',
+									marginBottom: 6,
+								}}
+							>
+								Shortcuts
+							</Text>
+							{COMMANDER_SHORTCUTS.map((shortcut) => (
+								<Pressable
+									key={shortcut.name}
+									onPress={() => {
+										onSendShortcut(shortcut.sequence);
+										handleClose();
+									}}
+									style={{
+										paddingVertical: 12,
+										paddingHorizontal: 12,
+										borderRadius: 10,
+										borderWidth: 1,
+										borderColor: theme.colors.border,
+										backgroundColor: theme.colors.surface,
+										marginBottom: 8,
+									}}
+								>
+									<Text
+										style={{
+											color: theme.colors.textPrimary,
+											fontSize: 14,
+											fontWeight: '600',
+										}}
+									>
+										{shortcut.name}
+									</Text>
+									<Text
+										style={{
+											color: theme.colors.textSecondary,
+											fontSize: 12,
+											marginTop: 2,
+										}}
+									>
+										{shortcut.description}
+									</Text>
+								</Pressable>
+							))}
+						</ScrollView>
+					</View>
+				</KeyboardAvoidingView>
+			</Pressable>
+		</Modal>
 	);
 }

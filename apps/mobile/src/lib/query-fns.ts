@@ -122,38 +122,38 @@ export const useSshConnMutation = (opts?: {
 		mutationFn: async (connectionDetails: InputConnectionDetails) => {
 			try {
 				logger.info('Connecting to SSH server...');
-					await connectAndOpenShell({
-						connectionDetails,
-						connect,
-						onConnectionProgress: (progressEvent) => {
-							opts?.onConnectionProgress?.(progressEvent);
-						},
-						navigate: ({ connectionId, channelId }) => {
-							router.push({
-								pathname: '/shell/detail',
-								params: {
-									connectionId,
-									channelId,
-								},
-							});
-						},
-						navigateWithError: ({
-							connectionId,
-							tmuxSessionName,
-							storedConnectionId,
-						}) => {
-							router.push({
-								pathname: '/shell/detail',
-								params: {
-									connectionId,
-									channelId: '0',
-									tmuxError: 'attach-failed',
-									tmuxSessionName,
-									storedConnectionId,
-								},
-							});
-						},
-					});
+				await connectAndOpenShell({
+					connectionDetails,
+					connect,
+					onConnectionProgress: (progressEvent) => {
+						opts?.onConnectionProgress?.(progressEvent);
+					},
+					navigate: ({ connectionId, channelId }) => {
+						router.push({
+							pathname: '/shell/detail',
+							params: {
+								connectionId,
+								channelId,
+							},
+						});
+					},
+					navigateWithError: ({
+						connectionId,
+						tmuxSessionName,
+						storedConnectionId,
+					}) => {
+						router.push({
+							pathname: '/shell/detail',
+							params: {
+								connectionId,
+								channelId: '0',
+								tmuxError: 'attach-failed',
+								tmuxSessionName,
+								storedConnectionId,
+							},
+						});
+					},
+				});
 			} catch (error) {
 				logger.error('Error connecting to SSH server', error);
 				throw error;

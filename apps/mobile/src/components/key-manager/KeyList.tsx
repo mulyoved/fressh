@@ -461,15 +461,15 @@ function KeyRow(props: {
 									fontFamily: 'Menlo, ui-monospace, monospace',
 								}}
 							/>
-								<Pressable
-									onPress={handleCopyPublicKey}
-									style={{
-										backgroundColor: copied
-											? theme.colors.primaryDisabled
-											: theme.colors.primary,
-										borderRadius: 8,
-										paddingVertical: 8,
-										paddingHorizontal: 12,
+							<Pressable
+								onPress={handleCopyPublicKey}
+								style={{
+									backgroundColor: copied
+										? theme.colors.primaryDisabled
+										: theme.colors.primary,
+									borderRadius: 8,
+									paddingVertical: 8,
+									paddingHorizontal: 12,
 									alignItems: 'center',
 								}}
 							>

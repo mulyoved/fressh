@@ -18,4 +18,5 @@ For the full dev build procedure (including native/UniFFI changes), see:
 
 ### Native Dependencies
 
-When Rust code changes (e.g., in `packages/react-native-uniffi-russh`), a new EAS build is required to regenerate UniFFI bindings.
+When Rust code changes (e.g., in `packages/react-native-uniffi-russh`), a new
+EAS build is required to regenerate UniFFI bindings.

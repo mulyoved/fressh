@@ -430,7 +430,9 @@ const betterConnectionStorage = makeBetterSecureStore({
 });
 
 export type InputConnectionDetails = z.infer<typeof connectionDetailsSchema>;
-export type StoredConnectionDetails = z.infer<typeof storedConnectionDetailsSchema>;
+export type StoredConnectionDetails = z.infer<
+	typeof storedConnectionDetailsSchema
+>;
 
 async function upsertConnection(params: {
 	details: StoredConnectionDetails;
@@ -440,10 +442,9 @@ async function upsertConnection(params: {
 	const normalizedDetails: InputConnectionDetails = {
 		...params.details,
 		useTmux: params.details.useTmux ?? true,
-		tmuxSessionName:
-			params.details.tmuxSessionName?.trim().length
-				? params.details.tmuxSessionName.trim()
-				: 'main',
+		tmuxSessionName: params.details.tmuxSessionName?.trim().length
+			? params.details.tmuxSessionName.trim()
+			: 'main',
 		autoConnect: params.details.autoConnect ?? false,
 	};
 	const id = getStoredConnectionId(params.details);
@@ -473,7 +474,9 @@ const listConnectionsQueryOptions = queryOptions({
 	queryKey: [connectionQueryKey],
 	queryFn: async () => {
 		const entries = await betterConnectionStorage.listEntries();
-		const results: ((typeof entries)[number] & { value: StoredConnectionDetails })[] = [];
+		const results: ((typeof entries)[number] & {
+			value: StoredConnectionDetails;
+		})[] = [];
 		for (const entry of entries) {
 			try {
 				const { value } = await betterConnectionStorage.getEntry(entry.id);

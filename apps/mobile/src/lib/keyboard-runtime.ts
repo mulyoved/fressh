@@ -24,16 +24,14 @@ export function parseMacroScript(script: string): MacroPayload | null {
 			return {
 				type: 'command',
 				value: parsed.value,
-				enter:
-					parsed.enter === undefined ? true : Boolean(parsed.enter),
+				enter: parsed.enter === undefined ? true : Boolean(parsed.enter),
 			};
 		}
 		if (parsed.type === 'text' && typeof parsed.value === 'string') {
 			return {
 				type: 'text',
 				value: parsed.value,
-				enter:
-					parsed.enter === undefined ? false : Boolean(parsed.enter),
+				enter: parsed.enter === undefined ? false : Boolean(parsed.enter),
 			};
 		}
 		if (parsed.type === 'sequence' && typeof parsed.value === 'string') {

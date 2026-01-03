@@ -61,15 +61,19 @@ export function AutoConnectManager() {
 		);
 	}, [shells]);
 
-	const { isAutoConnecting, isReconnecting, setAutoConnecting, setReconnecting } =
-		useAutoConnectStore(
-			useShallow((s) => ({
-				isAutoConnecting: s.isAutoConnecting,
-				isReconnecting: s.isReconnecting,
-				setAutoConnecting: s.setAutoConnecting,
-				setReconnecting: s.setReconnecting,
-			})),
-		);
+	const {
+		isAutoConnecting,
+		isReconnecting,
+		setAutoConnecting,
+		setReconnecting,
+	} = useAutoConnectStore(
+		useShallow((s) => ({
+			isAutoConnecting: s.isAutoConnecting,
+			isReconnecting: s.isReconnecting,
+			setAutoConnecting: s.setAutoConnecting,
+			setReconnecting: s.setReconnecting,
+		})),
+	);
 
 	const inFlightRef = React.useRef(false);
 	const reconnectTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(

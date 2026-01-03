@@ -61,7 +61,10 @@ function Host() {
 	const editConnectionQuery = useQuery({
 		...(editConnectionId
 			? secretsManager.connections.query.get(editConnectionId)
-			: { queryKey: ['connections', 'edit', 'none'], queryFn: async () => null }),
+			: {
+					queryKey: ['connections', 'edit', 'none'],
+					queryFn: async () => null,
+				}),
 		enabled: Boolean(editConnectionId),
 	});
 	const marginBottom = useBottomTabSpacing();
@@ -77,7 +80,10 @@ function Host() {
 		},
 	});
 
-	const isPristine = useStore(connectionForm.store, (state) => state.isPristine);
+	const isPristine = useStore(
+		connectionForm.store,
+		(state) => state.isPristine,
+	);
 	const setFieldValue = connectionForm.setFieldValue;
 	const formErrors = useStore(connectionForm.store, (state) => state.errorMap);
 	useEffect(() => {
@@ -112,10 +118,9 @@ function Host() {
 			setFieldValue('username', connection.username);
 			setFieldValue('security.keyId', connection.security.keyId);
 
-			const tmuxSessionName =
-				connection.tmuxSessionName?.trim().length
-					? connection.tmuxSessionName
-					: 'main';
+			const tmuxSessionName = connection.tmuxSessionName?.trim().length
+				? connection.tmuxSessionName
+				: 'main';
 
 			setFieldValue('useTmux', connection.useTmux ?? true);
 			setFieldValue('tmuxSessionName', tmuxSessionName);
@@ -135,7 +140,12 @@ function Host() {
 		if (editConnectionId) return;
 		if (!latestSavedConnection) return;
 		applyConnectionToForm(latestSavedConnection);
-	}, [applyConnectionToForm, editConnectionId, isPristine, latestSavedConnection]);
+	}, [
+		applyConnectionToForm,
+		editConnectionId,
+		isPristine,
+		latestSavedConnection,
+	]);
 
 	useEffect(() => {
 		if (!editConnectionId) return;
@@ -234,10 +244,7 @@ function Host() {
 
 							<connectionForm.AppField name="useTmux">
 								{(field) => (
-									<field.SwitchField
-										label="Use tmux"
-										testID="useTmux"
-									/>
+									<field.SwitchField label="Use tmux" testID="useTmux" />
 								)}
 							</connectionForm.AppField>
 							<connectionForm.AppField name="tmuxSessionName">
