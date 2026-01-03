@@ -157,7 +157,7 @@ function wrapShellSession(shell) {
     close: o => shell.close(o?.signal ? {
       signal: o.signal
     } : undefined),
-    resizePty: (cols, rows, o) => shell.resizePty(cols, rows, o?.pixelWidth ?? null, o?.pixelHeight ?? null, o?.signal ? {
+    resizePty: (cols, rows, o) => shell.resizePty(cols, rows, o?.pixelWidth ?? undefined, o?.pixelHeight ?? undefined, o?.signal ? {
       signal: o.signal
     } : undefined),
     // setBufferPolicy,

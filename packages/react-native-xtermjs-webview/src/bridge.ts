@@ -6,7 +6,9 @@ export type BridgeInboundMessage =
 	| { type: 'initialized' }
 	| { type: 'input'; str: string }
 	| { type: 'debug'; message: string }
-	| { type: 'sizeChanged'; cols: number; rows: number };
+	| { type: 'sizeChanged'; cols: number; rows: number }
+	| { type: 'selection'; requestId: number; text: string }
+	| { type: 'selectionChanged'; text: string };
 
 // Messages injected from React Native into the WebView (xterm page)
 export type BridgeOutboundMessage =
@@ -14,6 +16,8 @@ export type BridgeOutboundMessage =
 	| { type: 'writeMany'; chunks: string[] }
 	| { type: 'resize'; cols: number; rows: number }
 	| { type: 'fit' }
+	| { type: 'getSelection'; requestId: number }
+	| { type: 'setSelectionMode'; enabled: boolean }
 	| {
 			type: 'setOptions';
 			opts: Partial<Omit<ITerminalOptions, keyof ITerminalInitOnlyOptions>>;

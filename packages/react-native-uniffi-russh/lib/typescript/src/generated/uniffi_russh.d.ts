@@ -1243,16 +1243,17 @@ export interface ShellSessionInterface {
     readBuffer(cursor: Cursor, maxBytes: /*u64*/ bigint | undefined): BufferReadResult;
     removeListener(id: bigint): void;
     /**
-     * Send bytes to the active shell (stdin).
+     * Resize the PTY window. Call when the terminal UI size changes.
+     * This sends an SSH "window-change" request to the server, which will
+     * deliver SIGWINCH to the remote process (e.g., tmux, vim).
      */
-    sendData(data: ArrayBuffer, asyncOpts_?: {
+    resizePty(cols: number, rows: number, pixelWidth: /*u32*/ number | undefined, pixelHeight: /*u32*/ number | undefined, asyncOpts_?: {
         signal: AbortSignal;
     }): Promise<void>;
     /**
-     * Resize the PTY window. Call when the terminal UI size changes.
-     * This sends an SSH "window-change" request to the server.
+     * Send bytes to the active shell (stdin).
      */
-    resizePty(cols: number, rows: number, pixelWidth: number | null, pixelHeight: number | null, asyncOpts_?: {
+    sendData(data: ArrayBuffer, asyncOpts_?: {
         signal: AbortSignal;
     }): Promise<void>;
 }
@@ -1286,16 +1287,17 @@ export declare class ShellSession extends UniffiAbstractObject implements ShellS
     readBuffer(cursor: Cursor, maxBytes: /*u64*/ bigint | undefined): BufferReadResult;
     removeListener(id: bigint): void;
     /**
-     * Send bytes to the active shell (stdin).
+     * Resize the PTY window. Call when the terminal UI size changes.
+     * This sends an SSH "window-change" request to the server, which will
+     * deliver SIGWINCH to the remote process (e.g., tmux, vim).
      */
-    sendData(data: ArrayBuffer, asyncOpts_?: {
+    resizePty(cols: number, rows: number, pixelWidth: /*u32*/ number | undefined, pixelHeight: /*u32*/ number | undefined, asyncOpts_?: {
         signal: AbortSignal;
     }): Promise<void>;
     /**
-     * Resize the PTY window. Call when the terminal UI size changes.
-     * NOTE: This stub will be replaced by generated code after native rebuild.
+     * Send bytes to the active shell (stdin).
      */
-    resizePty(cols: number, rows: number, pixelWidth: number | null, pixelHeight: number | null, asyncOpts_?: {
+    sendData(data: ArrayBuffer, asyncOpts_?: {
         signal: AbortSignal;
     }): Promise<void>;
     /**

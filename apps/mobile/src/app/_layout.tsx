@@ -4,6 +4,7 @@ import { isLiquidGlassAvailable } from 'expo-glass-effect';
 import { Stack } from 'expo-router';
 import React from 'react';
 import { KeyboardProvider } from 'react-native-keyboard-controller';
+import { AutoConnectManager } from '../lib/auto-connect';
 import { rootLogger } from '@/lib/logger';
 import { ThemeProvider } from '../lib/theme';
 import { queryClient } from '../lib/utils';
@@ -25,6 +26,7 @@ export default function RootLayout() {
 	return (
 		<QueryClientProvider client={queryClient}>
 			<ThemeProvider>
+				<AutoConnectManager />
 				<KeyboardProvider>
 					<Stack screenOptions={{ headerShown: false }} />
 				</KeyboardProvider>

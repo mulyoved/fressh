@@ -318,8 +318,8 @@ function wrapShellSession(
 			shell.resizePty(
 				cols,
 				rows,
-				o?.pixelWidth ?? null,
-				o?.pixelHeight ?? null,
+				o?.pixelWidth ?? undefined,
+				o?.pixelHeight ?? undefined,
 				o?.signal ? { signal: o.signal } : undefined,
 			),
 		// setBufferPolicy,

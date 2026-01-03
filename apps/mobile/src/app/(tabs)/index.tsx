@@ -16,6 +16,7 @@ import { useAppForm, useFieldContext } from '@/components/form-components';
 import { KeyList } from '@/components/key-manager/KeyList';
 import { rootLogger } from '@/lib/logger';
 import { useSshConnMutation } from '@/lib/query-fns';
+import { pickLatestConnection } from '@/lib/connection-utils';
 import {
 	connectionDetailsSchema,
 	secretsManager,
@@ -56,6 +57,7 @@ function Host() {
 	const sshConnMutation = useSshConnMutation({
 		onConnectionProgress: (s) => setLastConnectionProgressEvent(s),
 	});
+	const listConnectionsQuery = useQuery(secretsManager.connections.query.list);
 	const marginBottom = useBottomTabSpacing();
 	const connectionForm = useAppForm({
 		// https://tanstack.com/form/latest/docs/framework/react/guides/async-initial-values
@@ -73,6 +75,8 @@ function Host() {
 		connectionForm.store,
 		(state) => state.values.security.type,
 	);
+	const isPristine = useStore(connectionForm.store, (state) => state.isPristine);
+	const setFieldValue = connectionForm.setFieldValue;
 	const formErrors = useStore(connectionForm.store, (state) => state.errorMap);
 	useEffect(() => {
 		if (!formErrors || Object.keys(formErrors).length === 0) return;
@@ -93,6 +97,33 @@ function Host() {
 			return 'Authenticating...';
 		return 'Connected!';
 	})();
+
+	const latestSavedConnection = React.useMemo(() => {
+		const latestEntry = pickLatestConnection(listConnectionsQuery.data);
+		return latestEntry?.value ?? null;
+	}, [listConnectionsQuery.data]);
+
+	useEffect(() => {
+		// Only prefill when the user hasn't edited the form yet.
+		if (!isPristine) return;
+		if (!latestSavedConnection) return;
+		setFieldValue('host', latestSavedConnection.host);
+		setFieldValue('port', latestSavedConnection.port);
+		setFieldValue('username', latestSavedConnection.username);
+		if (latestSavedConnection.security.type === 'password') {
+			setFieldValue(
+				'security.password',
+				latestSavedConnection.security.password,
+			);
+			setFieldValue('security.type', 'password');
+		} else {
+			setFieldValue(
+				'security.keyId',
+				latestSavedConnection.security.keyId,
+			);
+			setFieldValue('security.type', 'key');
+		}
+	}, [isPristine, latestSavedConnection, setFieldValue]);
 
 	return (
 		<SafeAreaView style={{ flex: 1, backgroundColor: theme.colors.background }}>

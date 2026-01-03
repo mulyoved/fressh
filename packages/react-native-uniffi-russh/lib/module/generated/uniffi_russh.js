@@ -2195,13 +2195,15 @@ export class ShellSession extends UniffiAbstractObject {
   }
 
   /**
-   * Send bytes to the active shell (stdin).
+   * Resize the PTY window. Call when the terminal UI size changes.
+   * This sends an SSH "window-change" request to the server, which will
+   * deliver SIGWINCH to the remote process (e.g., tmux, vim).
    */
-  async sendData(data, asyncOpts_) /*throws*/{
+  async resizePty(cols, rows, pixelWidth, pixelHeight, asyncOpts_) /*throws*/{
     const __stack = uniffiIsDebug ? new Error().stack : undefined;
     try {
       return await uniffiRustCallAsync(/*rustCaller:*/uniffiCaller, /*rustFutureFunc:*/() => {
-        return nativeModule().ubrn_uniffi_uniffi_russh_fn_method_shellsession_send_data(uniffiTypeShellSessionObjectFactory.clonePointer(this), FfiConverterArrayBuffer.lower(data));
+        return nativeModule().ubrn_uniffi_uniffi_russh_fn_method_shellsession_resize_pty(uniffiTypeShellSessionObjectFactory.clonePointer(this), FfiConverterUInt32.lower(cols), FfiConverterUInt32.lower(rows), FfiConverterOptionalUInt32.lower(pixelWidth), FfiConverterOptionalUInt32.lower(pixelHeight));
       }, /*pollFunc:*/nativeModule().ubrn_ffi_uniffi_russh_rust_future_poll_void, /*cancelFunc:*/nativeModule().ubrn_ffi_uniffi_russh_rust_future_cancel_void, /*completeFunc:*/nativeModule().ubrn_ffi_uniffi_russh_rust_future_complete_void, /*freeFunc:*/nativeModule().ubrn_ffi_uniffi_russh_rust_future_free_void, /*liftFunc:*/_v => {}, /*liftString:*/FfiConverterString.lift, /*asyncOpts:*/asyncOpts_, /*errorHandler:*/FfiConverterTypeSshError.lift.bind(FfiConverterTypeSshError));
     } catch (__error) {
       if (uniffiIsDebug && __error instanceof Error) {
@@ -2212,14 +2214,13 @@ export class ShellSession extends UniffiAbstractObject {
   }
 
   /**
-   * Resize the PTY window. Call when the terminal UI size changes.
-   * NOTE: This stub will be replaced by generated code after native rebuild.
+   * Send bytes to the active shell (stdin).
    */
-  async resizePty(cols, rows, pixelWidth, pixelHeight, asyncOpts_) /*throws*/{
+  async sendData(data, asyncOpts_) /*throws*/{
     const __stack = uniffiIsDebug ? new Error().stack : undefined;
     try {
       return await uniffiRustCallAsync(/*rustCaller:*/uniffiCaller, /*rustFutureFunc:*/() => {
-        return nativeModule().ubrn_uniffi_uniffi_russh_fn_method_shellsession_resize_pty(uniffiTypeShellSessionObjectFactory.clonePointer(this), FfiConverterUInt32.lower(cols), FfiConverterUInt32.lower(rows), FfiConverterOptionalUInt32.lower(pixelWidth), FfiConverterOptionalUInt32.lower(pixelHeight));
+        return nativeModule().ubrn_uniffi_uniffi_russh_fn_method_shellsession_send_data(uniffiTypeShellSessionObjectFactory.clonePointer(this), FfiConverterArrayBuffer.lower(data));
       }, /*pollFunc:*/nativeModule().ubrn_ffi_uniffi_russh_rust_future_poll_void, /*cancelFunc:*/nativeModule().ubrn_ffi_uniffi_russh_rust_future_cancel_void, /*completeFunc:*/nativeModule().ubrn_ffi_uniffi_russh_rust_future_complete_void, /*freeFunc:*/nativeModule().ubrn_ffi_uniffi_russh_rust_future_free_void, /*liftFunc:*/_v => {}, /*liftString:*/FfiConverterString.lift, /*asyncOpts:*/asyncOpts_, /*errorHandler:*/FfiConverterTypeSshError.lift.bind(FfiConverterTypeSshError));
     } catch (__error) {
       if (uniffiIsDebug && __error instanceof Error) {
@@ -2477,6 +2478,9 @@ function uniffiEnsureInitialized() {
   }
   if (nativeModule().ubrn_uniffi_uniffi_russh_checksum_method_shellsession_remove_listener() !== 24718) {
     throw new UniffiInternalError.ApiChecksumMismatch('uniffi_uniffi_russh_checksum_method_shellsession_remove_listener');
+  }
+  if (nativeModule().ubrn_uniffi_uniffi_russh_checksum_method_shellsession_resize_pty() !== 27901) {
+    throw new UniffiInternalError.ApiChecksumMismatch('uniffi_uniffi_russh_checksum_method_shellsession_resize_pty');
   }
   if (nativeModule().ubrn_uniffi_uniffi_russh_checksum_method_shellsession_send_data() !== 12893) {
     throw new UniffiInternalError.ApiChecksumMismatch('uniffi_uniffi_russh_checksum_method_shellsession_send_data');

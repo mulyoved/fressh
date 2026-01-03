@@ -10,6 +10,9 @@ This is a pnpm + Turbo monorepo.
 - Generated artifacts live in `src/generated`, `cpp/generated`, and package
   `src/generated` folders; avoid hand edits.
 
+### Mobile App Identity
+- Android package name for the mobile app (current branded build): `com.finalapp.vibe2`.
+
 ## Build, Test, and Development Commands
 - `pnpm install` (root) installs workspace deps.
 - `pnpm exec turbo lint` runs fmt + lint + typecheck across packages and root
@@ -22,6 +25,9 @@ This is a pnpm + Turbo monorepo.
 - Optional dev shells: `nix develop .#default` (or `.#android-emulator`).
 - Docker: `just docker-build`.
 - Dev client builds (EAS): see `docs/dev-builds.md`.
+
+## Wireless ADB (Android Development)
+adb connect 100.113.210.6:5555
 
 ## Coding Style & Naming Conventions
 - Formatting is Prettier-based (`prettier.config.mjs` / per-package configs).

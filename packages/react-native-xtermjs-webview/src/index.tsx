@@ -40,7 +40,8 @@ const jetBrainsMonoFontCss = `
 export type XtermInbound =
 	| { type: 'initialized' }
 	| { type: 'data'; data: Uint8Array }
-	| { type: 'debug'; message: string };
+	| { type: 'debug'; message: string }
+	| { type: 'selectionChanged'; text: string };
 
 export type XtermWebViewHandle = {
 	write: (data: Uint8Array) => void; // bytes in (batched)
@@ -49,6 +50,9 @@ export type XtermWebViewHandle = {
 	flush: () => void; // force-flush outgoing writes
 	clear: () => void;
 	focus: () => void;
+	setSystemKeyboardEnabled: (enabled: boolean) => void;
+	setSelectionModeEnabled: (enabled: boolean) => void;
+	getSelection: () => Promise<string>;
 	resize: (size: { cols: number; rows: number }) => void;
 	fit: () => void;
 };
@@ -97,6 +101,7 @@ export type XtermJsWebViewProps = {
 	xtermOptions?: Partial<ITerminalOptions>;
 	onInitialized?: () => void;
 	onData?: (data: string) => void;
+	onSelection?: (text: string) => void;
 	/** Called when terminal size changes (cols/rows). Use for PTY resize. */
 	onResize?: (cols: number, rows: number) => void;
 	logger?: {
@@ -138,6 +143,7 @@ export function XtermJsWebView({
 	xtermOptions = defaultXtermOptions,
 	onInitialized,
 	onData,
+	onSelection,
 	onResize,
 	coalescingThreshold = defaultCoalescingThreshold,
 	logger,
@@ -146,6 +152,10 @@ export function XtermJsWebView({
 }: XtermJsWebViewProps) {
 	const webRef = useRef<WebView>(null);
 	const [initialized, setInitialized] = useState(false);
+	const selectionRequestIdRef = useRef(0);
+	const pendingSelectionRef = useRef(
+		new Map<number, { resolve: (value: string) => void }>(),
+	);
 
 	// ---- RN -> WebView message sender
 	const sendToWebView = useCallback(
@@ -217,12 +227,61 @@ export function XtermJsWebView({
 			if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
 			rafRef.current = null;
 			bufRef.current = null;
+			pendingSelectionRef.current.clear();
 		};
 	}, []);
 
 	const fit = useCallback(() => {
 		sendToWebView({ type: 'fit' });
 	}, [sendToWebView]);
+
+	const setSystemKeyboardEnabled = useCallback((enabled: boolean) => {
+		const webViewRef = webRef.current;
+		if (!webViewRef) return;
+		const js = `
+(() => {
+	const ta = document.querySelector('.xterm-helper-textarea');
+	if (!ta) return true;
+	ta.setAttribute('inputmode', ${enabled ? "'verbatim'" : "'none'"});
+	ta.tabIndex = ${enabled ? 0 : -1};
+	if (${enabled ? 'true' : 'false'}) {
+		ta.removeAttribute('readonly');
+		ta.focus();
+	} else {
+		ta.setAttribute('readonly', 'true');
+		ta.blur();
+	}
+	return true;
+})();`;
+		webViewRef.injectJavaScript(js);
+		if (enabled) {
+			webViewRef.requestFocus();
+		}
+	}, []);
+
+	const getSelection = useCallback((): Promise<string> => {
+		if (!initialized) return Promise.resolve('');
+		const requestId = selectionRequestIdRef.current + 1;
+		selectionRequestIdRef.current = requestId;
+		return new Promise((resolve) => {
+			pendingSelectionRef.current.set(requestId, { resolve });
+			sendToWebView({ type: 'getSelection', requestId });
+			// Timeout after 5s to prevent hanging if WebView is unresponsive
+			setTimeout(() => {
+				if (pendingSelectionRef.current.has(requestId)) {
+					pendingSelectionRef.current.delete(requestId);
+					resolve('');
+				}
+			}, 5000);
+		});
+	}, [initialized, sendToWebView]);
+
+	const setSelectionModeEnabled = useCallback(
+		(enabled: boolean) => {
+			sendToWebView({ type: 'setSelectionMode', enabled });
+		},
+		[sendToWebView],
+	);
 
 	const autoFitFn = useCallback(() => {
 		if (!autoFit) return;
@@ -254,6 +313,9 @@ export function XtermJsWebView({
 			sendToWebView({ type: 'focus' });
 			webRef.current?.requestFocus();
 		},
+		setSystemKeyboardEnabled,
+		setSelectionModeEnabled,
+		getSelection,
 		resize: (size: { cols: number; rows: number }) => {
 			sendToWebView({ type: 'resize', cols: size.cols, rows: size.rows });
 			autoFitFn();
@@ -309,6 +371,18 @@ export function XtermJsWebView({
 					onResize?.(msg.cols, msg.rows);
 					return;
 				}
+				if (msg.type === 'selection') {
+					const pending = pendingSelectionRef.current.get(msg.requestId);
+					if (pending) {
+						pendingSelectionRef.current.delete(msg.requestId);
+						pending.resolve(msg.text);
+					}
+					return;
+				}
+				if (msg.type === 'selectionChanged') {
+					onSelection?.(msg.text);
+					return;
+				}
 				webViewOptions?.onMessage?.(e);
 			} catch (error) {
 				logger?.warn?.(
@@ -318,7 +392,15 @@ export function XtermJsWebView({
 				);
 			}
 		},
-		[logger, webViewOptions, onInitialized, autoFitFn, onData, onResize],
+		[
+			logger,
+			webViewOptions,
+			onInitialized,
+			autoFitFn,
+			onData,
+			onResize,
+			onSelection,
+		],
 	);
 
 	const onContentProcessDidTerminate = useCallback<

@@ -23,6 +23,8 @@ import React, {
 } from 'react';
 import {
 	Animated,
+	AppState,
+	Keyboard,
 	KeyboardAvoidingView,
 	Platform,
 	Pressable,
@@ -48,6 +50,7 @@ import {
 } from '@/lib/keyboard-actions';
 import { runMacro } from '@/lib/keyboard-runtime';
 import { rootLogger } from '@/lib/logger';
+import { useAutoConnectStore } from '@/lib/auto-connect';
 import { useSshStore } from '@/lib/ssh-store';
 import { useTheme } from '@/lib/theme';
 
@@ -94,6 +97,81 @@ function RouteSkeleton() {
 	);
 }
 
+type TerminalErrorBoundaryProps = {
+	children: React.ReactNode;
+	onRetry: () => void;
+};
+
+type TerminalErrorBoundaryState = {
+	hasError: boolean;
+};
+
+class TerminalErrorBoundary extends React.Component<
+	TerminalErrorBoundaryProps,
+	TerminalErrorBoundaryState
+> {
+	constructor(props: TerminalErrorBoundaryProps) {
+		super(props);
+		this.state = { hasError: false };
+	}
+
+	static getDerivedStateFromError(): TerminalErrorBoundaryState {
+		return { hasError: true };
+	}
+
+	override componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
+		logger.error('Terminal crashed', error, errorInfo);
+	}
+
+	handleRetry = () => {
+		this.setState({ hasError: false });
+		this.props.onRetry();
+	};
+
+	override render() {
+		if (this.state.hasError) {
+			return <TerminalErrorFallback onRetry={this.handleRetry} />;
+		}
+		return this.props.children;
+	}
+}
+
+function TerminalErrorFallback({ onRetry }: { onRetry: () => void }) {
+	const theme = useTheme();
+	return (
+		<View
+			style={{
+				flex: 1,
+				justifyContent: 'center',
+				alignItems: 'center',
+				backgroundColor: theme.colors.background,
+				padding: 20,
+			}}
+		>
+			<Text
+				style={{
+					color: theme.colors.textPrimary,
+					fontSize: 18,
+					marginBottom: 12,
+				}}
+			>
+				Terminal crashed
+			</Text>
+			<Pressable
+				onPress={onRetry}
+				style={{
+					paddingHorizontal: 20,
+					paddingVertical: 10,
+					borderRadius: 8,
+					backgroundColor: theme.colors.primary,
+				}}
+			>
+				<Text style={{ color: '#fff', fontSize: 16 }}>Tap to retry</Text>
+			</Pressable>
+		</View>
+	);
+}
+
 const encoder = new TextEncoder();
 const ALL_KEYBOARD_IDS = Object.keys(KEYBOARDS_BY_ID);
 const ACTIVE_KEYBOARD_IDS_FALLBACK: readonly string[] =
@@ -124,12 +202,16 @@ function ShellDetail() {
 		(s) => s.shells[`${connectionId}-${channelId}` as const],
 	);
 	const connection = useSshStore((s) => s.connections[connectionId]);
+	const isAutoConnecting = useAutoConnectStore((s) => s.isAutoConnecting);
+	const isReconnecting = useAutoConnectStore((s) => s.isReconnecting);
 
 	useEffect(() => {
 		if (shell && connection) return;
+		const autoState = useAutoConnectStore.getState();
+		if (autoState.isAutoConnecting || autoState.isReconnecting) return;
 		logger.info('shell or connection not found, replacing route with /shell');
 		router.back();
-	}, [connection, router, shell]);
+	}, [connection, isAutoConnecting, isReconnecting, router, shell]);
 
 	useEffect(() => {
 		const xterm = xtermRef.current;
@@ -202,6 +284,9 @@ function ShellDetail() {
 	const [modifierKeysActive, setModifierKeysActive] = useState<ModifierKey[]>(
 		[],
 	);
+	const [systemKeyboardEnabled, setSystemKeyboardEnabled] = useState(false);
+	const [selectionModeEnabled, setSelectionModeEnabled] = useState(false);
+	const lastSelectionRef = useRef<{ text: string; at: number } | null>(null);
 
 	const sendBytesRaw = useCallback(
 		(bytes: Uint8Array<ArrayBuffer>) => {
@@ -271,16 +356,59 @@ function ShellDetail() {
 
 	const handlePasteClipboard = useCallback(async () => {
 		try {
+			const cached = lastSelectionRef.current;
+			const now = Date.now();
+			if (selectionModeEnabled) {
+				const selection = await xtermRef.current?.getSelection();
+				if (selection) {
+					lastSelectionRef.current = { text: selection, at: now };
+					sendTextRaw(selection);
+					return;
+				}
+				if (cached?.text && now - cached.at < 15000) {
+					sendTextRaw(cached.text);
+					return;
+				}
+			}
 			const text = await Clipboard.getStringAsync();
 			if (text) sendTextRaw(text);
 		} catch (error) {
 			logger.warn('clipboard read failed', error);
 		}
-	}, [sendTextRaw]);
+	}, [sendTextRaw, selectionModeEnabled]);
 
 	const handleCopySelection = useCallback(() => {
-		logger.warn('copy selection not supported on native terminal');
+		const xr = xtermRef.current;
+		if (!xr) return;
+		void (async () => {
+			const selection = await xr.getSelection();
+			if (!selection) {
+				logger.info('no selection to copy');
+				return;
+			}
+			lastSelectionRef.current = { text: selection, at: Date.now() };
+			await Clipboard.setStringAsync(selection);
+			logger.info('copied selection', selection.length);
+		})();
 	}, []);
+
+	const handleSelectionChanged = useCallback(
+		(text: string) => {
+			if (!text) return;
+			const now = Date.now();
+			if (lastSelectionRef.current?.text === text) return;
+			lastSelectionRef.current = { text, at: now };
+			void (async () => {
+				try {
+					await Clipboard.setStringAsync(text);
+					logger.info('copied selection', text.length);
+				} catch (error) {
+					logger.warn('clipboard write failed', error);
+				}
+			})();
+		},
+		[],
+	);
 
 	const actionContext = useMemo<ActionContext>(
 		() => ({
@@ -400,6 +528,68 @@ function ShellDetail() {
 		};
 	}, []);
 
+	useEffect(() => {
+		if (Platform.OS !== 'android') return;
+		const dismissKeyboard = () => Keyboard.dismiss();
+		dismissKeyboard();
+		if (!systemKeyboardEnabled) {
+			xtermRef.current?.setSystemKeyboardEnabled(false);
+		}
+		const subscription = AppState.addEventListener('change', (nextState) => {
+			if (nextState === 'active') {
+				if (!systemKeyboardEnabled) {
+					xtermRef.current?.setSystemKeyboardEnabled(false);
+					dismissKeyboard();
+				}
+			}
+		});
+		return () => {
+			subscription.remove();
+		};
+	}, [systemKeyboardEnabled]);
+
+	const disableSystemKeyboard = useCallback(() => {
+		if (Platform.OS !== 'android') return;
+		xtermRef.current?.setSystemKeyboardEnabled(false);
+		Keyboard.dismiss();
+		setSystemKeyboardEnabled(false);
+	}, []);
+
+	const toggleSystemKeyboard = useCallback(() => {
+		if (Platform.OS !== 'android') return;
+		setSystemKeyboardEnabled((prev) => {
+			const next = !prev;
+			xtermRef.current?.setSystemKeyboardEnabled(next);
+			if (!next) Keyboard.dismiss();
+			return next;
+		});
+	}, []);
+
+	const toggleSelectionMode = useCallback(() => {
+		setSelectionModeEnabled((prev) => {
+			const next = !prev;
+			const xr = xtermRef.current;
+			logger.info('selection toggle', {
+				next,
+				hasRef: Boolean(xr),
+				hasMethod: Boolean(xr?.setSelectionModeEnabled),
+			});
+			xr?.setSelectionModeEnabled(next);
+			if (next) disableSystemKeyboard();
+			return next;
+		});
+	}, [disableSystemKeyboard]);
+
+	const handleTerminalCrashRetry = useCallback(() => {
+		// Navigate back to trigger auto-reconnect flow
+		router.back();
+	}, [router]);
+
+	const shouldRenderTerminal = Boolean(shell && connection);
+	if (!shouldRenderTerminal) {
+		return isAutoConnecting || isReconnecting ? <RouteSkeleton /> : null;
+	}
+
 	return (
 		<>
 			<Stack.Screen options={{ headerShown: false }} />
@@ -417,77 +607,95 @@ function ShellDetail() {
 					paddingBottom: Platform.OS === 'android' ? insets.bottom + 4 : 0,
 				}}
 			>
-				<XtermJsWebView
-					ref={xtermRef}
-					style={{ flex: 1 }}
-					webViewOptions={{
-						// Prevent iOS from adding automatic top inset inside WebView
-						contentInsetAdjustmentBehavior: 'never',
-						onLayout: () => {
-							// Refit terminal when container size changes
-							xtermRef.current?.fit();
-						},
-					}}
-					logger={{
-						log: logger.info,
-						// debug: logger.debug,
-						warn: logger.warn,
-						error: logger.error,
-					}}
-					xtermOptions={{
-						theme: {
-							background: theme.colors.background,
-							foreground: theme.colors.textPrimary,
-						},
-					}}
-					onResize={handleTerminalResize}
-					onInitialized={() => {
-						if (!shell) throw new Error('Shell not found');
-
-						// Replay from head, then attach live listener
-						void (async () => {
-							const res = shell.readBuffer({ mode: 'head' });
-							logger.info('readBuffer(head)', {
-								chunks: res.chunks.length,
-								nextSeq: res.nextSeq,
-								dropped: res.dropped,
-							});
-							if (res.chunks.length) {
-								const chunks = res.chunks.map((c) => c.bytes);
-								const xr = xtermRef.current;
-								if (xr) {
-									xr.writeMany(chunks.map((c) => new Uint8Array(c)));
-									xr.flush();
-								}
+				<TerminalErrorBoundary onRetry={handleTerminalCrashRetry}>
+					<XtermJsWebView
+						ref={xtermRef}
+						style={{ flex: 1 }}
+						webViewOptions={{
+							// Prevent iOS from adding automatic top inset inside WebView
+							contentInsetAdjustmentBehavior: 'never',
+							onLayout: () => {
+								// Refit terminal when container size changes
+								xtermRef.current?.fit();
+							},
+						}}
+						logger={{
+							log: logger.info,
+							// debug: logger.debug,
+							warn: logger.warn,
+							error: logger.error,
+						}}
+						xtermOptions={{
+							theme: {
+								background: theme.colors.background,
+								foreground: theme.colors.textPrimary,
+								selectionBackground: 'rgba(37, 99, 235, 0.35)',
+								selectionInactiveBackground: 'rgba(37, 99, 235, 0.2)',
+							},
+						}}
+						onResize={handleTerminalResize}
+						onSelection={handleSelectionChanged}
+						onInitialized={() => {
+							if (!shell) throw new Error('Shell not found');
+							if (Platform.OS === 'android') {
+								xtermRef.current?.setSystemKeyboardEnabled(false);
+								setSystemKeyboardEnabled(false);
 							}
-							const id = shell.addListener(
-								(ev: ListenerEvent) => {
-									if ('kind' in ev) {
-										logger.warn('listener.dropped', ev);
-										return;
+							xtermRef.current?.setSelectionModeEnabled(selectionModeEnabled);
+
+							// Replay from head, then attach live listener
+							void (async () => {
+								const res = shell.readBuffer({ mode: 'head' });
+								logger.info('readBuffer(head)', {
+									chunks: res.chunks.length,
+									nextSeq: res.nextSeq,
+									dropped: res.dropped,
+								});
+								if (res.chunks.length) {
+									const chunks = res.chunks.map((c) => c.bytes);
+									const xr = xtermRef.current;
+									if (xr) {
+										xr.writeMany(chunks.map((c) => new Uint8Array(c)));
+										xr.flush();
 									}
-									const chunk = ev;
-									const xr3 = xtermRef.current;
-									if (xr3) xr3.write(new Uint8Array(chunk.bytes));
-								},
-								{ cursor: { mode: 'seq', seq: res.nextSeq } },
-							);
-							logger.info('shell listener attached', id.toString());
-							listenerIdRef.current = id;
-						})();
-						// Focus to pop the keyboard (iOS needs the prop we set)
-						const xr2 = xtermRef.current;
-						if (xr2) xr2.focus();
-					}}
-					onData={(terminalMessage) => {
-						if (!shell) return;
-						sendBytesRaw(encoder.encode(terminalMessage));
-					}}
-				/>
+								}
+								const id = shell.addListener(
+									(ev: ListenerEvent) => {
+										if ('kind' in ev) {
+											logger.warn('listener.dropped', ev);
+											return;
+										}
+										const chunk = ev;
+										const xr3 = xtermRef.current;
+										if (xr3) xr3.write(new Uint8Array(chunk.bytes));
+									},
+									{ cursor: { mode: 'seq', seq: res.nextSeq } },
+								);
+								logger.info('shell listener attached', id.toString());
+								listenerIdRef.current = id;
+							})();
+							// Focus to pop the keyboard (iOS needs the prop we set)
+							const xr2 = xtermRef.current;
+							if (xr2 && Platform.OS === 'ios') xr2.focus();
+						}}
+						onData={(terminalMessage) => {
+							if (!shell) return;
+							sendBytesRaw(encoder.encode(terminalMessage));
+						}}
+					/>
+				</TerminalErrorBoundary>
 				<TerminalKeyboard
 					keyboard={currentKeyboard}
 					modifierKeysActive={modifierKeysActive}
 					onSlotPress={handleSlotPress}
+					showSelectionToggle
+					selectionModeEnabled={selectionModeEnabled}
+					onToggleSelectionMode={toggleSelectionMode}
+					onCopySelection={handleCopySelection}
+					onPasteClipboard={handlePasteClipboard}
+					showSystemKeyboardToggle={Platform.OS === 'android'}
+					systemKeyboardEnabled={systemKeyboardEnabled}
+					onToggleSystemKeyboard={toggleSystemKeyboard}
 				/>
 				{flashKeyboardName && (
 					<Animated.View
@@ -619,12 +827,32 @@ function TerminalKeyboard({
 	keyboard,
 	modifierKeysActive,
 	onSlotPress,
+	showSelectionToggle,
+	selectionModeEnabled,
+	onToggleSelectionMode,
+	onCopySelection,
+	onPasteClipboard,
+	showSystemKeyboardToggle,
+	systemKeyboardEnabled,
+	onToggleSystemKeyboard,
 }: {
 	keyboard: KeyboardDefinition | null;
 	modifierKeysActive: ModifierKey[];
 	onSlotPress: (slot: KeyboardSlot) => void;
+	showSelectionToggle: boolean;
+	selectionModeEnabled: boolean;
+	onToggleSelectionMode: () => void;
+	onCopySelection: () => void;
+	onPasteClipboard: () => void;
+	showSystemKeyboardToggle: boolean;
+	systemKeyboardEnabled: boolean;
+	onToggleSystemKeyboard: () => void;
 }) {
 	const theme = useTheme();
+	const KeyboardIcon = resolveLucideIcon('Keyboard');
+	const SelectionIcon = resolveLucideIcon('TextSelect');
+	const CopyIcon = resolveLucideIcon('Copy');
+	const PasteIcon = resolveLucideIcon('ClipboardPaste');
 
 	if (!keyboard) {
 		return (
@@ -700,6 +928,140 @@ function TerminalKeyboard({
 	));
 	/* eslint-enable @eslint-react/no-array-index-key */
 
+	const selectionToggle = showSelectionToggle ? (
+		<Pressable
+			onPress={onToggleSelectionMode}
+			style={[
+				{
+					flex: 1,
+					margin: 2,
+					paddingVertical: 6,
+					borderRadius: 8,
+					borderWidth: 1,
+					borderColor: theme.colors.border,
+					alignItems: 'center',
+					justifyContent: 'center',
+				},
+				selectionModeEnabled && { backgroundColor: theme.colors.primary },
+			]}
+		>
+			{SelectionIcon ? (
+				<SelectionIcon color={theme.colors.textPrimary} size={18} />
+			) : null}
+			<Text
+				numberOfLines={1}
+				style={{
+					color: theme.colors.textPrimary,
+					fontSize: 10,
+					marginTop: SelectionIcon ? 2 : 0,
+				}}
+			>
+				Select
+			</Text>
+		</Pressable>
+	) : null;
+
+	const copyToggle = (
+		<Pressable
+			onPress={onCopySelection}
+			style={{
+				flex: 1,
+				margin: 2,
+				paddingVertical: 6,
+				borderRadius: 8,
+				borderWidth: 1,
+				borderColor: theme.colors.border,
+				alignItems: 'center',
+				justifyContent: 'center',
+			}}
+		>
+			{CopyIcon ? <CopyIcon color={theme.colors.textPrimary} size={18} /> : null}
+			<Text
+				numberOfLines={1}
+				style={{
+					color: theme.colors.textPrimary,
+					fontSize: 10,
+					marginTop: CopyIcon ? 2 : 0,
+				}}
+			>
+				Copy
+			</Text>
+		</Pressable>
+	);
+
+	const pasteToggle = (
+		<Pressable
+			onPress={onPasteClipboard}
+			style={{
+				flex: 1,
+				margin: 2,
+				paddingVertical: 6,
+				borderRadius: 8,
+				borderWidth: 1,
+				borderColor: theme.colors.border,
+				alignItems: 'center',
+				justifyContent: 'center',
+			}}
+		>
+			{PasteIcon ? (
+				<PasteIcon color={theme.colors.textPrimary} size={18} />
+			) : null}
+			<Text
+				numberOfLines={1}
+				style={{
+					color: theme.colors.textPrimary,
+					fontSize: 10,
+					marginTop: PasteIcon ? 2 : 0,
+				}}
+			>
+				Paste
+			</Text>
+		</Pressable>
+	);
+
+	const systemKeyboardToggle = showSystemKeyboardToggle ? (
+		<Pressable
+			onPress={onToggleSystemKeyboard}
+			style={[
+				{
+					flex: 1,
+					margin: 2,
+					paddingVertical: 6,
+					borderRadius: 8,
+					borderWidth: 1,
+					borderColor: theme.colors.border,
+					alignItems: 'center',
+					justifyContent: 'center',
+				},
+				systemKeyboardEnabled && { backgroundColor: theme.colors.primary },
+			]}
+		>
+			{KeyboardIcon ? (
+				<KeyboardIcon color={theme.colors.textPrimary} size={18} />
+			) : null}
+			<Text
+				numberOfLines={1}
+				style={{
+					color: theme.colors.textPrimary,
+					fontSize: 10,
+					marginTop: KeyboardIcon ? 2 : 0,
+				}}
+			>
+				OS Keyboard
+			</Text>
+		</Pressable>
+	) : null;
+
+	const toggleRow =
+		showSelectionToggle || showSystemKeyboardToggle ? (
+			<View style={{ flexDirection: 'row' }}>
+				{selectionToggle}
+				{copyToggle}
+				{pasteToggle}
+				{systemKeyboardToggle}
+			</View>
+		) : null;
+
 	return (
 		<View
 			style={{
@@ -708,6 +1070,7 @@ function TerminalKeyboard({
 				padding: 6,
 			}}
 		>
+			{toggleRow}
 			{rows}
 		</View>
 	);

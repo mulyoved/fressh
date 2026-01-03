@@ -12,6 +12,13 @@ export type BridgeInboundMessage = {
     type: 'sizeChanged';
     cols: number;
     rows: number;
+} | {
+    type: 'selection';
+    requestId: number;
+    text: string;
+} | {
+    type: 'selectionChanged';
+    text: string;
 };
 export type BridgeOutboundMessage = {
     type: 'write';
@@ -25,6 +32,12 @@ export type BridgeOutboundMessage = {
     rows: number;
 } | {
     type: 'fit';
+} | {
+    type: 'getSelection';
+    requestId: number;
+} | {
+    type: 'setSelectionMode';
+    enabled: boolean;
 } | {
     type: 'setOptions';
     opts: Partial<Omit<ITerminalOptions, keyof ITerminalInitOnlyOptions>>;
