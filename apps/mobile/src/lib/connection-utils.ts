@@ -1,4 +1,4 @@
-import { type InputConnectionDetails } from './secrets-manager';
+import { type StoredConnectionDetails } from './secrets-manager';
 
 type SavedConnectionMetadata = {
 	modifiedAtMs: number;
@@ -10,13 +10,13 @@ type SavedConnectionMetadata = {
 export type SavedConnectionEntry = {
 	id: string;
 	metadata: SavedConnectionMetadata;
-	value: InputConnectionDetails;
+	value: StoredConnectionDetails;
 };
 
 type PartialConnectionEntry = {
 	id: string;
 	metadata: { modifiedAtMs?: number } | SavedConnectionMetadata;
-	value: InputConnectionDetails;
+	value: StoredConnectionDetails;
 };
 
 export const pickLatestConnection = <T extends PartialConnectionEntry>(
@@ -28,4 +28,15 @@ export const pickLatestConnection = <T extends PartialConnectionEntry>(
 		const entryModified = entry.metadata.modifiedAtMs ?? 0;
 		return entryModified > latestModified ? entry : latest;
 	});
+};
+
+export const getStoredConnectionId = (details: {
+	username: string;
+	host: string;
+	port: number;
+}): string => {
+	return `${details.username}-${details.host}-${details.port}`.replaceAll(
+		'.',
+		'_',
+	);
 };

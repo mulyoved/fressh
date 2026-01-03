@@ -4,9 +4,13 @@ import { AppState } from 'react-native';
 import { create } from 'zustand';
 import { useShallow } from 'zustand/react/shallow';
 import { pickLatestConnection } from './connection-utils';
-import { connectAndOpenShell } from './query-fns';
 import { rootLogger } from './logger';
-import { secretsManager, type InputConnectionDetails } from './secrets-manager';
+import { connectAndOpenShell } from './query-fns';
+import {
+	secretsManager,
+	type InputConnectionDetails,
+	type StoredConnectionDetails,
+} from './secrets-manager';
 import { useSshStore } from './ssh-store';
 import { queryClient } from './utils';
 
@@ -29,9 +33,8 @@ export const useAutoConnectStore = create<AutoConnectState>((set) => ({
 
 const isActiveState = (state: string) => state === 'active';
 
-// Auto-connect only supports key-based connections; password-based are skipped.
-async function resolveKeySecurity(details: InputConnectionDetails) {
-	if (details.security.type !== 'key') return null;
+// Auto-connect only supports key-based connections.
+async function resolveKeySecurity(details: StoredConnectionDetails) {
 	try {
 		const keyEntry = await secretsManager.keys.utils.getPrivateKey(
 			details.security.keyId,
@@ -97,7 +100,8 @@ export function AutoConnectManager() {
 		const entries = await queryClient.fetchQuery(
 			secretsManager.connections.query.list,
 		);
-		return pickLatestConnection(entries);
+		const eligible = entries?.filter((entry) => entry.value.autoConnect);
+		return pickLatestConnection(eligible);
 	}, []);
 
 	// Single attempt: use an active shell if present; otherwise connect silently.
@@ -119,20 +123,48 @@ export function AutoConnectManager() {
 			if (!latestEntry) return false;
 
 			const details = latestEntry.value;
+			if (
+				typeof details.useTmux !== 'boolean' ||
+				typeof details.tmuxSessionName !== 'string'
+			) {
+				return false;
+			}
+			const normalizedDetails: InputConnectionDetails = {
+				...details,
+				useTmux: details.useTmux,
+				tmuxSessionName: details.tmuxSessionName,
+				autoConnect: details.autoConnect ?? false,
+			};
 			const resolvedSecurity = await resolveKeySecurity(details);
 			if (!resolvedSecurity) return false;
 
 			await connectAndOpenShell({
-				connectionDetails: details,
+				connectionDetails: normalizedDetails,
 				resolvedSecurity,
 				connect,
 				navigate: ({ connectionId, channelId }) => {
 					navigateToShell(connectionId, channelId);
 				},
+				navigateWithError: ({
+					connectionId,
+					tmuxSessionName,
+					storedConnectionId,
+				}) => {
+					router.replace({
+						pathname: '/shell/detail',
+						params: {
+							connectionId,
+							channelId: '0',
+							tmuxError: 'attach-failed',
+							tmuxSessionName,
+							storedConnectionId,
+						},
+					});
+				},
 			});
 			return true;
 		} catch (error) {
-			logger.info('Auto-connect attempt failed', error);
+			logger.warn('Auto-connect attempt failed', error);
 			return false;
 		} finally {
 			setAutoConnecting(false);
@@ -144,6 +176,7 @@ export function AutoConnectManager() {
 		loadLatestSavedConnection,
 		navigateToShell,
 		pathname,
+		router,
 		setAutoConnecting,
 	]);
 
@@ -186,6 +219,7 @@ export function AutoConnectManager() {
 
 	React.useEffect(() => {
 		// Trigger on warm resumes; pause retries when backgrounded.
+		// eslint-disable-next-line @eslint-react/web-api/no-leaked-event-listener -- React Native AppState cleans up via subscription.remove()
 		const subscription = AppState.addEventListener('change', (nextState) => {
 			const wasActive = isActiveRef.current;
 			isActiveRef.current = isActiveState(nextState);

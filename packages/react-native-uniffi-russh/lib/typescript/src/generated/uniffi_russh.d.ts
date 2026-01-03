@@ -266,6 +266,8 @@ export type StartShellOptions = {
     terminalMode: Array<TerminalMode> | undefined;
     terminalSize: TerminalSize | undefined;
     terminalPixelSize: TerminalPixelSize | undefined;
+    useTmux: boolean;
+    tmuxSessionName: string | undefined;
     onClosedCallback: ShellClosedCallback | undefined;
 };
 /**
@@ -743,6 +745,7 @@ export declare enum SshError_Tags {
     UnsupportedKeyType = "UnsupportedKeyType",
     Auth = "Auth",
     ShellAlreadyRunning = "ShellAlreadyRunning",
+    TmuxAttachFailed = "TmuxAttachFailed",
     Russh = "Russh",
     RusshKeys = "RusshKeys"
 }
@@ -976,6 +979,77 @@ export declare const SshError: Readonly<{
             stack?: string;
             cause?: unknown;
         };
+        isError(error: unknown): error is Error;
+        captureStackTrace(targetObject: object, constructorOpt?: Function): void;
+        prepareStackTrace(err: Error, stackTraces: NodeJS.CallSite[]): any;
+        stackTraceLimit: number;
+    };
+    TmuxAttachFailed: {
+        new (v0: string): {
+            readonly tag: SshError_Tags.TmuxAttachFailed;
+            readonly inner: Readonly<[string]>;
+            /**
+             * @private
+             * This field is private and should not be used, use `tag` instead.
+             */
+            readonly [uniffiTypeNameSymbol]: "SshError";
+            name: string;
+            message: string;
+            stack?: string;
+            cause?: unknown;
+        };
+        "new"(v0: string): {
+            readonly tag: SshError_Tags.TmuxAttachFailed;
+            readonly inner: Readonly<[string]>;
+            /**
+             * @private
+             * This field is private and should not be used, use `tag` instead.
+             */
+            readonly [uniffiTypeNameSymbol]: "SshError";
+            name: string;
+            message: string;
+            stack?: string;
+            cause?: unknown;
+        };
+        instanceOf(obj: any): obj is {
+            readonly tag: SshError_Tags.TmuxAttachFailed;
+            readonly inner: Readonly<[string]>;
+            /**
+             * @private
+             * This field is private and should not be used, use `tag` instead.
+             */
+            readonly [uniffiTypeNameSymbol]: "SshError";
+            name: string;
+            message: string;
+            stack?: string;
+            cause?: unknown;
+        };
+        hasInner(obj: any): obj is {
+            readonly tag: SshError_Tags.TmuxAttachFailed;
+            readonly inner: Readonly<[string]>;
+            /**
+             * @private
+             * This field is private and should not be used, use `tag` instead.
+             */
+            readonly [uniffiTypeNameSymbol]: "SshError";
+            name: string;
+            message: string;
+            stack?: string;
+            cause?: unknown;
+        };
+        getInner(obj: {
+            readonly tag: SshError_Tags.TmuxAttachFailed;
+            readonly inner: Readonly<[string]>;
+            /**
+             * @private
+             * This field is private and should not be used, use `tag` instead.
+             */
+            readonly [uniffiTypeNameSymbol]: "SshError";
+            name: string;
+            message: string;
+            stack?: string;
+            cause?: unknown;
+        }): Readonly<[string]>;
         isError(error: unknown): error is Error;
         captureStackTrace(targetObject: object, constructorOpt?: Function): void;
         prepareStackTrace(err: Error, stackTraces: NodeJS.CallSite[]): any;

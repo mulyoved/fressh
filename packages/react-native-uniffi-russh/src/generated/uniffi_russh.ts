@@ -872,6 +872,8 @@ export type StartShellOptions = {
 	terminalMode: Array<TerminalMode> | undefined;
 	terminalSize: TerminalSize | undefined;
 	terminalPixelSize: TerminalPixelSize | undefined;
+	useTmux: boolean;
+	tmuxSessionName: string | undefined;
 	onClosedCallback: ShellClosedCallback | undefined;
 };
 
@@ -914,6 +916,8 @@ const FfiConverterTypeStartShellOptions = (() => {
 				terminalMode: FfiConverterOptionalArrayTypeTerminalMode.read(from),
 				terminalSize: FfiConverterOptionalTypeTerminalSize.read(from),
 				terminalPixelSize: FfiConverterOptionalTypeTerminalPixelSize.read(from),
+				useTmux: FfiConverterBool.read(from),
+				tmuxSessionName: FfiConverterOptionalString.read(from),
 				onClosedCallback:
 					FfiConverterOptionalTypeShellClosedCallback.read(from),
 			};
@@ -926,6 +930,8 @@ const FfiConverterTypeStartShellOptions = (() => {
 				value.terminalPixelSize,
 				into,
 			);
+			FfiConverterBool.write(value.useTmux, into);
+			FfiConverterOptionalString.write(value.tmuxSessionName, into);
 			FfiConverterOptionalTypeShellClosedCallback.write(
 				value.onClosedCallback,
 				into,
@@ -943,6 +949,8 @@ const FfiConverterTypeStartShellOptions = (() => {
 				FfiConverterOptionalTypeTerminalPixelSize.allocationSize(
 					value.terminalPixelSize,
 				) +
+				FfiConverterBool.allocationSize(value.useTmux) +
+				FfiConverterOptionalString.allocationSize(value.tmuxSessionName) +
 				FfiConverterOptionalTypeShellClosedCallback.allocationSize(
 					value.onClosedCallback,
 				)
@@ -1824,6 +1832,7 @@ export enum SshError_Tags {
 	UnsupportedKeyType = 'UnsupportedKeyType',
 	Auth = 'Auth',
 	ShellAlreadyRunning = 'ShellAlreadyRunning',
+	TmuxAttachFailed = 'TmuxAttachFailed',
 	Russh = 'Russh',
 	RusshKeys = 'RusshKeys',
 }
@@ -1953,6 +1962,44 @@ export const SshError = (() => {
 		}
 	}
 
+	type TmuxAttachFailed__interface = {
+		tag: SshError_Tags.TmuxAttachFailed;
+		inner: Readonly<[string]>;
+	};
+
+	class TmuxAttachFailed_
+		extends UniffiError
+		implements TmuxAttachFailed__interface
+	{
+		/**
+		 * @private
+		 * This field is private and should not be used, use `tag` instead.
+		 */
+		readonly [uniffiTypeNameSymbol] = 'SshError';
+		readonly tag = SshError_Tags.TmuxAttachFailed;
+		readonly inner: Readonly<[string]>;
+		constructor(v0: string) {
+			super('SshError', 'TmuxAttachFailed');
+			this.inner = Object.freeze([v0]);
+		}
+
+		static new(v0: string): TmuxAttachFailed_ {
+			return new TmuxAttachFailed_(v0);
+		}
+
+		static instanceOf(obj: any): obj is TmuxAttachFailed_ {
+			return obj.tag === SshError_Tags.TmuxAttachFailed;
+		}
+
+		static hasInner(obj: any): obj is TmuxAttachFailed_ {
+			return TmuxAttachFailed_.instanceOf(obj);
+		}
+
+		static getInner(obj: TmuxAttachFailed_): Readonly<[string]> {
+			return obj.inner;
+		}
+	}
+
 	type Russh__interface = {
 		tag: SshError_Tags.Russh;
 		inner: Readonly<[string]>;
@@ -2033,6 +2080,7 @@ export const SshError = (() => {
 		UnsupportedKeyType: UnsupportedKeyType_,
 		Auth: Auth_,
 		ShellAlreadyRunning: ShellAlreadyRunning_,
+		TmuxAttachFailed: TmuxAttachFailed_,
 		Russh: Russh_,
 		RusshKeys: RusshKeys_,
 	});
@@ -2058,8 +2106,10 @@ const FfiConverterTypeSshError = (() => {
 				case 4:
 					return new SshError.ShellAlreadyRunning();
 				case 5:
-					return new SshError.Russh(FfiConverterString.read(from));
+					return new SshError.TmuxAttachFailed(FfiConverterString.read(from));
 				case 6:
+					return new SshError.Russh(FfiConverterString.read(from));
+				case 7:
 					return new SshError.RusshKeys(FfiConverterString.read(from));
 				default:
 					throw new UniffiInternalError.UnexpectedEnumCase();
@@ -2085,14 +2135,20 @@ const FfiConverterTypeSshError = (() => {
 					ordinalConverter.write(4, into);
 					return;
 				}
-				case SshError_Tags.Russh: {
+				case SshError_Tags.TmuxAttachFailed: {
 					ordinalConverter.write(5, into);
 					const inner = value.inner;
 					FfiConverterString.write(inner[0], into);
 					return;
 				}
-				case SshError_Tags.RusshKeys: {
+				case SshError_Tags.Russh: {
 					ordinalConverter.write(6, into);
+					const inner = value.inner;
+					FfiConverterString.write(inner[0], into);
+					return;
+				}
+				case SshError_Tags.RusshKeys: {
+					ordinalConverter.write(7, into);
 					const inner = value.inner;
 					FfiConverterString.write(inner[0], into);
 					return;
@@ -2119,15 +2175,21 @@ const FfiConverterTypeSshError = (() => {
 				case SshError_Tags.ShellAlreadyRunning: {
 					return ordinalConverter.allocationSize(4);
 				}
-				case SshError_Tags.Russh: {
+				case SshError_Tags.TmuxAttachFailed: {
 					const inner = value.inner;
 					let size = ordinalConverter.allocationSize(5);
 					size += FfiConverterString.allocationSize(inner[0]);
 					return size;
 				}
-				case SshError_Tags.RusshKeys: {
+				case SshError_Tags.Russh: {
 					const inner = value.inner;
 					let size = ordinalConverter.allocationSize(6);
+					size += FfiConverterString.allocationSize(inner[0]);
+					return size;
+				}
+				case SshError_Tags.RusshKeys: {
+					const inner = value.inner;
+					let size = ordinalConverter.allocationSize(7);
 					size += FfiConverterString.allocationSize(inner[0]);
 					return size;
 				}

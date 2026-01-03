@@ -190,7 +190,9 @@ function wrapConnection(conn) {
         } : undefined,
         terminalMode: params.terminalMode,
         terminalPixelSize: params.terminalPixelSize,
-        terminalSize: params.terminalSize
+        terminalSize: params.terminalSize,
+        useTmux: params.useTmux,
+        tmuxSessionName: params.tmuxSessionName
       }, params.abortSignal ? {
         signal: params.abortSignal
       } : undefined);

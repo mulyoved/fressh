@@ -96,6 +96,8 @@ pub struct StartShellOptions {
     pub terminal_mode: Option<Vec<TerminalMode>>,
     pub terminal_size: Option<TerminalSize>,
     pub terminal_pixel_size: Option<TerminalPixelSize>,
+    pub use_tmux: bool,
+    pub tmux_session_name: Option<String>,
     pub on_closed_callback: Option<Arc<dyn ShellClosedCallback>>,
 }
 

@@ -42,6 +42,8 @@ import {
 	type MacroDef,
 	type ModifierKey,
 } from '@/generated/keyboard-config';
+import { useAutoConnectStore } from '@/lib/auto-connect';
+import { getStoredConnectionId } from '@/lib/connection-utils';
 import {
 	CONFIGURATOR_URL,
 	runAction,
@@ -50,7 +52,6 @@ import {
 } from '@/lib/keyboard-actions';
 import { runMacro } from '@/lib/keyboard-runtime';
 import { rootLogger } from '@/lib/logger';
-import { useAutoConnectStore } from '@/lib/auto-connect';
 import { useSshStore } from '@/lib/ssh-store';
 import { useTheme } from '@/lib/theme';
 
@@ -93,6 +94,65 @@ function RouteSkeleton() {
 			<Text style={{ color: theme.colors.textPrimary, fontSize: 20 }}>
 				Loading
 			</Text>
+		</View>
+	);
+}
+
+type TmuxAttachErrorScreenProps = {
+	sessionName: string;
+	onEdit: () => void;
+};
+
+function TmuxAttachErrorScreen({
+	sessionName,
+	onEdit,
+}: TmuxAttachErrorScreenProps) {
+	const theme = useTheme();
+	return (
+		<View
+			style={{
+				flex: 1,
+				justifyContent: 'center',
+				alignItems: 'center',
+				backgroundColor: theme.colors.background,
+				padding: 24,
+			}}
+		>
+			<Text
+				style={{
+					color: theme.colors.textPrimary,
+					fontSize: 20,
+					fontWeight: '700',
+					marginBottom: 12,
+					textAlign: 'center',
+				}}
+			>
+				Tmux session not found
+			</Text>
+			<Text
+				style={{
+					color: theme.colors.textSecondary,
+					fontSize: 14,
+					textAlign: 'center',
+					marginBottom: 20,
+				}}
+			>
+				We could not attach to tmux session &quot;{sessionName}&quot;. Create it on
+				the server and try again.
+			</Text>
+			<Pressable
+				onPress={onEdit}
+				style={{
+					backgroundColor: theme.colors.primary,
+					borderRadius: 10,
+					paddingVertical: 12,
+					paddingHorizontal: 20,
+				}}
+			>
+				<Text style={{ color: '#fff', fontWeight: '700' }}>
+					Edit Connection
+				</Text>
+			</Pressable>
 		</View>
 	);
 }
@@ -186,6 +246,9 @@ function ShellDetail() {
 	const searchParams = useLocalSearchParams<{
 		connectionId?: string;
 		channelId?: string;
+		tmuxError?: string;
+		tmuxSessionName?: string;
+		storedConnectionId?: string;
 	}>();
 
 	if (!searchParams.connectionId || !searchParams.channelId)
@@ -193,6 +256,8 @@ function ShellDetail() {
 
 	const connectionId = searchParams.connectionId;
 	const channelId = parseInt(searchParams.channelId);
+	const hasTmuxAttachError = searchParams.tmuxError === 'attach-failed';
+	const tmuxSessionName = searchParams.tmuxSessionName;
 
 	const router = useRouter();
 	const theme = useTheme();
@@ -202,16 +267,29 @@ function ShellDetail() {
 		(s) => s.shells[`${connectionId}-${channelId}` as const],
 	);
 	const connection = useSshStore((s) => s.connections[connectionId]);
+	const storedConnectionId =
+		searchParams.storedConnectionId ??
+		(connection
+			? getStoredConnectionId(connection.connectionDetails)
+			: undefined);
 	const isAutoConnecting = useAutoConnectStore((s) => s.isAutoConnecting);
 	const isReconnecting = useAutoConnectStore((s) => s.isReconnecting);
 
 	useEffect(() => {
+		if (hasTmuxAttachError) return;
 		if (shell && connection) return;
 		const autoState = useAutoConnectStore.getState();
 		if (autoState.isAutoConnecting || autoState.isReconnecting) return;
 		logger.info('shell or connection not found, replacing route with /shell');
 		router.back();
-	}, [connection, isAutoConnecting, isReconnecting, router, shell]);
+	}, [
+		connection,
+		hasTmuxAttachError,
+		isAutoConnecting,
+		isReconnecting,
+		router,
+		shell,
+	]);
 
 	useEffect(() => {
 		const xterm = xtermRef.current;
@@ -268,17 +346,26 @@ function ShellDetail() {
 
 		if (!currentKeyboard) return;
 
+		// eslint-disable-next-line @eslint-react/hooks-extra/no-direct-set-state-in-use-effect -- Animation state requires direct set in effect
 		setFlashKeyboardName(currentKeyboard.name);
 		flashOpacity.setValue(1);
 
-		Animated.timing(flashOpacity, {
+		const animation = Animated.timing(flashOpacity, {
 			toValue: 0,
 			duration: 800,
 			delay: 400,
 			useNativeDriver: true,
-		}).start(() => {
-			setFlashKeyboardName(null);
 		});
+
+		animation.start(({ finished }) => {
+			if (finished) {
+				setFlashKeyboardName(null);
+			}
+		});
+
+		return () => {
+			animation.stop();
+		};
 	}, [currentKeyboard, flashOpacity]);
 
 	const [modifierKeysActive, setModifierKeysActive] = useState<ModifierKey[]>(
@@ -535,6 +622,7 @@ function ShellDetail() {
 		if (!systemKeyboardEnabled) {
 			xtermRef.current?.setSystemKeyboardEnabled(false);
 		}
+		// eslint-disable-next-line @eslint-react/web-api/no-leaked-event-listener -- React Native AppState cleans up via subscription.remove()
 		const subscription = AppState.addEventListener('change', (nextState) => {
 			if (nextState === 'active') {
 				if (!systemKeyboardEnabled) {
@@ -584,6 +672,20 @@ function ShellDetail() {
 		// Navigate back to trigger auto-reconnect flow
 		router.back();
 	}, [router]);
+
+	if (hasTmuxAttachError) {
+		return (
+			<TmuxAttachErrorScreen
+				sessionName={tmuxSessionName ?? 'main'}
+				onEdit={() => {
+					router.replace({
+						pathname: '/',
+						params: { editConnectionId: storedConnectionId ?? connectionId },
+					});
+				}}
+			/>
+		);
+	}
 
 	const shouldRenderTerminal = Boolean(shell && connection);
 	if (!shouldRenderTerminal) {

@@ -558,6 +558,8 @@ const FfiConverterTypeStartShellOptions = (() => {
         terminalMode: FfiConverterOptionalArrayTypeTerminalMode.read(from),
         terminalSize: FfiConverterOptionalTypeTerminalSize.read(from),
         terminalPixelSize: FfiConverterOptionalTypeTerminalPixelSize.read(from),
+        useTmux: FfiConverterBool.read(from),
+        tmuxSessionName: FfiConverterOptionalString.read(from),
         onClosedCallback: FfiConverterOptionalTypeShellClosedCallback.read(from)
       };
     }
@@ -566,10 +568,12 @@ const FfiConverterTypeStartShellOptions = (() => {
       FfiConverterOptionalArrayTypeTerminalMode.write(value.terminalMode, into);
       FfiConverterOptionalTypeTerminalSize.write(value.terminalSize, into);
       FfiConverterOptionalTypeTerminalPixelSize.write(value.terminalPixelSize, into);
+      FfiConverterBool.write(value.useTmux, into);
+      FfiConverterOptionalString.write(value.tmuxSessionName, into);
       FfiConverterOptionalTypeShellClosedCallback.write(value.onClosedCallback, into);
     }
     allocationSize(value) {
-      return FfiConverterTypeTerminalType.allocationSize(value.term) + FfiConverterOptionalArrayTypeTerminalMode.allocationSize(value.terminalMode) + FfiConverterOptionalTypeTerminalSize.allocationSize(value.terminalSize) + FfiConverterOptionalTypeTerminalPixelSize.allocationSize(value.terminalPixelSize) + FfiConverterOptionalTypeShellClosedCallback.allocationSize(value.onClosedCallback);
+      return FfiConverterTypeTerminalType.allocationSize(value.term) + FfiConverterOptionalArrayTypeTerminalMode.allocationSize(value.terminalMode) + FfiConverterOptionalTypeTerminalSize.allocationSize(value.terminalSize) + FfiConverterOptionalTypeTerminalPixelSize.allocationSize(value.terminalPixelSize) + FfiConverterBool.allocationSize(value.useTmux) + FfiConverterOptionalString.allocationSize(value.tmuxSessionName) + FfiConverterOptionalTypeShellClosedCallback.allocationSize(value.onClosedCallback);
     }
   }
   return new FFIConverter();
@@ -1283,6 +1287,7 @@ export let SshError_Tags = /*#__PURE__*/function (SshError_Tags) {
   SshError_Tags["UnsupportedKeyType"] = "UnsupportedKeyType";
   SshError_Tags["Auth"] = "Auth";
   SshError_Tags["ShellAlreadyRunning"] = "ShellAlreadyRunning";
+  SshError_Tags["TmuxAttachFailed"] = "TmuxAttachFailed";
   SshError_Tags["Russh"] = "Russh";
   SshError_Tags["RusshKeys"] = "RusshKeys";
   return SshError_Tags;
@@ -1372,6 +1377,30 @@ export const SshError = (() => {
       return false;
     }
   }
+  class TmuxAttachFailed_ extends UniffiError {
+    /**
+     * @private
+     * This field is private and should not be used, use `tag` instead.
+     */
+    [uniffiTypeNameSymbol] = 'SshError';
+    tag = SshError_Tags.TmuxAttachFailed;
+    constructor(v0) {
+      super('SshError', 'TmuxAttachFailed');
+      this.inner = Object.freeze([v0]);
+    }
+    static new(v0) {
+      return new TmuxAttachFailed_(v0);
+    }
+    static instanceOf(obj) {
+      return obj.tag === SshError_Tags.TmuxAttachFailed;
+    }
+    static hasInner(obj) {
+      return TmuxAttachFailed_.instanceOf(obj);
+    }
+    static getInner(obj) {
+      return obj.inner;
+    }
+  }
   class Russh_ extends UniffiError {
     /**
      * @private
@@ -1429,6 +1458,7 @@ export const SshError = (() => {
     UnsupportedKeyType: UnsupportedKeyType_,
     Auth: Auth_,
     ShellAlreadyRunning: ShellAlreadyRunning_,
+    TmuxAttachFailed: TmuxAttachFailed_,
     Russh: Russh_,
     RusshKeys: RusshKeys_
   });
@@ -1448,8 +1478,10 @@ const FfiConverterTypeSshError = (() => {
         case 4:
           return new SshError.ShellAlreadyRunning();
         case 5:
-          return new SshError.Russh(FfiConverterString.read(from));
+          return new SshError.TmuxAttachFailed(FfiConverterString.read(from));
         case 6:
+          return new SshError.Russh(FfiConverterString.read(from));
+        case 7:
           return new SshError.RusshKeys(FfiConverterString.read(from));
         default:
           throw new UniffiInternalError.UnexpectedEnumCase();
@@ -1479,16 +1511,23 @@ const FfiConverterTypeSshError = (() => {
             ordinalConverter.write(4, into);
             return;
           }
-        case SshError_Tags.Russh:
+        case SshError_Tags.TmuxAttachFailed:
           {
             ordinalConverter.write(5, into);
             const inner = value.inner;
             FfiConverterString.write(inner[0], into);
             return;
           }
-        case SshError_Tags.RusshKeys:
+        case SshError_Tags.Russh:
           {
             ordinalConverter.write(6, into);
+            const inner = value.inner;
+            FfiConverterString.write(inner[0], into);
+            return;
+          }
+        case SshError_Tags.RusshKeys:
+          {
+            ordinalConverter.write(7, into);
             const inner = value.inner;
             FfiConverterString.write(inner[0], into);
             return;
@@ -1519,17 +1558,24 @@ const FfiConverterTypeSshError = (() => {
           {
             return ordinalConverter.allocationSize(4);
           }
-        case SshError_Tags.Russh:
+        case SshError_Tags.TmuxAttachFailed:
           {
             const inner = value.inner;
             let size = ordinalConverter.allocationSize(5);
             size += FfiConverterString.allocationSize(inner[0]);
             return size;
           }
-        case SshError_Tags.RusshKeys:
+        case SshError_Tags.Russh:
           {
             const inner = value.inner;
             let size = ordinalConverter.allocationSize(6);
+            size += FfiConverterString.allocationSize(inner[0]);
+            return size;
+          }
+        case SshError_Tags.RusshKeys:
+          {
+            const inner = value.inner;
+            let size = ordinalConverter.allocationSize(7);
             size += FfiConverterString.allocationSize(inner[0]);
             return size;
           }

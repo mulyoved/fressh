@@ -43,6 +43,8 @@ export type StartShellOptions = {
     terminalMode?: GeneratedRussh.TerminalMode[];
     terminalPixelSize?: GeneratedRussh.TerminalPixelSize;
     terminalSize?: GeneratedRussh.TerminalSize;
+    useTmux: boolean;
+    tmuxSessionName: string;
     onClosed?: (shellId: number) => void;
     abortSignal?: AbortSignal;
 };

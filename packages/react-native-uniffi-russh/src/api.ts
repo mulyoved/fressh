@@ -62,6 +62,8 @@ export type StartShellOptions = {
 	terminalMode?: GeneratedRussh.TerminalMode[];
 	terminalPixelSize?: GeneratedRussh.TerminalPixelSize;
 	terminalSize?: GeneratedRussh.TerminalSize;
+	useTmux: boolean;
+	tmuxSessionName: string;
 	onClosed?: (shellId: number) => void;
 	abortSignal?: AbortSignal;
 };
@@ -356,6 +358,8 @@ function wrapConnection(
 					terminalMode: params.terminalMode,
 					terminalPixelSize: params.terminalPixelSize,
 					terminalSize: params.terminalSize,
+					useTmux: params.useTmux,
+					tmuxSessionName: params.tmuxSessionName,
 				},
 				params.abortSignal ? { signal: params.abortSignal } : undefined,
 			);

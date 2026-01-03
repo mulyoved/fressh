@@ -1,7 +1,7 @@
 import { type SshConnectionProgress } from '@fressh/react-native-uniffi-russh';
-import SegmentedControl from '@react-native-segmented-control/segmented-control';
 import { useStore } from '@tanstack/react-form';
 import { useQuery } from '@tanstack/react-query';
+import { useLocalSearchParams } from 'expo-router';
 import React, { useEffect } from 'react';
 import {
 	Modal,
@@ -14,13 +14,14 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAppForm, useFieldContext } from '@/components/form-components';
 import { KeyList } from '@/components/key-manager/KeyList';
+import { pickLatestConnection } from '@/lib/connection-utils';
 import { rootLogger } from '@/lib/logger';
 import { useSshConnMutation } from '@/lib/query-fns';
-import { pickLatestConnection } from '@/lib/connection-utils';
 import {
 	connectionDetailsSchema,
 	secretsManager,
 	type InputConnectionDetails,
+	type StoredConnectionDetails,
 } from '@/lib/secrets-manager';
 import { useTheme } from '@/lib/theme';
 import { useBottomTabSpacing } from '@/lib/useBottomTabSpacing';
@@ -36,28 +37,33 @@ const defaultValues: InputConnectionDetails = {
 	port: 22,
 	username: 'muly',
 	security: {
-		type: 'password',
-		password: '',
+		type: 'key',
+		keyId: '',
 	},
+	useTmux: true,
+	tmuxSessionName: 'main',
+	autoConnect: false,
 };
 
 function Host() {
 	const theme = useTheme();
+	const searchParams = useLocalSearchParams<{
+		editConnectionId?: string;
+	}>();
+	const editConnectionId = searchParams.editConnectionId;
 	const [lastConnectionProgressEvent, setLastConnectionProgressEvent] =
 		React.useState<SshConnectionProgress | null>(null);
-
-	// Preload keys so they're ready when switching to key mode
-	const listPrivateKeysQuery = useQuery(secretsManager.keys.query.list);
-	const getDefaultKeyId = React.useCallback(() => {
-		const keys = listPrivateKeysQuery.data ?? [];
-		const def = keys.find((k) => k.metadata.isDefault);
-		return def?.id ?? keys[0]?.id;
-	}, [listPrivateKeysQuery.data]);
 
 	const sshConnMutation = useSshConnMutation({
 		onConnectionProgress: (s) => setLastConnectionProgressEvent(s),
 	});
 	const listConnectionsQuery = useQuery(secretsManager.connections.query.list);
+	const editConnectionQuery = useQuery({
+		...(editConnectionId
+			? secretsManager.connections.query.get(editConnectionId)
+			: { queryKey: ['connections', 'edit', 'none'], queryFn: async () => null }),
+		enabled: Boolean(editConnectionId),
+	});
 	const marginBottom = useBottomTabSpacing();
 	const connectionForm = useAppForm({
 		// https://tanstack.com/form/latest/docs/framework/react/guides/async-initial-values
@@ -71,10 +77,6 @@ function Host() {
 		},
 	});
 
-	const securityType = useStore(
-		connectionForm.store,
-		(state) => state.values.security.type,
-	);
 	const isPristine = useStore(connectionForm.store, (state) => state.isPristine);
 	const setFieldValue = connectionForm.setFieldValue;
 	const formErrors = useStore(connectionForm.store, (state) => state.errorMap);
@@ -103,27 +105,44 @@ function Host() {
 		return latestEntry?.value ?? null;
 	}, [listConnectionsQuery.data]);
 
+	const applyConnectionToForm = React.useCallback(
+		(connection: StoredConnectionDetails) => {
+			setFieldValue('host', connection.host);
+			setFieldValue('port', connection.port);
+			setFieldValue('username', connection.username);
+			setFieldValue('security.keyId', connection.security.keyId);
+
+			const tmuxSessionName =
+				connection.tmuxSessionName?.trim().length
+					? connection.tmuxSessionName
+					: 'main';
+
+			setFieldValue('useTmux', connection.useTmux ?? true);
+			setFieldValue('tmuxSessionName', tmuxSessionName);
+			setFieldValue(
+				'autoConnect',
+				typeof connection.autoConnect === 'boolean'
+					? connection.autoConnect
+					: false,
+			);
+		},
+		[setFieldValue],
+	);
+
 	useEffect(() => {
 		// Only prefill when the user hasn't edited the form yet.
 		if (!isPristine) return;
+		if (editConnectionId) return;
 		if (!latestSavedConnection) return;
-		setFieldValue('host', latestSavedConnection.host);
-		setFieldValue('port', latestSavedConnection.port);
-		setFieldValue('username', latestSavedConnection.username);
-		if (latestSavedConnection.security.type === 'password') {
-			setFieldValue(
-				'security.password',
-				latestSavedConnection.security.password,
-			);
-			setFieldValue('security.type', 'password');
-		} else {
-			setFieldValue(
-				'security.keyId',
-				latestSavedConnection.security.keyId,
-			);
-			setFieldValue('security.type', 'key');
-		}
-	}, [isPristine, latestSavedConnection, setFieldValue]);
+		applyConnectionToForm(latestSavedConnection);
+	}, [applyConnectionToForm, editConnectionId, isPristine, latestSavedConnection]);
+
+	useEffect(() => {
+		if (!editConnectionId) return;
+		const details = editConnectionQuery.data?.value ?? null;
+		if (!details) return;
+		applyConnectionToForm(details);
+	}, [applyConnectionToForm, editConnectionId, editConnectionQuery.data]);
 
 	return (
 		<SafeAreaView style={{ flex: 1, backgroundColor: theme.colors.background }}>
@@ -209,47 +228,37 @@ function Host() {
 									/>
 								)}
 							</connectionForm.AppField>
-							<connectionForm.AppField name="security.type">
+							<connectionForm.AppField name="security.keyId">
+								{() => <KeyIdPickerField />}
+							</connectionForm.AppField>
+
+							<connectionForm.AppField name="useTmux">
 								{(field) => (
-									<View style={{ marginBottom: 12 }}>
-										<SegmentedControl
-											values={['Password', 'Private Key']}
-											selectedIndex={field.state.value === 'password' ? 0 : 1}
-											onChange={(event) => {
-												const isKey =
-													event.nativeEvent.selectedSegmentIndex === 1;
-												field.handleChange(isKey ? 'key' : 'password');
-												// Set the default keyId when switching to key mode
-												if (isKey) {
-													const defaultKeyId = getDefaultKeyId();
-													if (defaultKeyId) {
-														connectionForm.setFieldValue(
-															'security.keyId',
-															defaultKeyId,
-														);
-													}
-												}
-											}}
-										/>
-									</View>
+									<field.SwitchField
+										label="Use tmux"
+										testID="useTmux"
+									/>
 								)}
 							</connectionForm.AppField>
-							{securityType === 'password' ? (
-								<connectionForm.AppField name="security.password">
-									{(field) => (
-										<field.TextField
-											label="Password"
-											testID="password"
-											placeholder="••••••••"
-											secureTextEntry
-										/>
-									)}
-								</connectionForm.AppField>
-							) : (
-								<connectionForm.AppField name="security.keyId">
-									{() => <KeyIdPickerField />}
-								</connectionForm.AppField>
-							)}
+							<connectionForm.AppField name="tmuxSessionName">
+								{(field) => (
+									<field.TextField
+										label="Tmux session name"
+										testID="tmuxSessionName"
+										placeholder="main"
+										autoCapitalize="none"
+										autoCorrect={false}
+									/>
+								)}
+							</connectionForm.AppField>
+							<connectionForm.AppField name="autoConnect">
+								{(field) => (
+									<field.SwitchField
+										label="Auto-connect on resume"
+										testID="autoConnect"
+									/>
+								)}
+							</connectionForm.AppField>
 
 							<View style={{ marginTop: 20 }}>
 								<connectionForm.SubmitButton
@@ -273,26 +282,7 @@ function Host() {
 							) : null}
 						</connectionForm.AppForm>
 					</View>
-					<PreviousConnectionsSection
-						onFillForm={(connection) => {
-							connectionForm.setFieldValue('host', connection.host);
-							connectionForm.setFieldValue('port', connection.port);
-							connectionForm.setFieldValue('username', connection.username);
-							if (connection.security.type === 'password') {
-								connectionForm.setFieldValue(
-									'security.password',
-									connection.security.password,
-								);
-								connectionForm.setFieldValue('security.type', 'password');
-							} else {
-								connectionForm.setFieldValue(
-									'security.keyId',
-									connection.security.keyId,
-								);
-								connectionForm.setFieldValue('security.type', 'key');
-							}
-						}}
-					/>
+					<PreviousConnectionsSection onFillForm={applyConnectionToForm} />
 				</View>
 			</ScrollView>
 		</SafeAreaView>
@@ -459,7 +449,7 @@ function KeyIdPickerField() {
 }
 
 function PreviousConnectionsSection(props: {
-	onFillForm: (connection: InputConnectionDetails) => void;
+	onFillForm: (connection: StoredConnectionDetails) => void;
 }) {
 	const theme = useTheme();
 	const listConnectionsQuery = useQuery(secretsManager.connections.query.list);
@@ -507,11 +497,11 @@ function PreviousConnectionsSection(props: {
 
 function ConnectionRow(props: {
 	id: string;
-	onFillForm: (connection: InputConnectionDetails) => void;
+	onFillForm: (connection: StoredConnectionDetails) => void;
 }) {
 	const theme = useTheme();
 	const detailsQuery = useQuery(secretsManager.connections.query.get(props.id));
-	const details = detailsQuery.data?.value;
+	const details = detailsQuery.data?.value ?? null;
 	const [open, setOpen] = React.useState(false);
 	const [renameOpen, setRenameOpen] = React.useState(false);
 	const [newId, setNewId] = React.useState(props.id);
@@ -547,7 +537,7 @@ function ConnectionRow(props: {
 					{details ? `${details.username}@${details.host}` : 'Loading...'}
 				</Text>
 				<Text style={{ color: theme.colors.muted, marginTop: 2, fontSize: 12 }}>
-					{details ? `Port ${details.port} • ${details.security.type}` : ''}
+					{details ? `Port ${details.port} • key` : ''}
 				</Text>
 			</View>
 			<Pressable onPress={() => setOpen(true)} hitSlop={8}>
