@@ -127,6 +127,11 @@ window.onload = () => {
 		let activeHandle: 'start' | 'end' | null = null;
 		let activePointerId: number | null = null;
 		const selectionOverlayTint = 'rgba(0, 0, 0, 0)';
+		const minHandleGapPx = 36;
+		const selectionHandleSizePx = 36;
+		// Keep in sync with CSS: transform: translate(-50%, -10%)
+		const selectionHandleOffsetX = selectionHandleSizePx * 0.5;
+		const selectionHandleOffsetY = selectionHandleSizePx * 0.1;
 		const longPressTimeoutMs = 500;
 		const longPressSlopPx = 8;
 		// Guard against immediate hide right after long-press selection activates.
@@ -147,14 +152,24 @@ window.onload = () => {
 }
 .${selectionModeClass} .fressh-selection-handle {
 	position: absolute;
+	/* Larger hit area for touch, with a smaller visual dot as a child element. */
+	width: 36px;
+	height: 36px;
+	background: transparent;
+	transform: translate(-50%, -10%);
+	touch-action: none;
+	z-index: 30;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+.${selectionModeClass} .fressh-selection-handle-dot {
 	width: 18px;
 	height: 18px;
 	border-radius: 999px;
 	background: rgba(37, 99, 235, 0.9);
 	box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.85);
-	transform: translate(-50%, -10%);
-	touch-action: none;
-	z-index: 30;
+	pointer-events: none;
 }
 `;
 			(document.head || document.documentElement).appendChild(style);
@@ -275,6 +290,103 @@ window.onload = () => {
 				selectionService,
 				workCell,
 			};
+		};
+
+		const getCellDimensions = () => {
+			const renderService = (term as unknown as {
+				_core?: { _renderService?: { dimensions?: { css?: { cell?: { width?: number; height?: number } } } } };
+				_renderService?: { dimensions?: { css?: { cell?: { width?: number; height?: number } } } };
+			})._renderService ??
+				(term as unknown as {
+					_core?: { _renderService?: { dimensions?: { css?: { cell?: { width?: number; height?: number } } } } };
+				})._core?._renderService;
+			const cellWidth = renderService?.dimensions?.css?.cell?.width;
+			const cellHeight = renderService?.dimensions?.css?.cell?.height;
+			if (!cellWidth || !cellHeight) return null;
+			return { cellWidth, cellHeight };
+		};
+
+		const getHandleGapPx = (
+			start: [number, number],
+			end: [number, number],
+			dims: { cellWidth: number; cellHeight: number },
+		) => {
+			const dx = (end[0] - start[0]) * dims.cellWidth;
+			const dy = (end[1] - start[1]) * dims.cellHeight;
+			return Math.hypot(dx, dy);
+		};
+
+		const clampHandlePosition = (
+			left: number,
+			top: number,
+			bounds: { left: number; top: number; right: number; bottom: number },
+		) => {
+			let minLeft = bounds.left + selectionHandleOffsetX;
+			let maxLeft =
+				bounds.right - selectionHandleSizePx + selectionHandleOffsetX;
+			let minTop = bounds.top + selectionHandleOffsetY;
+			let maxTop =
+				bounds.bottom - selectionHandleSizePx + selectionHandleOffsetY;
+			if (maxLeft < minLeft) maxLeft = minLeft;
+			if (maxTop < minTop) maxTop = minTop;
+			return {
+				left: Math.min(Math.max(left, minLeft), maxLeft),
+				top: Math.min(Math.max(top, minTop), maxTop),
+			};
+		};
+
+		const stepBufferPos = (
+			pos: [number, number],
+			dir: -1 | 1,
+			cols: number,
+		): [number, number] => {
+			let [x, y] = pos;
+			if (dir > 0) {
+				x += 1;
+				if (x >= cols) {
+					x = 0;
+					y += 1;
+				}
+			} else {
+				x -= 1;
+				if (x < 0) {
+					x = cols - 1;
+					y -= 1;
+				}
+			}
+			return [x, y];
+		};
+
+		const moveUntilMinGap = (
+			anchor: [number, number],
+			moving: [number, number],
+			dir: -1 | 1,
+			dims: { cellWidth: number; cellHeight: number },
+			bounds: { minRow: number; maxRow: number; cols: number },
+		) => {
+			let next = moving;
+			let gap = getHandleGapPx(anchor, next, dims);
+			let steps = 0;
+			const maxSteps = bounds.cols * 2;
+			while (gap < minHandleGapPx && steps < maxSteps) {
+				const candidate = stepBufferPos(next, dir, bounds.cols);
+				if (candidate[1] < bounds.minRow || candidate[1] > bounds.maxRow) break;
+				next = candidate;
+				gap = getHandleGapPx(anchor, next, dims);
+				steps += 1;
+			}
+			return { pos: next, achieved: gap >= minHandleGapPx };
+		};
+
+		const toInclusiveEnd = (
+			endExclusive: [number, number],
+			cols: number,
+			minRow: number,
+		): [number, number] => {
+			const [x, y] = endExclusive;
+			if (x > 0) return [x - 1, y];
+			if (y <= minRow) return [0, y];
+			return [cols - 1, y - 1];
 		};
 
 		const getBufferCoords = (
@@ -401,15 +513,9 @@ window.onload = () => {
 				if (endHandle) endHandle.style.display = 'none';
 				return;
 			}
-			const renderService = (term as unknown as {
-				_core?: { _renderService?: { dimensions?: { css?: { cell?: { width?: number; height?: number } } } } };
-				_renderService?: { dimensions?: { css?: { cell?: { width?: number; height?: number } } } };
-			})._renderService ??
-				(term as unknown as {
-					_core?: { _renderService?: { dimensions?: { css?: { cell?: { width?: number; height?: number } } } } };
-				})._core?._renderService;
-			const cellWidth = renderService?.dimensions?.css?.cell?.width;
-			const cellHeight = renderService?.dimensions?.css?.cell?.height;
+			const dims = getCellDimensions();
+			const cellWidth = dims?.cellWidth;
+			const cellHeight = dims?.cellHeight;
 			if (!cellWidth || !cellHeight) return;
 
 			const rootEl = term.element;
@@ -420,6 +526,12 @@ window.onload = () => {
 			const offsetX = screenRect.left - rootRect.left;
 			const offsetY = screenRect.top - rootRect.top;
 			const ydisp = core.bufferService.buffer.ydisp;
+			const screenBounds = {
+				left: offsetX,
+				top: offsetY,
+				right: offsetX + screenRect.width,
+				bottom: offsetY + screenRect.height,
+			};
 
 			const startRow = selectionStart[1] - ydisp;
 			const endRow = selectionEnd[1] - ydisp;
@@ -428,11 +540,17 @@ window.onload = () => {
 			} else {
 				const startX = offsetX + selectionStart[0] * cellWidth;
 				const startY = offsetY + startRow * cellHeight;
+				const startPos = clampHandlePosition(startX, startY, screenBounds);
 				startHandle = startHandle ?? document.createElement('div');
 				startHandle.className = 'fressh-selection-handle';
+				if (!startHandle.firstChild) {
+					const dot = document.createElement('div');
+					dot.className = 'fressh-selection-handle-dot';
+					startHandle.appendChild(dot);
+				}
 				startHandle.style.display = 'block';
-				startHandle.style.left = `${startX}px`;
-				startHandle.style.top = `${startY}px`;
+				startHandle.style.left = `${startPos.left}px`;
+				startHandle.style.top = `${startPos.top}px`;
 				if (!startHandle.parentElement) rootEl.appendChild(startHandle);
 			}
 
@@ -442,11 +560,17 @@ window.onload = () => {
 			} else {
 				const endX = offsetX + selectionEnd[0] * cellWidth;
 				const endY = offsetY + endRow * cellHeight;
+				const endPos = clampHandlePosition(endX, endY, screenBounds);
 				endHandle = endHandle ?? document.createElement('div');
 				endHandle.className = 'fressh-selection-handle';
+				if (!endHandle.firstChild) {
+					const dot = document.createElement('div');
+					dot.className = 'fressh-selection-handle-dot';
+					endHandle.appendChild(dot);
+				}
 				endHandle.style.display = 'block';
-				endHandle.style.left = `${endX}px`;
-				endHandle.style.top = `${endY}px`;
+				endHandle.style.left = `${endPos.left}px`;
+				endHandle.style.top = `${endPos.top}px`;
 				if (!endHandle.parentElement) rootEl.appendChild(endHandle);
 			}
 			if (startHandle || endHandle) ensureHandleListeners();
@@ -479,6 +603,88 @@ window.onload = () => {
 					} else if (activeHandle === 'end') {
 						ey = sy;
 						exInclusive = sx;
+					}
+				}
+				const dims = getCellDimensions();
+				if (dims) {
+					const bounds = {
+						minRow,
+						maxRow,
+						cols: core.bufferService.cols,
+					};
+					const gap = getHandleGapPx(
+						[sx, sy],
+						[exInclusive, ey],
+						dims,
+					);
+					if (gap < minHandleGapPx) {
+						if (activeHandle === 'start' || activeHandle === 'end') {
+							const isStartActive = activeHandle === 'start';
+							const anchor: [number, number] = isStartActive
+								? [exInclusive, ey]
+								: [sx, sy];
+							const moving: [number, number] = isStartActive
+								? [sx, sy]
+								: [exInclusive, ey];
+							const dir: -1 | 1 = isStartActive ? -1 : 1;
+							const result = moveUntilMinGap(
+								anchor,
+								moving,
+								dir,
+								dims,
+								bounds,
+							);
+							if (result.achieved) {
+								if (isStartActive) {
+									sx = result.pos[0];
+									sy = result.pos[1];
+								} else {
+									exInclusive = result.pos[0];
+									ey = result.pos[1];
+								}
+							} else {
+								const fallback = moveUntilMinGap(
+									moving,
+									anchor,
+									(dir * -1) as -1 | 1,
+									dims,
+									bounds,
+								);
+								if (fallback.achieved) {
+									if (isStartActive) {
+										exInclusive = fallback.pos[0];
+										ey = fallback.pos[1];
+									} else {
+										sx = fallback.pos[0];
+										sy = fallback.pos[1];
+									}
+								}
+							}
+						} else {
+							const result = moveUntilMinGap(
+								[sx, sy],
+								[exInclusive, ey],
+								1,
+								dims,
+								bounds,
+							);
+							if (result.achieved) {
+								exInclusive = result.pos[0];
+								ey = result.pos[1];
+							} else {
+								const fallback = moveUntilMinGap(
+									[exInclusive, ey],
+									[sx, sy],
+									-1,
+									dims,
+									bounds,
+								);
+								if (fallback.achieved) {
+									sx = fallback.pos[0];
+									sy = fallback.pos[1];
+								}
+							}
+						}
 					}
 				}
 				const endExclusive =
@@ -544,9 +750,21 @@ window.onload = () => {
 					const normalizedCol = line
 						? normalizeSelectionColumn(line, coords[0], core)
 						: coords[0];
-					const model = core.selectionService._model;
-					const start = model.selectionStart ?? coords;
-					const end = model.selectionEnd ?? coords;
+					const selectionService =
+						core.selectionService as typeof core.selectionService & {
+							selectionStart?: [number, number];
+							selectionEnd?: [number, number];
+						};
+					const model = selectionService._model;
+					const start =
+						selectionService.selectionStart ?? model.selectionStart ?? coords;
+					const endExclusive =
+						selectionService.selectionEnd ?? model.selectionEnd ?? coords;
+					const end = toInclusiveEnd(
+						endExclusive,
+						core.bufferService.cols,
+						core.bufferService.buffer.ydisp,
+					);
 					if (kind === 'start') {
 						updateSelectionRange([normalizedCol, coords[1]], end);
 					} else {

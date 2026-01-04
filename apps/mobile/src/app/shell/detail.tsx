@@ -826,8 +826,17 @@ function ShellDetail() {
 							theme: {
 								background: theme.colors.background,
 								foreground: theme.colors.textPrimary,
-								selectionBackground: 'rgba(37, 99, 235, 0.35)',
-								selectionInactiveBackground: 'rgba(37, 99, 235, 0.2)',
+								...(Platform.OS === 'android'
+									? {
+											// Android: reverse-style selection for readability; iOS keeps the default blue highlight.
+											selectionBackground: '#F5F5F5',
+											selectionForeground: '#000000',
+											selectionInactiveBackground: 'rgba(255, 255, 255, 0.6)',
+										}
+									: {
+											selectionBackground: 'rgba(37, 99, 235, 0.35)',
+											selectionInactiveBackground: 'rgba(37, 99, 235, 0.2)',
+										}),
 							},
 						}}
 						onResize={handleTerminalResize}
