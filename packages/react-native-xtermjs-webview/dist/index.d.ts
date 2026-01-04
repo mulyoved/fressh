@@ -19,6 +19,9 @@ export type XtermInbound = {
 } | {
     type: 'selectionChanged';
     text: string;
+} | {
+    type: 'selectionModeChanged';
+    enabled: boolean;
 };
 export type XtermWebViewHandle = {
     write: (data: Uint8Array) => void;
@@ -44,6 +47,7 @@ export type XtermJsWebViewProps = {
     onInitialized?: () => void;
     onData?: (data: string) => void;
     onSelection?: (text: string) => void;
+    onSelectionModeChange?: (enabled: boolean) => void;
     /** Called when terminal size changes (cols/rows). Use for PTY resize. */
     onResize?: (cols: number, rows: number) => void;
     logger?: {
@@ -59,5 +63,5 @@ export type XtermJsWebViewProps = {
     };
     autoFit?: boolean;
 };
-export declare function XtermJsWebView({ ref, style, webViewOptions, xtermOptions, onInitialized, onData, onSelection, onResize, coalescingThreshold, logger, size, autoFit, }: XtermJsWebViewProps): import("react/jsx-runtime").JSX.Element;
+export declare function XtermJsWebView({ ref, style, webViewOptions, xtermOptions, onInitialized, onData, onSelection, onSelectionModeChange, onResize, coalescingThreshold, logger, size, autoFit, }: XtermJsWebViewProps): import("react/jsx-runtime").JSX.Element;
 //# sourceMappingURL=index.d.ts.map

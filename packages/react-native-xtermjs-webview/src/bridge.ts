@@ -8,7 +8,8 @@ export type BridgeInboundMessage =
 	| { type: 'debug'; message: string }
 	| { type: 'sizeChanged'; cols: number; rows: number }
 	| { type: 'selection'; requestId: number; text: string }
-	| { type: 'selectionChanged'; text: string };
+	| { type: 'selectionChanged'; text: string }
+	| { type: 'selectionModeChanged'; enabled: boolean };
 
 // Messages injected from React Native into the WebView (xterm page)
 export type BridgeOutboundMessage =

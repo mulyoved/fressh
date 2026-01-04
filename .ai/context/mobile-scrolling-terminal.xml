@@ -1,0 +1,587 @@
+<context>
+<metadata>
+  <mode>topic</mode>
+  <topic>Mobile terminal scrolling - native tablet finger-drag for Tmux scrollback</topic>
+  <token_estimate>~25000</token_estimate>
+  <generated>2026-01-04</generated>
+  <purpose>Deep research and implementation ideas</purpose>
+</metadata>
+
+<instructions>
+You are GPT-5 Pro conducting deep research on implementing native mobile scrolling for a terminal app that connects to Tmux.
+
+The user wants touch-drag gestures on a tablet to scroll through Tmux history naturally - like scrolling a web page. This is technically complex because:
+1. xterm.js (in WebView) has its own scroll buffer
+2. Tmux (on remote server) has a separate scrollback buffer
+3. Scrolling Tmux requires copy-mode or mouse wheel events
+4. Network latency makes synchronous scrolling feel sluggish
+
+Please analyze the approaches outlined, recommend the best solution, and provide implementation guidance. Focus on practical solutions that work with existing Tmux sessions and don't break full-screen apps.
+</instructions>
+
+<problem_statement>
+# Mobile Terminal Scrolling Feature - Deep Research Request
+
+## Problem Statement
+
+I have a React Native mobile app that connects to remote SSH servers and opens Tmux sessions. The terminal is rendered using xterm.js inside a WebView. I want **native tablet finger-drag scrolling** to control the **Tmux scrollback buffer** - so users can put their finger on the screen and drag up/down to scroll through terminal history, just like scrolling through any mobile app content.
+
+**Current behavior:** Terminal scrolling is handled entirely within xterm.js (CSS overflow), and native touch gestures are blocked (bounces: false, overScrollMode: 'never').
+
+**Desired behavior:** Touch-drag gestures should scroll through Tmux's scrollback history (not just xterm.js's local buffer). The goal is ~3 pages of scrollback accessible via intuitive finger-drag, similar to scrolling a web page or document.
+
+## Architecture Overview
+
+### Stack
+- **React Native** (Expo) mobile app
+- **WebView** containing **xterm.js** terminal
+- **Rust SSH client** (via UniFFI bindings) connecting to remote servers
+- **Tmux** sessions on the remote server
+
+### Data Flow
+```
+User's Tablet
+     |
+React Native App
+     |
+WebView (xterm.js renders terminal output)
+     |
+Rust SSH Bridge (ring buffer of terminal output)
+     |
+SSH Connection -> Remote Server -> Tmux Session
+```
+
+### Key Components
+
+1. **xterm.js** - Renders terminal in WebView, has its own scrollback: 10000 buffer, handles rendering and cursor positioning
+
+2. **Tmux** - Runs on remote server, has separate scrollback buffer, copy-mode for scrolling (prefix + [), responds to mouse wheel events (if mouse mode enabled)
+
+3. **WebView Bridge** - Messages between React Native and xterm.js via postMessage/injectJavaScript
+
+4. **Rust SSH Shell** - Ring buffer stores terminal output locally, supports readBuffer() for replay
+
+## Technical Challenges
+
+### Challenge 1: Two Separate Scroll Buffers
+- **xterm.js buffer**: Local in WebView, stores what was rendered
+- **Tmux buffer**: Remote on server, authoritative source of scrollback
+- These are NOT synchronized - xterm.js only knows what Tmux sent to display
+
+### Challenge 2: Tmux Scroll Requires Copy-Mode
+- Normal Tmux scroll requires entering "copy-mode" (prefix + [)
+- In copy-mode, terminal enters alternate mode where normal input is blocked
+- Scroll commands are C-u/C-d (half page), PgUp/PgDn, or mouse wheel
+- This changes terminal state and visual appearance
+
+### Challenge 3: Touch Gesture Translation
+- Native touch scrolling expects immediate visual feedback
+- Tmux scroll requires sending commands to remote server, waiting for response
+- Round-trip latency (50-200ms) would make scrolling feel sluggish/unresponsive
+
+### Challenge 4: Viewport Sync Problem
+- If we scroll xterm.js locally, it shows stale content
+- If we scroll Tmux remotely, we need to sync viewport position
+- No direct way to query Tmux's current scroll position
+
+## Potential Approaches (Need Research)
+
+### Approach A: Fake Larger Terminal Screen
+Idea: Configure Tmux/xterm with many more rows than visible, show only bottom portion, let native scroll show upper content.
+
+Questions:
+- Can we set terminal to 200 rows but only render 40 visible?
+- How does xterm.js handle rendering with scrollback visible?
+- Would Tmux alt-screen apps (vim, htop) break this?
+
+### Approach B: Intercept Touch -> Send Tmux Commands
+Idea: Capture touch velocity, translate to Tmux copy-mode scroll commands, enter/exit copy-mode automatically.
+
+Questions:
+- Can we make copy-mode entry/exit seamless and invisible?
+- How to handle latency (predictive scrolling? local estimation?)
+- What about apps that use mouse tracking (vim, htop)?
+
+### Approach C: Local Buffer Expansion
+Idea: Store much more terminal output locally in Rust ring buffer, scroll through local history without touching Tmux.
+
+Questions:
+- Can we replay arbitrary positions from ring buffer to xterm.js?
+- How to handle terminal state (colors, cursor) at arbitrary scroll positions?
+- What about applications that clear screen or use alternate buffer?
+
+### Approach D: Hybrid - Local Cache + Tmux Sync
+Idea: Cache recent output locally, allow instant local scroll for cached content, sync with Tmux when scrolling beyond cache.
+
+Questions:
+- How to determine cache validity?
+- How to handle divergence between local cache and Tmux state?
+- What triggers refresh/resync?
+
+### Approach E: Mouse Wheel Event Injection
+Idea: Translate touch velocity to synthetic mouse wheel events, send to Tmux.
+
+Questions:
+- Does Tmux respond to mouse wheel outside copy-mode? (yes, with mouse mode)
+- Can we enable Tmux mouse mode transparently?
+- How to handle apps that disable mouse mode?
+
+## Research Questions
+
+1. **Tmux Internals**: What's the best way to programmatically scroll Tmux and retrieve scrollback content? Can we use tmux capture-pane or similar commands?
+
+2. **xterm.js Capabilities**: Can xterm.js be configured to show a "virtual" larger buffer that we populate incrementally? Does it have APIs for injecting historical content at specific scroll positions?
+
+3. **Terminal Protocol**: Are there escape sequences or control codes that allow scrolling viewport without entering copy-mode? ANSI scroll regions?
+
+4. **Mobile UX Patterns**: How do other mobile terminal apps (Termux, iSH, Prompt, Blink) handle touch scrolling with remote connections?
+
+5. **Latency Mitigation**: What techniques exist for making remote scroll feel responsive? (Predictive rendering, optimistic UI, rubber-banding?)
+
+6. **Implementation Recommendation**: Given the architecture, what's the most practical approach that:
+   - Works with 50-200ms latency
+   - Doesn't break full-screen apps (vim, htop)
+   - Provides intuitive finger-drag UX
+   - Keeps Tmux as source of truth
+
+## Constraints
+
+- Must work with existing Tmux sessions (can't require special Tmux config)
+- Must not break alternate screen buffer apps
+- Should handle reconnection gracefully (scroll position preserved or reset)
+- Target: ~3 pages of scrollback (enough to see recent command output)
+- Acceptable latency for scroll response: less than 100ms perceived
+</problem_statement>
+
+<file path="packages/react-native-xtermjs-webview/src/index.tsx" role="critical">
+import React, {
+	useEffect,
+	useImperativeHandle,
+	useMemo,
+	useRef,
+	useCallback,
+	useState,
+} from 'react';
+import { WebView, type WebViewMessageEvent } from 'react-native-webview';
+import htmlString from '../dist-internal/index.html?raw';
+import {
+	binaryToBStr,
+	bStrToBinary,
+	type BridgeInboundMessage,
+	type BridgeOutboundMessage,
+} from './bridge';
+import { jetBrainsMonoTtfBase64 } from './jetbrains-mono';
+
+export { bStrToBinary, binaryToBStr };
+
+type StrictOmit<T, K extends keyof T> = Omit<T, K>;
+type ITerminalOptions = import('@xterm/xterm').ITerminalOptions;
+type WebViewOptions = React.ComponentProps<typeof WebView>;
+
+const defaultCoalescingThreshold = 8 * 1024;
+const jetBrainsMonoStyleId = 'fressh-jetbrains-mono';
+const jetBrainsMonoFontCss = `
+@font-face {
+	font-family: 'JetBrains Mono';
+	src: url(data:font/ttf;base64,${jetBrainsMonoTtfBase64}) format('truetype');
+	font-weight: 400;
+	font-style: normal;
+	font-display: swap;
+}
+`;
+
+/**
+ * Message from this pkg to calling RN
+ */
+export type XtermInbound =
+	| { type: 'initialized' }
+	| { type: 'data'; data: Uint8Array }
+	| { type: 'debug'; message: string }
+	| { type: 'selectionChanged'; text: string }
+	| { type: 'selectionModeChanged'; enabled: boolean };
+
+export type XtermWebViewHandle = {
+	write: (data: Uint8Array) => void; // bytes in (batched)
+	// Efficiently write many chunks in one postMessage (for initial replay)
+	writeMany: (chunks: Uint8Array[]) => void;
+	flush: () => void; // force-flush outgoing writes
+	clear: () => void;
+	focus: () => void;
+	setSystemKeyboardEnabled: (enabled: boolean) => void;
+	setSelectionModeEnabled: (enabled: boolean) => void;
+	getSelection: () => Promise<string>;
+	resize: (size: { cols: number; rows: number }) => void;
+	fit: () => void;
+};
+
+const defaultWebViewProps: WebViewOptions = {
+	// WebView behavior that suits terminals
+	// ios
+	keyboardDisplayRequiresUserAction: false,
+	pullToRefreshEnabled: false,
+	bounces: false,
+	textInteractionEnabled: false,
+	allowsLinkPreview: false,
+	// android
+	setSupportMultipleWindows: false,
+	overScrollMode: 'never',
+	setBuiltInZoomControls: false,
+	setDisplayZoomControls: false,
+	textZoom: 100,
+	// both
+	originWhitelist: ['*'],
+	scalesPageToFit: false,
+	contentMode: 'mobile',
+};
+
+const defaultXtermOptions: Partial<ITerminalOptions> = {
+	allowProposedApi: true,
+	convertEol: true,
+	scrollback: 10000,
+	cursorBlink: true,
+	// Tablet focus-mode defaults (JetBrains Mono preferred).
+	// Note: WebView must have the font available or it will fall back.
+	fontFamily:
+		'"JetBrains Mono", "Roboto Mono", ui-monospace, Menlo, Monaco, "Cascadia Mono", "Segoe UI Mono", monospace',
+	fontSize: 16,
+};
+
+type UserControllableWebViewProps = StrictOmit<
+	WebViewOptions,
+	'source' | 'style' | 'injectedJavaScriptBeforeContentLoaded'
+>;
+
+export type XtermJsWebViewProps = {
+	ref: React.RefObject<XtermWebViewHandle | null>;
+	style?: WebViewOptions['style'];
+	webViewOptions?: UserControllableWebViewProps;
+	xtermOptions?: Partial<ITerminalOptions>;
+	onInitialized?: () => void;
+	onData?: (data: string) => void;
+	onSelection?: (text: string) => void;
+	onSelectionModeChange?: (enabled: boolean) => void;
+	/** Called when terminal size changes (cols/rows). Use for PTY resize. */
+	onResize?: (cols: number, rows: number) => void;
+	logger?: {
+		debug?: (...args: unknown[]) => void;
+		log?: (...args: unknown[]) => void;
+		warn?: (...args: unknown[]) => void;
+		error?: (...args: unknown[]) => void;
+	};
+	coalescingThreshold?: number;
+	size?: {
+		cols: number;
+		rows: number;
+	};
+	autoFit?: boolean;
+};
+
+function xTermOptionsEquals(
+	a: Partial<ITerminalOptions> | null,
+	b: Partial<ITerminalOptions> | null,
+): boolean {
+	if (a == b) return true;
+	if (a == null && b == null) return true;
+	if (a == null || b == null) return false;
+	const keys = new Set<string>([
+		...Object.keys(a as object),
+		...Object.keys(b as object),
+	]);
+	for (const k of keys) {
+		const key = k as keyof ITerminalOptions;
+		if (a[key] !== b[key]) return false;
+	}
+	return true;
+}
+
+export function XtermJsWebView({
+	ref,
+	style,
+	webViewOptions = defaultWebViewProps,
+	xtermOptions = defaultXtermOptions,
+	onInitialized,
+	onData,
+	onSelection,
+	onResize,
+	coalescingThreshold = defaultCoalescingThreshold,
+	logger,
+	size,
+	autoFit = true,
+}: XtermJsWebViewProps) {
+	const webRef = useRef<WebView>(null);
+	const [initialized, setInitialized] = useState(false);
+	const selectionRequestIdRef = useRef(0);
+	const pendingSelectionRef = useRef(
+		new Map<number, { resolve: (value: string) => void }>(),
+	);
+
+	// ---- RN -> WebView message sender
+	const sendToWebView = useCallback(
+		(obj: BridgeOutboundMessage) => {
+			const webViewRef = webRef.current;
+			if (!webViewRef) return;
+			const payload = JSON.stringify(obj);
+			logger?.debug?.(`sending msg to webview: ${payload}`);
+			const js = `window.dispatchEvent(new MessageEvent('message',{data:${payload}})); true;`;
+			webViewRef.injectJavaScript(js);
+		},
+		[logger],
+	);
+
+	// ---- rAF + 8KB coalescer for writes
+	const bufRef = useRef<Uint8Array | null>(null);
+	const rafRef = useRef<number | null>(null);
+
+	const flush = useCallback(() => {
+		if (!bufRef.current) return;
+		const bStr = binaryToBStr(bufRef.current);
+		bufRef.current = null;
+		if (rafRef.current != null) {
+			cancelAnimationFrame(rafRef.current);
+			rafRef.current = null;
+		}
+		sendToWebView({ type: 'write', bStr });
+	}, [sendToWebView]);
+
+	const schedule = useCallback(() => {
+		if (rafRef.current != null) return;
+		rafRef.current = requestAnimationFrame(() => {
+			rafRef.current = null;
+			flush();
+		});
+	}, [flush]);
+
+	const write = useCallback(
+		(data: Uint8Array) => {
+			if (!data || data.length === 0) return;
+			if (!bufRef.current) {
+				bufRef.current = data;
+			} else {
+				const a = bufRef.current;
+				const merged = new Uint8Array(a.length + data.length);
+				merged.set(a, 0);
+				merged.set(data, a.length);
+				bufRef.current = merged;
+			}
+			if ((bufRef.current?.length ?? 0) >= coalescingThreshold) flush();
+			else schedule();
+		},
+		[coalescingThreshold, flush, schedule],
+	);
+
+	const writeMany = useCallback(
+		(chunks: Uint8Array[]) => {
+			if (!chunks || chunks.length === 0) return;
+			flush(); // Ensure any pending small buffered write is flushed before bulk write
+			const bStrs = chunks.map(binaryToBStr);
+			sendToWebView({ type: 'writeMany', chunks: bStrs });
+		},
+		[flush, sendToWebView],
+	);
+
+	// ... rest of component (see full file)
+}
+</file>
+
+<file path="packages/react-native-xtermjs-webview/src-internal/main.tsx" role="critical">
+import { FitAddon } from '@xterm/addon-fit';
+import { Terminal, type ITerminalOptions } from '@xterm/xterm';
+import '@xterm/xterm/css/xterm.css';
+import {
+	bStrToBinary,
+	type BridgeInboundMessage,
+	type BridgeOutboundMessage,
+} from '../src/bridge';
+
+declare global {
+	interface Window {
+		terminal?: Terminal;
+		fitAddon?: FitAddon;
+		terminalWriteBase64?: (data: string) => void;
+		__FRESSH_XTERM_OPTIONS__?: ITerminalOptions;
+		ReactNativeWebView?: {
+			postMessage?: (data: string) => void;
+			injectedObjectJson?: () => string | undefined;
+		};
+		__FRESSH_XTERM_BRIDGE__?: boolean;
+		__FRESSH_XTERM_MSG_HANDLER__?: (
+			e: MessageEvent<BridgeOutboundMessage>,
+		) => void;
+	}
+}
+
+const sendToRn = (msg: BridgeInboundMessage) =>
+	window.ReactNativeWebView?.postMessage?.(JSON.stringify(msg));
+
+window.onload = () => {
+	try {
+		if (window.__FRESSH_XTERM_BRIDGE__) {
+			sendToRn({
+				type: 'debug',
+				message: 'bridge already installed; ignoring duplicate boot',
+			});
+			return;
+		}
+
+		// ... xterm options loading ...
+
+		window.__FRESSH_XTERM_BRIDGE__ = true;
+
+		// ---- Xterm setup
+		const term = new Terminal(injectedObject);
+		const fitAddon = new FitAddon();
+		term.loadAddon(fitAddon);
+
+		const root = document.getElementById('terminal')!;
+		term.open(root);
+		fitAddon.fit();
+
+		// Send initial size after first fit
+		if (term.cols >= 2 && term.rows >= 1) {
+			sendToRn({ type: 'sizeChanged', cols: term.cols, rows: term.rows });
+		}
+
+		// Selection mode handling with touch overlay
+		const selectionModeClass = 'fressh-selection-mode';
+		let selectionModeEnabled = false;
+		let selectionOverlay: HTMLDivElement | null = null;
+
+		// Touch overlay captures touch events for selection
+		// Key insight: Currently blocks native scrolling
+		const ensureOverlay = () => {
+			if (selectionOverlay) return selectionOverlay;
+			const overlay = document.createElement('div');
+			overlay.style.position = 'absolute';
+			overlay.style.left = '0';
+			overlay.style.right = '0';
+			overlay.style.top = '0';
+			overlay.style.bottom = '0';
+			overlay.style.background = 'rgba(0, 0, 0, 0)';
+			overlay.style.border = 'none';
+			overlay.style.zIndex = '20';
+			overlay.style.touchAction = 'none'; // <-- BLOCKS NATIVE SCROLL
+			overlay.style.pointerEvents = 'auto';
+			// ...
+			return overlay;
+		};
+
+		// Touch event handlers for selection
+		const onTouchStart = (event: TouchEvent) => {
+			// Captures touch, prevents default
+			event.preventDefault();
+		};
+
+		const onTouchMove = (event: TouchEvent) => {
+			// Updates selection during drag
+			event.preventDefault();
+		};
+
+		// RN -> WebView handler
+		const handler = (e: MessageEvent<BridgeOutboundMessage>) => {
+			switch (msg.type) {
+				case 'write': {
+					const bytes = bStrToBinary(msg.bStr);
+					term.write(bytes);
+					break;
+				}
+				case 'resize': {
+					term.resize(msg.cols, msg.rows);
+					break;
+				}
+				case 'fit': {
+					fitAddon.fit();
+					break;
+				}
+				// ...
+			}
+		};
+
+		window.addEventListener('message', handler);
+	} catch (e) {
+		sendToRn({
+			type: 'debug',
+			message: `error in xtermjs-webview: ${String(e)}`,
+		});
+	}
+};
+</file>
+
+<file path="packages/react-native-xtermjs-webview/src/bridge.ts" role="critical">
+import { Base64 } from 'js-base64';
+type ITerminalOptions = import('@xterm/xterm').ITerminalOptions;
+type ITerminalInitOnlyOptions = import('@xterm/xterm').ITerminalInitOnlyOptions;
+
+// Messages posted from the WebView (xterm page) to React Native
+export type BridgeInboundMessage =
+	| { type: 'initialized' }
+	| { type: 'input'; str: string }
+	| { type: 'debug'; message: string }
+	| { type: 'sizeChanged'; cols: number; rows: number }
+	| { type: 'selection'; requestId: number; text: string }
+	| { type: 'selectionChanged'; text: string }
+	| { type: 'selectionModeChanged'; enabled: boolean };
+
+// Messages injected from React Native into the WebView (xterm page)
+export type BridgeOutboundMessage =
+	| { type: 'write'; bStr: string }
+	| { type: 'writeMany'; chunks: string[] }
+	| { type: 'resize'; cols: number; rows: number }
+	| { type: 'fit' }
+	| { type: 'getSelection'; requestId: number }
+	| { type: 'setSelectionMode'; enabled: boolean }
+	| {
+			type: 'setOptions';
+			opts: Partial<Omit<ITerminalOptions, keyof ITerminalInitOnlyOptions>>;
+	  }
+	| { type: 'clear' }
+	| { type: 'focus' };
+
+export const binaryToBStr = (binary: Uint8Array): string =>
+	Base64.fromUint8Array(binary);
+export const bStrToBinary = (bStr: string): Uint8Array =>
+	Base64.toUint8Array(bStr);
+</file>
+
+<file path="packages/react-native-uniffi-russh/src/api.ts" role="supporting" summary="SSH shell API">
+// Key types and methods for shell management:
+
+export type TerminalType = 'Xterm' | 'Vt220' | 'Ansi' | 'Dumb' | 'Screen';
+
+export interface StartShellOptions {
+	term?: TerminalType;
+	useTmux?: boolean;
+	tmuxSessionName?: string;
+	terminalSize?: { cols: number; rows: number };
+}
+
+export interface BufferReadOptions {
+	mode: 'head' | 'seq' | 'time' | 'live' | 'tailBytes';
+	// For seq mode: start from specific sequence number
+	// For time mode: start from timestamp
+	// For tailBytes: last N bytes
+}
+
+export interface SshShell {
+	sendData(data: ArrayBuffer): Promise<void>;
+	resizePty(cols: number, rows: number): Promise<void>;
+	readBuffer(options: BufferReadOptions): Promise<BufferReadResult>;
+	addListener(callback: (event: ListenerEvent) => void): bigint;
+	removeListener(id: bigint): void;
+	close(): Promise<void>;
+}
+
+// Ring buffer stores terminal output locally
+// Can replay from arbitrary positions
+// This is key for potential local scroll implementation
+</file>
+
+<desired_output>
+Please provide:
+1. Analysis of each approach's feasibility (A through E)
+2. Recommended approach with detailed rationale
+3. High-level implementation plan with specific code locations to modify
+4. Key technical challenges and proposed solutions
+5. Prior art or reference implementations to study (other mobile terminal apps)
+6. Any alternative approaches not listed
+</desired_output>
+</context>

@@ -19,6 +19,9 @@ export type BridgeInboundMessage = {
 } | {
     type: 'selectionChanged';
     text: string;
+} | {
+    type: 'selectionModeChanged';
+    enabled: boolean;
 };
 export type BridgeOutboundMessage = {
     type: 'write';

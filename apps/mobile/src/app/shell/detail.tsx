@@ -22,6 +22,7 @@ import React, {
 	useState,
 } from 'react';
 import {
+	Alert,
 	Animated,
 	AppState,
 	Keyboard,
@@ -391,6 +392,11 @@ function ShellDetail() {
 	const commandTimeoutsRef = useRef<ReturnType<typeof setTimeout>[]>([]);
 	const lastSelectionRef = useRef<{ text: string; at: number } | null>(null);
 
+	const exitSelectionMode = useCallback(() => {
+		setSelectionModeEnabled(false);
+		xtermRef.current?.setSelectionModeEnabled(false);
+	}, []);
+
 	const sendBytesRaw = useCallback(
 		(bytes: Uint8Array<ArrayBuffer>) => {
 			if (!shell) return;
@@ -475,6 +481,7 @@ function ShellDetail() {
 
 	const runCommandPreset = useCallback(
 		(preset: CommandPreset) => {
+			exitSelectionMode();
 			clearCommandTimeouts();
 			let delay = 0;
 			const baseDelay = 50;
@@ -488,7 +495,7 @@ function ShellDetail() {
 			});
 			setCommandPresetsOpen(false);
 		},
-		[clearCommandTimeouts, sendCommandStep],
+		[clearCommandTimeouts, exitSelectionMode, sendCommandStep],
 	);
 
 	const toggleModifier = useCallback((modifier: ModifierKey) => {
@@ -518,26 +525,15 @@ function ShellDetail() {
 
 	const handlePasteClipboard = useCallback(async () => {
 		try {
-			const cached = lastSelectionRef.current;
-			const now = Date.now();
-			if (selectionModeEnabled) {
-				const selection = await xtermRef.current?.getSelection();
-				if (selection) {
-					lastSelectionRef.current = { text: selection, at: now };
-					sendTextRaw(selection);
-					return;
-				}
-				if (cached?.text && now - cached.at < 15000) {
-					sendTextRaw(cached.text);
-					return;
-				}
-			}
 			const text = await Clipboard.getStringAsync();
 			if (text) sendTextRaw(text);
+			if (selectionModeEnabled) {
+				exitSelectionMode();
+			}
 		} catch (error) {
 			logger.warn('clipboard read failed', error);
 		}
-	}, [sendTextRaw, selectionModeEnabled]);
+	}, [exitSelectionMode, sendTextRaw, selectionModeEnabled]);
 
 	const handleCopySelection = useCallback(() => {
 		const xr = xtermRef.current;
@@ -551,32 +547,50 @@ function ShellDetail() {
 			lastSelectionRef.current = { text: selection, at: Date.now() };
 			await Clipboard.setStringAsync(selection);
 			logger.info('copied selection', selection.length);
+			exitSelectionMode();
 		})();
-	}, []);
+	}, [exitSelectionMode]);
 
 	const handleSelectionChanged = useCallback((text: string) => {
 		if (!text) return;
 		const now = Date.now();
 		if (lastSelectionRef.current?.text === text) return;
 		lastSelectionRef.current = { text, at: now };
-		void (async () => {
-			try {
-				await Clipboard.setStringAsync(text);
-				logger.info('copied selection', text.length);
-			} catch (error) {
-				logger.warn('clipboard write failed', error);
-			}
-		})();
 	}, []);
+
+	const openConfigDialog = useCallback(() => {
+		const editConnectionId = storedConnectionId ?? connectionId;
+		Alert.alert(
+			'Configure',
+			'Choose where to go',
+			[
+				{
+					text: 'Keyboard config',
+					onPress: () => {
+						void Linking.openURL(CONFIGURATOR_URL);
+					},
+				},
+				{
+					text: 'Host config',
+					onPress: () => {
+						router.replace({
+							pathname: '/',
+							params: { editConnectionId },
+						});
+					},
+				},
+				{ text: 'Cancel', style: 'cancel' },
+			],
+			{ cancelable: true },
+		);
+	}, [connectionId, router, storedConnectionId]);
 
 	const actionContext = useMemo<ActionContext>(
 		() => ({
 			availableKeyboardIds,
 			selectKeyboard: selectKeyboardIfExists,
 			rotateKeyboard,
-			openConfigurator: () => {
-				void Linking.openURL(CONFIGURATOR_URL);
-			},
+			openConfigurator: openConfigDialog,
 			sendBytes: sendBytesRaw,
 			pasteClipboard: handlePasteClipboard,
 			copySelection: handleCopySelection,
@@ -593,6 +607,7 @@ function ShellDetail() {
 			availableKeyboardIds,
 			handleCopySelection,
 			handlePasteClipboard,
+			openConfigDialog,
 			rotateKeyboard,
 			selectKeyboardIfExists,
 			sendBytesRaw,
@@ -608,6 +623,13 @@ function ShellDetail() {
 
 	const handleSlotPress = useCallback(
 		(slot: KeyboardSlot) => {
+			if (
+				selectionModeEnabled &&
+				!(slot.type === 'action' && slot.actionId === 'COPY_SELECTION')
+			) {
+				// Any input/command should exit selection first, except explicit copy.
+				exitSelectionMode();
+			}
 			if (slot.type === 'modifier') {
 				toggleModifier(slot.modifier);
 				return;
@@ -637,11 +659,13 @@ function ShellDetail() {
 		},
 		[
 			currentMacros,
+			exitSelectionMode,
 			handleAction,
 			sendBytesRaw,
 			sendBytesWithModifiers,
 			sendTextRaw,
 			sendTextWithModifiers,
+			selectionModeEnabled,
 			toggleModifier,
 		],
 	);
@@ -717,37 +741,27 @@ function ShellDetail() {
 
 	const toggleSystemKeyboard = useCallback(() => {
 		if (Platform.OS !== 'android') return;
-		setSystemKeyboardEnabled((prev) => {
-			const next = !prev;
-			xtermRef.current?.setSystemKeyboardEnabled(next);
-			if (next) {
-				setSelectionModeEnabled(false);
-				xtermRef.current?.setSelectionModeEnabled(false);
-				// Defer focus until after the button press releases.
-				setTimeout(() => {
-					xtermRef.current?.focus();
-				}, 0);
-			} else {
-				Keyboard.dismiss();
-			}
-			return next;
-		});
-	}, []);
+		const next = !systemKeyboardEnabled;
+		setSystemKeyboardEnabled(next);
+		xtermRef.current?.setSystemKeyboardEnabled(next);
+		if (next) {
+			exitSelectionMode();
+			// Defer focus until after the button press releases.
+			setTimeout(() => {
+				xtermRef.current?.focus();
+			}, 0);
+		} else {
+			Keyboard.dismiss();
+		}
+	}, [exitSelectionMode, systemKeyboardEnabled]);
 
-	const toggleSelectionMode = useCallback(() => {
-		setSelectionModeEnabled((prev) => {
-			const next = !prev;
-			const xr = xtermRef.current;
-			logger.info('selection toggle', {
-				next,
-				hasRef: Boolean(xr),
-				hasMethod: Boolean(xr?.setSelectionModeEnabled),
-			});
-			xr?.setSelectionModeEnabled(next);
-			if (next) disableSystemKeyboard();
-			return next;
-		});
-	}, [disableSystemKeyboard]);
+	const handleSelectionModeChange = useCallback(
+		(enabled: boolean) => {
+			setSelectionModeEnabled(enabled);
+			if (enabled) disableSystemKeyboard();
+		},
+		[disableSystemKeyboard],
+	);
 
 	const handleTerminalCrashRetry = useCallback(() => {
 		// Navigate back to trigger auto-reconnect flow
@@ -818,6 +832,7 @@ function ShellDetail() {
 						}}
 						onResize={handleTerminalResize}
 						onSelection={handleSelectionChanged}
+						onSelectionModeChange={handleSelectionModeChange}
 						onInitialized={() => {
 							if (!shell) throw new Error('Shell not found');
 							if (Platform.OS === 'android') {
@@ -863,6 +878,7 @@ function ShellDetail() {
 						}}
 						onData={(terminalMessage) => {
 							if (!shell) return;
+							if (selectionModeEnabled) exitSelectionMode();
 							sendBytesRaw(encoder.encode(terminalMessage));
 						}}
 					/>
@@ -871,9 +887,7 @@ function ShellDetail() {
 					keyboard={currentKeyboard}
 					modifierKeysActive={modifierKeysActive}
 					onSlotPress={handleSlotPress}
-					showSelectionToggle
 					selectionModeEnabled={selectionModeEnabled}
-					onToggleSelectionMode={toggleSelectionMode}
 					onCopySelection={handleCopySelection}
 					onPasteClipboard={handlePasteClipboard}
 					showSystemKeyboardToggle={Platform.OS === 'android'}
@@ -1037,9 +1051,7 @@ function TerminalKeyboard({
 	keyboard,
 	modifierKeysActive,
 	onSlotPress,
-	showSelectionToggle,
 	selectionModeEnabled,
-	onToggleSelectionMode,
 	onCopySelection,
 	onPasteClipboard,
 	showSystemKeyboardToggle,
@@ -1049,9 +1061,7 @@ function TerminalKeyboard({
 	keyboard: KeyboardDefinition | null;
 	modifierKeysActive: ModifierKey[];
 	onSlotPress: (slot: KeyboardSlot) => void;
-	showSelectionToggle: boolean;
 	selectionModeEnabled: boolean;
-	onToggleSelectionMode: () => void;
 	onCopySelection: () => void;
 	onPasteClipboard: () => void;
 	showSystemKeyboardToggle: boolean;
@@ -1060,7 +1070,6 @@ function TerminalKeyboard({
 }) {
 	const theme = useTheme();
 	const KeyboardIcon = resolveLucideIcon('Keyboard');
-	const SelectionIcon = resolveLucideIcon('TextSelect');
 	const CopyIcon = resolveLucideIcon('Copy');
 	const PasteIcon = resolveLucideIcon('ClipboardPaste');
 
@@ -1135,39 +1144,6 @@ function TerminalKeyboard({
 		</View>
 	));
 	/* eslint-enable @eslint-react/no-array-index-key */
-
-	const selectionToggle = showSelectionToggle ? (
-		<Pressable
-			onPress={onToggleSelectionMode}
-			style={[
-				{
-					flex: 1,
-					margin: 2,
-					paddingVertical: 6,
-					borderRadius: 8,
-					borderWidth: 1,
-					borderColor: theme.colors.border,
-					alignItems: 'center',
-					justifyContent: 'center',
-				},
-				selectionModeEnabled && { backgroundColor: theme.colors.primary },
-			]}
-		>
-			{SelectionIcon ? (
-				<SelectionIcon color={theme.colors.textPrimary} size={18} />
-			) : null}
-			<Text
-				numberOfLines={1}
-				style={{
-					color: theme.colors.textPrimary,
-					fontSize: 10,
-					marginTop: SelectionIcon ? 2 : 0,
-				}}
-			>
-				Select
-			</Text>
-		</Pressable>
-	) : null;
 
 	const copyToggle = (
 		<Pressable
@@ -1263,11 +1239,10 @@ function TerminalKeyboard({
 	) : null;
 
 	const toggleRow =
-		showSelectionToggle || showSystemKeyboardToggle ? (
+		selectionModeEnabled || showSystemKeyboardToggle ? (
 			<View style={{ flexDirection: 'row' }}>
-				{selectionToggle}
-				{copyToggle}
-				{pasteToggle}
+				{selectionModeEnabled ? copyToggle : null}
+				{selectionModeEnabled ? pasteToggle : null}
 				{systemKeyboardToggle}
 			</View>
 		) : null;

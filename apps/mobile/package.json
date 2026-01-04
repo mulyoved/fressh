@@ -10,6 +10,7 @@
     "lint": "eslint --fix --max-warnings 0 --report-unused-disable-directives .",
     "lint:check": "eslint --max-warnings 0 --report-unused-disable-directives .",
     "typecheck": "tsc",
+    "metro": "lsof -ti:8081 | xargs kill -9 2>/dev/null; expo start --port 8081",
     "android": "expo run:android --port 8082",
     "ios": "expo run:ios --port 8081",
     "dev:android:release": "expo run:android --port 8082 --variant release",

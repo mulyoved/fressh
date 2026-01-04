@@ -41,7 +41,8 @@ export type XtermInbound =
 	| { type: 'initialized' }
 	| { type: 'data'; data: Uint8Array }
 	| { type: 'debug'; message: string }
-	| { type: 'selectionChanged'; text: string };
+	| { type: 'selectionChanged'; text: string }
+	| { type: 'selectionModeChanged'; enabled: boolean };
 
 export type XtermWebViewHandle = {
 	write: (data: Uint8Array) => void; // bytes in (batched)
@@ -102,6 +103,7 @@ export type XtermJsWebViewProps = {
 	onInitialized?: () => void;
 	onData?: (data: string) => void;
 	onSelection?: (text: string) => void;
+	onSelectionModeChange?: (enabled: boolean) => void;
 	/** Called when terminal size changes (cols/rows). Use for PTY resize. */
 	onResize?: (cols: number, rows: number) => void;
 	logger?: {
@@ -144,6 +146,7 @@ export function XtermJsWebView({
 	onInitialized,
 	onData,
 	onSelection,
+	onSelectionModeChange,
 	onResize,
 	coalescingThreshold = defaultCoalescingThreshold,
 	logger,
@@ -384,6 +387,10 @@ export function XtermJsWebView({
 					onSelection?.(msg.text);
 					return;
 				}
+				if (msg.type === 'selectionModeChanged') {
+					onSelectionModeChange?.(msg.enabled);
+					return;
+				}
 				webViewOptions?.onMessage?.(e);
 			} catch (error) {
 				logger?.warn?.(
@@ -401,6 +408,7 @@ export function XtermJsWebView({
 			onData,
 			onResize,
 			onSelection,
+			onSelectionModeChange,
 		],
 	);
 
