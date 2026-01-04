@@ -124,7 +124,12 @@ export const keyboard_phone_base = {
         "label": "PAGE_UP",
         "icon": null
       },
-      null,
+      {
+        "type": "action",
+        "actionId": "CYCLE_TMUX_WINDOW",
+        "label": "Cycle",
+        "icon": "ArrowBigRightDash"
+      },
       {
         "type": "action",
         "actionId": "PASTE_CLIPBOARD",
@@ -146,20 +151,20 @@ export const keyboard_phone_base = {
         "icon": null
       },
       {
+        "type": "macro",
+        "macroId": "cmd_fix",
+        "label": "fix",
+        "icon": null
+      },
+      null,
+      {
         "type": "bytes",
         "bytes": [
           13
         ],
         "label": "ENTER",
         "icon": "CornerDownLeft"
-      },
-      {
-        "type": "action",
-        "actionId": "CYCLE_TMUX_WINDOW",
-        "label": "Cycle",
-        "icon": "ArrowBigRightDash"
-      },
-      null
+      }
     ],
     [
       {
@@ -221,12 +226,7 @@ export const keyboard_phone_base = {
         "label": "HOME",
         "icon": null
       },
-      {
-        "type": "macro",
-        "macroId": "cmd_fix",
-        "label": "fix",
-        "icon": null
-      },
+      null,
       {
         "type": "macro",
         "macroId": "cmd_skip",
