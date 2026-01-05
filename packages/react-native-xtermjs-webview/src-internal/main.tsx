@@ -161,13 +161,22 @@ window.onload = () => {
 		let activePointerId: number | null = null;
 		const selectionOverlayTint = 'rgba(0, 0, 0, 0)';
 		const minHandleGapPx = 36;
+		// Toggle handle debug visuals + oversized hitboxes (tuning aid).
+		const debugSelectionHandles = false;
 		// Lollipop handle geometry; anchor is where the circle meets the stem.
-		const selectionHandleScale = 5;
+		const selectionHandleScale = debugSelectionHandles ? 5 : 1;
 		const selectionHandleSizePx = 48 * selectionHandleScale;
 		const selectionHandleGlyphWidthPx = 48 * selectionHandleScale;
 		const selectionHandleGlyphHeightPx = 48 * selectionHandleScale;
 		const selectionHandleGlyphLeftPx = 0;
 		const selectionHandleGlyphTopPx = 0;
+		const selectionHandleBorder = debugSelectionHandles
+			? '1px dashed #ff3b30'
+			: 'none';
+		const selectionHandleClipBorder = debugSelectionHandles
+			? '1px solid #22c55e'
+			: 'none';
+		const selectionHandleClipDisplay = debugSelectionHandles ? 'block' : 'none';
 		const lollipopViewboxSize = 48;
 		const lollipopCircleCenter = { x: 24, y: 10 };
 		const lollipopJunction = { x: 24, y: 17 };
@@ -191,12 +200,12 @@ window.onload = () => {
 }
 .${selectionModeClass} .fressh-selection-handle {
 	position: absolute;
-	/* Larger hit area for touch; lollipop glyph is a child element. */
+	/* Hitbox scales up only when debugSelectionHandles is true. */
 	width: ${selectionHandleSizePx}px;
 	height: ${selectionHandleSizePx}px;
 	background: transparent;
 	box-sizing: border-box;
-	border: 1px dashed #ff3b30;
+	border: ${selectionHandleBorder};
 	touch-action: none;
 	z-index: 30;
 	pointer-events: auto;
@@ -215,9 +224,10 @@ window.onload = () => {
 }
 .${selectionModeClass} .fressh-selection-handle-clip {
 	position: absolute;
-	border: 1px solid #22c55e;
+	border: ${selectionHandleClipBorder};
 	box-sizing: border-box;
 	pointer-events: none;
+	display: ${selectionHandleClipDisplay};
 }
 `;
 			(document.head || document.documentElement).appendChild(style);
@@ -931,10 +941,31 @@ window.onload = () => {
 			if (!rootEl) return;
 			const attach = (handle: HTMLDivElement, kind: 'start' | 'end') => {
 				if (handle.dataset.listenersAttached === 'true') return;
+				let dragStart: { x: number; y: number } | null = null;
+				let dragOffset: { x: number; y: number } | null = null;
+				let dragging = false;
+
+				const resetDrag = () => {
+					dragStart = null;
+					dragOffset = null;
+					dragging = false;
+				};
+
 				const onPointerDown = (event: PointerEvent) => {
 					if (!selectionModeEnabled) return;
 					activeHandle = kind;
 					activePointerId = event.pointerId;
+					const layout = getHandleLayout(kind);
+					const rect = handle.getBoundingClientRect();
+					const anchorX = rect.left + layout.anchorOffsetX;
+					const anchorY = rect.top + layout.anchorOffsetY;
+					// Keep the handle anchor fixed relative to the finger until dragging begins.
+					dragStart = { x: event.clientX, y: event.clientY };
+					dragOffset = {
+						x: event.clientX - anchorX,
+						y: event.clientY - anchorY,
+					};
+					dragging = false;
 					handle.setPointerCapture(event.pointerId);
 					event.preventDefault();
 					event.stopPropagation();
@@ -943,10 +974,35 @@ window.onload = () => {
 					if (!selectionModeEnabled) return;
 					if (activeHandle !== kind || activePointerId !== event.pointerId)
 						return;
-					const coords = getBufferCoords(event.clientX, event.clientY);
-					if (!coords) return;
+					if (!dragStart || !dragOffset) return;
+					const dx = event.clientX - dragStart.x;
+					const dy = event.clientY - dragStart.y;
+					if (!dragging) {
+						if (Math.hypot(dx, dy) <= longPressSlopPx) {
+							event.preventDefault();
+							event.stopPropagation();
+							return;
+						}
+						dragging = true;
+					}
 					const core = getSelectionCore();
 					if (!core) return;
+					const screenRect = core.screenElement.getBoundingClientRect();
+					// Clamp to the screen bounds so getBufferCoords stays valid.
+					const adjustedX = event.clientX - dragOffset.x;
+					const adjustedY = event.clientY - dragOffset.y;
+					const maxX = Math.max(screenRect.left, screenRect.right - 1);
+					const maxY = Math.max(screenRect.top, screenRect.bottom - 1);
+					const clampedX = Math.min(
+						Math.max(adjustedX, screenRect.left),
+						maxX,
+					);
+					const clampedY = Math.min(
+						Math.max(adjustedY, screenRect.top),
+						maxY,
+					);
+					const coords = getBufferCoords(clampedX, clampedY);
+					if (!coords) return;
 					const line = core.bufferService.buffer.lines.get(coords[1]);
 					const normalizedCol = line
 						? normalizeSelectionColumn(line, coords[0], core)
@@ -978,6 +1034,7 @@ window.onload = () => {
 					if (activePointerId !== event.pointerId) return;
 					activeHandle = null;
 					activePointerId = null;
+					resetDrag();
 					handle.releasePointerCapture(event.pointerId);
 					emitSelectionChanged();
 					event.preventDefault();
@@ -987,6 +1044,7 @@ window.onload = () => {
 					if (activePointerId !== event.pointerId) return;
 					activeHandle = null;
 					activePointerId = null;
+					resetDrag();
 					handle.releasePointerCapture(event.pointerId);
 					event.preventDefault();
 					event.stopPropagation();

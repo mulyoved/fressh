@@ -1,70 +1,54 @@
 type ITerminalOptions = import('@xterm/xterm').ITerminalOptions;
 type ITerminalInitOnlyOptions = import('@xterm/xterm').ITerminalInitOnlyOptions;
-export type BridgeInboundMessage =
-	| {
-			type: 'initialized';
-	  }
-	| {
-			type: 'input';
-			str: string;
-	  }
-	| {
-			type: 'debug';
-			message: string;
-	  }
-	| {
-			type: 'sizeChanged';
-			cols: number;
-			rows: number;
-	  }
-	| {
-			type: 'selection';
-			requestId: number;
-			text: string;
-	  }
-	| {
-			type: 'selectionChanged';
-			text: string;
-	  }
-	| {
-			type: 'selectionModeChanged';
-			enabled: boolean;
-	  };
-export type BridgeOutboundMessage =
-	| {
-			type: 'write';
-			bStr: string;
-	  }
-	| {
-			type: 'writeMany';
-			chunks: string[];
-	  }
-	| {
-			type: 'resize';
-			cols: number;
-			rows: number;
-	  }
-	| {
-			type: 'fit';
-	  }
-	| {
-			type: 'getSelection';
-			requestId: number;
-	  }
-	| {
-			type: 'setSelectionMode';
-			enabled: boolean;
-	  }
-	| {
-			type: 'setOptions';
-			opts: Partial<Omit<ITerminalOptions, keyof ITerminalInitOnlyOptions>>;
-	  }
-	| {
-			type: 'clear';
-	  }
-	| {
-			type: 'focus';
-	  };
+export type BridgeInboundMessage = {
+    type: 'initialized';
+} | {
+    type: 'input';
+    str: string;
+} | {
+    type: 'debug';
+    message: string;
+} | {
+    type: 'sizeChanged';
+    cols: number;
+    rows: number;
+} | {
+    type: 'selection';
+    requestId: number;
+    text: string;
+} | {
+    type: 'selectionChanged';
+    text: string;
+} | {
+    type: 'selectionModeChanged';
+    enabled: boolean;
+};
+export type BridgeOutboundMessage = {
+    type: 'write';
+    bStr: string;
+} | {
+    type: 'writeMany';
+    chunks: string[];
+} | {
+    type: 'resize';
+    cols: number;
+    rows: number;
+} | {
+    type: 'fit';
+} | {
+    type: 'getSelection';
+    requestId: number;
+} | {
+    type: 'setSelectionMode';
+    enabled: boolean;
+} | {
+    type: 'setOptions';
+    opts: Partial<Omit<ITerminalOptions, keyof ITerminalInitOnlyOptions>>;
+} | {
+    type: 'clear';
+} | {
+    type: 'focus';
+};
 export declare const binaryToBStr: (binary: Uint8Array) => string;
 export declare const bStrToBinary: (bStr: string) => Uint8Array;
 export {};
