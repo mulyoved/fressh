@@ -8,6 +8,7 @@ export const KEYBOARD_MENU_KEYBOARD_ID = 'keyboard_menu';
 
 export const CONFIGURATOR_URL =
 	'https://dev-remote-machine-1.tail83108.ts.net:4002/keyboard-configurator';
+export const HANDLE_DEV_SERVER_URL = 'http://100.122.2.100:5173/';
 
 export const KNOWN_ACTION_IDS = [
 	'ROTATE_KEYBOARD',

@@ -52,8 +52,7 @@ window.onload = () => {
 					injectedObject = window.__FRESSH_XTERM_OPTIONS__;
 					sendToRn({
 						type: 'debug',
-						message:
-							'injectedObjectJson invalid; using preloaded options',
+						message: 'injectedObjectJson invalid; using preloaded options',
 					});
 				} else {
 					sendToRn({
@@ -87,6 +86,40 @@ window.onload = () => {
 		const root = document.getElementById('terminal')!;
 		term.open(root);
 		fitAddon.fit();
+		if (document.documentElement) {
+			document.documentElement.style.overflow = 'hidden';
+		}
+		if (document.body) {
+			document.body.style.overflow = 'hidden';
+		}
+		if (term.element) {
+			term.element.style.position = 'relative';
+			term.element.style.overflow = 'hidden';
+		}
+		root.style.position = 'relative';
+		root.style.overflow = 'hidden';
+
+		if (!window.ReactNativeWebView) {
+			const devTheme = {
+				background: '#0b1220',
+				foreground: '#e2e8f0',
+				selectionBackground: 'rgba(26, 115, 232, 0.35)',
+				selectionInactiveBackground: 'rgba(26, 115, 232, 0.2)',
+			};
+			term.options.theme = {
+				...(term.options.theme ?? {}),
+				...devTheme,
+			};
+			if (document.body) {
+				document.body.style.backgroundColor = devTheme.background;
+			}
+			term.writeln('Fressh handle dev view');
+			term.writeln('Long-press to enter selection mode.');
+			term.writeln('Use this page to tune selection handles.');
+			term.writeln('');
+			term.writeln('The quick brown fox jumps over the lazy dog.');
+			term.writeln('0123456789 []{}() <>,.?/ +-*/');
+		}
 
 		// Send initial size after first fit
 		if (term.cols >= 2 && term.rows >= 1) {
@@ -128,10 +161,16 @@ window.onload = () => {
 		let activePointerId: number | null = null;
 		const selectionOverlayTint = 'rgba(0, 0, 0, 0)';
 		const minHandleGapPx = 36;
-		const selectionHandleSizePx = 36;
-		// Keep in sync with CSS: transform: translate(-50%, -10%)
-		const selectionHandleOffsetX = selectionHandleSizePx * 0.5;
-		const selectionHandleOffsetY = selectionHandleSizePx * 0.1;
+		// Lollipop handle geometry; anchor is where the circle meets the stem.
+		const selectionHandleScale = 5;
+		const selectionHandleSizePx = 48 * selectionHandleScale;
+		const selectionHandleGlyphWidthPx = 48 * selectionHandleScale;
+		const selectionHandleGlyphHeightPx = 48 * selectionHandleScale;
+		const selectionHandleGlyphLeftPx = 0;
+		const selectionHandleGlyphTopPx = 0;
+		const lollipopViewboxSize = 48;
+		const lollipopCircleCenter = { x: 24, y: 10 };
+		const lollipopJunction = { x: 24, y: 17 };
 		const longPressTimeoutMs = 500;
 		const longPressSlopPx = 8;
 		// Guard against immediate hide right after long-press selection activates.
@@ -152,23 +191,32 @@ window.onload = () => {
 }
 .${selectionModeClass} .fressh-selection-handle {
 	position: absolute;
-	/* Larger hit area for touch, with a smaller visual dot as a child element. */
-	width: 36px;
-	height: 36px;
+	/* Larger hit area for touch; lollipop glyph is a child element. */
+	width: ${selectionHandleSizePx}px;
+	height: ${selectionHandleSizePx}px;
 	background: transparent;
-	transform: translate(-50%, -10%);
+	box-sizing: border-box;
+	border: 1px dashed #ff3b30;
 	touch-action: none;
 	z-index: 30;
-	display: flex;
-	align-items: center;
-	justify-content: center;
+	pointer-events: auto;
 }
-.${selectionModeClass} .fressh-selection-handle-dot {
-	width: 18px;
-	height: 18px;
-	border-radius: 999px;
-	background: rgba(37, 99, 235, 0.9);
-	box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.85);
+.${selectionModeClass} .fressh-selection-handle-glyph {
+	position: absolute;
+	left: ${selectionHandleGlyphLeftPx}px;
+	top: ${selectionHandleGlyphTopPx}px;
+	width: ${selectionHandleGlyphWidthPx}px;
+	height: ${selectionHandleGlyphHeightPx}px;
+}
+.${selectionModeClass} .fressh-selection-handle-glyph path {
+	/* Temporary debug color to confirm updated handle rendering. */
+	fill: #1a73e8;
+	pointer-events: none;
+}
+.${selectionModeClass} .fressh-selection-handle-clip {
+	position: absolute;
+	border: 1px solid #22c55e;
+	box-sizing: border-box;
 	pointer-events: none;
 }
 `;
@@ -199,15 +247,12 @@ window.onload = () => {
 					buffer: {
 						ydisp: number;
 						lines: {
-							get: (
-								idx: number,
-							) =>
+							get: (idx: number) =>
 								| {
-										getCell: (
-											col: number,
-										) =>
-											| { getWidth: () => number; getChars?: () => string }
-											| null;
+										getCell: (col: number) => {
+											getWidth: () => number;
+											getChars?: () => string;
+										} | null;
 								  }
 								| undefined;
 						};
@@ -241,15 +286,12 @@ window.onload = () => {
 						buffer: {
 							ydisp: number;
 							lines: {
-								get: (
-									idx: number,
-								) =>
+								get: (idx: number) =>
 									| {
-											getCell: (
-												col: number,
-											) =>
-												| { getWidth: () => number; getChars?: () => string }
-												| null;
+											getCell: (col: number) => {
+												getWidth: () => number;
+												getChars?: () => string;
+											} | null;
 									  }
 									| undefined;
 							};
@@ -277,10 +319,16 @@ window.onload = () => {
 			const bufferService = core._bufferService ?? core._core?._bufferService;
 			const selectionService =
 				core._selectionService ?? core._core?._selectionService;
-			const workCell = (selectionService as { _workCell?: WorkCell } | undefined)
-				?._workCell;
+			const workCell = (
+				selectionService as { _workCell?: WorkCell } | undefined
+			)?._workCell;
 
-			if (!mouseService || !screenElement || !bufferService || !selectionService) {
+			if (
+				!mouseService ||
+				!screenElement ||
+				!bufferService ||
+				!selectionService
+			) {
 				return null;
 			}
 			return {
@@ -293,13 +341,34 @@ window.onload = () => {
 		};
 
 		const getCellDimensions = () => {
-			const renderService = (term as unknown as {
-				_core?: { _renderService?: { dimensions?: { css?: { cell?: { width?: number; height?: number } } } } };
-				_renderService?: { dimensions?: { css?: { cell?: { width?: number; height?: number } } } };
-			})._renderService ??
-				(term as unknown as {
-					_core?: { _renderService?: { dimensions?: { css?: { cell?: { width?: number; height?: number } } } } };
-				})._core?._renderService;
+			const renderService =
+				(
+					term as unknown as {
+						_core?: {
+							_renderService?: {
+								dimensions?: {
+									css?: { cell?: { width?: number; height?: number } };
+								};
+							};
+						};
+						_renderService?: {
+							dimensions?: {
+								css?: { cell?: { width?: number; height?: number } };
+							};
+						};
+					}
+				)._renderService ??
+				(
+					term as unknown as {
+						_core?: {
+							_renderService?: {
+								dimensions?: {
+									css?: { cell?: { width?: number; height?: number } };
+								};
+							};
+						};
+					}
+				)._core?._renderService;
 			const cellWidth = renderService?.dimensions?.css?.cell?.width;
 			const cellHeight = renderService?.dimensions?.css?.cell?.height;
 			if (!cellWidth || !cellHeight) return null;
@@ -314,25 +383,6 @@ window.onload = () => {
 			const dx = (end[0] - start[0]) * dims.cellWidth;
 			const dy = (end[1] - start[1]) * dims.cellHeight;
 			return Math.hypot(dx, dy);
-		};
-
-		const clampHandlePosition = (
-			left: number,
-			top: number,
-			bounds: { left: number; top: number; right: number; bottom: number },
-		) => {
-			let minLeft = bounds.left + selectionHandleOffsetX;
-			let maxLeft =
-				bounds.right - selectionHandleSizePx + selectionHandleOffsetX;
-			let minTop = bounds.top + selectionHandleOffsetY;
-			let maxTop =
-				bounds.bottom - selectionHandleSizePx + selectionHandleOffsetY;
-			if (maxLeft < minLeft) maxLeft = minLeft;
-			if (maxTop < minTop) maxTop = minTop;
-			return {
-				left: Math.min(Math.max(left, minLeft), maxLeft),
-				top: Math.min(Math.max(top, minTop), maxTop),
-			};
 		};
 
 		const stepBufferPos = (
@@ -387,6 +437,141 @@ window.onload = () => {
 			if (x > 0) return [x - 1, y];
 			if (y <= minRow) return [0, y];
 			return [cols - 1, y - 1];
+		};
+
+		// Lollipop glyph in a 48x48 viewBox: circle above the anchor, stem crosses it.
+		const lollipopPath = [
+			'M31 10',
+			'A7 7 0 1 0 17 10',
+			'A7 7 0 1 0 31 10',
+			'M22 17',
+			'H26',
+			'V30',
+			'H22',
+			'Z',
+		].join(' ');
+
+		const ensureHandleGlyph = (
+			handle: HTMLDivElement,
+			kind: 'start' | 'end',
+		) => {
+			if (handle.dataset.glyph === kind) return;
+			handle.textContent = '';
+			handle.dataset.glyph = kind;
+			const glyph = document.createElement('div');
+			glyph.className = 'fressh-selection-handle-glyph';
+			const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+			svg.setAttribute('width', String(selectionHandleGlyphWidthPx));
+			svg.setAttribute('height', String(selectionHandleGlyphHeightPx));
+			svg.setAttribute(
+				'viewBox',
+				`0 0 ${lollipopViewboxSize} ${lollipopViewboxSize}`,
+			);
+			const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+			if (kind === 'end') {
+				// End handle is a vertical mirror: circle below the anchor.
+				g.setAttribute('transform', 'translate(0 48) scale(1 -1)');
+			}
+			const path = document.createElementNS(
+				'http://www.w3.org/2000/svg',
+				'path',
+			);
+			path.setAttribute('d', lollipopPath);
+			g.appendChild(path);
+			svg.appendChild(g);
+			glyph.appendChild(svg);
+			handle.appendChild(glyph);
+			const clip = document.createElement('div');
+			clip.className = 'fressh-selection-handle-clip';
+			handle.appendChild(clip);
+		};
+
+		const getHandleGlyphBounds = (handle: HTMLDivElement) => {
+			const path = handle.querySelector<SVGPathElement>('path');
+			if (!path) return null;
+			const bbox = path.getBBox();
+			if (!Number.isFinite(bbox.x) || !Number.isFinite(bbox.width)) return null;
+			const scaleX = selectionHandleGlyphWidthPx / lollipopViewboxSize;
+			const scaleY = selectionHandleGlyphHeightPx / lollipopViewboxSize;
+			const isEnd = handle.dataset.glyph === 'end';
+			const top =
+				isEnd && Number.isFinite(bbox.height)
+					? lollipopViewboxSize - (bbox.y + bbox.height)
+					: bbox.y;
+			return {
+				left: bbox.x * scaleX,
+				top: top * scaleY,
+				width: bbox.width * scaleX,
+				height: bbox.height * scaleY,
+			};
+		};
+
+		const getHandleLayout = (kind: 'start' | 'end') => {
+			const circleY =
+				kind === 'start'
+					? lollipopCircleCenter.y
+					: lollipopViewboxSize - lollipopCircleCenter.y;
+			const junctionY =
+				kind === 'start'
+					? lollipopJunction.y
+					: lollipopViewboxSize - lollipopJunction.y;
+			const glyphOffsetX =
+				(lollipopViewboxSize / 2 - lollipopCircleCenter.x) *
+				selectionHandleScale;
+			const glyphOffsetY =
+				(lollipopViewboxSize / 2 - circleY) * selectionHandleScale;
+			const anchorOffsetX =
+				glyphOffsetX + lollipopJunction.x * selectionHandleScale;
+			const anchorOffsetY = glyphOffsetY + junctionY * selectionHandleScale;
+			return {
+				glyphLeft: selectionHandleGlyphLeftPx + glyphOffsetX,
+				glyphTop: selectionHandleGlyphTopPx + glyphOffsetY,
+				anchorOffsetX,
+				anchorOffsetY,
+			};
+		};
+
+		const ensureHandleInDom = (handle: HTMLDivElement, root: HTMLElement) => {
+			if (handle.parentElement) return;
+			handle.style.visibility = 'hidden';
+			handle.style.left = '0px';
+			handle.style.top = '0px';
+			root.appendChild(handle);
+		};
+
+		const setHandleGlyphLeft = (handle: HTMLDivElement, leftPx: number) => {
+			const glyph = handle.querySelector<HTMLDivElement>(
+				'.fressh-selection-handle-glyph',
+			);
+			if (!glyph) return;
+			// Allow the glyph to overflow the hitbox so we can center the circle.
+			glyph.style.left = `${leftPx}px`;
+		};
+
+		const setHandleGlyphTop = (handle: HTMLDivElement, topPx: number) => {
+			const glyph = handle.querySelector<HTMLDivElement>(
+				'.fressh-selection-handle-glyph',
+			);
+			if (!glyph) return;
+			// Allow the glyph to overflow the hitbox so we can center the circle.
+			glyph.style.top = `${topPx}px`;
+		};
+
+		const setHandleClipRect = (
+			handle: HTMLDivElement,
+			left: number,
+			top: number,
+			width: number,
+			height: number,
+		) => {
+			const clip = handle.querySelector<HTMLDivElement>(
+				'.fressh-selection-handle-clip',
+			);
+			if (!clip) return;
+			clip.style.left = `${left}px`;
+			clip.style.top = `${top}px`;
+			clip.style.width = `${width}px`;
+			clip.style.height = `${height}px`;
 		};
 
 		const getBufferCoords = (
@@ -501,12 +686,14 @@ window.onload = () => {
 			}
 			const core = getSelectionCore();
 			if (!core) return;
-			const selectionService = core.selectionService as typeof core.selectionService & {
-				selectionStart?: [number, number];
-				selectionEnd?: [number, number];
-			};
+			const selectionService =
+				core.selectionService as typeof core.selectionService & {
+					selectionStart?: [number, number];
+					selectionEnd?: [number, number];
+				};
 			const model = selectionService._model;
-			const selectionStart = selectionService.selectionStart ?? model.selectionStart;
+			const selectionStart =
+				selectionService.selectionStart ?? model.selectionStart;
 			const selectionEnd = selectionService.selectionEnd ?? model.selectionEnd;
 			if (!selectionStart || !selectionEnd) {
 				if (startHandle) startHandle.style.display = 'none';
@@ -526,13 +713,6 @@ window.onload = () => {
 			const offsetX = screenRect.left - rootRect.left;
 			const offsetY = screenRect.top - rootRect.top;
 			const ydisp = core.bufferService.buffer.ydisp;
-			const screenBounds = {
-				left: offsetX,
-				top: offsetY,
-				right: offsetX + screenRect.width,
-				bottom: offsetY + screenRect.height,
-			};
-
 			const startRow = selectionStart[1] - ydisp;
 			const endRow = selectionEnd[1] - ydisp;
 			if (startRow < 0 || startRow >= core.bufferService.rows) {
@@ -540,17 +720,30 @@ window.onload = () => {
 			} else {
 				const startX = offsetX + selectionStart[0] * cellWidth;
 				const startY = offsetY + startRow * cellHeight;
-				const startPos = clampHandlePosition(startX, startY, screenBounds);
 				startHandle = startHandle ?? document.createElement('div');
 				startHandle.className = 'fressh-selection-handle';
-				if (!startHandle.firstChild) {
-					const dot = document.createElement('div');
-					dot.className = 'fressh-selection-handle-dot';
-					startHandle.appendChild(dot);
-				}
+				ensureHandleGlyph(startHandle, 'start');
+				ensureHandleInDom(startHandle, rootEl);
+				const startBounds = getHandleGlyphBounds(startHandle) ?? {
+					left: 0,
+					top: 0,
+					width: selectionHandleGlyphWidthPx,
+					height: selectionHandleGlyphHeightPx,
+				};
+				const startLayout = getHandleLayout('start');
+				setHandleGlyphLeft(startHandle, startLayout.glyphLeft);
+				setHandleGlyphTop(startHandle, startLayout.glyphTop);
+				setHandleClipRect(
+					startHandle,
+					startLayout.glyphLeft + startBounds.left,
+					startLayout.glyphTop + startBounds.top,
+					startBounds.width,
+					startBounds.height,
+				);
 				startHandle.style.display = 'block';
-				startHandle.style.left = `${startPos.left}px`;
-				startHandle.style.top = `${startPos.top}px`;
+				startHandle.style.left = `${startX - startLayout.anchorOffsetX}px`;
+				startHandle.style.top = `${startY - startLayout.anchorOffsetY}px`;
+				startHandle.style.visibility = 'visible';
 				if (!startHandle.parentElement) rootEl.appendChild(startHandle);
 			}
 
@@ -558,19 +751,32 @@ window.onload = () => {
 			if (!endRowVisible) {
 				if (endHandle) endHandle.style.display = 'none';
 			} else {
-				const endX = offsetX + selectionEnd[0] * cellWidth;
-				const endY = offsetY + endRow * cellHeight;
-				const endPos = clampHandlePosition(endX, endY, screenBounds);
+				const endX = offsetX + (selectionEnd[0] + 1) * cellWidth;
+				const endY = offsetY + (endRow + 1) * cellHeight;
 				endHandle = endHandle ?? document.createElement('div');
 				endHandle.className = 'fressh-selection-handle';
-				if (!endHandle.firstChild) {
-					const dot = document.createElement('div');
-					dot.className = 'fressh-selection-handle-dot';
-					endHandle.appendChild(dot);
-				}
+				ensureHandleGlyph(endHandle, 'end');
+				ensureHandleInDom(endHandle, rootEl);
+				const endBounds = getHandleGlyphBounds(endHandle) ?? {
+					left: 0,
+					top: 0,
+					width: selectionHandleGlyphWidthPx,
+					height: selectionHandleGlyphHeightPx,
+				};
+				const endLayout = getHandleLayout('end');
+				setHandleGlyphLeft(endHandle, endLayout.glyphLeft);
+				setHandleGlyphTop(endHandle, endLayout.glyphTop);
+				setHandleClipRect(
+					endHandle,
+					endLayout.glyphLeft + endBounds.left,
+					endLayout.glyphTop + endBounds.top,
+					endBounds.width,
+					endBounds.height,
+				);
 				endHandle.style.display = 'block';
-				endHandle.style.left = `${endPos.left}px`;
-				endHandle.style.top = `${endPos.top}px`;
+				endHandle.style.left = `${endX - endLayout.anchorOffsetX}px`;
+				endHandle.style.top = `${endY - endLayout.anchorOffsetY}px`;
+				endHandle.style.visibility = 'visible';
 				if (!endHandle.parentElement) rootEl.appendChild(endHandle);
 			}
 			if (startHandle || endHandle) ensureHandleListeners();
@@ -612,11 +818,7 @@ window.onload = () => {
 						maxRow,
 						cols: core.bufferService.cols,
 					};
-					const gap = getHandleGapPx(
-						[sx, sy],
-						[exInclusive, ey],
-						dims,
-					);
+					const gap = getHandleGapPx([sx, sy], [exInclusive, ey], dims);
 					if (gap < minHandleGapPx) {
 						if (activeHandle === 'start' || activeHandle === 'end') {
 							const isStartActive = activeHandle === 'start';
@@ -627,13 +829,7 @@ window.onload = () => {
 								? [sx, sy]
 								: [exInclusive, ey];
 							const dir: -1 | 1 = isStartActive ? -1 : 1;
-							const result = moveUntilMinGap(
-								anchor,
-								moving,
-								dir,
-								dims,
-								bounds,
-							);
+							const result = moveUntilMinGap(anchor, moving, dir, dims, bounds);
 							if (result.achieved) {
 								if (isStartActive) {
 									sx = result.pos[0];
@@ -692,10 +888,14 @@ window.onload = () => {
 						? exInclusive + 1
 						: core.bufferService.cols;
 				const ex = endExclusive;
-				const length = Math.max(1, (ey - sy) * core.bufferService.cols + (ex - sx));
-				const selectionService = core.selectionService as typeof core.selectionService & {
-					setSelection?: (col: number, row: number, length: number) => void;
-				};
+				const length = Math.max(
+					1,
+					(ey - sy) * core.bufferService.cols + (ex - sx),
+				);
+				const selectionService =
+					core.selectionService as typeof core.selectionService & {
+						setSelection?: (col: number, row: number, length: number) => void;
+					};
 				if (selectionService.setSelection) {
 					selectionService.setSelection(sx, sy, length);
 				} else {
@@ -741,7 +941,8 @@ window.onload = () => {
 				};
 				const onPointerMove = (event: PointerEvent) => {
 					if (!selectionModeEnabled) return;
-					if (activeHandle !== kind || activePointerId !== event.pointerId) return;
+					if (activeHandle !== kind || activePointerId !== event.pointerId)
+						return;
 					const coords = getBufferCoords(event.clientX, event.clientY);
 					if (!coords) return;
 					const core = getSelectionCore();
@@ -824,10 +1025,13 @@ window.onload = () => {
 
 			const termInternals = term as unknown as {
 				_selectionService?: { enable?: () => void; disable?: () => void };
-				_core?: { _selectionService?: { enable?: () => void; disable?: () => void } };
+				_core?: {
+					_selectionService?: { enable?: () => void; disable?: () => void };
+				};
 			};
 			const selectionService =
-				termInternals._selectionService ?? termInternals._core?._selectionService;
+				termInternals._selectionService ??
+				termInternals._core?._selectionService;
 
 			let mouseTrackingActive = false;
 			try {
@@ -1182,7 +1386,11 @@ window.onload = () => {
 						fitAddon.fit();
 						// Report new size after fit (onResize may not fire if size unchanged)
 						if (term.cols >= 2 && term.rows >= 1) {
-							sendToRn({ type: 'sizeChanged', cols: term.cols, rows: term.rows });
+							sendToRn({
+								type: 'sizeChanged',
+								cols: term.cols,
+								rows: term.rows,
+							});
 						}
 						break;
 					}

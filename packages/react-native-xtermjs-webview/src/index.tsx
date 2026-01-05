@@ -8,6 +8,9 @@ import React, {
 } from 'react';
 import { WebView, type WebViewMessageEvent } from 'react-native-webview';
 import htmlString from '../dist-internal/index.html?raw';
+
+// React Native global for development mode detection
+declare const __DEV__: boolean | undefined;
 import {
 	binaryToBStr,
 	bStrToBinary,
@@ -100,6 +103,8 @@ export type XtermJsWebViewProps = {
 	style?: WebViewOptions['style'];
 	webViewOptions?: UserControllableWebViewProps;
 	xtermOptions?: Partial<ITerminalOptions>;
+	/** Dev-only override for loading the internal WebView HTML via a Vite dev server. */
+	devServerUrl?: string;
 	onInitialized?: () => void;
 	onData?: (data: string) => void;
 	onSelection?: (text: string) => void;
@@ -152,6 +157,7 @@ export function XtermJsWebView({
 	logger,
 	size,
 	autoFit = true,
+	devServerUrl,
 }: XtermJsWebViewProps) {
 	const webRef = useRef<WebView>(null);
 	const [initialized, setInitialized] = useState(false);
@@ -483,10 +489,22 @@ export function XtermJsWebView({
 		`;
 	}, [mergedXTermOptions]);
 
+	const webViewSource = useMemo(() => {
+		if (__DEV__ && devServerUrl) {
+			const normalized =
+				devServerUrl.startsWith('http://') ||
+				devServerUrl.startsWith('https://')
+					? devServerUrl
+					: `http://${devServerUrl}`;
+			return { uri: normalized };
+		}
+		return { html: htmlString };
+	}, [devServerUrl]);
+
 	return (
 		<WebView
 			ref={webRef}
-			source={{ html: htmlString }}
+			source={webViewSource}
 			onMessage={onMessage}
 			style={style}
 			injectedJavaScriptObject={mergedXTermOptions}

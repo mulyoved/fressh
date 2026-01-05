@@ -8,60 +8,82 @@ type WebViewOptions = React.ComponentProps<typeof WebView>;
 /**
  * Message from this pkg to calling RN
  */
-export type XtermInbound = {
-    type: 'initialized';
-} | {
-    type: 'data';
-    data: Uint8Array;
-} | {
-    type: 'debug';
-    message: string;
-} | {
-    type: 'selectionChanged';
-    text: string;
-} | {
-    type: 'selectionModeChanged';
-    enabled: boolean;
-};
+export type XtermInbound =
+	| {
+			type: 'initialized';
+	  }
+	| {
+			type: 'data';
+			data: Uint8Array;
+	  }
+	| {
+			type: 'debug';
+			message: string;
+	  }
+	| {
+			type: 'selectionChanged';
+			text: string;
+	  }
+	| {
+			type: 'selectionModeChanged';
+			enabled: boolean;
+	  };
 export type XtermWebViewHandle = {
-    write: (data: Uint8Array) => void;
-    writeMany: (chunks: Uint8Array[]) => void;
-    flush: () => void;
-    clear: () => void;
-    focus: () => void;
-    setSystemKeyboardEnabled: (enabled: boolean) => void;
-    setSelectionModeEnabled: (enabled: boolean) => void;
-    getSelection: () => Promise<string>;
-    resize: (size: {
-        cols: number;
-        rows: number;
-    }) => void;
-    fit: () => void;
+	write: (data: Uint8Array) => void;
+	writeMany: (chunks: Uint8Array[]) => void;
+	flush: () => void;
+	clear: () => void;
+	focus: () => void;
+	setSystemKeyboardEnabled: (enabled: boolean) => void;
+	setSelectionModeEnabled: (enabled: boolean) => void;
+	getSelection: () => Promise<string>;
+	resize: (size: { cols: number; rows: number }) => void;
+	fit: () => void;
 };
-type UserControllableWebViewProps = StrictOmit<WebViewOptions, 'source' | 'style' | 'injectedJavaScriptBeforeContentLoaded'>;
+type UserControllableWebViewProps = StrictOmit<
+	WebViewOptions,
+	'source' | 'style' | 'injectedJavaScriptBeforeContentLoaded'
+>;
 export type XtermJsWebViewProps = {
-    ref: React.RefObject<XtermWebViewHandle | null>;
-    style?: WebViewOptions['style'];
-    webViewOptions?: UserControllableWebViewProps;
-    xtermOptions?: Partial<ITerminalOptions>;
-    onInitialized?: () => void;
-    onData?: (data: string) => void;
-    onSelection?: (text: string) => void;
-    onSelectionModeChange?: (enabled: boolean) => void;
-    /** Called when terminal size changes (cols/rows). Use for PTY resize. */
-    onResize?: (cols: number, rows: number) => void;
-    logger?: {
-        debug?: (...args: unknown[]) => void;
-        log?: (...args: unknown[]) => void;
-        warn?: (...args: unknown[]) => void;
-        error?: (...args: unknown[]) => void;
-    };
-    coalescingThreshold?: number;
-    size?: {
-        cols: number;
-        rows: number;
-    };
-    autoFit?: boolean;
+	ref: React.RefObject<XtermWebViewHandle | null>;
+	style?: WebViewOptions['style'];
+	webViewOptions?: UserControllableWebViewProps;
+	xtermOptions?: Partial<ITerminalOptions>;
+	/** Dev-only override for loading the internal WebView HTML via a Vite dev server. */
+	devServerUrl?: string;
+	onInitialized?: () => void;
+	onData?: (data: string) => void;
+	onSelection?: (text: string) => void;
+	onSelectionModeChange?: (enabled: boolean) => void;
+	/** Called when terminal size changes (cols/rows). Use for PTY resize. */
+	onResize?: (cols: number, rows: number) => void;
+	logger?: {
+		debug?: (...args: unknown[]) => void;
+		log?: (...args: unknown[]) => void;
+		warn?: (...args: unknown[]) => void;
+		error?: (...args: unknown[]) => void;
+	};
+	coalescingThreshold?: number;
+	size?: {
+		cols: number;
+		rows: number;
+	};
+	autoFit?: boolean;
 };
-export declare function XtermJsWebView({ ref, style, webViewOptions, xtermOptions, onInitialized, onData, onSelection, onSelectionModeChange, onResize, coalescingThreshold, logger, size, autoFit, }: XtermJsWebViewProps): import("react/jsx-runtime").JSX.Element;
+export declare function XtermJsWebView({
+	ref,
+	style,
+	webViewOptions,
+	xtermOptions,
+	onInitialized,
+	onData,
+	onSelection,
+	onSelectionModeChange,
+	onResize,
+	coalescingThreshold,
+	logger,
+	size,
+	autoFit,
+	devServerUrl,
+}: XtermJsWebViewProps): import('react/jsx-runtime').JSX.Element;
 //# sourceMappingURL=index.d.ts.map

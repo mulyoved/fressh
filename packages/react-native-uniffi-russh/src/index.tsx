@@ -6,8 +6,8 @@ import installer from './NativeReactNativeUniffiRussh';
 //   code is reloaded (e.g. during development with metro).
 let rustInstalled = false;
 if (!rustInstalled) {
-  installer.installRustCrate();
-  rustInstalled = true;
+	installer.installRustCrate();
+	rustInstalled = true;
 }
 
 // Export the generated bindings to the app.
@@ -23,19 +23,18 @@ import * as uniffi_russh from './generated/uniffi_russh';
 //   is reloaded (e.g. during development with metro).
 let initialized = false;
 if (!initialized) {
-  uniffi_russh.default.initialize();
-  initialized = true;
+	uniffi_russh.default.initialize();
+	initialized = true;
 }
 
 // This provides parity with the index.web.ts version of this file.
 // The web version relies on an asynchronous fetch, which this doesn't
 // need, so we just no-op.
 export async function uniffiInitAsync() {
-  // NOOP.
+	// NOOP.
 }
 
 // Export the crates as individually namespaced objects.
 export default {
-  uniffi_russh,
+	uniffi_russh,
 };
-

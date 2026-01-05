@@ -55,6 +55,7 @@ import {
 import { getStoredConnectionId } from '@/lib/connection-utils';
 import {
 	CONFIGURATOR_URL,
+	HANDLE_DEV_SERVER_URL,
 	runAction,
 	type ActionContext,
 	type ActionId,
@@ -568,6 +569,12 @@ function ShellDetail() {
 					text: 'Keyboard config',
 					onPress: () => {
 						void Linking.openURL(CONFIGURATOR_URL);
+					},
+				},
+				{
+					text: 'Handle dev server',
+					onPress: () => {
+						void Linking.openURL(HANDLE_DEV_SERVER_URL);
 					},
 				},
 				{
