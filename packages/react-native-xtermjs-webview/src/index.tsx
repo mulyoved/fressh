@@ -21,6 +21,18 @@ import { jetBrainsMonoTtfBase64 } from './jetbrains-mono';
 
 export { bStrToBinary, binaryToBStr };
 
+let didLogHtmlFingerprint = false;
+if (__DEV__ && !didLogHtmlFingerprint) {
+	didLogHtmlFingerprint = true;
+	try {
+		console.log(
+			`[xtermjs-webview] htmlString includes light blue lollipop: ${htmlString.includes(
+				'#60a5fa',
+			)}`,
+		);
+	} catch {}
+}
+
 type StrictOmit<T, K extends keyof T> = Omit<T, K>;
 type ITerminalOptions = import('@xterm/xterm').ITerminalOptions;
 type WebViewOptions = React.ComponentProps<typeof WebView>;
@@ -499,7 +511,7 @@ export function XtermJsWebView({
 			return { uri: normalized };
 		}
 		return { html: htmlString };
-	}, [devServerUrl]);
+	}, [devServerUrl, htmlString]);
 
 	return (
 		<WebView

@@ -166,8 +166,23 @@ window.onload = () => {
 		// Lollipop handle geometry; anchor is where the circle meets the stem.
 		const selectionHandleScale = debugSelectionHandles ? 5 : 1;
 		const selectionHandleSizePx = 48 * selectionHandleScale;
-		const selectionHandleGlyphWidthPx = 48 * selectionHandleScale;
-		const selectionHandleGlyphHeightPx = 48 * selectionHandleScale;
+		const selectionHandleCircleBelowStart = true;
+		const lollipopViewboxWidth = 48;
+		const lollipopViewboxHeight = 52;
+		const lollipopViewboxMinX = 0;
+		const lollipopViewboxMinY = -4;
+		const lollipopViewboxMaxY =
+			lollipopViewboxMinY + lollipopViewboxHeight;
+		const lollipopViewboxCenterX =
+			lollipopViewboxMinX + lollipopViewboxWidth / 2;
+		const lollipopViewboxCenterY =
+			lollipopViewboxMinY + lollipopViewboxHeight / 2;
+		const lollipopViewboxFlipSumY =
+			lollipopViewboxMinY + lollipopViewboxMaxY;
+		const selectionHandleGlyphWidthPx =
+			lollipopViewboxWidth * selectionHandleScale;
+		const selectionHandleGlyphHeightPx =
+			lollipopViewboxHeight * selectionHandleScale;
 		const selectionHandleGlyphLeftPx = 0;
 		const selectionHandleGlyphTopPx = 0;
 		const selectionHandleBorder = debugSelectionHandles
@@ -177,9 +192,12 @@ window.onload = () => {
 			? '1px solid #22c55e'
 			: 'none';
 		const selectionHandleClipDisplay = debugSelectionHandles ? 'block' : 'none';
-		const lollipopViewboxSize = 48;
-		const lollipopCircleCenter = { x: 24, y: 10 };
+		const lollipopCircleCenter = { x: 24, y: 9 };
+		const lollipopCircleRadius = 10.5;
 		const lollipopJunction = { x: 24, y: 17 };
+		const lollipopStemWidth = 2;
+		const lollipopStemTop = 15;
+		const lollipopStemBottom = 36;
 		const longPressTimeoutMs = 500;
 		const longPressSlopPx = 8;
 		// Guard against immediate hide right after long-press selection activates.
@@ -217,9 +235,10 @@ window.onload = () => {
 	width: ${selectionHandleGlyphWidthPx}px;
 	height: ${selectionHandleGlyphHeightPx}px;
 }
-.${selectionModeClass} .fressh-selection-handle-glyph path {
-	/* Temporary debug color to confirm updated handle rendering. */
-	fill: #1a73e8;
+.${selectionModeClass} .fressh-selection-handle-glyph path,
+.${selectionModeClass} .fressh-selection-handle-glyph circle,
+.${selectionModeClass} .fressh-selection-handle-glyph rect {
+	fill: #60a5fa;
 	pointer-events: none;
 }
 .${selectionModeClass} .fressh-selection-handle-clip {
@@ -449,17 +468,7 @@ window.onload = () => {
 			return [cols - 1, y - 1];
 		};
 
-		// Lollipop glyph in a 48x48 viewBox: circle above the anchor, stem crosses it.
-		const lollipopPath = [
-			'M31 10',
-			'A7 7 0 1 0 17 10',
-			'A7 7 0 1 0 31 10',
-			'M22 17',
-			'H26',
-			'V30',
-			'H22',
-			'Z',
-		].join(' ');
+		// Lollipop glyph in a padded viewBox: circle above the anchor, stem crosses it.
 
 		const ensureHandleGlyph = (
 			handle: HTMLDivElement,
@@ -468,6 +477,7 @@ window.onload = () => {
 			if (handle.dataset.glyph === kind) return;
 			handle.textContent = '';
 			handle.dataset.glyph = kind;
+			const isFlipped = kind === 'end' || selectionHandleCircleBelowStart;
 			const glyph = document.createElement('div');
 			glyph.className = 'fressh-selection-handle-glyph';
 			const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -475,19 +485,40 @@ window.onload = () => {
 			svg.setAttribute('height', String(selectionHandleGlyphHeightPx));
 			svg.setAttribute(
 				'viewBox',
-				`0 0 ${lollipopViewboxSize} ${lollipopViewboxSize}`,
+				`${lollipopViewboxMinX} ${lollipopViewboxMinY} ${lollipopViewboxWidth} ${lollipopViewboxHeight}`,
 			);
 			const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
-			if (kind === 'end') {
-				// End handle is a vertical mirror: circle below the anchor.
-				g.setAttribute('transform', 'translate(0 48) scale(1 -1)');
+			if (isFlipped) {
+				// Vertical mirror: circle below the anchor.
+				g.setAttribute(
+					'transform',
+					`translate(0 ${lollipopViewboxFlipSumY}) scale(1 -1)`,
+				);
 			}
-			const path = document.createElementNS(
+			const stem = document.createElementNS(
 				'http://www.w3.org/2000/svg',
-				'path',
+				'rect',
 			);
-			path.setAttribute('d', lollipopPath);
-			g.appendChild(path);
+			stem.setAttribute(
+				'x',
+				String(lollipopJunction.x - lollipopStemWidth / 2),
+			);
+			stem.setAttribute('y', String(lollipopStemTop));
+			stem.setAttribute('width', String(lollipopStemWidth));
+			stem.setAttribute(
+				'height',
+				String(lollipopStemBottom - lollipopStemTop),
+			);
+			const circle = document.createElementNS(
+				'http://www.w3.org/2000/svg',
+				'circle',
+			);
+			circle.setAttribute('cx', String(lollipopCircleCenter.x));
+			circle.setAttribute('cy', String(lollipopCircleCenter.y));
+			circle.setAttribute('r', String(lollipopCircleRadius));
+			// Draw stem first so the circle can cover any seam at the join.
+			g.appendChild(stem);
+			g.appendChild(circle);
 			svg.appendChild(g);
 			glyph.appendChild(svg);
 			handle.appendChild(glyph);
@@ -497,42 +528,55 @@ window.onload = () => {
 		};
 
 		const getHandleGlyphBounds = (handle: HTMLDivElement) => {
-			const path = handle.querySelector<SVGPathElement>('path');
-			if (!path) return null;
-			const bbox = path.getBBox();
-			if (!Number.isFinite(bbox.x) || !Number.isFinite(bbox.width)) return null;
-			const scaleX = selectionHandleGlyphWidthPx / lollipopViewboxSize;
-			const scaleY = selectionHandleGlyphHeightPx / lollipopViewboxSize;
-			const isEnd = handle.dataset.glyph === 'end';
-			const top =
-				isEnd && Number.isFinite(bbox.height)
-					? lollipopViewboxSize - (bbox.y + bbox.height)
-					: bbox.y;
+			const scaleX = selectionHandleGlyphWidthPx / lollipopViewboxWidth;
+			const scaleY = selectionHandleGlyphHeightPx / lollipopViewboxHeight;
+			const kind = handle.dataset.glyph as 'start' | 'end' | undefined;
+			const isFlipped =
+				kind === 'end' || (kind === 'start' && selectionHandleCircleBelowStart);
+			const circleMinX = lollipopCircleCenter.x - lollipopCircleRadius;
+			const circleMaxX = lollipopCircleCenter.x + lollipopCircleRadius;
+			const circleMinY = lollipopCircleCenter.y - lollipopCircleRadius;
+			const circleMaxY = lollipopCircleCenter.y + lollipopCircleRadius;
+			const stemMinX = lollipopJunction.x - lollipopStemWidth / 2;
+			const stemMaxX = lollipopJunction.x + lollipopStemWidth / 2;
+			const stemMinY = lollipopStemTop;
+			const stemMaxY = lollipopStemBottom;
+			const minX = Math.min(circleMinX, stemMinX);
+			const maxX = Math.max(circleMaxX, stemMaxX);
+			const minY = Math.min(circleMinY, stemMinY);
+			const maxY = Math.max(circleMaxY, stemMaxY);
+			const flippedMinY = isFlipped ? lollipopViewboxFlipSumY - maxY : minY;
+			const flippedMaxY = isFlipped ? lollipopViewboxFlipSumY - minY : maxY;
 			return {
-				left: bbox.x * scaleX,
-				top: top * scaleY,
-				width: bbox.width * scaleX,
-				height: bbox.height * scaleY,
+				left: (minX - lollipopViewboxMinX) * scaleX,
+				top: (flippedMinY - lollipopViewboxMinY) * scaleY,
+				width: (maxX - minX) * scaleX,
+				height: (flippedMaxY - flippedMinY) * scaleY,
 			};
 		};
 
 		const getHandleLayout = (kind: 'start' | 'end') => {
+			const isFlipped =
+				kind === 'end' || (kind === 'start' && selectionHandleCircleBelowStart);
 			const circleY =
-				kind === 'start'
-					? lollipopCircleCenter.y
-					: lollipopViewboxSize - lollipopCircleCenter.y;
+				isFlipped
+					? lollipopViewboxFlipSumY - lollipopCircleCenter.y
+					: lollipopCircleCenter.y;
 			const junctionY =
-				kind === 'start'
-					? lollipopJunction.y
-					: lollipopViewboxSize - lollipopJunction.y;
+				isFlipped
+					? lollipopViewboxFlipSumY - lollipopJunction.y
+					: lollipopJunction.y;
 			const glyphOffsetX =
-				(lollipopViewboxSize / 2 - lollipopCircleCenter.x) *
+				(lollipopViewboxCenterX - lollipopCircleCenter.x) *
 				selectionHandleScale;
 			const glyphOffsetY =
-				(lollipopViewboxSize / 2 - circleY) * selectionHandleScale;
+				(lollipopViewboxCenterY - circleY) * selectionHandleScale;
 			const anchorOffsetX =
-				glyphOffsetX + lollipopJunction.x * selectionHandleScale;
-			const anchorOffsetY = glyphOffsetY + junctionY * selectionHandleScale;
+				glyphOffsetX +
+				(lollipopJunction.x - lollipopViewboxMinX) * selectionHandleScale;
+			const anchorOffsetY =
+				glyphOffsetY +
+				(junctionY - lollipopViewboxMinY) * selectionHandleScale;
 			return {
 				glyphLeft: selectionHandleGlyphLeftPx + glyphOffsetX,
 				glyphTop: selectionHandleGlyphTopPx + glyphOffsetY,
@@ -728,8 +772,11 @@ window.onload = () => {
 			if (startRow < 0 || startRow >= core.bufferService.rows) {
 				if (startHandle) startHandle.style.display = 'none';
 			} else {
-				const startX = offsetX + selectionStart[0] * cellWidth;
-				const startY = offsetY + startRow * cellHeight;
+				const startX = offsetX + selectionStart[0] * cellWidth - 1;
+				const startY =
+					offsetY +
+					(startRow + (selectionHandleCircleBelowStart ? 1 : 0)) *
+						cellHeight;
 				startHandle = startHandle ?? document.createElement('div');
 				startHandle.className = 'fressh-selection-handle';
 				ensureHandleGlyph(startHandle, 'start');
@@ -761,7 +808,7 @@ window.onload = () => {
 			if (!endRowVisible) {
 				if (endHandle) endHandle.style.display = 'none';
 			} else {
-				const endX = offsetX + (selectionEnd[0] + 1) * cellWidth;
+				const endX = offsetX + selectionEnd[0] * cellWidth;
 				const endY = offsetY + (endRow + 1) * cellHeight;
 				endHandle = endHandle ?? document.createElement('div');
 				endHandle.className = 'fressh-selection-handle';
