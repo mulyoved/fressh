@@ -1118,8 +1118,8 @@ function ShellDetail() {
 	}
 
 	const shouldRenderTerminal = Boolean(shell && connection);
-	const scrollbackVisible =
-		scrollbackActive && scrollbackPhase === 'active';
+	const scrollbackVisible = scrollbackActive;
+	const ScrollbackIcon = resolveLucideIcon('ArrowDownToLine');
 	if (!shouldRenderTerminal) {
 		return isAutoConnecting || isReconnecting ? <RouteSkeleton /> : null;
 	}
@@ -1142,49 +1142,76 @@ function ShellDetail() {
 				}}
 			>
 				<TerminalErrorBoundary onRetry={handleTerminalCrashRetry}>
-					<XtermJsWebView
-						ref={xtermRef}
-						style={{ flex: 1 }}
-						webViewOptions={{
-							// Prevent iOS from adding automatic top inset inside WebView
-							contentInsetAdjustmentBehavior: 'never',
-							onLayout: () => {
-								// Refit terminal when container size changes
-								xtermRef.current?.fit();
-							},
-						}}
-						logger={{
-							log: logger.info,
-							// debug: logger.debug,
-							warn: logger.warn,
-							error: logger.error,
-						}}
-						xtermOptions={{
-							theme: {
-								background: theme.colors.background,
-								foreground: theme.colors.textPrimary,
-								...(Platform.OS === 'android'
-									? {
-											// Android: reverse-style selection for readability; iOS keeps the default blue highlight.
-											selectionBackground: '#F5F5F5',
-											selectionForeground: '#000000',
-											selectionInactiveBackground: 'rgba(255, 255, 255, 0.6)',
-										}
-									: {
-											selectionBackground: 'rgba(37, 99, 235, 0.35)',
-											selectionInactiveBackground: 'rgba(37, 99, 235, 0.2)',
-										}),
-							},
-						}}
-						touchScrollConfig={touchScrollConfig}
-						onResize={handleTerminalResize}
-						onSelection={handleSelectionChanged}
-						onSelectionModeChange={handleSelectionModeChange}
-						onInitialized={handleTerminalInitialized}
-						onInput={handleWebViewInput}
-						onScrollbackModeChange={handleScrollbackModeChange}
-						onTmuxEnterCopyMode={handleTmuxEnterCopyMode}
-					/>
+					<View style={{ flex: 1 }}>
+						<XtermJsWebView
+							ref={xtermRef}
+							style={{ flex: 1 }}
+							webViewOptions={{
+								// Prevent iOS from adding automatic top inset inside WebView
+								contentInsetAdjustmentBehavior: 'never',
+								onLayout: () => {
+									// Refit terminal when container size changes
+									xtermRef.current?.fit();
+								},
+							}}
+							logger={{
+								log: logger.info,
+								// debug: logger.debug,
+								warn: logger.warn,
+								error: logger.error,
+							}}
+							xtermOptions={{
+								theme: {
+									background: theme.colors.background,
+									foreground: theme.colors.textPrimary,
+									...(Platform.OS === 'android'
+										? {
+												// Android: reverse-style selection for readability; iOS keeps the default blue highlight.
+												selectionBackground: '#F5F5F5',
+												selectionForeground: '#000000',
+												selectionInactiveBackground: 'rgba(255, 255, 255, 0.6)',
+											}
+										: {
+												selectionBackground: 'rgba(37, 99, 235, 0.35)',
+												selectionInactiveBackground: 'rgba(37, 99, 235, 0.2)',
+											}),
+								},
+							}}
+							touchScrollConfig={touchScrollConfig}
+							onResize={handleTerminalResize}
+							onSelection={handleSelectionChanged}
+							onSelectionModeChange={handleSelectionModeChange}
+							onInitialized={handleTerminalInitialized}
+							onInput={handleWebViewInput}
+							onScrollbackModeChange={handleScrollbackModeChange}
+							onTmuxEnterCopyMode={handleTmuxEnterCopyMode}
+						/>
+						{scrollbackVisible && (
+							<Pressable
+								onPress={handleJumpToLive}
+								style={{
+									position: 'absolute',
+									right: 16,
+									bottom: 16,
+									width: 48,
+									height: 48,
+									borderRadius: 999,
+									alignItems: 'center',
+									justifyContent: 'center',
+									backgroundColor: 'rgba(15, 23, 42, 0.92)',
+									borderWidth: 1,
+									borderColor: 'rgba(148, 163, 184, 0.35)',
+								}}
+							>
+								{ScrollbackIcon ? (
+									<ScrollbackIcon
+										color={theme.colors.textPrimary}
+										size={20}
+									/>
+								) : null}
+							</Pressable>
+						)}
+					</View>
 				</TerminalErrorBoundary>
 				<TerminalKeyboard
 					keyboard={currentKeyboard}
@@ -1225,40 +1252,6 @@ function ShellDetail() {
 						sendBytesRaw(encoder.encode(sequence));
 					}}
 				/>
-				{scrollbackVisible && (
-					<View
-						pointerEvents="box-none"
-						style={{
-							position: 'absolute',
-							top: Platform.OS === 'android' ? insets.top + 12 : 12,
-							left: 0,
-							right: 0,
-							alignItems: 'center',
-						}}
-					>
-						<Pressable
-							onPress={handleJumpToLive}
-							style={{
-								backgroundColor: 'rgba(15, 23, 42, 0.92)',
-								paddingHorizontal: 14,
-								paddingVertical: 8,
-								borderRadius: 999,
-								borderWidth: 1,
-								borderColor: 'rgba(148, 163, 184, 0.35)',
-							}}
-						>
-							<Text
-								style={{
-									color: theme.colors.textPrimary,
-									fontSize: 12,
-									fontWeight: '600',
-								}}
-							>
-								Scrollback · Jump to live
-							</Text>
-						</Pressable>
-					</View>
-				)}
 				{flashKeyboardName && (
 					<Animated.View
 						pointerEvents="none"
