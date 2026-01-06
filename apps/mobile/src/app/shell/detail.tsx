@@ -2,6 +2,7 @@ import { type ListenerEvent } from '@fressh/react-native-uniffi-russh';
 import {
 	XtermJsWebView,
 	type XtermWebViewHandle,
+	type TouchScrollConfig,
 } from '@fressh/react-native-xtermjs-webview';
 
 import * as Clipboard from 'expo-clipboard';
@@ -33,6 +34,7 @@ import {
 	ScrollView,
 	Text,
 	TextInput,
+	useWindowDimensions,
 	View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -66,6 +68,80 @@ import { useSshStore } from '@/lib/ssh-store';
 import { useTheme } from '@/lib/theme';
 
 const logger = rootLogger.extend('TabsShellDetail');
+
+type OrderedWriteFn = (bytes: Uint8Array<ArrayBufferLike>) => Promise<void>;
+
+const sleep = (ms: number) =>
+	new Promise<void>((resolve) => {
+		setTimeout(resolve, ms);
+	});
+
+// Single-writer queue that guarantees no interleaving across all PTY writes.
+class OrderedWriter {
+	private tail: Promise<void> = Promise.resolve();
+
+	constructor(private write: OrderedWriteFn) {}
+
+	send(bytes: Uint8Array<ArrayBufferLike>) {
+		return this.enqueue(async () => {
+			await this.write(bytes);
+		});
+	}
+
+	sendBatch(segments: Uint8Array<ArrayBufferLike>[], opts?: { interSegmentDelayMs?: number }) {
+		const delayMs = opts?.interSegmentDelayMs ?? 0;
+		return this.enqueue(async () => {
+			for (let i = 0; i < segments.length; i += 1) {
+				const segment = segments[i];
+				if (segment) await this.write(segment);
+				if (delayMs > 0 && i + 1 < segments.length) {
+					await sleep(delayMs);
+				}
+			}
+		});
+	}
+
+	private enqueue(task: () => Promise<void>) {
+		const next = this.tail.then(task, task);
+		this.tail = next.catch(() => {});
+		return next;
+	}
+}
+
+const isValidCancelKey = (cancelKey: Uint8Array) =>
+	cancelKey.length === 1 && cancelKey[0] !== 0x1b;
+
+const concatBytes = (a: Uint8Array, b: Uint8Array) => {
+	const merged = new Uint8Array(a.length + b.length);
+	merged.set(a, 0);
+	merged.set(b, a.length);
+	return merged;
+};
+
+const containsMarker = (bytes: Uint8Array, marker: number[]) => {
+	if (bytes.length < marker.length) return false;
+	for (let i = 0; i <= bytes.length - marker.length; i += 1) {
+		let matched = true;
+		for (let j = 0; j < marker.length; j += 1) {
+			if (bytes[i + j] !== marker[j]) {
+				matched = false;
+				break;
+			}
+		}
+		if (matched) return true;
+	}
+	return false;
+};
+
+const isLargePayload = (bytes: Uint8Array) => {
+	if (bytes.length > 32) return true;
+	for (let i = 0; i < bytes.length; i += 1) {
+		if (bytes[i] === 10 || bytes[i] === 13) return true;
+	}
+	const pasteStart = [0x1b, 0x5b, 0x32, 0x30, 0x30, 0x7e];
+	const pasteEnd = [0x1b, 0x5b, 0x32, 0x30, 0x31, 0x7e];
+	return containsMarker(bytes, pasteStart) || containsMarker(bytes, pasteEnd);
+};
 
 export default function TabsShellDetail() {
 	const [ready, setReady] = useState(false);
@@ -243,6 +319,11 @@ function TerminalErrorFallback({ onRetry }: { onRetry: () => void }) {
 }
 
 const encoder = new TextEncoder();
+const tmuxPrefixKey = '\x02';
+const tmuxCopyModeKey = '[';
+const tmuxCancelKey = 'q';
+const tmuxExitKey = 'q';
+const touchEnterDelayMs = 10;
 const ALL_KEYBOARD_IDS = Object.keys(KEYBOARDS_BY_ID);
 const ACTIVE_KEYBOARD_IDS_FALLBACK: readonly string[] =
 	ACTIVE_KEYBOARD_IDS.length > 0 ? ACTIVE_KEYBOARD_IDS : ALL_KEYBOARD_IDS;
@@ -390,23 +471,136 @@ function ShellDetail() {
 	const [selectionModeEnabled, setSelectionModeEnabled] = useState(false);
 	const [commandPresetsOpen, setCommandPresetsOpen] = useState(false);
 	const [commanderOpen, setCommanderOpen] = useState(false);
+	const [scrollbackActive, setScrollbackActive] = useState(false);
+	const [scrollbackPhase, setScrollbackPhase] = useState<'dragging' | 'active'>(
+		'active',
+	);
+	const scrollbackActiveRef = useRef(false);
+	const scrollbackPhaseRef = useRef<'dragging' | 'active'>('active');
+	const currentInstanceIdRef = useRef<string | null>(null);
+	const writerRef = useRef<OrderedWriter | null>(null);
 	const commandTimeoutsRef = useRef<ReturnType<typeof setTimeout>[]>([]);
 	const lastSelectionRef = useRef<{ text: string; at: number } | null>(null);
+	const { width, height } = useWindowDimensions();
+	const touchScrollEnabled =
+		Platform.OS === 'android' && Math.min(width, height) >= 600;
+	const touchScrollConfig = useMemo<TouchScrollConfig>(
+		() =>
+			touchScrollEnabled
+				? {
+						enabled: true,
+						pxPerLine: 16,
+						slopPx: 10,
+						maxLinesPerFrame: 6,
+						flickVelocity: 1.2,
+						enterDelayMs: touchEnterDelayMs,
+						prefixKey: tmuxPrefixKey,
+						copyModeKey: tmuxCopyModeKey,
+						exitKey: tmuxExitKey,
+						cancelKey: tmuxCancelKey,
+					}
+				: { enabled: false },
+		[touchScrollEnabled],
+	);
+	const cancelKeyBytes = useMemo(() => encoder.encode(tmuxCancelKey), []);
+	const exitKeyBytes = useMemo(() => encoder.encode(tmuxExitKey), []);
 
 	const exitSelectionMode = useCallback(() => {
 		setSelectionModeEnabled(false);
 		xtermRef.current?.setSelectionModeEnabled(false);
 	}, []);
 
-	const sendBytesRaw = useCallback(
-		(bytes: Uint8Array<ArrayBuffer>) => {
+	const writeToShell = useCallback(
+		async (bytes: Uint8Array<ArrayBufferLike>) => {
 			if (!shell) return;
-			shell.sendData(bytes.buffer).catch((e: unknown) => {
+			try {
+				await shell.sendData(bytes.buffer as ArrayBuffer);
+			} catch (e: unknown) {
 				logger.warn('sendData failed', e);
 				router.back();
-			});
+			}
 		},
 		[shell, router],
+	);
+
+	useEffect(() => {
+		if (!shell) {
+			writerRef.current = null;
+			return;
+		}
+		writerRef.current = new OrderedWriter(writeToShell);
+	}, [shell, writeToShell]);
+
+	const sendBytesOrdered = useCallback((bytes: Uint8Array<ArrayBuffer>) => {
+		return writerRef.current?.send(bytes);
+	}, []);
+
+	const sendBytesQueued = useCallback(
+		(
+			segments: Uint8Array<ArrayBuffer>[],
+			opts?: { interSegmentDelayMs?: number },
+		) => {
+			return writerRef.current?.sendBatch(segments, opts);
+		},
+		[],
+	);
+
+	const clearScrollbackState = useCallback(() => {
+		scrollbackActiveRef.current = false;
+		setScrollbackActive(false);
+		setScrollbackPhase('active');
+		xtermRef.current?.exitScrollback({ emitExit: false });
+	}, []);
+
+	const sendInputEnsuringLive = useCallback(
+		(bytes: Uint8Array<ArrayBuffer>) => {
+			if (!scrollbackActiveRef.current) {
+				void sendBytesOrdered(bytes);
+				return;
+			}
+
+			if (!isValidCancelKey(cancelKeyBytes)) {
+				logger.warn(
+					'cancelKey invalid; blocking input until Jump to live is used',
+				);
+				return;
+			}
+
+			const isExitKey =
+				bytes.length === exitKeyBytes.length &&
+				bytes.length === 1 &&
+				bytes[0] === exitKeyBytes[0];
+
+			if (isExitKey) {
+				void sendBytesOrdered(cancelKeyBytes);
+				clearScrollbackState();
+				return;
+			}
+
+			const largePayload = isLargePayload(bytes);
+			if (!largePayload) {
+				void sendBytesOrdered(concatBytes(cancelKeyBytes, bytes));
+			} else {
+				void sendBytesQueued([cancelKeyBytes, bytes], {
+					interSegmentDelayMs: touchEnterDelayMs,
+				});
+			}
+			clearScrollbackState();
+		},
+		[
+			cancelKeyBytes,
+			exitKeyBytes,
+			sendBytesOrdered,
+			sendBytesQueued,
+			clearScrollbackState,
+		],
+	);
+
+	const sendBytesRaw = useCallback(
+		(bytes: Uint8Array<ArrayBuffer>) => {
+			sendInputEnsuringLive(bytes);
+		},
+		[sendInputEnsuringLive],
 	);
 
 	const sendBytesWithModifiers = useCallback(
@@ -770,10 +964,144 @@ function ShellDetail() {
 		[disableSystemKeyboard],
 	);
 
+	const handleScrollbackModeChange = useCallback(
+		(event: {
+			active: boolean;
+			phase: 'dragging' | 'active';
+			instanceId: string;
+		}) => {
+			if (
+				currentInstanceIdRef.current &&
+				event.instanceId !== currentInstanceIdRef.current
+			) {
+				return;
+			}
+			scrollbackActiveRef.current = event.active;
+			scrollbackPhaseRef.current = event.phase;
+			setScrollbackActive(event.active);
+			setScrollbackPhase(event.phase);
+		},
+		[],
+	);
+
+	const handleTmuxEnterCopyMode = useCallback(
+		async (event: { instanceId: string; requestId: number }) => {
+			if (
+				currentInstanceIdRef.current &&
+				event.instanceId !== currentInstanceIdRef.current
+			) {
+				return;
+			}
+			const prefixBytes = encoder.encode(tmuxPrefixKey);
+			const copyModeBytes = encoder.encode(tmuxCopyModeKey);
+			try {
+				await sendBytesQueued([prefixBytes, copyModeBytes], {
+					interSegmentDelayMs: touchEnterDelayMs,
+				});
+			} catch (error) {
+				logger.warn('tmux enter copy-mode write failed', error);
+			}
+			xtermRef.current?.sendTmuxEnterCopyModeAck(
+				event.requestId,
+				event.instanceId,
+			);
+		},
+		[sendBytesQueued],
+	);
+
+	const handleWebViewInput = useCallback(
+		(input: { str: string; kind: 'typing' | 'scroll'; instanceId: string }) => {
+			if (!shell) return;
+			if (
+				currentInstanceIdRef.current &&
+				input.instanceId !== currentInstanceIdRef.current
+			) {
+				return;
+			}
+			const bytes = encoder.encode(input.str);
+			if (input.kind === 'scroll') {
+				if (selectionModeEnabled) return;
+				void sendBytesOrdered(bytes);
+				return;
+			}
+			if (selectionModeEnabled) exitSelectionMode();
+			sendInputEnsuringLive(bytes);
+		},
+		[
+			shell,
+			sendBytesOrdered,
+			sendInputEnsuringLive,
+			selectionModeEnabled,
+			exitSelectionMode,
+		],
+	);
+
 	const handleTerminalCrashRetry = useCallback(() => {
 		// Navigate back to trigger auto-reconnect flow
 		router.back();
 	}, [router]);
+
+	const handleJumpToLive = useCallback(() => {
+		if (!isValidCancelKey(cancelKeyBytes)) {
+			logger.warn('cancelKey invalid; cannot auto-exit scrollback');
+			return;
+		}
+		void sendBytesOrdered(cancelKeyBytes);
+		clearScrollbackState();
+	}, [cancelKeyBytes, sendBytesOrdered, clearScrollbackState]);
+
+	const handleTerminalInitialized = useCallback(
+		(instanceId: string) => {
+			currentInstanceIdRef.current = instanceId;
+			scrollbackActiveRef.current = false;
+			scrollbackPhaseRef.current = 'active';
+			setScrollbackActive(false);
+			setScrollbackPhase('active');
+
+			if (!shell) throw new Error('Shell not found');
+			if (Platform.OS === 'android') {
+				xtermRef.current?.setSystemKeyboardEnabled(false);
+				setSystemKeyboardEnabled(false);
+			}
+			xtermRef.current?.setSelectionModeEnabled(selectionModeEnabled);
+
+			// Replay from head, then attach live listener
+			void (async () => {
+				const res = shell.readBuffer({ mode: 'head' });
+				logger.info('readBuffer(head)', {
+					chunks: res.chunks.length,
+					nextSeq: res.nextSeq,
+					dropped: res.dropped,
+				});
+				if (res.chunks.length) {
+					const chunks = res.chunks.map((c) => c.bytes);
+					const xr = xtermRef.current;
+					if (xr) {
+						xr.writeMany(chunks.map((c) => new Uint8Array(c)));
+						xr.flush();
+					}
+				}
+				const id = shell.addListener(
+					(ev: ListenerEvent) => {
+						if ('kind' in ev) {
+							logger.warn('listener.dropped', ev);
+							return;
+						}
+						const chunk = ev;
+						const xr3 = xtermRef.current;
+						if (xr3) xr3.write(new Uint8Array(chunk.bytes));
+					},
+					{ cursor: { mode: 'seq', seq: res.nextSeq } },
+				);
+				logger.info('shell listener attached', id.toString());
+				listenerIdRef.current = id;
+			})();
+			// Focus to pop the keyboard (iOS needs the prop we set)
+			const xr2 = xtermRef.current;
+			if (xr2 && Platform.OS === 'ios') xr2.focus();
+		},
+		[shell, selectionModeEnabled],
+	);
 
 	if (hasTmuxAttachError) {
 		return (
@@ -790,6 +1118,8 @@ function ShellDetail() {
 	}
 
 	const shouldRenderTerminal = Boolean(shell && connection);
+	const scrollbackVisible =
+		scrollbackActive && scrollbackPhase === 'active';
 	if (!shouldRenderTerminal) {
 		return isAutoConnecting || isReconnecting ? <RouteSkeleton /> : null;
 	}
@@ -846,57 +1176,14 @@ function ShellDetail() {
 										}),
 							},
 						}}
+						touchScrollConfig={touchScrollConfig}
 						onResize={handleTerminalResize}
 						onSelection={handleSelectionChanged}
 						onSelectionModeChange={handleSelectionModeChange}
-						onInitialized={() => {
-							if (!shell) throw new Error('Shell not found');
-							if (Platform.OS === 'android') {
-								xtermRef.current?.setSystemKeyboardEnabled(false);
-								setSystemKeyboardEnabled(false);
-							}
-							xtermRef.current?.setSelectionModeEnabled(selectionModeEnabled);
-
-							// Replay from head, then attach live listener
-							void (async () => {
-								const res = shell.readBuffer({ mode: 'head' });
-								logger.info('readBuffer(head)', {
-									chunks: res.chunks.length,
-									nextSeq: res.nextSeq,
-									dropped: res.dropped,
-								});
-								if (res.chunks.length) {
-									const chunks = res.chunks.map((c) => c.bytes);
-									const xr = xtermRef.current;
-									if (xr) {
-										xr.writeMany(chunks.map((c) => new Uint8Array(c)));
-										xr.flush();
-									}
-								}
-								const id = shell.addListener(
-									(ev: ListenerEvent) => {
-										if ('kind' in ev) {
-											logger.warn('listener.dropped', ev);
-											return;
-										}
-										const chunk = ev;
-										const xr3 = xtermRef.current;
-										if (xr3) xr3.write(new Uint8Array(chunk.bytes));
-									},
-									{ cursor: { mode: 'seq', seq: res.nextSeq } },
-								);
-								logger.info('shell listener attached', id.toString());
-								listenerIdRef.current = id;
-							})();
-							// Focus to pop the keyboard (iOS needs the prop we set)
-							const xr2 = xtermRef.current;
-							if (xr2 && Platform.OS === 'ios') xr2.focus();
-						}}
-						onData={(terminalMessage) => {
-							if (!shell) return;
-							if (selectionModeEnabled) exitSelectionMode();
-							sendBytesRaw(encoder.encode(terminalMessage));
-						}}
+						onInitialized={handleTerminalInitialized}
+						onInput={handleWebViewInput}
+						onScrollbackModeChange={handleScrollbackModeChange}
+						onTmuxEnterCopyMode={handleTmuxEnterCopyMode}
 					/>
 				</TerminalErrorBoundary>
 				<TerminalKeyboard
@@ -938,6 +1225,40 @@ function ShellDetail() {
 						sendBytesRaw(encoder.encode(sequence));
 					}}
 				/>
+				{scrollbackVisible && (
+					<View
+						pointerEvents="box-none"
+						style={{
+							position: 'absolute',
+							top: Platform.OS === 'android' ? insets.top + 12 : 12,
+							left: 0,
+							right: 0,
+							alignItems: 'center',
+						}}
+					>
+						<Pressable
+							onPress={handleJumpToLive}
+							style={{
+								backgroundColor: 'rgba(15, 23, 42, 0.92)',
+								paddingHorizontal: 14,
+								paddingVertical: 8,
+								borderRadius: 999,
+								borderWidth: 1,
+								borderColor: 'rgba(148, 163, 184, 0.35)',
+							}}
+						>
+							<Text
+								style={{
+									color: theme.colors.textPrimary,
+									fontSize: 12,
+									fontWeight: '600',
+								}}
+							>
+								Scrollback · Jump to live
+							</Text>
+						</Pressable>
+					</View>
+				)}
 				{flashKeyboardName && (
 					<Animated.View
 						pointerEvents="none"

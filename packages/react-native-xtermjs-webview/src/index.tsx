@@ -1,4 +1,4 @@
-import React, {
+import {
 	useEffect,
 	useImperativeHandle,
 	useMemo,
@@ -6,6 +6,7 @@ import React, {
 	useCallback,
 	useState,
 } from 'react';
+import type { RefObject } from 'react';
 import { WebView, type WebViewMessageEvent } from 'react-native-webview';
 import htmlString from '../dist-internal/index.html?raw';
 
@@ -16,10 +17,12 @@ import {
 	bStrToBinary,
 	type BridgeInboundMessage,
 	type BridgeOutboundMessage,
+	type TouchScrollConfig,
 } from './bridge';
 import { jetBrainsMonoTtfBase64 } from './jetbrains-mono';
 
 export { bStrToBinary, binaryToBStr };
+export type { TouchScrollConfig };
 
 let didLogHtmlFingerprint = false;
 if (__DEV__ && !didLogHtmlFingerprint) {
@@ -71,6 +74,8 @@ export type XtermWebViewHandle = {
 	getSelection: () => Promise<string>;
 	resize: (size: { cols: number; rows: number }) => void;
 	fit: () => void;
+	exitScrollback: (opts?: { emitExit?: boolean; requestId?: number }) => void;
+	sendTmuxEnterCopyModeAck: (requestId: number, instanceId: string) => void;
 };
 
 const defaultWebViewProps: WebViewOptions = {
@@ -111,18 +116,33 @@ type UserControllableWebViewProps = StrictOmit<
 >;
 
 export type XtermJsWebViewProps = {
-	ref: React.RefObject<XtermWebViewHandle | null>;
+	ref: RefObject<XtermWebViewHandle | null>;
 	style?: WebViewOptions['style'];
 	webViewOptions?: UserControllableWebViewProps;
 	xtermOptions?: Partial<ITerminalOptions>;
 	/** Dev-only override for loading the internal WebView HTML via a Vite dev server. */
 	devServerUrl?: string;
-	onInitialized?: () => void;
+	onInitialized?: (instanceId: string) => void;
 	onData?: (data: string) => void;
+	onInput?: (input: {
+		str: string;
+		kind: 'typing' | 'scroll';
+		instanceId: string;
+	}) => void;
 	onSelection?: (text: string) => void;
 	onSelectionModeChange?: (enabled: boolean) => void;
 	/** Called when terminal size changes (cols/rows). Use for PTY resize. */
 	onResize?: (cols: number, rows: number) => void;
+	onScrollbackModeChange?: (event: {
+		active: boolean;
+		phase: 'dragging' | 'active';
+		instanceId: string;
+		requestId?: number;
+	}) => void;
+	onTmuxEnterCopyMode?: (event: {
+		instanceId: string;
+		requestId: number;
+	}) => void;
 	logger?: {
 		debug?: (...args: unknown[]) => void;
 		log?: (...args: unknown[]) => void;
@@ -135,6 +155,7 @@ export type XtermJsWebViewProps = {
 		rows: number;
 	};
 	autoFit?: boolean;
+	touchScrollConfig?: TouchScrollConfig;
 };
 
 function xTermOptionsEquals(
@@ -155,6 +176,24 @@ function xTermOptionsEquals(
 	return true;
 }
 
+function touchScrollConfigEquals(
+	a: TouchScrollConfig | null | undefined,
+	b: TouchScrollConfig | null | undefined,
+): boolean {
+	if (a == b) return true;
+	if (a == null && b == null) return true;
+	if (a == null || b == null) return false;
+	const keys = new Set<string>([
+		...Object.keys(a as object),
+		...Object.keys(b as object),
+	]);
+	for (const key of keys) {
+		if (a[key as keyof TouchScrollConfig] !== b[key as keyof TouchScrollConfig])
+			return false;
+	}
+	return true;
+}
+
 export function XtermJsWebView({
 	ref,
 	style,
@@ -162,14 +201,18 @@ export function XtermJsWebView({
 	xtermOptions = defaultXtermOptions,
 	onInitialized,
 	onData,
+	onInput,
 	onSelection,
 	onSelectionModeChange,
 	onResize,
+	onScrollbackModeChange,
+	onTmuxEnterCopyMode,
 	coalescingThreshold = defaultCoalescingThreshold,
 	logger,
 	size,
 	autoFit = true,
 	devServerUrl,
+	touchScrollConfig,
 }: XtermJsWebViewProps) {
 	const webRef = useRef<WebView>(null);
 	const [initialized, setInitialized] = useState(false);
@@ -177,6 +220,7 @@ export function XtermJsWebView({
 	const pendingSelectionRef = useRef(
 		new Map<number, { resolve: (value: string) => void }>(),
 	);
+	const currentInstanceIdRef = useRef<string | null>(null);
 
 	// ---- RN -> WebView message sender
 	const sendToWebView = useCallback(
@@ -344,6 +388,16 @@ export function XtermJsWebView({
 			appliedSizeRef.current = size;
 		},
 		fit,
+		exitScrollback: (opts) => {
+			sendToWebView({ type: 'exitScrollback', ...opts });
+		},
+		sendTmuxEnterCopyModeAck: (requestId, instanceId) => {
+			sendToWebView({
+				type: 'tmuxEnterCopyModeAck',
+				requestId,
+				instanceId,
+			});
+		},
 	}));
 
 	const mergedXTermOptions = useMemo(
@@ -355,6 +409,7 @@ export function XtermJsWebView({
 	);
 
 	const appliedXtermOptionsRef = useRef<Partial<ITerminalOptions> | null>(null);
+	const appliedTouchConfigRef = useRef<TouchScrollConfig | null>(null);
 
 	useEffect(() => {
 		if (!initialized) return;
@@ -367,21 +422,49 @@ export function XtermJsWebView({
 		appliedXtermOptionsRef.current = mergedXTermOptions;
 	}, [mergedXTermOptions, sendToWebView, logger, initialized, autoFitFn]);
 
+	useEffect(() => {
+		if (!initialized) return;
+		const normalizedConfig: TouchScrollConfig =
+			touchScrollConfig ?? ({ enabled: false } as TouchScrollConfig);
+		const appliedConfig = appliedTouchConfigRef.current;
+		if (touchScrollConfigEquals(appliedConfig, normalizedConfig)) return;
+		sendToWebView({ type: 'setTouchScrollConfig', config: normalizedConfig });
+		appliedTouchConfigRef.current = normalizedConfig;
+	}, [initialized, sendToWebView, touchScrollConfig]);
+
 	const onMessage = useCallback(
 		(e: WebViewMessageEvent) => {
 			try {
 				const msg: BridgeInboundMessage = JSON.parse(e.nativeEvent.data);
 				logger?.log?.(`received msg from webview: `, msg);
 				if (msg.type === 'initialized') {
-					onInitialized?.();
+					currentInstanceIdRef.current = msg.instanceId;
+					pendingSelectionRef.current.clear();
+					onInitialized?.(msg.instanceId);
 					autoFitFn();
 					setInitialized(true);
 					return;
 				}
+				if (
+					'instanceId' in msg &&
+					currentInstanceIdRef.current &&
+					msg.instanceId !== currentInstanceIdRef.current
+				) {
+					logger?.warn?.(
+						`dropping stale webview message`,
+						msg.type,
+						msg.instanceId,
+					);
+					return;
+				}
 				if (msg.type === 'input') {
-					// const bytes = bStrToBinary(msg.bStr);
-					// onData?.(bytes);
-					onData?.(msg.str);
+					const kind = msg.kind ?? 'typing';
+					onInput?.({ str: msg.str, kind, instanceId: msg.instanceId });
+					if (kind === 'typing') {
+						// const bytes = bStrToBinary(msg.bStr);
+						// onData?.(bytes);
+						onData?.(msg.str);
+					}
 					return;
 				}
 				if (msg.type === 'debug') {
@@ -409,6 +492,22 @@ export function XtermJsWebView({
 					onSelectionModeChange?.(msg.enabled);
 					return;
 				}
+				if (msg.type === 'scrollbackModeChanged') {
+					onScrollbackModeChange?.({
+						active: msg.active,
+						phase: msg.phase,
+						instanceId: msg.instanceId,
+						requestId: msg.requestId,
+					});
+					return;
+				}
+				if (msg.type === 'tmuxEnterCopyMode') {
+					onTmuxEnterCopyMode?.({
+						instanceId: msg.instanceId,
+						requestId: msg.requestId,
+					});
+					return;
+				}
 				webViewOptions?.onMessage?.(e);
 			} catch (error) {
 				logger?.warn?.(
@@ -424,9 +523,12 @@ export function XtermJsWebView({
 			onInitialized,
 			autoFitFn,
 			onData,
+			onInput,
 			onResize,
 			onSelection,
 			onSelectionModeChange,
+			onScrollbackModeChange,
+			onTmuxEnterCopyMode,
 		],
 	);
 

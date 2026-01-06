@@ -3,13 +3,38 @@ type ITerminalOptions = import('@xterm/xterm').ITerminalOptions;
 type ITerminalInitOnlyOptions = import('@xterm/xterm').ITerminalInitOnlyOptions;
 // Messages posted from the WebView (xterm page) to React Native
 export type BridgeInboundMessage =
-	| { type: 'initialized' }
-	| { type: 'input'; str: string }
+	| { type: 'initialized'; instanceId: string }
+	| { type: 'input'; str: string; instanceId: string; kind?: 'typing' | 'scroll' }
 	| { type: 'debug'; message: string }
 	| { type: 'sizeChanged'; cols: number; rows: number }
-	| { type: 'selection'; requestId: number; text: string }
-	| { type: 'selectionChanged'; text: string }
-	| { type: 'selectionModeChanged'; enabled: boolean };
+	| { type: 'selection'; requestId: number; text: string; instanceId: string }
+	| { type: 'selectionChanged'; text: string; instanceId: string }
+	| { type: 'selectionModeChanged'; enabled: boolean; instanceId: string }
+	| {
+			type: 'scrollbackModeChanged';
+			active: boolean;
+			phase: 'dragging' | 'active';
+			instanceId: string;
+			requestId?: number;
+	  }
+	| { type: 'tmuxEnterCopyMode'; instanceId: string; requestId: number };
+
+export type TouchScrollConfig =
+	| { enabled: false }
+	| {
+			enabled: true;
+			pxPerLine?: number;
+			slopPx?: number;
+			maxLinesPerFrame?: number;
+			flickVelocity?: number;
+			invertScroll?: boolean;
+			enterDelayMs?: number;
+			prefixKey?: string;
+			copyModeKey?: string;
+			exitKey?: string;
+			cancelKey?: string;
+			debug?: boolean;
+	  };
 
 // Messages injected from React Native into the WebView (xterm page)
 export type BridgeOutboundMessage =
@@ -19,6 +44,13 @@ export type BridgeOutboundMessage =
 	| { type: 'fit' }
 	| { type: 'getSelection'; requestId: number }
 	| { type: 'setSelectionMode'; enabled: boolean }
+	| { type: 'setTouchScrollConfig'; config: TouchScrollConfig }
+	| { type: 'exitScrollback'; emitExit?: boolean; requestId?: number }
+	| {
+			type: 'tmuxEnterCopyModeAck';
+			requestId: number;
+			instanceId: string;
+	  }
 	| {
 			type: 'setOptions';
 			opts: Partial<Omit<ITerminalOptions, keyof ITerminalInitOnlyOptions>>;
