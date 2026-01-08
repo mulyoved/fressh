@@ -88,9 +88,7 @@ export function TerminalKeyboard({
 							},
 						]}
 					>
-						{Icon ? (
-							<Icon color={theme.colors.textPrimary} size={18} />
-						) : null}
+						{Icon ? <Icon color={theme.colors.textPrimary} size={18} /> : null}
 						<Text
 							numberOfLines={1}
 							style={{
