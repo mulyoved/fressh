@@ -61,9 +61,12 @@ import {
 import { runMacro } from '@/lib/keyboard-runtime';
 import { rootLogger } from '@/lib/logger';
 import { resolveLucideIcon } from '@/lib/lucide-utils';
+import { executeSideChannelCommand } from '@/lib/ssh-side-channel';
 import { useSshStore } from '@/lib/ssh-store';
 import { useTheme } from '@/lib/theme';
 import { CommandPresetsModal } from './components/CommandPresetsModal';
+import { ConfigureModal } from './components/ConfigureModal';
+import { FeatureRequestModal } from './components/FeatureRequestModal';
 import { TerminalCommanderModal } from './components/TerminalCommanderModal';
 import { TerminalKeyboard } from './components/TerminalKeyboard';
 
@@ -88,7 +91,10 @@ class OrderedWriter {
 		});
 	}
 
-	sendBatch(segments: Uint8Array<ArrayBufferLike>[], opts?: { interSegmentDelayMs?: number }) {
+	sendBatch(
+		segments: Uint8Array<ArrayBufferLike>[],
+		opts?: { interSegmentDelayMs?: number },
+	) {
 		const delayMs = opts?.interSegmentDelayMs ?? 0;
 		return this.enqueue(async () => {
 			for (let i = 0; i < segments.length; i += 1) {
@@ -471,6 +477,13 @@ function ShellDetail() {
 	const [selectionModeEnabled, setSelectionModeEnabled] = useState(false);
 	const [commandPresetsOpen, setCommandPresetsOpen] = useState(false);
 	const [commanderOpen, setCommanderOpen] = useState(false);
+	const [configureOpen, setConfigureOpen] = useState(false);
+	const [featureRequestOpen, setFeatureRequestOpen] = useState(false);
+	const [featureRequestSubmitting, setFeatureRequestSubmitting] =
+		useState(false);
+	const [featureRequestError, setFeatureRequestError] = useState<
+		string | undefined
+	>(undefined);
 	const [scrollbackActive, setScrollbackActive] = useState(false);
 	const scrollbackActiveRef = useRef(false);
 	const scrollbackPhaseRef = useRef<'dragging' | 'active'>('active');
@@ -751,37 +764,93 @@ function ShellDetail() {
 	}, []);
 
 	const openConfigDialog = useCallback(() => {
+		setConfigureOpen(true);
+	}, []);
+
+	const handleKeyboardConfig = useCallback(() => {
+		setConfigureOpen(false);
+		void Linking.openURL(CONFIGURATOR_URL);
+	}, []);
+
+	const handleDevServer = useCallback(() => {
+		setConfigureOpen(false);
+		void Linking.openURL(HANDLE_DEV_SERVER_URL);
+	}, []);
+
+	const handleHostConfig = useCallback(() => {
+		setConfigureOpen(false);
 		const editConnectionId = storedConnectionId ?? connectionId;
-		Alert.alert(
-			'Configure',
-			'Choose where to go',
-			[
-				{
-					text: 'Keyboard config',
-					onPress: () => {
-						void Linking.openURL(CONFIGURATOR_URL);
-					},
-				},
-				{
-					text: 'Handle dev server',
-					onPress: () => {
-						void Linking.openURL(HANDLE_DEV_SERVER_URL);
-					},
-				},
-				{
-					text: 'Host config',
-					onPress: () => {
-						router.replace({
-							pathname: '/',
-							params: { editConnectionId },
-						});
-					},
-				},
-				{ text: 'Cancel', style: 'cancel' },
-			],
-			{ cancelable: true },
-		);
+		router.replace({
+			pathname: '/',
+			params: { editConnectionId },
+		});
 	}, [connectionId, router, storedConnectionId]);
+
+	const handleOpenFeatureRequest = useCallback(() => {
+		setConfigureOpen(false);
+		setFeatureRequestError(undefined);
+		setFeatureRequestOpen(true);
+	}, []);
+
+	const handleFeatureRequestSubmit = useCallback(
+		async (title: string, description: string) => {
+			if (!connection) {
+				setFeatureRequestError('No SSH connection available');
+				return;
+			}
+
+			setFeatureRequestSubmitting(true);
+			setFeatureRequestError(undefined);
+
+			// Escape single quotes for shell safety
+			const escapedTitle = title.replace(/'/g, "'\\''");
+			const escapedDescription = description.replace(/'/g, "'\\''");
+
+			// Build the gh CLI command
+			const command = `gh issue create --repo mulyoved/fressh --title 'Feature Request: ${escapedTitle}' --body '${escapedDescription}'`;
+
+			try {
+				// Execute via side-channel SSH session (doesn't interfere with current terminal)
+				const result = await executeSideChannelCommand(connection, command);
+
+				if (result.success) {
+					logger.info('Feature request submitted successfully', {
+						output: result.output,
+						issueUrl: result.issueUrl,
+					});
+					setFeatureRequestOpen(false);
+					setFeatureRequestError(undefined);
+					// Extract issue number from URL (format: https://github.com/owner/repo/issues/123)
+					const issueUrl = result.issueUrl ?? null;
+					const issueNumberMatch = issueUrl?.match(/\/issues\/(\d+)$/);
+					const issueNumber = issueNumberMatch?.[1] ?? null;
+					Alert.alert(
+						issueNumber
+							? `Issue #${issueNumber} Created`
+							: 'Feature Request Submitted',
+						issueUrl
+							? `Your request has been created:\n${issueUrl}`
+							: 'Your feature request has been submitted successfully.',
+						[{ text: 'OK' }],
+					);
+				} else {
+					const errorMsg =
+						result.error ||
+						'Failed to create issue. Make sure gh CLI is installed and authenticated on the remote host.';
+					logger.error('Feature request failed', { error: errorMsg });
+					setFeatureRequestError(errorMsg);
+				}
+			} catch (err) {
+				const errorMsg =
+					err instanceof Error ? err.message : 'Unknown error occurred';
+				logger.error('Feature request error', { error: err });
+				setFeatureRequestError(errorMsg);
+			} finally {
+				setFeatureRequestSubmitting(false);
+			}
+		},
+		[connection],
+	);
 
 	const actionContext = useMemo<ActionContext>(
 		() => ({
@@ -1199,10 +1268,7 @@ function ShellDetail() {
 								}}
 							>
 								{ScrollbackIcon ? (
-									<ScrollbackIcon
-										color={theme.colors.textPrimary}
-										size={20}
-									/>
+									<ScrollbackIcon color={theme.colors.textPrimary} size={20} />
 								) : null}
 							</Pressable>
 						)}
@@ -1246,6 +1312,29 @@ function ShellDetail() {
 					onSendShortcut={(sequence) => {
 						sendBytesRaw(encoder.encode(sequence));
 					}}
+				/>
+				<ConfigureModal
+					open={configureOpen}
+					bottomOffset={Platform.OS === 'android' ? insets.bottom + 24 : 24}
+					onClose={() => {
+						setConfigureOpen(false);
+					}}
+					onKeyboardConfig={handleKeyboardConfig}
+					onDevServer={handleDevServer}
+					onHostConfig={handleHostConfig}
+					onRequestFeature={handleOpenFeatureRequest}
+				/>
+				<FeatureRequestModal
+					open={featureRequestOpen}
+					bottomOffset={Platform.OS === 'android' ? insets.bottom + 24 : 24}
+					onClose={() => {
+						setFeatureRequestOpen(false);
+						setFeatureRequestSubmitting(false);
+						setFeatureRequestError(undefined);
+					}}
+					onSubmit={handleFeatureRequestSubmit}
+					isSubmitting={featureRequestSubmitting}
+					error={featureRequestError}
 				/>
 				{flashKeyboardName && (
 					<Animated.View
@@ -1359,4 +1448,3 @@ const MODIFIER_DEFS: Record<ModifierKey, ModifierContract> = {
 	ALT: altModifier,
 	CMD: cmdModifier,
 };
-

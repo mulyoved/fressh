@@ -161,9 +161,7 @@ export function TerminalCommanderModal({
 									borderColor: theme.colors.border,
 								}}
 							>
-								<Text style={{ color: theme.colors.textSecondary }}>
-									Close
-								</Text>
+								<Text style={{ color: theme.colors.textSecondary }}>Close</Text>
 							</Pressable>
 						</View>
 						<ScrollView>
