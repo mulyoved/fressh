@@ -61,7 +61,11 @@ export function FeatureRequestModal({
 			>
 				<KeyboardAvoidingView
 					behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-					style={{ flex: 1, justifyContent: 'flex-end' }}
+					style={{
+						flex: 1,
+						justifyContent: 'center',
+						paddingBottom: bottomOffset,
+					}}
 				>
 					<View
 						onStartShouldSetResponder={() => true}
@@ -77,7 +81,6 @@ export function FeatureRequestModal({
 							minWidth: 280,
 							alignSelf: 'flex-end',
 							marginRight: 8,
-							marginBottom: bottomOffset,
 						}}
 					>
 						<View

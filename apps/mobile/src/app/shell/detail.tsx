@@ -149,6 +149,8 @@ const isLargePayload = (bytes: Uint8Array) => {
 	return containsMarker(bytes, pasteStart) || containsMarker(bytes, pasteEnd);
 };
 
+const GITHUB_ISSUES_URL = 'https://github.com/mulyoved/fressh/issues';
+
 export default function TabsShellDetail() {
 	const [ready, setReady] = useState(false);
 
@@ -786,6 +788,11 @@ function ShellDetail() {
 		});
 	}, [connectionId, router, storedConnectionId]);
 
+	const handleOpenGitHubIssues = useCallback(() => {
+		setConfigureOpen(false);
+		void Linking.openURL(GITHUB_ISSUES_URL);
+	}, []);
+
 	const handleOpenFeatureRequest = useCallback(() => {
 		setConfigureOpen(false);
 		setFeatureRequestError(undefined);
@@ -1322,6 +1329,7 @@ function ShellDetail() {
 					onKeyboardConfig={handleKeyboardConfig}
 					onDevServer={handleDevServer}
 					onHostConfig={handleHostConfig}
+					onOpenGitHubIssues={handleOpenGitHubIssues}
 					onRequestFeature={handleOpenFeatureRequest}
 				/>
 				<FeatureRequestModal

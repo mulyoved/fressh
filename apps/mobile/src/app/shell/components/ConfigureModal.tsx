@@ -16,6 +16,7 @@ export function ConfigureModal({
 	onDevServer,
 	onHostConfig,
 	onRequestFeature,
+	onOpenGitHubIssues,
 }: {
 	open: boolean;
 	bottomOffset: number;
@@ -24,6 +25,7 @@ export function ConfigureModal({
 	onDevServer: () => void;
 	onHostConfig: () => void;
 	onRequestFeature: () => void;
+	onOpenGitHubIssues: () => void;
 }) {
 	const theme = useTheme();
 
@@ -42,6 +44,11 @@ export function ConfigureModal({
 			label: 'Host config',
 			description: 'Edit connection settings',
 			onPress: onHostConfig,
+		},
+		{
+			label: 'GitHub issues',
+			description: 'Open project issues page',
+			onPress: onOpenGitHubIssues,
 		},
 		{
 			label: 'Request a Feature',
