@@ -8,10 +8,10 @@ export const keyboard_secondary_menu = {
 	grid: [
 		[
 			{
-				type: 'bytes',
-				bytes: [2, 110],
-				label: 'Next all',
-				icon: null,
+				type: 'action',
+				actionId: 'OPEN_KEYBOARD_SETTINGS',
+				label: 'Config',
+				icon: 'Settings',
 			},
 			{
 				type: 'bytes',
@@ -25,23 +25,18 @@ export const keyboard_secondary_menu = {
 				label: 'Back',
 				icon: 'X',
 			},
+			null,
 			{
-				type: 'action',
-				actionId: 'OPEN_KEYBOARD_MENU',
-				label: 'Keys',
-				icon: 'Keyboard',
+				type: 'bytes',
+				bytes: [2, 110],
+				label: 'Next all',
+				icon: null,
 			},
 			null,
 			null,
 			null,
 			null,
 			null,
-			{
-				type: 'action',
-				actionId: 'ROTATE_KEYBOARD',
-				label: 'Rotate',
-				icon: 'Keyboard',
-			},
 		],
 		[null, null, null, null, null, null, null, null, null, null],
 		[null, null, null, null, null, null, null, null, null, null],

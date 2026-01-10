@@ -7,21 +7,41 @@ import { keyboard_secondary_menu } from './keyboards/secondary_menu';
 
 export type ModifierKey = 'CTRL' | 'ALT' | 'SHIFT' | 'CMD';
 export type KeyboardSlot =
-	| { type: 'text'; text: string; label: string; icon: string | null }
+	| {
+			type: 'text';
+			text: string;
+			label: string;
+			icon: string | null;
+			span?: number;
+	  }
 	| {
 			type: 'bytes';
 			bytes: readonly number[];
 			label: string;
 			icon: string | null;
+			span?: number;
 	  }
 	| {
 			type: 'modifier';
 			modifier: ModifierKey;
 			label: string;
 			icon: string | null;
+			span?: number;
 	  }
-	| { type: 'macro'; macroId: string; label: string; icon: string | null }
-	| { type: 'action'; actionId: ActionId; label: string; icon: string | null };
+	| {
+			type: 'macro';
+			macroId: string;
+			label: string;
+			icon: string | null;
+			span?: number;
+	  }
+	| {
+			type: 'action';
+			actionId: ActionId;
+			label: string;
+			icon: string | null;
+			span?: number;
+	  };
 
 export type MacroDef = {
 	id: string;

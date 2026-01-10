@@ -9,15 +9,16 @@ export const keyboard_main_menu = {
 		[
 			{
 				type: 'action',
-				actionId: 'OPEN_KEYBOARD_MENU',
-				label: 'Keys',
-				icon: 'Keyboard',
+				actionId: 'OPEN_KEYBOARD_SETTINGS',
+				label: 'Config',
+				icon: 'Settings',
 			},
 			{
 				type: 'bytes',
 				bytes: [27, 91, 49, 59, 53, 67],
 				label: 'Window',
 				icon: 'AppWindow',
+				span: 2,
 			},
 			{
 				type: 'bytes',
@@ -50,18 +51,8 @@ export const keyboard_main_menu = {
 				icon: 'Ellipsis',
 			},
 			null,
-			{
-				type: 'action',
-				actionId: 'OPEN_KEYBOARD_SETTINGS',
-				label: 'Config',
-				icon: 'Settings',
-			},
-			{
-				type: 'action',
-				actionId: 'ROTATE_KEYBOARD',
-				label: 'Rotate',
-				icon: 'Keyboard',
-			},
+			null,
+			null,
 		],
 		[null, null, null, null, null, null, null, null, null, null],
 		[null, null, null, null, null, null, null, null, null, null],

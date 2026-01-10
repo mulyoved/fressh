@@ -475,7 +475,9 @@ function ShellDetail() {
 	const [modifierKeysActive, setModifierKeysActive] = useState<ModifierKey[]>(
 		[],
 	);
-	const [systemKeyboardEnabled, setSystemKeyboardEnabled] = useState(false);
+	const [systemKeyboardEnabled, setSystemKeyboardEnabled] = useState(
+		Platform.OS === 'android',
+	);
 	const [selectionModeEnabled, setSelectionModeEnabled] = useState(false);
 	const [commandPresetsOpen, setCommandPresetsOpen] = useState(false);
 	const [commanderOpen, setCommanderOpen] = useState(false);
@@ -989,14 +991,12 @@ function ShellDetail() {
 		if (Platform.OS !== 'android') return;
 		const dismissKeyboard = () => Keyboard.dismiss();
 		dismissKeyboard();
-		if (!systemKeyboardEnabled) {
-			xtermRef.current?.setSystemKeyboardEnabled(false);
-		}
+		xtermRef.current?.setSystemKeyboardEnabled(systemKeyboardEnabled);
 		// eslint-disable-next-line @eslint-react/web-api/no-leaked-event-listener -- React Native AppState cleans up via subscription.remove()
 		const subscription = AppState.addEventListener('change', (nextState) => {
 			if (nextState === 'active') {
+				xtermRef.current?.setSystemKeyboardEnabled(systemKeyboardEnabled);
 				if (!systemKeyboardEnabled) {
-					xtermRef.current?.setSystemKeyboardEnabled(false);
 					dismissKeyboard();
 				}
 			}
@@ -1006,6 +1006,12 @@ function ShellDetail() {
 		};
 	}, [systemKeyboardEnabled]);
 
+	const enableSystemKeyboard = useCallback(() => {
+		if (Platform.OS !== 'android') return;
+		xtermRef.current?.setSystemKeyboardEnabled(true);
+		setSystemKeyboardEnabled(true);
+	}, []);
+
 	const disableSystemKeyboard = useCallback(() => {
 		if (Platform.OS !== 'android') return;
 		xtermRef.current?.setSystemKeyboardEnabled(false);
@@ -1013,28 +1019,16 @@ function ShellDetail() {
 		setSystemKeyboardEnabled(false);
 	}, []);
 
-	const toggleSystemKeyboard = useCallback(() => {
-		if (Platform.OS !== 'android') return;
-		const next = !systemKeyboardEnabled;
-		setSystemKeyboardEnabled(next);
-		xtermRef.current?.setSystemKeyboardEnabled(next);
-		if (next) {
-			exitSelectionMode();
-			// Defer focus until after the button press releases.
-			setTimeout(() => {
-				xtermRef.current?.focus();
-			}, 0);
-		} else {
-			Keyboard.dismiss();
-		}
-	}, [exitSelectionMode, systemKeyboardEnabled]);
-
 	const handleSelectionModeChange = useCallback(
 		(enabled: boolean) => {
 			setSelectionModeEnabled(enabled);
-			if (enabled) disableSystemKeyboard();
+			if (enabled) {
+				disableSystemKeyboard();
+			} else {
+				enableSystemKeyboard();
+			}
 		},
-		[disableSystemKeyboard],
+		[disableSystemKeyboard, enableSystemKeyboard],
 	);
 
 	const handleScrollbackModeChange = useCallback(
@@ -1131,8 +1125,8 @@ function ShellDetail() {
 
 			if (!shell) throw new Error('Shell not found');
 			if (Platform.OS === 'android') {
-				xtermRef.current?.setSystemKeyboardEnabled(false);
-				setSystemKeyboardEnabled(false);
+				xtermRef.current?.setSystemKeyboardEnabled(true);
+				setSystemKeyboardEnabled(true);
 			}
 			xtermRef.current?.setSelectionModeEnabled(selectionModeEnabled);
 
@@ -1288,9 +1282,6 @@ function ShellDetail() {
 					selectionModeEnabled={selectionModeEnabled}
 					onCopySelection={handleCopySelection}
 					onPasteClipboard={handlePasteClipboard}
-					showSystemKeyboardToggle={Platform.OS === 'android'}
-					systemKeyboardEnabled={systemKeyboardEnabled}
-					onToggleSystemKeyboard={toggleSystemKeyboard}
 				/>
 				<CommandPresetsModal
 					open={commandPresetsOpen}

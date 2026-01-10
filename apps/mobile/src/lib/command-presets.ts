@@ -65,4 +65,12 @@ export const commandPresets: CommandPreset[] = [
 		label: '/work-on-issue',
 		steps: [{ type: 'text', data: '/work-on-issue' }],
 	},
+	{
+		label: 'git checkout dev',
+		steps: [{ type: 'text', data: 'git checkout dev' }, { type: 'enter' }],
+	},
+	{
+		label: 'git pull',
+		steps: [{ type: 'text', data: 'git pull' }, { type: 'enter' }],
+	},
 ];

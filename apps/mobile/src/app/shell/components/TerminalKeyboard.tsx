@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useCallback, useEffect, useMemo, useRef } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import {
 	type KeyboardDefinition,
@@ -15,9 +15,6 @@ export function TerminalKeyboard({
 	selectionModeEnabled,
 	onCopySelection,
 	onPasteClipboard,
-	showSystemKeyboardToggle,
-	systemKeyboardEnabled,
-	onToggleSystemKeyboard,
 }: {
 	keyboard: KeyboardDefinition | null;
 	modifierKeysActive: ModifierKey[];
@@ -25,14 +22,62 @@ export function TerminalKeyboard({
 	selectionModeEnabled: boolean;
 	onCopySelection: () => void;
 	onPasteClipboard: () => void;
-	showSystemKeyboardToggle: boolean;
-	systemKeyboardEnabled: boolean;
-	onToggleSystemKeyboard: () => void;
 }) {
 	const theme = useTheme();
-	const KeyboardIcon = resolveLucideIcon('Keyboard');
 	const CopyIcon = resolveLucideIcon('Copy');
 	const PasteIcon = resolveLucideIcon('ClipboardPaste');
+	const keyMinHeight = 44;
+	const repeatDelayMs = 320;
+	const repeatIntervalMs = 70;
+	const repeatTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const repeatIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+	const repeatSlotRef = useRef<KeyboardSlot | null>(null);
+	const iconOnlyLabels = useMemo(
+		() =>
+			new Set([
+				'ARROW_LEFT',
+				'ARROW_RIGHT',
+				'ARROW_UP',
+				'ARROW_DOWN',
+				'PAGE_UP',
+				'PAGE_DOWN',
+			]),
+		[],
+	);
+	const repeatableLabels = useMemo(
+		() => new Set(['ARROW_LEFT', 'ARROW_RIGHT', 'ARROW_UP', 'ARROW_DOWN']),
+		[],
+	);
+
+	const clearRepeat = useCallback(() => {
+		if (repeatTimeoutRef.current) {
+			clearTimeout(repeatTimeoutRef.current);
+			repeatTimeoutRef.current = null;
+		}
+		if (repeatIntervalRef.current) {
+			clearInterval(repeatIntervalRef.current);
+			repeatIntervalRef.current = null;
+		}
+		repeatSlotRef.current = null;
+	}, []);
+
+	const startRepeat = useCallback(
+		(slot: KeyboardSlot) => {
+			clearRepeat();
+			repeatSlotRef.current = slot;
+			onSlotPress(slot);
+			repeatTimeoutRef.current = setTimeout(() => {
+				repeatIntervalRef.current = setInterval(() => {
+					if (repeatSlotRef.current) {
+						onSlotPress(repeatSlotRef.current);
+					}
+				}, repeatIntervalMs);
+			}, repeatDelayMs);
+		},
+		[clearRepeat, onSlotPress, repeatDelayMs, repeatIntervalMs],
+	);
+
+	useEffect(() => clearRepeat, [clearRepeat]);
 
 	if (!keyboard) {
 		return (
@@ -58,7 +103,7 @@ export function TerminalKeyboard({
 					return (
 						<View
 							key={`slot-${rowIndex}-${colIndex}`}
-							style={{ flex: 1, margin: 2 }}
+							style={{ flex: 1, margin: 2, minHeight: keyMinHeight }}
 						/>
 					);
 				}
@@ -67,15 +112,23 @@ export function TerminalKeyboard({
 					slot.type === 'modifier' &&
 					modifierKeysActive.includes(slot.modifier);
 				const Icon = resolveLucideIcon(slot.icon);
+				const showLabel = !(Icon && iconOnlyLabels.has(slot.label));
+				const isRepeatable =
+					slot.type === 'bytes' && repeatableLabels.has(slot.label);
+				const flexValue =
+					typeof slot.span === 'number' && slot.span > 1 ? slot.span : 1;
 
 				return (
 					<Pressable
 						key={`slot-${rowIndex}-${colIndex}`}
-						onPress={() => onSlotPress(slot)}
+						onPress={isRepeatable ? undefined : () => onSlotPress(slot)}
+						onPressIn={isRepeatable ? () => startRepeat(slot) : undefined}
+						onPressOut={isRepeatable ? clearRepeat : undefined}
 						style={[
 							{
-								flex: 1,
+								flex: flexValue,
 								margin: 2,
+								minHeight: keyMinHeight,
 								paddingVertical: 6,
 								borderRadius: 8,
 								borderWidth: 1,
@@ -89,16 +142,18 @@ export function TerminalKeyboard({
 						]}
 					>
 						{Icon ? <Icon color={theme.colors.textPrimary} size={18} /> : null}
-						<Text
-							numberOfLines={1}
-							style={{
-								color: theme.colors.textPrimary,
-								fontSize: 10,
-								marginTop: Icon ? 2 : 0,
-							}}
-						>
-							{slot.label}
-						</Text>
+						{showLabel ? (
+							<Text
+								numberOfLines={1}
+								style={{
+									color: theme.colors.textPrimary,
+									fontSize: 10,
+									marginTop: Icon ? 2 : 0,
+								}}
+							>
+								{slot.label}
+							</Text>
+						) : null}
 					</Pressable>
 				);
 			})}
@@ -112,6 +167,7 @@ export function TerminalKeyboard({
 			style={{
 				flex: 1,
 				margin: 2,
+				minHeight: keyMinHeight,
 				paddingVertical: 6,
 				borderRadius: 8,
 				borderWidth: 1,
@@ -142,6 +198,7 @@ export function TerminalKeyboard({
 			style={{
 				flex: 1,
 				margin: 2,
+				minHeight: keyMinHeight,
 				paddingVertical: 6,
 				borderRadius: 8,
 				borderWidth: 1,
@@ -166,47 +223,12 @@ export function TerminalKeyboard({
 		</Pressable>
 	);
 
-	const systemKeyboardToggle = showSystemKeyboardToggle ? (
-		<Pressable
-			onPress={onToggleSystemKeyboard}
-			style={[
-				{
-					flex: 1,
-					margin: 2,
-					paddingVertical: 6,
-					borderRadius: 8,
-					borderWidth: 1,
-					borderColor: theme.colors.border,
-					alignItems: 'center',
-					justifyContent: 'center',
-				},
-				systemKeyboardEnabled && { backgroundColor: theme.colors.primary },
-			]}
-		>
-			{KeyboardIcon ? (
-				<KeyboardIcon color={theme.colors.textPrimary} size={18} />
-			) : null}
-			<Text
-				numberOfLines={1}
-				style={{
-					color: theme.colors.textPrimary,
-					fontSize: 10,
-					marginTop: KeyboardIcon ? 2 : 0,
-				}}
-			>
-				OS Keyboard
-			</Text>
-		</Pressable>
+	const toggleRow = selectionModeEnabled ? (
+		<View style={{ flexDirection: 'row' }}>
+			{copyToggle}
+			{pasteToggle}
+		</View>
 	) : null;
-
-	const toggleRow =
-		selectionModeEnabled || showSystemKeyboardToggle ? (
-			<View style={{ flexDirection: 'row' }}>
-				{selectionModeEnabled ? copyToggle : null}
-				{selectionModeEnabled ? pasteToggle : null}
-				{systemKeyboardToggle}
-			</View>
-		) : null;
 
 	return (
 		<View
