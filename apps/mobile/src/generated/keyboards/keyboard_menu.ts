@@ -9,9 +9,9 @@ export const keyboard_keyboard_menu = {
 		[
 			{
 				type: 'action',
-				actionId: 'OPEN_MAIN_MENU',
-				label: 'Back',
-				icon: 'X',
+				actionId: 'OPEN_KEYBOARD_SETTINGS',
+				label: 'Config',
+				icon: 'Settings',
 			},
 			{
 				type: 'action',
@@ -27,9 +27,9 @@ export const keyboard_keyboard_menu = {
 			},
 			{
 				type: 'action',
-				actionId: 'CYCLE_TMUX_WINDOW',
-				label: 'Cycle',
-				icon: 'ArrowBigRightDash',
+				actionId: 'OPEN_TEXT_EDITOR',
+				label: 'Text',
+				icon: 'Type',
 			},
 			{
 				type: 'bytes',
@@ -85,25 +85,25 @@ export const keyboard_keyboard_menu = {
 				type: 'bytes',
 				bytes: [27, 91, 68],
 				label: 'ARROW_LEFT',
-				icon: null,
+				icon: 'ArrowLeft',
 			},
 			{
 				type: 'bytes',
 				bytes: [27, 91, 67],
 				label: 'ARROW_RIGHT',
-				icon: null,
+				icon: 'ArrowRight',
 			},
 			{
 				type: 'bytes',
 				bytes: [27, 91, 65],
 				label: 'ARROW_UP',
-				icon: null,
+				icon: 'ArrowUp',
 			},
 			{
 				type: 'bytes',
 				bytes: [27, 91, 66],
 				label: 'ARROW_DOWN',
-				icon: null,
+				icon: 'ArrowDown',
 			},
 			{
 				type: 'bytes',
@@ -121,13 +121,13 @@ export const keyboard_keyboard_menu = {
 				type: 'bytes',
 				bytes: [27, 91, 53, 126],
 				label: 'PAGE_UP',
-				icon: null,
+				icon: 'ChevronsUp',
 			},
 			{
 				type: 'bytes',
 				bytes: [27, 91, 54, 126],
 				label: 'PAGE_DOWN',
-				icon: null,
+				icon: 'ChevronsDown',
 			},
 		],
 		[
@@ -151,9 +151,9 @@ export const keyboard_keyboard_menu = {
 			},
 			{
 				type: 'action',
-				actionId: 'OPEN_KEYBOARD_SETTINGS',
-				label: 'Config',
-				icon: 'Settings',
+				actionId: 'OPEN_MAIN_MENU',
+				label: 'Back',
+				icon: 'X',
 			},
 			{
 				type: 'action',

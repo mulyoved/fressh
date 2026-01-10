@@ -9,16 +9,11 @@ export const keyboard_phone_base = {
 		[
 			{
 				type: 'action',
-				actionId: 'OPEN_KEYBOARD_MENU',
-				label: 'Keys',
-				icon: 'Keyboard',
-			},
-			{
-				type: 'action',
 				actionId: 'OPEN_KEYBOARD_SETTINGS',
 				label: 'Config',
 				icon: 'Settings',
 			},
+			null,
 			{
 				type: 'bytes',
 				bytes: [2, 110],
@@ -54,6 +49,7 @@ export const keyboard_phone_base = {
 				bytes: [27, 91, 49, 59, 53, 67],
 				label: 'Window',
 				icon: 'AppWindow',
+				span: 2,
 			},
 			{
 				type: 'action',
@@ -61,38 +57,28 @@ export const keyboard_phone_base = {
 				label: 'Cmds',
 				icon: 'Command',
 			},
-			{
-				type: 'action',
-				actionId: 'ROTATE_KEYBOARD',
-				label: 'Rotate',
-				icon: 'Keyboard',
-			},
+			null,
 		],
 		[
 			{
 				type: 'bytes',
 				bytes: [27, 91, 68],
 				label: 'ARROW_LEFT',
-				icon: null,
+				icon: 'ArrowLeft',
 			},
 			{
 				type: 'bytes',
 				bytes: [27, 91, 67],
 				label: 'ARROW_RIGHT',
-				icon: null,
+				icon: 'ArrowRight',
 			},
 			{
 				type: 'bytes',
 				bytes: [27, 91, 53, 126],
 				label: 'PAGE_UP',
-				icon: null,
+				icon: 'ChevronsUp',
 			},
-			{
-				type: 'action',
-				actionId: 'CYCLE_TMUX_WINDOW',
-				label: 'Cycle',
-				icon: 'ArrowBigRightDash',
-			},
+			null,
 			{
 				type: 'action',
 				actionId: 'PASTE_CLIPBOARD',
@@ -130,19 +116,19 @@ export const keyboard_phone_base = {
 				type: 'bytes',
 				bytes: [27, 91, 65],
 				label: 'ARROW_UP',
-				icon: null,
+				icon: 'ArrowUp',
 			},
 			{
 				type: 'bytes',
 				bytes: [27, 91, 66],
 				label: 'ARROW_DOWN',
-				icon: null,
+				icon: 'ArrowDown',
 			},
 			{
 				type: 'bytes',
 				bytes: [27, 91, 54, 126],
 				label: 'PAGE_DOWN',
-				icon: null,
+				icon: 'ChevronsDown',
 			},
 			{
 				type: 'bytes',

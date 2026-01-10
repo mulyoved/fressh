@@ -69,6 +69,7 @@ import { ConfigureModal } from './components/ConfigureModal';
 import { FeatureRequestModal } from './components/FeatureRequestModal';
 import { TerminalCommanderModal } from './components/TerminalCommanderModal';
 import { TerminalKeyboard } from './components/TerminalKeyboard';
+import { TextEntryModal } from './components/TextEntryModal';
 
 const logger = rootLogger.extend('TabsShellDetail');
 
@@ -148,6 +149,8 @@ const isLargePayload = (bytes: Uint8Array) => {
 	const pasteEnd = [0x1b, 0x5b, 0x32, 0x30, 0x31, 0x7e];
 	return containsMarker(bytes, pasteStart) || containsMarker(bytes, pasteEnd);
 };
+
+const GITHUB_ISSUES_URL = 'https://github.com/mulyoved/fressh/issues';
 
 export default function TabsShellDetail() {
 	const [ready, setReady] = useState(false);
@@ -473,10 +476,13 @@ function ShellDetail() {
 	const [modifierKeysActive, setModifierKeysActive] = useState<ModifierKey[]>(
 		[],
 	);
-	const [systemKeyboardEnabled, setSystemKeyboardEnabled] = useState(false);
+	const [systemKeyboardEnabled, setSystemKeyboardEnabled] = useState(
+		Platform.OS === 'android',
+	);
 	const [selectionModeEnabled, setSelectionModeEnabled] = useState(false);
 	const [commandPresetsOpen, setCommandPresetsOpen] = useState(false);
 	const [commanderOpen, setCommanderOpen] = useState(false);
+	const [textEntryOpen, setTextEntryOpen] = useState(false);
 	const [configureOpen, setConfigureOpen] = useState(false);
 	const [featureRequestOpen, setFeatureRequestOpen] = useState(false);
 	const [featureRequestSubmitting, setFeatureRequestSubmitting] =
@@ -740,6 +746,17 @@ function ShellDetail() {
 		}
 	}, [exitSelectionMode, sendTextRaw, selectionModeEnabled]);
 
+	const handlePasteTextEntry = useCallback(
+		(value: string) => {
+			if (!value) return;
+			sendTextRaw(value);
+			if (selectionModeEnabled) {
+				exitSelectionMode();
+			}
+		},
+		[exitSelectionMode, sendTextRaw, selectionModeEnabled],
+	);
+
 	const handleCopySelection = useCallback(() => {
 		const xr = xtermRef.current;
 		if (!xr) return;
@@ -785,6 +802,11 @@ function ShellDetail() {
 			params: { editConnectionId },
 		});
 	}, [connectionId, router, storedConnectionId]);
+
+	const handleOpenGitHubIssues = useCallback(() => {
+		setConfigureOpen(false);
+		void Linking.openURL(GITHUB_ISSUES_URL);
+	}, []);
 
 	const handleOpenFeatureRequest = useCallback(() => {
 		setConfigureOpen(false);
@@ -863,11 +885,18 @@ function ShellDetail() {
 			copySelection: handleCopySelection,
 			toggleCommandPresets: () => {
 				setCommanderOpen(false);
+				setTextEntryOpen(false);
 				setCommandPresetsOpen((prev) => !prev);
 			},
 			openCommander: () => {
 				setCommandPresetsOpen(false);
+				setTextEntryOpen(false);
 				setCommanderOpen(true);
+			},
+			openTextEditor: () => {
+				setCommandPresetsOpen(false);
+				setCommanderOpen(false);
+				setTextEntryOpen(true);
 			},
 		}),
 		[
@@ -982,14 +1011,12 @@ function ShellDetail() {
 		if (Platform.OS !== 'android') return;
 		const dismissKeyboard = () => Keyboard.dismiss();
 		dismissKeyboard();
-		if (!systemKeyboardEnabled) {
-			xtermRef.current?.setSystemKeyboardEnabled(false);
-		}
+		xtermRef.current?.setSystemKeyboardEnabled(systemKeyboardEnabled);
 		// eslint-disable-next-line @eslint-react/web-api/no-leaked-event-listener -- React Native AppState cleans up via subscription.remove()
 		const subscription = AppState.addEventListener('change', (nextState) => {
 			if (nextState === 'active') {
+				xtermRef.current?.setSystemKeyboardEnabled(systemKeyboardEnabled);
 				if (!systemKeyboardEnabled) {
-					xtermRef.current?.setSystemKeyboardEnabled(false);
 					dismissKeyboard();
 				}
 			}
@@ -999,6 +1026,12 @@ function ShellDetail() {
 		};
 	}, [systemKeyboardEnabled]);
 
+	const enableSystemKeyboard = useCallback(() => {
+		if (Platform.OS !== 'android') return;
+		xtermRef.current?.setSystemKeyboardEnabled(true);
+		setSystemKeyboardEnabled(true);
+	}, []);
+
 	const disableSystemKeyboard = useCallback(() => {
 		if (Platform.OS !== 'android') return;
 		xtermRef.current?.setSystemKeyboardEnabled(false);
@@ -1006,28 +1039,16 @@ function ShellDetail() {
 		setSystemKeyboardEnabled(false);
 	}, []);
 
-	const toggleSystemKeyboard = useCallback(() => {
-		if (Platform.OS !== 'android') return;
-		const next = !systemKeyboardEnabled;
-		setSystemKeyboardEnabled(next);
-		xtermRef.current?.setSystemKeyboardEnabled(next);
-		if (next) {
-			exitSelectionMode();
-			// Defer focus until after the button press releases.
-			setTimeout(() => {
-				xtermRef.current?.focus();
-			}, 0);
-		} else {
-			Keyboard.dismiss();
-		}
-	}, [exitSelectionMode, systemKeyboardEnabled]);
-
 	const handleSelectionModeChange = useCallback(
 		(enabled: boolean) => {
 			setSelectionModeEnabled(enabled);
-			if (enabled) disableSystemKeyboard();
+			if (enabled) {
+				disableSystemKeyboard();
+			} else {
+				enableSystemKeyboard();
+			}
 		},
-		[disableSystemKeyboard],
+		[disableSystemKeyboard, enableSystemKeyboard],
 	);
 
 	const handleScrollbackModeChange = useCallback(
@@ -1124,8 +1145,8 @@ function ShellDetail() {
 
 			if (!shell) throw new Error('Shell not found');
 			if (Platform.OS === 'android') {
-				xtermRef.current?.setSystemKeyboardEnabled(false);
-				setSystemKeyboardEnabled(false);
+				xtermRef.current?.setSystemKeyboardEnabled(true);
+				setSystemKeyboardEnabled(true);
 			}
 			xtermRef.current?.setSelectionModeEnabled(selectionModeEnabled);
 
@@ -1281,9 +1302,6 @@ function ShellDetail() {
 					selectionModeEnabled={selectionModeEnabled}
 					onCopySelection={handleCopySelection}
 					onPasteClipboard={handlePasteClipboard}
-					showSystemKeyboardToggle={Platform.OS === 'android'}
-					systemKeyboardEnabled={systemKeyboardEnabled}
-					onToggleSystemKeyboard={toggleSystemKeyboard}
 				/>
 				<CommandPresetsModal
 					open={commandPresetsOpen}
@@ -1313,6 +1331,14 @@ function ShellDetail() {
 						sendBytesRaw(encoder.encode(sequence));
 					}}
 				/>
+				<TextEntryModal
+					open={textEntryOpen}
+					bottomOffset={Platform.OS === 'android' ? insets.bottom + 24 : 24}
+					onClose={() => {
+						setTextEntryOpen(false);
+					}}
+					onPaste={handlePasteTextEntry}
+				/>
 				<ConfigureModal
 					open={configureOpen}
 					bottomOffset={Platform.OS === 'android' ? insets.bottom + 24 : 24}
@@ -1322,6 +1348,7 @@ function ShellDetail() {
 					onKeyboardConfig={handleKeyboardConfig}
 					onDevServer={handleDevServer}
 					onHostConfig={handleHostConfig}
+					onOpenGitHubIssues={handleOpenGitHubIssues}
 					onRequestFeature={handleOpenFeatureRequest}
 				/>
 				<FeatureRequestModal
