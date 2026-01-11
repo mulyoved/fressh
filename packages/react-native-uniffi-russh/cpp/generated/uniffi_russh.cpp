@@ -299,6 +299,13 @@ extern "C" {
         uint64_t id, 
         RustCallStatus *uniffi_out_err
     );
+    /*handle*/ uint64_t uniffi_uniffi_russh_fn_method_shellsession_resize_pty(
+        void * ptr, 
+        uint32_t cols, 
+        uint32_t rows, 
+        RustBuffer pixel_width, 
+        RustBuffer pixel_height
+    );
     /*handle*/ uint64_t uniffi_uniffi_russh_fn_method_shellsession_send_data(
         void * ptr, 
         RustBuffer data
@@ -580,6 +587,8 @@ extern "C" {
     uint16_t uniffi_uniffi_russh_checksum_method_shellsession_read_buffer(
     );
     uint16_t uniffi_uniffi_russh_checksum_method_shellsession_remove_listener(
+    );
+    uint16_t uniffi_uniffi_russh_checksum_method_shellsession_resize_pty(
     );
     uint16_t uniffi_uniffi_russh_checksum_method_shellsession_send_data(
     );
@@ -3767,6 +3776,14 @@ NativeUniffiRussh::NativeUniffiRussh(
             return this->cpp_uniffi_uniffi_russh_fn_method_shellsession_remove_listener(rt, thisVal, args, count);
         }
     );
+    props["ubrn_uniffi_uniffi_russh_fn_method_shellsession_resize_pty"] = jsi::Function::createFromHostFunction(
+        rt,
+        jsi::PropNameID::forAscii(rt, "ubrn_uniffi_uniffi_russh_fn_method_shellsession_resize_pty"),
+        5,
+        [this](jsi::Runtime &rt, const jsi::Value &thisVal, const jsi::Value *args, size_t count) -> jsi::Value {
+            return this->cpp_uniffi_uniffi_russh_fn_method_shellsession_resize_pty(rt, thisVal, args, count);
+        }
+    );
     props["ubrn_uniffi_uniffi_russh_fn_method_shellsession_send_data"] = jsi::Function::createFromHostFunction(
         rt,
         jsi::PropNameID::forAscii(rt, "ubrn_uniffi_uniffi_russh_fn_method_shellsession_send_data"),
@@ -4391,6 +4408,14 @@ NativeUniffiRussh::NativeUniffiRussh(
             return this->cpp_uniffi_uniffi_russh_checksum_method_shellsession_remove_listener(rt, thisVal, args, count);
         }
     );
+    props["ubrn_uniffi_uniffi_russh_checksum_method_shellsession_resize_pty"] = jsi::Function::createFromHostFunction(
+        rt,
+        jsi::PropNameID::forAscii(rt, "ubrn_uniffi_uniffi_russh_checksum_method_shellsession_resize_pty"),
+        0,
+        [this](jsi::Runtime &rt, const jsi::Value &thisVal, const jsi::Value *args, size_t count) -> jsi::Value {
+            return this->cpp_uniffi_uniffi_russh_checksum_method_shellsession_resize_pty(rt, thisVal, args, count);
+        }
+    );
     props["ubrn_uniffi_uniffi_russh_checksum_method_shellsession_send_data"] = jsi::Function::createFromHostFunction(
         rt,
         jsi::PropNameID::forAscii(rt, "ubrn_uniffi_uniffi_russh_checksum_method_shellsession_send_data"),
@@ -4940,6 +4965,13 @@ jsi::Value NativeUniffiRussh::cpp_uniffi_uniffi_russh_fn_method_shellsession_rem
 
         
         return jsi::Value::undefined();
+}
+jsi::Value NativeUniffiRussh::cpp_uniffi_uniffi_russh_fn_method_shellsession_resize_pty(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
+        auto value = uniffi_uniffi_russh_fn_method_shellsession_resize_pty(uniffi_jsi::Bridging<void *>::fromJs(rt, callInvoker, args[0]), uniffi_jsi::Bridging<uint32_t>::fromJs(rt, callInvoker, args[1]), uniffi_jsi::Bridging<uint32_t>::fromJs(rt, callInvoker, args[2]), uniffi::uniffi_russh::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[3]), uniffi::uniffi_russh::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[4])
+        );
+
+        
+        return uniffi_jsi::Bridging</*handle*/ uint64_t>::toJs(rt, callInvoker, value);
 }
 jsi::Value NativeUniffiRussh::cpp_uniffi_uniffi_russh_fn_method_shellsession_send_data(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         auto value = uniffi_uniffi_russh_fn_method_shellsession_send_data(uniffi_jsi::Bridging<void *>::fromJs(rt, callInvoker, args[0]), uniffi::uniffi_russh::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[1])
@@ -5539,6 +5571,13 @@ jsi::Value NativeUniffiRussh::cpp_uniffi_uniffi_russh_checksum_method_shellsessi
 }
 jsi::Value NativeUniffiRussh::cpp_uniffi_uniffi_russh_checksum_method_shellsession_remove_listener(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         auto value = uniffi_uniffi_russh_checksum_method_shellsession_remove_listener(
+        );
+
+        
+        return uniffi_jsi::Bridging<uint16_t>::toJs(rt, callInvoker, value);
+}
+jsi::Value NativeUniffiRussh::cpp_uniffi_uniffi_russh_checksum_method_shellsession_resize_pty(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
+        auto value = uniffi_uniffi_russh_checksum_method_shellsession_resize_pty(
         );
 
         

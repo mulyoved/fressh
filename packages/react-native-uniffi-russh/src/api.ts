@@ -62,6 +62,8 @@ export type StartShellOptions = {
 	terminalMode?: GeneratedRussh.TerminalMode[];
 	terminalPixelSize?: GeneratedRussh.TerminalPixelSize;
 	terminalSize?: GeneratedRussh.TerminalSize;
+	useTmux: boolean;
+	tmuxSessionName: string;
 	onClosed?: (shellId: number) => void;
 	abortSignal?: AbortSignal;
 };
@@ -130,6 +132,16 @@ export type SshShell = {
 		opts?: { signal?: AbortSignal },
 	) => Promise<void>;
 	close: (opts?: { signal?: AbortSignal }) => Promise<void>;
+
+	/**
+	 * Resize the PTY window. Call when terminal UI size changes.
+	 * Sends SSH "window-change" request to deliver SIGWINCH to remote process.
+	 */
+	resizePty: (
+		cols: number,
+		rows: number,
+		opts?: { pixelWidth?: number; pixelHeight?: number; signal?: AbortSignal },
+	) => Promise<void>;
 
 	// Buffer policy & stats
 	// setBufferPolicy: (policy: {
@@ -304,6 +316,14 @@ function wrapShellSession(
 		sendData: (data, o) =>
 			shell.sendData(data, o?.signal ? { signal: o.signal } : undefined),
 		close: (o) => shell.close(o?.signal ? { signal: o.signal } : undefined),
+		resizePty: (cols, rows, o) =>
+			shell.resizePty(
+				cols,
+				rows,
+				o?.pixelWidth ?? undefined,
+				o?.pixelHeight ?? undefined,
+				o?.signal ? { signal: o.signal } : undefined,
+			),
 		// setBufferPolicy,
 		bufferStats: shell.bufferStats,
 		currentSeq: () => Number(shell.currentSeq()),
@@ -338,6 +358,8 @@ function wrapConnection(
 					terminalMode: params.terminalMode,
 					terminalPixelSize: params.terminalPixelSize,
 					terminalSize: params.terminalSize,
+					useTmux: params.useTmux,
+					tmuxSessionName: params.tmuxSessionName,
 				},
 				params.abortSignal ? { signal: params.abortSignal } : undefined,
 			);

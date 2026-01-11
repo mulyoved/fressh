@@ -19,6 +19,8 @@ pub enum SshError {
     Auth(String),
     #[error("Shell already running")]
     ShellAlreadyRunning,
+    #[error("Tmux attach failed: {0}")]
+    TmuxAttachFailed(String),
     #[error("russh error: {0}")]
     Russh(String),
     #[error("russh-keys error: {0}")]

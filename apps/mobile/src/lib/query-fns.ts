@@ -1,12 +1,116 @@
-import { type SshConnectionProgress } from '@fressh/react-native-uniffi-russh';
+import {
+	type RnRussh,
+	type ConnectionDetails,
+	type SshConnectionProgress,
+	SshError_Tags,
+} from '@fressh/react-native-uniffi-russh';
 import { useMutation } from '@tanstack/react-query';
 import { useRouter } from 'expo-router';
+import { getStoredConnectionId } from './connection-utils';
 import { rootLogger } from './logger';
 import { secretsManager, type InputConnectionDetails } from './secrets-manager';
 import { useSshStore } from './ssh-store';
 import { AbortSignalTimeout } from './utils';
 
 const logger = rootLogger.extend('QueryFns');
+const DEFAULT_CONNECT_TIMEOUT_MS = 5_000;
+
+// Shared resolver for turning stored details into a connect-ready security object.
+export async function resolveSecurityFromDetails(
+	connectionDetails: InputConnectionDetails,
+): Promise<ConnectionDetails['security']> {
+	const privateKey = await secretsManager.keys.utils
+		.getPrivateKey(connectionDetails.security.keyId)
+		.then((e) => e.value);
+	return {
+		type: 'key',
+		privateKey,
+	};
+}
+
+// Shared connect flow used by both manual and silent auto-connect.
+export async function connectAndOpenShell(args: {
+	connectionDetails: InputConnectionDetails;
+	connect: typeof RnRussh.connect;
+	navigate: (params: { connectionId: string; channelId: number }) => void;
+	navigateWithError?: (params: {
+		connectionId: string;
+		tmuxSessionName: string;
+		storedConnectionId: string;
+	}) => void;
+	onConnectionProgress?: (progressEvent: SshConnectionProgress) => void;
+	abortSignalTimeoutMs?: number;
+	resolvedSecurity?: ConnectionDetails['security'];
+}) {
+	const {
+		connectionDetails,
+		connect,
+		navigate,
+		onConnectionProgress,
+		abortSignalTimeoutMs = DEFAULT_CONNECT_TIMEOUT_MS,
+		resolvedSecurity,
+	} = args;
+	const security =
+		resolvedSecurity ?? (await resolveSecurityFromDetails(connectionDetails));
+
+	const sshConnection = await connect({
+		host: connectionDetails.host,
+		port: connectionDetails.port,
+		username: connectionDetails.username,
+		security,
+		onConnectionProgress: (progressEvent) => {
+			logger.info('SSH connect progress event', progressEvent);
+			onConnectionProgress?.(progressEvent);
+		},
+		// TODO: Implement proper host key verification (known_hosts).
+		// Currently accepts all server keys, which is vulnerable to MITM attacks.
+		// Future: store known host keys, verify against them, prompt user on mismatch.
+		onServerKey: async (serverKeyInfo) => {
+			logger.info('SSH server key', serverKeyInfo);
+			return true;
+		},
+		abortSignal: AbortSignalTimeout(abortSignalTimeoutMs),
+	});
+
+	const storedConnectionId = getStoredConnectionId(connectionDetails);
+	await secretsManager.connections.utils.upsertConnection({
+		label: `${connectionDetails.username}@${connectionDetails.host}:${connectionDetails.port}`,
+		details: connectionDetails,
+		priority: 0,
+	});
+	let shellHandle: Awaited<ReturnType<typeof sshConnection.startShell>>;
+	try {
+		shellHandle = await sshConnection.startShell({
+			term: 'Xterm',
+			useTmux: connectionDetails.useTmux,
+			tmuxSessionName: connectionDetails.tmuxSessionName,
+			abortSignal: AbortSignalTimeout(abortSignalTimeoutMs),
+		});
+	} catch (error) {
+		const err = error as { tag?: string };
+		if (err?.tag === SshError_Tags.TmuxAttachFailed) {
+			args.navigateWithError?.({
+				connectionId: sshConnection.connectionId,
+				tmuxSessionName: connectionDetails.tmuxSessionName,
+				storedConnectionId,
+			});
+			return null;
+		}
+		throw error;
+	}
+
+	logger.info(
+		'Connected to SSH server',
+		sshConnection.connectionId,
+		shellHandle.channelId,
+	);
+	navigate({
+		connectionId: sshConnection.connectionId,
+		channelId: shellHandle.channelId,
+	});
+
+	return { sshConnection, shellHandle };
+}
 
 export const useSshConnMutation = (opts?: {
 	onConnectionProgress?: (progressEvent: SshConnectionProgress) => void;
@@ -18,56 +122,36 @@ export const useSshConnMutation = (opts?: {
 		mutationFn: async (connectionDetails: InputConnectionDetails) => {
 			try {
 				logger.info('Connecting to SSH server...');
-				// Resolve security into the RN bridge shape
-				const security =
-					connectionDetails.security.type === 'password'
-						? {
-								type: 'password' as const,
-								password: connectionDetails.security.password,
-							}
-						: {
-								type: 'key' as const,
-								privateKey: await secretsManager.keys.utils
-									.getPrivateKey(connectionDetails.security.keyId)
-									.then((e) => e.value),
-							};
-
-				const sshConnection = await connect({
-					host: connectionDetails.host,
-					port: connectionDetails.port,
-					username: connectionDetails.username,
-					security,
+				await connectAndOpenShell({
+					connectionDetails,
+					connect,
 					onConnectionProgress: (progressEvent) => {
-						logger.info('SSH connect progress event', progressEvent);
 						opts?.onConnectionProgress?.(progressEvent);
 					},
-					onServerKey: async (serverKeyInfo) => {
-						logger.info('SSH server key', serverKeyInfo);
-						return true;
+					navigate: ({ connectionId, channelId }) => {
+						router.push({
+							pathname: '/shell/detail',
+							params: {
+								connectionId,
+								channelId,
+							},
+						});
 					},
-					abortSignal: AbortSignalTimeout(5_000),
-				});
-
-				await secretsManager.connections.utils.upsertConnection({
-					label: `${connectionDetails.username}@${connectionDetails.host}:${connectionDetails.port}`,
-					details: connectionDetails,
-					priority: 0,
-				});
-				const shellHandle = await sshConnection.startShell({
-					term: 'Xterm',
-					abortSignal: AbortSignalTimeout(5_000),
-				});
-
-				logger.info(
-					'Connected to SSH server',
-					sshConnection.connectionId,
-					shellHandle.channelId,
-				);
-				router.push({
-					pathname: '/shell/detail',
-					params: {
-						connectionId: sshConnection.connectionId,
-						channelId: shellHandle.channelId,
+					navigateWithError: ({
+						connectionId,
+						tmuxSessionName,
+						storedConnectionId,
+					}) => {
+						router.push({
+							pathname: '/shell/detail',
+							params: {
+								connectionId,
+								channelId: '0',
+								tmuxError: 'attach-failed',
+								tmuxSessionName,
+								storedConnectionId,
+							},
+						});
 					},
 				});
 			} catch (error) {

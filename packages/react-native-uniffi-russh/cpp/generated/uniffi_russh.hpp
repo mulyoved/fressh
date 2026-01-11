@@ -50,6 +50,7 @@ class NativeUniffiRussh : public jsi::HostObject {
     jsi::Value cpp_uniffi_uniffi_russh_fn_method_shellsession_get_info(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count);
     jsi::Value cpp_uniffi_uniffi_russh_fn_method_shellsession_read_buffer(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count);
     jsi::Value cpp_uniffi_uniffi_russh_fn_method_shellsession_remove_listener(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count);
+    jsi::Value cpp_uniffi_uniffi_russh_fn_method_shellsession_resize_pty(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count);
     jsi::Value cpp_uniffi_uniffi_russh_fn_method_shellsession_send_data(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count);
     jsi::Value cpp_uniffi_uniffi_russh_fn_clone_sshconnection(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count);
     jsi::Value cpp_uniffi_uniffi_russh_fn_free_sshconnection(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count);
@@ -128,6 +129,7 @@ class NativeUniffiRussh : public jsi::HostObject {
     jsi::Value cpp_uniffi_uniffi_russh_checksum_method_shellsession_get_info(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count);
     jsi::Value cpp_uniffi_uniffi_russh_checksum_method_shellsession_read_buffer(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count);
     jsi::Value cpp_uniffi_uniffi_russh_checksum_method_shellsession_remove_listener(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count);
+    jsi::Value cpp_uniffi_uniffi_russh_checksum_method_shellsession_resize_pty(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count);
     jsi::Value cpp_uniffi_uniffi_russh_checksum_method_shellsession_send_data(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count);
     jsi::Value cpp_uniffi_uniffi_russh_checksum_method_sshconnection_disconnect(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count);
     jsi::Value cpp_uniffi_uniffi_russh_checksum_method_sshconnection_get_info(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count);

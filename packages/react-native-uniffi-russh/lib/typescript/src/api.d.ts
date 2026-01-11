@@ -43,6 +43,8 @@ export type StartShellOptions = {
     terminalMode?: GeneratedRussh.TerminalMode[];
     terminalPixelSize?: GeneratedRussh.TerminalPixelSize;
     terminalSize?: GeneratedRussh.TerminalSize;
+    useTmux: boolean;
+    tmuxSessionName: string;
     onClosed?: (shellId: number) => void;
     abortSignal?: AbortSignal;
 };
@@ -111,6 +113,15 @@ export type SshShell = {
         signal?: AbortSignal;
     }) => Promise<void>;
     close: (opts?: {
+        signal?: AbortSignal;
+    }) => Promise<void>;
+    /**
+     * Resize the PTY window. Call when terminal UI size changes.
+     * Sends SSH "window-change" request to deliver SIGWINCH to remote process.
+     */
+    resizePty: (cols: number, rows: number, opts?: {
+        pixelWidth?: number;
+        pixelHeight?: number;
         signal?: AbortSignal;
     }) => Promise<void>;
     bufferStats: () => GeneratedRussh.BufferStats;

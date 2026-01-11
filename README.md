@@ -62,6 +62,10 @@ be replaced in the future. Implementing a
 [Nitro view](https://nitro.margelo.com/docs/view-components) seems very
 promising.
 
+### Docs
+
+- [Keyboard configurator workflow](./docs/keyboard-configurator.md)
+
 ### Changelogs
 
 - `apps/mobile`: [`apps/mobile/CHANGELOG.md`](./apps/mobile/CHANGELOG.md)

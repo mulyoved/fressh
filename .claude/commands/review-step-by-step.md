@@ -1,0 +1,10 @@
+- Let's review the plan section by section.
+- Analyze each section of the plan,
+- explain clearly what is the plan,
+- rethink if need to modify/improve the section,
+- recommend what suggested with this section
+- Ask me if I want to change some aspect of the section, give me options
+- I could add my comments
+- modify the section based on my input
+- See if need to update other sections base on this sections changes,
+- make sure the plan is consistent and clear

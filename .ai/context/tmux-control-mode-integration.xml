@@ -1,0 +1,5569 @@
+This file is a merged representation of a subset of the codebase, containing specifically included files, combined into a single document by Repomix.
+
+<file_summary>
+This section contains a summary of this file.
+
+<purpose>
+This file contains a packed representation of a subset of the repository's contents that is considered the most important context.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.
+</purpose>
+
+<file_format>
+The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Repository files (if enabled)
+5. Multiple file entries, each consisting of:
+  - File path as an attribute
+  - Full contents of the file
+</file_format>
+
+<usage_guidelines>
+- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.
+</usage_guidelines>
+
+<notes>
+- Some files may have been excluded based on .gitignore rules and Repomix's configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Only files matching these patterns are included: docs/design/tmux-control-mode-integration.md, packages/react-native-uniffi-russh/rust/uniffi-russh/src/ssh_shell.rs, packages/react-native-uniffi-russh/rust/uniffi-russh/src/ssh_connection.rs, packages/react-native-uniffi-russh/rust/uniffi-russh/src/lib.rs, packages/react-native-uniffi-russh/src/api.ts, apps/mobile/src/app/shell/detail.tsx, packages/react-native-xtermjs-webview/src/bridge.ts, packages/react-native-xtermjs-webview/src-internal/main.tsx
+- Files matching patterns in .gitignore are excluded
+- Files matching default ignore patterns are excluded
+- Files are sorted by Git change count (files with more changes are at the bottom)
+</notes>
+
+</file_summary>
+
+<directory_structure>
+apps/
+  mobile/
+    src/
+      app/
+        shell/
+          detail.tsx
+docs/
+  design/
+    tmux-control-mode-integration.md
+packages/
+  react-native-uniffi-russh/
+    rust/
+      uniffi-russh/
+        src/
+          lib.rs
+          ssh_connection.rs
+          ssh_shell.rs
+    src/
+      api.ts
+  react-native-xtermjs-webview/
+    src/
+      bridge.ts
+    src-internal/
+      main.tsx
+</directory_structure>
+
+<files>
+This section contains the contents of the repository's files.
+
+<file path="docs/design/tmux-control-mode-integration.md">
+# Tmux -CC Control Mode Integration
+
+## Overview
+
+Replace current tmux handling with tmux control mode (`-CC`) to enable **native scrollback** - frontend owns the scrollback buffer, eliminating the need for tmux copy-mode.
+
+## Current vs Proposed Architecture
+
+### Current
+```
+User Input → SSH → tmux attach → Raw bytes → xterm.js (owns scrollback)
+```
+
+### Proposed with -CC
+```
+User Input → SSH → tmux -CC → Protocol Parser → Decoded bytes → React Native (owns scrollback) → xterm.js
+```
+
+## Tmux -CC Protocol Summary
+
+### Notifications (Server → Client)
+| Message | Format | Description |
+|---------|--------|-------------|
+| `%output` | `%output %<pane_id> <escaped>` | Pane output (octal-escaped) |
+| `%begin` | `%begin <ts> <cmd_id> <flags>` | Command response start |
+| `%end` | `%end <ts> <cmd_id> <flags>` | Command response success |
+| `%error` | `%error <ts> <cmd_id> <flags>` | Command response failure |
+| `%exit` | `%exit [reason]` | Session terminated |
+| `%window-add` | `%window-add @<id>` | Window created |
+| `%window-close` | `%window-close @<id>` | Window closed |
+
+### Commands (Client → Server)
+| Command | Purpose |
+|---------|---------|
+| `send-keys -t %<pane> <keys>` | Send user input |
+| `refresh-client -C WxH` | Resize client window |
+| `capture-pane -p -t %<pane> -S start -E end` | Get pane history |
+
+### Escape Encoding
+Characters < 32 (control chars) and backslash become octal `\ooo`:
+- `\015` = CR (`\r`)
+- `\012` = LF (`\n`)
+- `\134` = backslash (`\`)
+
+---
+
+## Implementation Phases
+
+### Phase 1: Rust Protocol Parser
+
+**New file:** `packages/react-native-uniffi-russh/rust/uniffi-russh/src/tmux_control.rs`
+
+```rust
+use bytes::Bytes;
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum TmuxControlEvent {
+    Output { pane_id: String, data: Vec<u8> },
+    WindowAdd { id: String },
+    WindowClose { id: String },
+    Exit { reason: Option<String> },
+    CommandResponse { cmd_id: u64, success: bool, data: Vec<u8> },
+}
+
+pub struct TmuxControlParser {
+    buffer: Vec<u8>,
+    pending_cmd: Option<PendingCommand>,
+}
+
+struct PendingCommand {
+    cmd_id: u64,
+    data: Vec<u8>,
+}
+
+impl TmuxControlParser {
+    pub fn new() -> Self {
+        Self {
+            buffer: Vec::new(),
+            pending_cmd: None,
+        }
+    }
+
+    /// Parse incoming data, return complete events
+    pub fn parse(&mut self, data: &[u8]) -> Vec<TmuxControlEvent> {
+        self.buffer.extend_from_slice(data);
+        let mut events = Vec::new();
+
+        // Process complete lines
+        while let Some(line_end) = self.buffer.iter().position(|&b| b == b'\n') {
+            let line = String::from_utf8_lossy(&self.buffer[..line_end]).to_string();
+            self.buffer.drain(..=line_end);
+
+            if let Some(event) = self.parse_line(&line) {
+                events.push(event);
+            }
+        }
+
+        events
+    }
+
+    fn parse_line(&mut self, line: &str) -> Option<TmuxControlEvent> {
+        if line.starts_with("%output ") {
+            self.parse_output(line)
+        } else if line.starts_with("%begin ") {
+            self.parse_begin(line);
+            None
+        } else if line.starts_with("%end ") {
+            self.parse_end(line, true)
+        } else if line.starts_with("%error ") {
+            self.parse_end(line, false)
+        } else if line.starts_with("%exit") {
+            self.parse_exit(line)
+        } else if line.starts_with("%window-add ") {
+            self.parse_window_add(line)
+        } else if line.starts_with("%window-close ") {
+            self.parse_window_close(line)
+        } else if let Some(ref mut cmd) = self.pending_cmd {
+            // Accumulate command response data
+            cmd.data.extend_from_slice(line.as_bytes());
+            cmd.data.push(b'\n');
+            None
+        } else {
+            None
+        }
+    }
+
+    fn parse_output(&self, line: &str) -> Option<TmuxControlEvent> {
+        // Format: %output %<pane_id> <escaped_data>
+        let rest = line.strip_prefix("%output ")?;
+        let space_idx = rest.find(' ')?;
+        let pane_id = rest[..space_idx].to_string();
+        let escaped = &rest[space_idx + 1..];
+        let data = Self::decode_escaped(escaped);
+        Some(TmuxControlEvent::Output { pane_id, data })
+    }
+
+    fn parse_begin(&mut self, line: &str) {
+        // Format: %begin <timestamp> <cmd_id> <flags>
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() >= 3 {
+            if let Ok(cmd_id) = parts[2].parse::<u64>() {
+                self.pending_cmd = Some(PendingCommand {
+                    cmd_id,
+                    data: Vec::new(),
+                });
+            }
+        }
+    }
+
+    fn parse_end(&mut self, line: &str, success: bool) -> Option<TmuxControlEvent> {
+        // Format: %end <timestamp> <cmd_id> <flags>
+        let cmd = self.pending_cmd.take()?;
+        Some(TmuxControlEvent::CommandResponse {
+            cmd_id: cmd.cmd_id,
+            success,
+            data: cmd.data,
+        })
+    }
+
+    fn parse_exit(&self, line: &str) -> Option<TmuxControlEvent> {
+        let reason = line.strip_prefix("%exit")
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
+        Some(TmuxControlEvent::Exit { reason })
+    }
+
+    fn parse_window_add(&self, line: &str) -> Option<TmuxControlEvent> {
+        let id = line.strip_prefix("%window-add ")?.to_string();
+        Some(TmuxControlEvent::WindowAdd { id })
+    }
+
+    fn parse_window_close(&self, line: &str) -> Option<TmuxControlEvent> {
+        let id = line.strip_prefix("%window-close ")?.to_string();
+        Some(TmuxControlEvent::WindowClose { id })
+    }
+
+    /// Decode octal escapes: \ooo -> byte
+    pub fn decode_escaped(s: &str) -> Vec<u8> {
+        let mut result = Vec::with_capacity(s.len());
+        let bytes = s.as_bytes();
+        let mut i = 0;
+
+        while i < bytes.len() {
+            if bytes[i] == b'\\' && i + 3 < bytes.len() {
+                // Check for octal escape \ooo
+                let oct = &bytes[i + 1..i + 4];
+                if oct.iter().all(|&b| b >= b'0' && b <= b'7') {
+                    let val = (oct[0] - b'0') as u8 * 64
+                        + (oct[1] - b'0') as u8 * 8
+                        + (oct[2] - b'0') as u8;
+                    result.push(val);
+                    i += 4;
+                    continue;
+                }
+            }
+            result.push(bytes[i]);
+            i += 1;
+        }
+
+        result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_decode_escaped() {
+        // \015 = CR (13), \012 = LF (10)
+        let decoded = TmuxControlParser::decode_escaped("hello\\015\\012world");
+        assert_eq!(decoded, b"hello\r\nworld");
+    }
+
+    #[test]
+    fn test_parse_output() {
+        let mut parser = TmuxControlParser::new();
+        let events = parser.parse(b"%output %0 hello\\015\\012\n");
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            TmuxControlEvent::Output { pane_id, data } => {
+                assert_eq!(pane_id, "%0");
+                assert_eq!(data, b"hello\r\n");
+            }
+            _ => panic!("Expected Output event"),
+        }
+    }
+}
+```
+
+**Modify:** `packages/react-native-uniffi-russh/rust/uniffi-russh/src/lib.rs`
+```rust
+pub mod tmux_control;
+```
+
+---
+
+### Phase 2: Shell Session Types
+
+**Modify:** `packages/react-native-uniffi-russh/rust/uniffi-russh/src/ssh_shell.rs`
+
+Add new types for control mode:
+
+```rust
+// Add to existing enums
+#[derive(Debug, Clone, Copy, PartialEq, uniffi::Enum)]
+pub enum ShellMode {
+    Raw,
+    TmuxControl,
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Enum)]
+pub enum TmuxShellEvent {
+    PaneOutput { pane_id: String, data: Vec<u8> },
+    WindowAdd { id: String },
+    WindowClose { id: String },
+    Exit { reason: Option<String> },
+}
+
+#[uniffi::export(with_foreign)]
+pub trait TmuxShellListener: Send + Sync {
+    fn on_event(&self, ev: TmuxShellEvent);
+}
+```
+
+Extend `StartShellOptions` (around line 94):
+```rust
+pub struct StartShellOptions {
+    pub term: TerminalType,
+    pub terminal_mode: Option<Vec<TerminalMode>>,
+    pub terminal_size: Option<TerminalSize>,
+    pub terminal_pixel_size: Option<TerminalPixelSize>,
+    pub use_tmux: bool,
+    pub tmux_session_name: Option<String>,
+    pub use_control_mode: bool,  // NEW
+}
+```
+
+---
+
+### Phase 3: Modified Shell Startup
+
+**Modify:** `packages/react-native-uniffi-russh/rust/uniffi-russh/src/ssh_connection.rs`
+
+Change exec command at line 264:
+```rust
+if use_tmux {
+    let tmux_name = tmux_session_name
+        .as_deref()
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    if tmux_name.is_empty() {
+        self.disconnect().await.ok();
+        return Err(SshError::TmuxAttachFailed(
+            "Missing tmux session name".to_string(),
+        ));
+    }
+
+    // NEW: Use control mode if requested
+    let cmd = if opts.use_control_mode {
+        format!("tmux -CC attach -t {tmux_name}")
+    } else {
+        format!("tmux attach -t {tmux_name}")
+    };
+    ch.exec(true, cmd).await?;
+} else {
+    ch.request_shell(true).await?;
+}
+```
+
+Modify reader task (around line 350) to use parser:
+```rust
+// Create parser if control mode
+let mut parser = if use_control_mode {
+    Some(TmuxControlParser::new())
+} else {
+    None
+};
+
+// In the reader loop, after receiving data:
+if let Some(ref mut p) = parser {
+    for event in p.parse(&data) {
+        match event {
+            TmuxControlEvent::Output { pane_id, data } => {
+                // Store in ring buffer for replay support
+                append_and_broadcast(
+                    &data,
+                    StreamKind::Stdout,
+                    &ring_clone,
+                    &used_bytes_clone,
+                    &ring_bytes_capacity_c,
+                    &dropped_bytes_total_c,
+                    &head_seq_c,
+                    &tail_seq_c,
+                    &next_seq_c,
+                    &tx_clone,
+                    DEFAULT_MAX_CHUNK_SIZE,
+                );
+                // Also invoke callback for real-time handling
+                if let Some(ref cb) = tmux_callback {
+                    cb.on_event(TmuxShellEvent::PaneOutput {
+                        pane_id,
+                        data: data.to_vec()
+                    });
+                }
+            }
+            TmuxControlEvent::Exit { reason } => {
+                if let Some(ref cb) = tmux_callback {
+                    cb.on_event(TmuxShellEvent::Exit { reason });
+                }
+                break; // Exit reader loop
+            }
+            TmuxControlEvent::WindowAdd { id } => {
+                if let Some(ref cb) = tmux_callback {
+                    cb.on_event(TmuxShellEvent::WindowAdd { id });
+                }
+            }
+            TmuxControlEvent::WindowClose { id } => {
+                if let Some(ref cb) = tmux_callback {
+                    cb.on_event(TmuxShellEvent::WindowClose { id });
+                }
+            }
+            _ => {}
+        }
+    }
+} else {
+    // Current raw behavior
+    append_and_broadcast(&data, StreamKind::Stdout, ...);
+}
+```
+
+---
+
+### Phase 4: Control Mode Commands
+
+**Modify:** `packages/react-native-uniffi-russh/rust/uniffi-russh/src/ssh_shell.rs`
+
+Add methods to `ShellSession` impl:
+
+```rust
+impl ShellSession {
+    // ... existing methods ...
+
+    /// Send user input to a tmux pane
+    pub async fn send_keys(&self, pane_id: &str, keys: &str) -> Result<(), SshError> {
+        let escaped = Self::escape_tmux_keys(keys);
+        let cmd = format!("send-keys -t {pane_id} {escaped}\n");
+        self.send_data(cmd.into_bytes()).await
+    }
+
+    /// Resize tmux client window
+    pub async fn refresh_client_size(&self, cols: u32, rows: u32) -> Result<(), SshError> {
+        let cmd = format!("refresh-client -C {cols}x{rows}\n");
+        self.send_data(cmd.into_bytes()).await
+    }
+
+    /// Capture pane history for seeding scrollback
+    /// Returns raw output after command response tracking
+    pub async fn capture_pane(
+        &self,
+        pane_id: &str,
+        start_line: i32,
+        end_line: i32,
+    ) -> Result<Vec<u8>, SshError> {
+        let cmd = format!("capture-pane -p -t {pane_id} -S {start_line} -E {end_line}\n");
+        // Note: Requires command/response tracking via %begin/%end
+        // Implementation depends on how we handle command responses
+        self.send_data(cmd.into_bytes()).await?;
+        // TODO: Wait for %begin/%end and return captured data
+        Ok(Vec::new())
+    }
+
+    /// Escape special characters for tmux send-keys
+    fn escape_tmux_keys(keys: &str) -> String {
+        let mut result = String::with_capacity(keys.len() * 2);
+        for ch in keys.chars() {
+            match ch {
+                '\\' => result.push_str("\\\\"),
+                ';' => result.push_str("\\;"),
+                '"' => result.push_str("\\\""),
+                '\'' => result.push_str("\\'"),
+                '#' => result.push_str("\\#"),
+                '{' => result.push_str("\\{"),
+                '}' => result.push_str("\\}"),
+                '\n' => result.push_str(" Enter"),
+                '\t' => result.push_str(" Tab"),
+                '\x1b' => result.push_str(" Escape"),
+                _ => result.push(ch),
+            }
+        }
+        result
+    }
+}
+```
+
+---
+
+### Phase 5: TypeScript API
+
+**Modify:** `packages/react-native-uniffi-russh/src/api.ts`
+
+Add new types:
+```typescript
+export type TmuxShellEvent =
+  | { type: 'paneOutput'; paneId: string; data: ArrayBuffer }
+  | { type: 'windowAdd'; id: string }
+  | { type: 'windowClose'; id: string }
+  | { type: 'exit'; reason?: string };
+
+export type StartShellOptions = {
+  term?: TerminalType;
+  terminalMode?: TerminalMode[];
+  terminalSize?: TerminalSize;
+  terminalPixelSize?: TerminalPixelSize;
+  useTmux?: boolean;
+  tmuxSessionName?: string;
+  useControlMode?: boolean;  // NEW
+  onTmuxEvent?: (event: TmuxShellEvent) => void;  // NEW
+  onClosed?: () => void;
+};
+```
+
+Extend `SshShell` type:
+```typescript
+export type SshShell = {
+  readonly mode: 'Raw' | 'TmuxControl';
+
+  // Existing methods
+  sendData: (data: ArrayBuffer, opts?: { signal?: AbortSignal }) => Promise<void>;
+  resizePty: (cols: number, rows: number) => Promise<void>;
+  readBuffer: (cursor: Cursor) => ReadBufferResult;
+  addListener: (callback: (ev: ListenerEvent) => void, opts?: ListenerOptions) => string;
+  removeListener: (id: string) => void;
+  close: () => Promise<void>;
+
+  // NEW: Control mode methods
+  sendKeys: (paneId: string, keys: string) => Promise<void>;
+  refreshClientSize: (cols: number, rows: number) => Promise<void>;
+  capturePane: (paneId: string, startLine: number, endLine: number) => Promise<Uint8Array>;
+};
+```
+
+---
+
+### Phase 6: Terminal UI Integration
+
+**Modify:** `apps/mobile/src/app/shell/detail.tsx`
+
+Add control mode state:
+```typescript
+const [shellMode, setShellMode] = useState<'Raw' | 'TmuxControl'>('Raw');
+const [activePaneId, setActivePaneId] = useState<string | null>(null);
+```
+
+Handle tmux events:
+```typescript
+const handleTmuxEvent = useCallback((event: TmuxShellEvent) => {
+  switch (event.type) {
+    case 'paneOutput':
+      // Write decoded output to xterm
+      xtermRef.current?.write(new Uint8Array(event.data));
+      break;
+    case 'exit':
+      // Session ended, navigate back
+      router.back();
+      break;
+    case 'windowAdd':
+    case 'windowClose':
+      // Future: handle multi-pane support
+      logger.info('tmux.window', event);
+      break;
+  }
+}, [router]);
+```
+
+Modify `sendBytesRaw` (around line 401):
+```typescript
+const sendBytesRaw = useCallback((bytes: Uint8Array) => {
+  if (!shell) return;
+
+  if (shellMode === 'TmuxControl' && activePaneId) {
+    // Control mode: wrap input in send-keys command
+    const text = new TextDecoder().decode(bytes);
+    shell.sendKeys(activePaneId, text).catch((err) => {
+      logger.warn('sendKeys failed', err);
+    });
+  } else {
+    // Raw mode: send directly to PTY
+    shell.sendData(bytes.buffer).catch((err) => {
+      logger.warn('sendData failed', err);
+    });
+  }
+}, [shell, shellMode, activePaneId]);
+```
+
+Modify `handleTerminalResize` (around line 684):
+```typescript
+const handleTerminalResize = useCallback((cols: number, rows: number) => {
+  if (resizeTimeoutRef.current) {
+    clearTimeout(resizeTimeoutRef.current);
+  }
+
+  resizeTimeoutRef.current = setTimeout(() => {
+    if (!shell) return;
+
+    if (shellMode === 'TmuxControl') {
+      // Control mode: use refresh-client
+      shell.refreshClientSize(cols, rows).catch((err) => {
+        logger.warn('refreshClientSize failed', err);
+      });
+    } else {
+      // Raw mode: SSH window-change request
+      shell.resizePty(cols, rows).catch((err) => {
+        logger.warn('resizePty failed', err);
+      });
+    }
+  }, 100);
+}, [shell, shellMode]);
+```
+
+Seed history on connect:
+```typescript
+const seedHistoryFromTmux = useCallback(async () => {
+  if (!shell || shellMode !== 'TmuxControl' || !activePaneId) return;
+
+  try {
+    // Get last 500 lines of history
+    const historyData = await shell.capturePane(activePaneId, -500, -1);
+    xtermRef.current?.write(historyData);
+  } catch (err) {
+    logger.warn('capturePane failed', err);
+  }
+}, [shell, shellMode, activePaneId]);
+```
+
+---
+
+## Files Summary
+
+| File | Type | Changes |
+|------|------|---------|
+| `rust/uniffi-russh/src/tmux_control.rs` | New | Protocol parser |
+| `rust/uniffi-russh/src/lib.rs` | Modify | Add module |
+| `rust/uniffi-russh/src/ssh_shell.rs` | Modify | Types, commands |
+| `rust/uniffi-russh/src/ssh_connection.rs` | Modify | Startup, reader |
+| `react-native-uniffi-russh/src/api.ts` | Modify | TypeScript API |
+| `apps/mobile/src/app/shell/detail.tsx` | Modify | UI integration |
+
+---
+
+## Build Strategy
+
+1. **Phases 1-4** (all Rust changes) → single EAS build
+2. **Phases 5-6** (TypeScript) → hot reload
+
+---
+
+## Testing
+
+- [ ] Connect to tmux session in control mode
+- [ ] Verify output decoding (control chars, Unicode, colors)
+- [ ] Test user input via send-keys (Enter, Tab, Escape, special chars)
+- [ ] Test resize via refresh-client
+- [ ] Verify history seeding with capture-pane
+- [ ] Test session exit handling (kill tmux externally)
+- [ ] No regression in raw mode (non-tmux shells)
+- [ ] Performance comparison vs raw mode
+
+---
+
+## Risks & Mitigations
+
+| Risk | Impact | Mitigation |
+|------|--------|------------|
+| Protocol parsing bugs | High | Unit tests, fuzzing |
+| Breaking raw mode | High | Feature flag, parallel code paths |
+| Latency increase | Medium | Benchmark, optimize hot paths |
+| Complex state machine | Medium | Clear docs, logging |
+</file>
+
+<file path="packages/react-native-uniffi-russh/rust/uniffi-russh/src/lib.rs">
+//! This file is used to generate Typescript bindings for the Russh library.
+//!
+//! For more information on the available data types, see the following links:
+//! - https://jhugman.github.io/uniffi-bindgen-react-native/idioms/common-types.html
+//! - https://jhugman.github.io/uniffi-bindgen-react-native/idioms/callback-interfaces.html
+//! - https://jhugman.github.io/uniffi-bindgen-react-native/idioms/async-callbacks.html
+
+pub mod private_key;
+pub mod ssh_connection;
+pub mod ssh_shell;
+pub mod utils;
+
+uniffi::setup_scaffolding!();
+</file>
+
+<file path="packages/react-native-xtermjs-webview/src/bridge.ts">
+import { Base64 } from 'js-base64';
+type ITerminalOptions = import('@xterm/xterm').ITerminalOptions;
+type ITerminalInitOnlyOptions = import('@xterm/xterm').ITerminalInitOnlyOptions;
+// Messages posted from the WebView (xterm page) to React Native
+export type BridgeInboundMessage =
+	| { type: 'initialized' }
+	| { type: 'input'; str: string }
+	| { type: 'debug'; message: string }
+	| { type: 'sizeChanged'; cols: number; rows: number }
+	| { type: 'selection'; requestId: number; text: string }
+	| { type: 'selectionChanged'; text: string }
+	| { type: 'selectionModeChanged'; enabled: boolean };
+
+// Messages injected from React Native into the WebView (xterm page)
+export type BridgeOutboundMessage =
+	| { type: 'write'; bStr: string }
+	| { type: 'writeMany'; chunks: string[] }
+	| { type: 'resize'; cols: number; rows: number }
+	| { type: 'fit' }
+	| { type: 'getSelection'; requestId: number }
+	| { type: 'setSelectionMode'; enabled: boolean }
+	| {
+			type: 'setOptions';
+			opts: Partial<Omit<ITerminalOptions, keyof ITerminalInitOnlyOptions>>;
+	  }
+	| { type: 'clear' }
+	| { type: 'focus' };
+
+export const binaryToBStr = (binary: Uint8Array): string =>
+	Base64.fromUint8Array(binary);
+export const bStrToBinary = (bStr: string): Uint8Array =>
+	Base64.toUint8Array(bStr);
+</file>
+
+<file path="packages/react-native-uniffi-russh/rust/uniffi-russh/src/ssh_connection.rs">
+use std::fmt;
+use std::sync::{Arc, Weak};
+use std::time::Duration;
+
+use tokio::sync::{broadcast, Mutex as AsyncMutex};
+
+use russh::client::{Config, Handle as ClientHandle};
+use russh::keys::PrivateKeyWithHashAlg;
+use russh::{self, client, ChannelMsg, Disconnect};
+
+use crate::private_key::normalize_openssh_ed25519_seed_key;
+use crate::ssh_shell::{
+    append_and_broadcast, Chunk, ShellSession, ShellSessionInfo, StartShellOptions, StreamKind,
+    DEFAULT_BROADCAST_CHUNK_CAPACITY, DEFAULT_MAX_CHUNK_SIZE, DEFAULT_SHELL_RING_BUFFER_CAPACITY,
+    DEFAULT_TERMINAL_MODES, DEFAULT_TERM_COALESCE_MS, DEFAULT_TERM_COL_WIDTH,
+    DEFAULT_TERM_PIXEL_HEIGHT, DEFAULT_TERM_PIXEL_WIDTH, DEFAULT_TERM_ROW_HEIGHT,
+};
+use crate::utils::{now_ms, SshError};
+use russh::keys::PublicKeyBase64;
+use std::sync::atomic::AtomicUsize;
+
+use std::{
+    collections::HashMap,
+    sync::{atomic::AtomicU64, Mutex},
+};
+
+// Mobile-friendly keepalive defaults.
+const KEEPALIVE_INTERVAL_SECS: u64 = 30;
+const KEEPALIVE_MAX: usize = 3;
+// Short probe window to catch immediate tmux attach failures.
+const TMUX_ATTACH_PROBE_TIMEOUT_MS: u64 = 300;
+
+fn server_public_key_to_info(
+    host: &str,
+    port: u16,
+    remote_ip: Option<String>,
+    pk: &russh::keys::PublicKey,
+) -> ServerPublicKeyInfo {
+    // Algorithm identifier (e.g., "ssh-ed25519", "rsa-sha2-512")
+    let algorithm = pk.algorithm().to_string();
+
+    // Key blob (base64)
+    let key_base64 = pk.public_key_base64();
+
+    // Fingerprints via russh-keys/ssh-key helpers
+    let fingerprint_sha256 = format!("{}", pk.fingerprint(russh::keys::ssh_key::HashAlg::Sha256));
+
+    ServerPublicKeyInfo {
+        host: host.to_string(),
+        port,
+        remote_ip,
+        algorithm,
+        fingerprint_sha256,
+        key_base64,
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Enum)]
+pub enum Security {
+    Password { password: String },
+    Key { private_key_content: String }, // (key-based auth can be wired later)
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct ConnectionDetails {
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub security: Security,
+}
+
+#[derive(Clone, uniffi::Record)]
+pub struct ConnectOptions {
+    pub connection_details: ConnectionDetails,
+    pub on_connection_progress_callback: Option<Arc<dyn ConnectProgressCallback>>,
+    pub on_disconnected_callback: Option<Arc<dyn ConnectionDisconnectedCallback>>,
+    pub on_server_key_callback: Arc<dyn ServerKeyCallback>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, uniffi::Enum)]
+pub enum SshConnectionProgressEvent {
+    // Before any progress events, assume: TcpConnecting
+    TcpConnected,
+    SshHandshake,
+    // If promise has not resolved, assume: Authenticating
+    // After promise resolves, assume: Connected
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct SshConnectionInfoProgressTimings {
+    // TODO: We should have a field for each SshConnectionProgressEvent. Would be great if this were enforced by the compiler.
+    pub tcp_established_at_ms: f64,
+    pub ssh_handshake_at_ms: f64,
+}
+
+#[uniffi::export(with_foreign)]
+pub trait ConnectProgressCallback: Send + Sync {
+    fn on_change(&self, status: SshConnectionProgressEvent);
+}
+
+#[uniffi::export(with_foreign)]
+pub trait ConnectionDisconnectedCallback: Send + Sync {
+    fn on_change(&self, connection_id: String);
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct ServerPublicKeyInfo {
+    pub host: String,
+    pub port: u16,
+    pub remote_ip: Option<String>,
+    pub algorithm: String,
+    pub fingerprint_sha256: String, // e.g., "SHA256:..." (no padding)
+    pub key_base64: String,         // raw key blob (base64)
+}
+
+#[uniffi::export(with_foreign)]
+#[async_trait::async_trait]
+pub trait ServerKeyCallback: Send + Sync {
+    async fn on_change(&self, server_key_info: ServerPublicKeyInfo) -> bool;
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct SshConnectionInfo {
+    pub connection_id: String,
+    pub connection_details: ConnectionDetails,
+    pub created_at_ms: f64,
+    pub connected_at_ms: f64,
+    pub progress_timings: SshConnectionInfoProgressTimings,
+}
+
+/// Minimal client::Handler with optional server key callback.
+pub(crate) struct NoopHandler {
+    pub on_server_key_callback: Arc<dyn ServerKeyCallback>,
+    pub host: String,
+    pub port: u16,
+    pub remote_ip: Option<String>,
+}
+impl client::Handler for NoopHandler {
+    type Error = SshError;
+    fn check_server_key(
+        &mut self,
+        server_public_key: &russh::keys::PublicKey,
+    ) -> impl std::future::Future<
+        Output = std::result::Result<bool, <Self as russh::client::Handler>::Error>,
+    > + std::marker::Send {
+        let cb = self.on_server_key_callback.clone();
+        let host = self.host.clone();
+        let port = self.port;
+        let remote_ip = self.remote_ip.clone();
+        // Build structured info for UI/decision.
+        let info = server_public_key_to_info(&host, port, remote_ip, server_public_key);
+        async move {
+            // Delegate decision to user callback (async via UniFFI).
+            let accept = cb.on_change(info).await;
+            Ok(accept)
+        }
+    }
+}
+
+#[derive(uniffi::Object)]
+pub struct SshConnection {
+    pub info: SshConnectionInfo,
+    pub on_disconnected_callback: Option<Arc<dyn ConnectionDisconnectedCallback>>,
+
+    pub(crate) client_handle: AsyncMutex<ClientHandle<NoopHandler>>,
+
+    pub(crate) shells: AsyncMutex<HashMap<u32, Arc<ShellSession>>>,
+
+    // Weak self for child sessions to refer back without cycles.
+    pub(crate) self_weak: AsyncMutex<Weak<SshConnection>>,
+}
+
+impl fmt::Debug for SshConnection {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SshConnectionHandle")
+            .field("info.connection_details", &self.info.connection_details)
+            .field("info.created_at_ms", &self.info.created_at_ms)
+            .field("info.connected_at_ms", &self.info.connected_at_ms)
+            .finish()
+    }
+}
+
+#[uniffi::export(async_runtime = "tokio")]
+impl SshConnection {
+    /// Convenience snapshot for property-like access in TS.
+    pub fn get_info(&self) -> SshConnectionInfo {
+        self.info.clone()
+    }
+
+    pub async fn start_shell(
+        &self,
+        opts: StartShellOptions,
+    ) -> Result<Arc<ShellSession>, SshError> {
+        let started_at_ms = now_ms();
+
+        let term = opts.term;
+        let on_closed_callback = opts.on_closed_callback.clone();
+        let use_tmux = opts.use_tmux;
+        let tmux_session_name = opts.tmux_session_name.clone();
+
+        let ch = {
+            let client_handle = self.client_handle.lock().await;
+            client_handle.channel_open_session().await?
+        };
+        let channel_id: u32 = ch.id().into();
+
+        let mut modes: Vec<(russh::Pty, u32)> = DEFAULT_TERMINAL_MODES.to_vec();
+        if let Some(terminal_mode_params) = &opts.terminal_mode {
+            for m in terminal_mode_params {
+                if let Some(pty) = russh::Pty::from_u8(m.opcode) {
+                    if let Some(pos) = modes.iter().position(|(p, _)| *p as u8 == m.opcode) {
+                        modes[pos].1 = m.value; // override
+                    } else {
+                        modes.push((pty, m.value)); // add
+                    }
+                }
+            }
+        }
+
+        let row_height = opts
+            .terminal_size
+            .as_ref()
+            .and_then(|s| s.row_height)
+            .unwrap_or(DEFAULT_TERM_ROW_HEIGHT);
+        let col_width = opts
+            .terminal_size
+            .as_ref()
+            .and_then(|s| s.col_width)
+            .unwrap_or(DEFAULT_TERM_COL_WIDTH);
+        let pixel_width = opts
+            .terminal_pixel_size
+            .as_ref()
+            .and_then(|s| s.pixel_width)
+            .unwrap_or(DEFAULT_TERM_PIXEL_WIDTH);
+        let pixel_height = opts
+            .terminal_pixel_size
+            .as_ref()
+            .and_then(|s| s.pixel_height)
+            .unwrap_or(DEFAULT_TERM_PIXEL_HEIGHT);
+
+        ch.request_pty(
+            true,
+            term.as_ssh_name(),
+            col_width,
+            row_height,
+            pixel_width,
+            pixel_height,
+            &modes,
+        )
+        .await?;
+
+        if use_tmux {
+            let tmux_name = tmux_session_name
+                .as_deref()
+                .unwrap_or_default()
+                .trim()
+                .to_string();
+            if tmux_name.is_empty() {
+                self.disconnect().await.ok();
+                return Err(SshError::TmuxAttachFailed(
+                    "Missing tmux session name".to_string(),
+                ));
+            }
+            let cmd = format!("tmux attach -t {tmux_name}");
+            ch.exec(true, cmd).await?;
+        } else {
+            ch.request_shell(true).await?;
+        }
+
+        // Split for read/write; spawn reader.
+        let (mut reader, writer) = ch.split();
+
+        // Setup ring + broadcast for this session
+        let (tx, _rx) = broadcast::channel::<Arc<Chunk>>(DEFAULT_BROADCAST_CHUNK_CAPACITY);
+        let ring = Arc::new(Mutex::new(std::collections::VecDeque::<Arc<Chunk>>::new()));
+        let used_bytes = Arc::new(Mutex::new(0usize));
+        let next_seq = Arc::new(AtomicU64::new(1));
+        let head_seq = Arc::new(AtomicU64::new(1));
+        let tail_seq = Arc::new(AtomicU64::new(0));
+        let dropped_bytes_total = Arc::new(AtomicU64::new(0));
+        let ring_bytes_capacity = Arc::new(AtomicUsize::new(DEFAULT_SHELL_RING_BUFFER_CAPACITY));
+        let default_coalesce_ms = AtomicU64::new(DEFAULT_TERM_COALESCE_MS);
+
+        let ring_clone = ring.clone();
+        let used_bytes_clone = used_bytes.clone();
+        let tx_clone = tx.clone();
+        let ring_bytes_capacity_c = ring_bytes_capacity.clone();
+        let dropped_bytes_total_c = dropped_bytes_total.clone();
+        let head_seq_c = head_seq.clone();
+        let tail_seq_c = tail_seq.clone();
+        let next_seq_c = next_seq.clone();
+
+        let on_closed_callback_for_reader = on_closed_callback.clone();
+
+        if use_tmux {
+            // Probe once for an immediate tmux attach failure before surfacing the shell.
+            let probe = tokio::time::timeout(
+                Duration::from_millis(TMUX_ATTACH_PROBE_TIMEOUT_MS),
+                reader.wait(),
+            )
+            .await;
+            match probe {
+                Ok(Some(ChannelMsg::ExitStatus { exit_status })) if exit_status != 0 => {
+                    self.disconnect().await.ok();
+                    return Err(SshError::TmuxAttachFailed(format!(
+                        "tmux attach exited with status {exit_status}"
+                    )));
+                }
+                Ok(Some(ChannelMsg::Close)) | Ok(None) => {
+                    self.disconnect().await.ok();
+                    return Err(SshError::TmuxAttachFailed(
+                        "tmux attach closed the channel".to_string(),
+                    ));
+                }
+                Ok(Some(ChannelMsg::Data { data })) => {
+                    append_and_broadcast(
+                        &data,
+                        StreamKind::Stdout,
+                        &ring_clone,
+                        &used_bytes_clone,
+                        &ring_bytes_capacity_c,
+                        &dropped_bytes_total_c,
+                        &head_seq_c,
+                        &tail_seq_c,
+                        &next_seq_c,
+                        &tx_clone,
+                        DEFAULT_MAX_CHUNK_SIZE,
+                    );
+                }
+                Ok(Some(ChannelMsg::ExtendedData { data, .. })) => {
+                    append_and_broadcast(
+                        &data,
+                        StreamKind::Stderr,
+                        &ring_clone,
+                        &used_bytes_clone,
+                        &ring_bytes_capacity_c,
+                        &dropped_bytes_total_c,
+                        &head_seq_c,
+                        &tail_seq_c,
+                        &next_seq_c,
+                        &tx_clone,
+                        DEFAULT_MAX_CHUNK_SIZE,
+                    );
+                }
+                _ => {}
+            }
+        }
+
+        let reader_task = tokio::spawn(async move {
+            let max_chunk = DEFAULT_MAX_CHUNK_SIZE;
+            loop {
+                match reader.wait().await {
+                    Some(ChannelMsg::Data { data }) => {
+                        append_and_broadcast(
+                            &data,
+                            StreamKind::Stdout,
+                            &ring_clone,
+                            &used_bytes_clone,
+                            &ring_bytes_capacity_c,
+                            &dropped_bytes_total_c,
+                            &head_seq_c,
+                            &tail_seq_c,
+                            &next_seq_c,
+                            &tx_clone,
+                            max_chunk,
+                        );
+                    }
+                    Some(ChannelMsg::ExtendedData { data, .. }) => {
+                        append_and_broadcast(
+                            &data,
+                            StreamKind::Stderr,
+                            &ring_clone,
+                            &used_bytes_clone,
+                            &ring_bytes_capacity_c,
+                            &dropped_bytes_total_c,
+                            &head_seq_c,
+                            &tail_seq_c,
+                            &next_seq_c,
+                            &tx_clone,
+                            max_chunk,
+                        );
+                    }
+                    Some(ChannelMsg::Close) | None => {
+                        if let Some(sl) = on_closed_callback_for_reader.as_ref() {
+                            sl.on_change(channel_id);
+                        }
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+        });
+
+        let session = Arc::new(ShellSession {
+            info: ShellSessionInfo {
+                channel_id,
+                created_at_ms: started_at_ms,
+                connected_at_ms: now_ms(),
+                term,
+                connection_id: self.info.connection_id.clone(),
+            },
+            on_closed_callback,
+            parent: self.self_weak.lock().await.clone(),
+
+            writer: AsyncMutex::new(writer),
+            reader_task,
+
+            // Ring buffer
+            ring,
+            ring_bytes_capacity,
+            used_bytes,
+            dropped_bytes_total,
+            head_seq,
+            tail_seq,
+
+            // Listener tasks management
+            sender: tx,
+            listener_tasks: Arc::new(Mutex::new(HashMap::new())),
+            next_listener_id: AtomicU64::new(1),
+            coalesce_ms: default_coalesce_ms,
+            rt_handle: tokio::runtime::Handle::current(),
+        });
+
+        self.shells.lock().await.insert(channel_id, session.clone());
+
+        Ok(session)
+    }
+
+    pub async fn disconnect(&self) -> Result<(), SshError> {
+        // TODO: Check if we need to close all these if we are about to disconnect?
+        let sessions: Vec<Arc<ShellSession>> = {
+            let map = self.shells.lock().await;
+            map.values().cloned().collect()
+        };
+        for s in sessions {
+            s.close().await?;
+        }
+
+        let h = self.client_handle.lock().await;
+        h.disconnect(Disconnect::ByApplication, "bye", "").await?;
+
+        if let Some(on_disconnected_callback) = self.on_disconnected_callback.as_ref() {
+            on_disconnected_callback.on_change(self.info.connection_id.clone());
+        }
+
+        Ok(())
+    }
+}
+
+#[uniffi::export(async_runtime = "tokio")]
+pub async fn connect(options: ConnectOptions) -> Result<Arc<SshConnection>, SshError> {
+    let started_at_ms = now_ms();
+    let details = ConnectionDetails {
+        host: options.connection_details.host.clone(),
+        port: options.connection_details.port,
+        username: options.connection_details.username.clone(),
+        security: options.connection_details.security.clone(),
+    };
+
+    // TCP
+    let addr = format!("{}:{}", details.host, details.port);
+    let socket = tokio::net::TcpStream::connect(&addr).await?;
+    let local_port = socket.local_addr()?.port();
+
+    let tcp_established_at_ms = now_ms();
+    if let Some(sl) = options.on_connection_progress_callback.as_ref() {
+        sl.on_change(SshConnectionProgressEvent::TcpConnected);
+    }
+    let mut cfg = Config::default();
+    cfg.keepalive_interval = Some(Duration::from_secs(KEEPALIVE_INTERVAL_SECS));
+    cfg.keepalive_max = KEEPALIVE_MAX;
+    let cfg = Arc::new(cfg);
+    let remote_ip = socket.peer_addr().ok().map(|a| a.ip().to_string());
+    let mut handle: ClientHandle<NoopHandler> = russh::client::connect_stream(
+        cfg,
+        socket,
+        NoopHandler {
+            on_server_key_callback: options.on_server_key_callback.clone(),
+            host: options.connection_details.host.clone(),
+            port: options.connection_details.port,
+            remote_ip,
+        },
+    )
+    .await?;
+    let ssh_handshake_at_ms = now_ms();
+    if let Some(sl) = options.on_connection_progress_callback.as_ref() {
+        sl.on_change(SshConnectionProgressEvent::SshHandshake);
+    }
+    let auth_result = match &details.security {
+        Security::Password { password } => {
+            handle
+                .authenticate_password(details.username.clone(), password.clone())
+                .await?
+        }
+        Security::Key {
+            private_key_content,
+        } => {
+            // Normalize and parse using shared helper so RN-validated keys match runtime parsing.
+            let (_canonical, parsed) = normalize_openssh_ed25519_seed_key(private_key_content)?;
+            let pk_with_hash = PrivateKeyWithHashAlg::new(Arc::new(parsed), None);
+            handle
+                .authenticate_publickey(details.username.clone(), pk_with_hash)
+                .await?
+        }
+    };
+    if !matches!(auth_result, russh::client::AuthResult::Success) {
+        return Err(auth_result.into());
+    }
+
+    let connection_id = format!(
+        "{}@{}:{}:{}",
+        details.username, details.host, details.port, local_port
+    );
+    let conn = Arc::new(SshConnection {
+        info: SshConnectionInfo {
+            connection_id,
+            connection_details: details,
+            created_at_ms: started_at_ms,
+            connected_at_ms: now_ms(),
+            progress_timings: SshConnectionInfoProgressTimings {
+                tcp_established_at_ms,
+                ssh_handshake_at_ms,
+            },
+        },
+        client_handle: AsyncMutex::new(handle),
+        shells: AsyncMutex::new(HashMap::new()),
+        self_weak: AsyncMutex::new(Weak::new()),
+        on_disconnected_callback: options.on_disconnected_callback.clone(),
+    });
+    // Initialize weak self reference.
+    *conn.self_weak.lock().await = Arc::downgrade(&conn);
+    Ok(conn)
+}
+</file>
+
+<file path="packages/react-native-uniffi-russh/rust/uniffi-russh/src/ssh_shell.rs">
+use std::{
+    collections::HashMap,
+    sync::{
+        atomic::{AtomicU64, AtomicUsize, Ordering},
+        Arc, Mutex,
+    },
+    time::Duration,
+};
+
+use bytes::Bytes;
+
+use crate::{
+    ssh_connection::SshConnection,
+    utils::{now_ms, SshError},
+};
+use russh::{self, client};
+use tokio::sync::{broadcast, Mutex as AsyncMutex};
+
+// Note: russh accepts an untyped string for the terminal type
+#[derive(Debug, Clone, Copy, PartialEq, uniffi::Enum)]
+pub enum TerminalType {
+    Vanilla,
+    Vt100,
+    Vt102,
+    Vt220,
+    Ansi,
+    Xterm,
+    Xterm256,
+}
+impl TerminalType {
+    pub(crate) fn as_ssh_name(self) -> &'static str {
+        match self {
+            TerminalType::Vanilla => "vanilla",
+            TerminalType::Vt100 => "vt100",
+            TerminalType::Vt102 => "vt102",
+            TerminalType::Vt220 => "vt220",
+            TerminalType::Ansi => "ansi",
+            TerminalType::Xterm => "xterm",
+            TerminalType::Xterm256 => "xterm-256color",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, uniffi::Enum)]
+pub enum StreamKind {
+    Stdout,
+    Stderr,
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct TerminalChunk {
+    pub seq: u64,
+    pub t_ms: f64,
+    pub stream: StreamKind,
+    pub bytes: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct DroppedRange {
+    pub from_seq: u64,
+    pub to_seq: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Enum)]
+pub enum ShellEvent {
+    Chunk(TerminalChunk),
+    Dropped { from_seq: u64, to_seq: u64 },
+}
+
+#[uniffi::export(with_foreign)]
+pub trait ShellListener: Send + Sync {
+    fn on_event(&self, ev: ShellEvent);
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, uniffi::Record)]
+pub struct TerminalMode {
+    pub opcode: u8, // PTY opcode (matches russh::Pty discriminants)
+    pub value: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, uniffi::Record)]
+pub struct TerminalSize {
+    pub row_height: Option<u32>,
+    pub col_width: Option<u32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, uniffi::Record)]
+pub struct TerminalPixelSize {
+    pub pixel_width: Option<u32>,
+    pub pixel_height: Option<u32>,
+}
+
+#[derive(Clone, uniffi::Record)]
+pub struct StartShellOptions {
+    pub term: TerminalType,
+    pub terminal_mode: Option<Vec<TerminalMode>>,
+    pub terminal_size: Option<TerminalSize>,
+    pub terminal_pixel_size: Option<TerminalPixelSize>,
+    pub use_tmux: bool,
+    pub tmux_session_name: Option<String>,
+    pub on_closed_callback: Option<Arc<dyn ShellClosedCallback>>,
+}
+
+#[uniffi::export(with_foreign)]
+pub trait ShellClosedCallback: Send + Sync {
+    fn on_change(&self, channel_id: u32);
+}
+
+/// Snapshot of shell session info for property-like access in TS.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct ShellSessionInfo {
+    pub channel_id: u32,
+    pub created_at_ms: f64,
+    pub connected_at_ms: f64,
+    pub term: TerminalType,
+    pub connection_id: String,
+}
+
+#[derive(uniffi::Object)]
+pub struct ShellSession {
+    pub info: ShellSessionInfo,
+    pub on_closed_callback: Option<Arc<dyn ShellClosedCallback>>,
+
+    // Weak backref; avoid retain cycle.
+    pub(crate) parent: std::sync::Weak<SshConnection>,
+
+    pub(crate) writer: AsyncMutex<russh::ChannelWriteHalf<client::Msg>>,
+    // We keep the reader task to allow cancellation on close.
+    pub(crate) reader_task: tokio::task::JoinHandle<()>,
+
+    // Ring buffer
+    pub(crate) ring: Arc<Mutex<std::collections::VecDeque<Arc<Chunk>>>>,
+    pub(crate) ring_bytes_capacity: Arc<AtomicUsize>,
+    pub(crate) used_bytes: Arc<Mutex<usize>>,
+    pub(crate) dropped_bytes_total: Arc<AtomicU64>,
+    pub(crate) head_seq: Arc<AtomicU64>,
+    pub(crate) tail_seq: Arc<AtomicU64>,
+
+    // Live broadcast
+    pub(crate) sender: broadcast::Sender<Arc<Chunk>>,
+
+    // Listener tasks management
+    pub(crate) listener_tasks: Arc<Mutex<HashMap<u64, tokio::task::JoinHandle<()>>>>,
+    pub(crate) next_listener_id: AtomicU64,
+    pub(crate) coalesce_ms: AtomicU64,
+    pub(crate) rt_handle: tokio::runtime::Handle,
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Enum)]
+pub enum Cursor {
+    Head,                     // start from the beginning
+    TailBytes { bytes: u64 }, // start from the end of the last N bytes
+    Seq { seq: u64 },         // start from the given sequence number
+    TimeMs { t_ms: f64 },     // start from the given time in milliseconds
+    Live,                     // start from the live stream
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct ListenerOptions {
+    pub cursor: Cursor,
+    pub coalesce_ms: Option<u32>, // coalesce chunks into this many milliseconds
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct BufferReadResult {
+    pub chunks: Vec<TerminalChunk>,
+    pub next_seq: u64,
+    pub dropped: Option<DroppedRange>,
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct BufferStats {
+    pub ring_bytes_count: u64,
+    pub used_bytes: u64,
+    pub head_seq: u64,
+    pub tail_seq: u64,
+    pub dropped_bytes_total: u64,
+
+    pub chunks_count: u64,
+}
+
+// Internal chunk type kept in ring/broadcast
+#[derive(Debug)]
+pub(crate) struct Chunk {
+    // TODO: This is very similar to TerminalChunk. The only difference is the bytes field
+    seq: u64,
+    t_ms: f64,
+    stream: StreamKind,
+    bytes: Bytes,
+}
+
+/// ---------- Methods ----------
+pub(crate) static DEFAULT_TERMINAL_MODES: &[(russh::Pty, u32)] = &[
+    (russh::Pty::ECHO, 1), // This will cause the terminal to echo the characters back to the client.
+    (russh::Pty::ECHOK, 1), // After the line-kill character (often Ctrl+U), echo a newline.
+    (russh::Pty::ECHOE, 1), // Visually erase on backspace (erase using BS-SP-BS sequence).
+    (russh::Pty::ICANON, 1), // Canonical (cooked) mode: line editing; input delivered line-by-line.
+    (russh::Pty::ISIG, 1), // Generate signals on special chars (e.g., Ctrl+C -> SIGINT, Ctrl+Z -> SIGTSTP).
+    (russh::Pty::ICRNL, 1), // Convert carriage return (CR, \r) to newline (NL, \n) on input.
+    (russh::Pty::ONLCR, 1), // Convert newline (NL) to CR+NL on output (LF -> CRLF).
+    (russh::Pty::TTY_OP_ISPEED, 38400), // Set input baud rate (here 38400). The baud rate is the number of characters per second.
+    (russh::Pty::TTY_OP_OSPEED, 38400), // Set output baud rate (here 38400). The baud rate is the number of characters per second.
+];
+
+pub(crate) static DEFAULT_TERM_ROW_HEIGHT: u32 = 24;
+pub(crate) static DEFAULT_TERM_COL_WIDTH: u32 = 80;
+pub(crate) static DEFAULT_TERM_PIXEL_WIDTH: u32 = 0;
+pub(crate) static DEFAULT_TERM_PIXEL_HEIGHT: u32 = 0;
+pub(crate) static DEFAULT_TERM_COALESCE_MS: u64 = 16;
+
+// Number of recent live chunks retained by the broadcast channel for each
+// subscriber. If a subscriber falls behind this many messages, they will get a
+// Lagged error and skip to the latest. Tune to: peak_chunks_per_sec × max_pause_sec.
+pub(crate) static DEFAULT_BROADCAST_CHUNK_CAPACITY: usize = 1024;
+
+// Byte budget for the on-heap replay/history ring buffer. When the total bytes
+// of stored chunks exceed this, oldest chunks are evicted. Increase for a
+// longer replay window at the cost of memory.
+pub(crate) static DEFAULT_SHELL_RING_BUFFER_CAPACITY: usize = 2 * 1024 * 1024; // default 2MiB
+
+// Upper bound for the size of a single appended/broadcast chunk. Incoming data
+// is split into slices no larger than this. Smaller values reduce latency and
+// loss impact; larger values reduce per-message overhead.
+pub(crate) static DEFAULT_MAX_CHUNK_SIZE: usize = 16 * 1024; // 16KB
+
+pub(crate) static DEFAULT_READ_BUFFER_MAX_BYTES: u64 = 512 * 1024; // 512KB
+
+#[uniffi::export(async_runtime = "tokio")]
+impl ShellSession {
+    pub fn get_info(&self) -> ShellSessionInfo {
+        self.info.clone()
+    }
+
+    /// Send bytes to the active shell (stdin).
+    pub async fn send_data(&self, data: Vec<u8>) -> Result<(), SshError> {
+        let w = self.writer.lock().await;
+        w.data(&data[..]).await?;
+        Ok(())
+    }
+
+    /// Resize the PTY window. Call when the terminal UI size changes.
+    /// This sends an SSH "window-change" request to the server, which will
+    /// deliver SIGWINCH to the remote process (e.g., tmux, vim).
+    pub async fn resize_pty(
+        &self,
+        cols: u32,
+        rows: u32,
+        pixel_width: Option<u32>,
+        pixel_height: Option<u32>,
+    ) -> Result<(), SshError> {
+        let w = self.writer.lock().await;
+        w.window_change(
+            cols,
+            rows,
+            pixel_width.unwrap_or(0),
+            pixel_height.unwrap_or(0),
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Close the associated shell channel and stop its reader task.
+    pub async fn close(&self) -> Result<(), SshError> {
+        self.close_internal().await
+    }
+
+    /// Buffer statistics snapshot.
+    pub fn buffer_stats(&self) -> BufferStats {
+        let used = *self.used_bytes.lock().unwrap_or_else(|p| p.into_inner()) as u64;
+        let chunks_count = match self.ring.lock() {
+            Ok(q) => q.len() as u64,
+            Err(p) => p.into_inner().len() as u64,
+        };
+        BufferStats {
+            ring_bytes_count: self.ring_bytes_capacity.load(Ordering::Relaxed) as u64,
+            used_bytes: used,
+            chunks_count,
+            head_seq: self.head_seq.load(Ordering::Relaxed),
+            tail_seq: self.tail_seq.load(Ordering::Relaxed),
+            dropped_bytes_total: self.dropped_bytes_total.load(Ordering::Relaxed),
+        }
+    }
+
+    /// Current next sequence number.
+    pub fn current_seq(&self) -> u64 {
+        self.tail_seq.load(Ordering::Relaxed).saturating_add(1)
+    }
+
+    /// Read the ring buffer from a cursor.
+    pub fn read_buffer(&self, cursor: Cursor, max_bytes: Option<u64>) -> BufferReadResult {
+        let max_total = max_bytes.unwrap_or(DEFAULT_READ_BUFFER_MAX_BYTES) as usize;
+        let mut out_chunks: Vec<TerminalChunk> = Vec::new();
+        let mut dropped: Option<DroppedRange> = None;
+        let head_seq_now = self.head_seq.load(Ordering::Relaxed);
+        let tail_seq_now = self.tail_seq.load(Ordering::Relaxed);
+
+        // Lock ring to determine start and collect arcs, then drop lock.
+        let (_start_idx_unused, _start_seq, arcs): (usize, u64, Vec<Arc<Chunk>>) = {
+            let ring = match self.ring.lock() {
+                Ok(g) => g,
+                Err(p) => p.into_inner(),
+            };
+            let (start_seq, idx) = match cursor {
+                Cursor::Head => (head_seq_now, 0usize),
+                Cursor::Seq { seq: mut s } => {
+                    if s < head_seq_now {
+                        dropped = Some(DroppedRange {
+                            from_seq: s,
+                            to_seq: head_seq_now - 1,
+                        });
+                        s = head_seq_now;
+                    }
+                    let idx = s.saturating_sub(head_seq_now) as usize;
+                    (s, idx.min(ring.len()))
+                }
+                Cursor::TimeMs { t_ms: t } => {
+                    // linear scan to find first chunk with t_ms >= t
+                    let mut idx = 0usize;
+                    let mut s = head_seq_now;
+                    for (i, ch) in ring.iter().enumerate() {
+                        if ch.t_ms >= t {
+                            idx = i;
+                            s = ch.seq;
+                            break;
+                        }
+                    }
+                    (s, idx)
+                }
+                Cursor::TailBytes { bytes: n } => {
+                    // Walk from tail backwards until approx n bytes, then forward.
+                    let mut bytes = 0usize;
+                    let mut idx = ring.len();
+                    for i in (0..ring.len()).rev() {
+                        let b = ring[i].bytes.len();
+                        if bytes >= n as usize {
+                            idx = i + 1;
+                            break;
+                        }
+                        bytes += b;
+                        idx = i;
+                    }
+                    let s = if idx < ring.len() {
+                        ring[idx].seq
+                    } else {
+                        tail_seq_now.saturating_add(1)
+                    };
+                    (s, idx)
+                }
+                Cursor::Live => (tail_seq_now.saturating_add(1), ring.len()),
+            };
+            let arcs: Vec<Arc<Chunk>> = ring.iter().skip(idx).cloned().collect();
+            (idx, start_seq, arcs)
+        };
+
+        // Build output respecting max_bytes
+        let mut total = 0usize;
+        for ch in arcs {
+            let len = ch.bytes.len();
+            if total + len > max_total {
+                break;
+            }
+            out_chunks.push(TerminalChunk {
+                seq: ch.seq,
+                t_ms: ch.t_ms,
+                stream: ch.stream,
+                bytes: ch.bytes.clone().to_vec(),
+            });
+            total += len;
+        }
+        let next_seq = if let Some(last) = out_chunks.last() {
+            last.seq + 1
+        } else {
+            tail_seq_now.saturating_add(1)
+        };
+        BufferReadResult {
+            chunks: out_chunks,
+            next_seq,
+            dropped,
+        }
+    }
+
+    /// Add a listener with optional replay and live follow.
+    pub fn add_listener(
+        &self,
+        listener: Arc<dyn ShellListener>,
+        opts: ListenerOptions,
+    ) -> Result<u64, SshError> {
+        // Snapshot for replay; emit from task to avoid re-entrant callbacks during FFI.
+        let replay = self.read_buffer(opts.cursor.clone(), None);
+        let mut rx = self.sender.subscribe();
+        let id = self.next_listener_id.fetch_add(1, Ordering::Relaxed);
+        let default_coalesce_ms = self.coalesce_ms.load(Ordering::Relaxed) as u32;
+        let coalesce_ms = opts.coalesce_ms.unwrap_or(default_coalesce_ms);
+
+        let rt = self.rt_handle.clone();
+        let handle = rt.spawn(async move {
+            // Emit replay first
+            if let Some(dr) = replay.dropped.as_ref() {
+                listener.on_event(ShellEvent::Dropped { from_seq: dr.from_seq, to_seq: dr.to_seq });
+            }
+            for ch in replay.chunks.into_iter() {
+                listener.on_event(ShellEvent::Chunk(ch));
+            }
+
+            let mut last_seq_seen: u64 = replay.next_seq.saturating_sub(1);
+            let mut acc: Vec<u8> = Vec::new();
+            let mut acc_stream: Option<StreamKind>;
+            let mut acc_last_seq: u64;
+            let mut acc_last_t: f64;
+            let window = Duration::from_millis(coalesce_ms as u64);
+            let mut pending_drop_from: Option<u64> = None;
+
+            loop {
+                // First receive an item
+                let first = match rx.recv().await {
+                    Ok(c) => c,
+                    Err(broadcast::error::RecvError::Lagged(_n)) => { pending_drop_from = Some(last_seq_seen.saturating_add(1)); continue; }
+                    Err(broadcast::error::RecvError::Closed) => break,
+                };
+                if let Some(from) = pending_drop_from.take() {
+                    if from <= first.seq.saturating_sub(1) {
+                        listener.on_event(ShellEvent::Dropped { from_seq: from, to_seq: first.seq - 1 });
+                    }
+                }
+                // Start accumulating
+                acc.clear(); acc_stream = Some(first.stream); acc_last_seq = first.seq; acc_last_t = first.t_ms; acc.extend_from_slice(&first.bytes);
+                last_seq_seen = first.seq;
+
+                // Drain within window while same stream
+                let mut deadline = tokio::time::Instant::now() + window;
+                loop {
+                    let timeout = tokio::time::sleep_until(deadline);
+                    tokio::pin!(timeout);
+                    tokio::select! {
+                        _ = &mut timeout => break,
+                        msg = rx.recv() => {
+                            match msg {
+                                Ok(c) => {
+                                    if Some(c.stream) == acc_stream { acc.extend_from_slice(&c.bytes); acc_last_seq = c.seq; acc_last_t = c.t_ms; last_seq_seen = c.seq; }
+                                    else { // flush and start new
+                                        let chunk = TerminalChunk { seq: acc_last_seq, t_ms: acc_last_t, stream: acc_stream.unwrap_or(StreamKind::Stdout), bytes: std::mem::take(&mut acc) };
+                                        listener.on_event(ShellEvent::Chunk(chunk));
+                                        acc_stream = Some(c.stream); acc_last_seq = c.seq; acc_last_t = c.t_ms; acc.extend_from_slice(&c.bytes); last_seq_seen = c.seq;
+                                        deadline = tokio::time::Instant::now() + window;
+                                    }
+                                }
+                                Err(broadcast::error::RecvError::Lagged(_n)) => { pending_drop_from = Some(last_seq_seen.saturating_add(1)); break; }
+                                Err(broadcast::error::RecvError::Closed) => { break; }
+                            }
+                        }
+                    }
+                }
+                if let Some(s) = acc_stream.take() {
+                    let chunk = TerminalChunk { seq: acc_last_seq, t_ms: acc_last_t, stream: s, bytes: std::mem::take(&mut acc) };
+                    listener.on_event(ShellEvent::Chunk(chunk));
+                }
+            }
+        });
+        if let Ok(mut map) = self.listener_tasks.lock() {
+            map.insert(id, handle);
+        }
+        Ok(id)
+    }
+
+    pub fn remove_listener(&self, id: u64) {
+        if let Ok(mut map) = self.listener_tasks.lock() {
+            if let Some(h) = map.remove(&id) {
+                h.abort();
+            }
+        }
+    }
+}
+
+// Internal lifecycle helpers (not exported via UniFFI)
+impl ShellSession {
+    async fn close_internal(&self) -> Result<(), SshError> {
+        // Try to close channel gracefully; ignore error.
+        self.writer.lock().await.close().await.ok();
+        self.reader_task.abort();
+        if let Some(sl) = self.on_closed_callback.as_ref() {
+            sl.on_change(self.info.channel_id);
+        }
+        // Clear parent's notion of active shell if it matches us.
+        if let Some(parent) = self.parent.upgrade() {
+            parent.shells.lock().await.remove(&self.info.channel_id);
+        }
+        Ok(())
+    }
+
+    // /// This was on the public interface but I don't think we need it
+    // pub async fn set_buffer_policy(&self, ring_bytes: Option<u64>, coalesce_ms: Option<u32>) {
+    //     if let Some(rb) = ring_bytes { self.ring_bytes_capacity.store(rb as usize, Ordering::Relaxed); self.evict_if_needed(); }
+    //     if let Some(cm) = coalesce_ms { self.default_coalesce_ms.store(cm as u64, Ordering::Relaxed); }
+    // }
+
+    // fn evict_if_needed(&self) {
+    //     let cap = self.ring_bytes_capacity.load(Ordering::Relaxed);
+    //     let mut ring = match self.ring.lock() { Ok(g) => g, Err(p) => p.into_inner() };
+    //     let mut used = self.used_bytes.lock().unwrap_or_else(|p| p.into_inner());
+    //     while *used > cap {
+    //         if let Some(front) = ring.pop_front() {
+    //             *used -= front.bytes.len();
+    //             self.dropped_bytes_total.fetch_add(front.bytes.len() as u64, Ordering::Relaxed);
+    //             self.head_seq.store(front.seq.saturating_add(1), Ordering::Relaxed);
+    //         } else { break; }
+    //     }
+    // }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn append_and_broadcast(
+    data: &[u8],
+    stream: StreamKind,
+    ring: &Arc<Mutex<std::collections::VecDeque<Arc<Chunk>>>>,
+    used_bytes: &Arc<Mutex<usize>>,
+    ring_bytes_capacity: &Arc<AtomicUsize>,
+    dropped_bytes_total: &Arc<AtomicU64>,
+    head_seq: &Arc<AtomicU64>,
+    tail_seq: &Arc<AtomicU64>,
+    next_seq: &Arc<AtomicU64>,
+    sender: &broadcast::Sender<Arc<Chunk>>,
+    max_chunk: usize,
+) {
+    let mut offset = 0usize;
+    while offset < data.len() {
+        let end = (offset + max_chunk).min(data.len());
+        let slice = &data[offset..end];
+        let seq = next_seq.fetch_add(1, Ordering::Relaxed);
+        let t_ms = now_ms();
+        let chunk = Arc::new(Chunk {
+            seq,
+            t_ms,
+            stream,
+            bytes: Bytes::copy_from_slice(slice),
+        });
+        // push to ring
+        {
+            let mut q = match ring.lock() {
+                Ok(g) => g,
+                Err(p) => p.into_inner(),
+            };
+            q.push_back(chunk.clone());
+        }
+        {
+            let mut used = used_bytes.lock().unwrap_or_else(|p| p.into_inner());
+            *used += slice.len();
+            tail_seq.store(seq, Ordering::Relaxed);
+            // evict if needed
+            let cap = ring_bytes_capacity.load(Ordering::Relaxed);
+            if *used > cap {
+                let mut q = match ring.lock() {
+                    Ok(g) => g,
+                    Err(p) => p.into_inner(),
+                };
+                while *used > cap {
+                    if let Some(front) = q.pop_front() {
+                        *used -= front.bytes.len();
+                        dropped_bytes_total.fetch_add(front.bytes.len() as u64, Ordering::Relaxed);
+                        head_seq.store(front.seq.saturating_add(1), Ordering::Relaxed);
+                    } else {
+                        break;
+                    }
+                }
+            }
+        }
+        // broadcast
+        let _ = sender.send(chunk);
+
+        offset = end;
+    }
+}
+</file>
+
+<file path="packages/react-native-uniffi-russh/src/api.ts">
+/**
+ * We cannot make the generated code match this API exactly because uniffi
+ * - Doesn't support ts literals for rust enums
+ * - Doesn't support passing a js object with methods and properties to or from rust.
+ *
+ * The second issue is much harder to get around than the first.
+ * In practice it means that if you want to pass an object with callbacks and props to rust, it need to be in seperate args.
+ * If you want to pass an object with callbacks and props from rust to js (like ssh handles), you need to instead only pass an object with callbacks
+ * just make one of the callbacks a sync info() callback.
+ *
+ * Then in this api wrapper we can smooth over those rough edges.
+ * See: - https://jhugman.github.io/uniffi-bindgen-react-native/idioms/callback-interfaces.html
+ */
+import * as GeneratedRussh from './index';
+
+// #region Ideal API
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Core types
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type TerminalType =
+	| 'Vanilla'
+	| 'Vt100'
+	| 'Vt102'
+	| 'Vt220'
+	| 'Ansi'
+	| 'Xterm'
+	| 'Xterm256';
+
+export type ConnectionDetails = {
+	host: string;
+	port: number;
+	username: string;
+	security:
+		| { type: 'password'; password: string }
+		| { type: 'key'; privateKey: string };
+};
+
+/**
+ * This status is only to provide updates for discrete events
+ * during the connect() promise.
+ *
+ * It is no longer relevant after the connect() promise is resolved.
+ */
+export type SshConnectionProgress =
+	| 'tcpConnected' // TCP established, starting SSH handshake
+	| 'sshHandshake'; // SSH protocol negotiation complete
+
+export type ConnectOptions = ConnectionDetails & {
+	onConnectionProgress?: (status: SshConnectionProgress) => void;
+	onDisconnected?: (connectionId: string) => void;
+	onServerKey: (
+		serverKeyInfo: GeneratedRussh.ServerPublicKeyInfo,
+		signal?: AbortSignal,
+	) => Promise<boolean>;
+	abortSignal?: AbortSignal;
+};
+
+export type StartShellOptions = {
+	term: TerminalType;
+	terminalMode?: GeneratedRussh.TerminalMode[];
+	terminalPixelSize?: GeneratedRussh.TerminalPixelSize;
+	terminalSize?: GeneratedRussh.TerminalSize;
+	useTmux: boolean;
+	tmuxSessionName: string;
+	onClosed?: (shellId: number) => void;
+	abortSignal?: AbortSignal;
+};
+
+export type StreamKind = 'stdout' | 'stderr';
+
+export type TerminalChunk = {
+	seq: bigint;
+	/** Milliseconds since UNIX epoch (double). */
+	tMs: number;
+	stream: StreamKind;
+	bytes: ArrayBuffer;
+};
+
+export type DropNotice = { kind: 'dropped'; fromSeq: bigint; toSeq: bigint };
+export type ListenerEvent = TerminalChunk | DropNotice;
+
+export type Cursor =
+	| { mode: 'head' } // earliest available in ring
+	| { mode: 'tailBytes'; bytes: bigint } // last N bytes (best-effort)
+	| { mode: 'seq'; seq: bigint } // from a given sequence
+	| { mode: 'time'; tMs: number } // from timestamp
+	| { mode: 'live' }; // no replay, live only
+
+export type ListenerOptions = {
+	cursor: Cursor;
+	/** Optional per-listener coalescing window in ms (e.g., 10–25). */
+	coalesceMs?: number;
+};
+
+export type BufferReadResult = {
+	chunks: TerminalChunk[];
+	nextSeq: bigint;
+	dropped?: { fromSeq: bigint; toSeq: bigint };
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Handles
+// ─────────────────────────────────────────────────────────────────────────────
+
+type ProgressTimings = {
+	tcpEstablishedAtMs: number;
+	sshHandshakeAtMs: number;
+};
+
+export type SshConnection = {
+	readonly connectionId: string;
+	readonly createdAtMs: number;
+	readonly connectedAtMs: number;
+	readonly connectionDetails: ConnectionDetails;
+	readonly progressTimings: ProgressTimings;
+
+	startShell: (opts: StartShellOptions) => Promise<SshShell>;
+	disconnect: (opts?: { signal?: AbortSignal }) => Promise<void>;
+};
+
+export type SshShell = {
+	readonly channelId: number;
+	readonly createdAtMs: number;
+	readonly pty: TerminalType;
+	readonly connectionId: string;
+
+	// I/O
+	sendData: (
+		data: ArrayBuffer,
+		opts?: { signal?: AbortSignal },
+	) => Promise<void>;
+	close: (opts?: { signal?: AbortSignal }) => Promise<void>;
+
+	/**
+	 * Resize the PTY window. Call when terminal UI size changes.
+	 * Sends SSH "window-change" request to deliver SIGWINCH to remote process.
+	 */
+	resizePty: (
+		cols: number,
+		rows: number,
+		opts?: { pixelWidth?: number; pixelHeight?: number; signal?: AbortSignal },
+	) => Promise<void>;
+
+	// Buffer policy & stats
+	// setBufferPolicy: (policy: {
+	//   ringBytes?: number;
+	//   coalesceMs?: number;
+	// }) => Promise<void>;
+	bufferStats: () => GeneratedRussh.BufferStats;
+	currentSeq: () => number;
+
+	// Replay + live
+	readBuffer: (cursor: Cursor, maxBytes?: bigint) => BufferReadResult;
+	addListener: (
+		cb: (ev: ListenerEvent) => void,
+		opts: ListenerOptions,
+	) => bigint;
+	removeListener: (id: bigint) => void;
+};
+
+type RusshApi = {
+	uniffiInitAsync: () => Promise<void>;
+	connect: (opts: ConnectOptions) => Promise<SshConnection>;
+	generateKeyPair: (
+		type: 'rsa' | 'ecdsa' | 'ed25519',
+		// TODO: Add these
+		// passphrase?: string;
+		// keySize?: number;
+		// comment?: string;
+	) => Promise<string>;
+	validatePrivateKey: (
+		key: string,
+	) =>
+		| { valid: true; error?: never }
+		| { valid: false; error: GeneratedRussh.SshError };
+	extractPublicKey: (
+		privateKey: string,
+	) =>
+		| { publicKey: string; error?: never }
+		| { publicKey?: never; error: GeneratedRussh.SshError };
+};
+
+// #endregion
+
+// #region Wrapper to match the ideal API
+
+const terminalTypeLiteralToEnum = {
+	Vanilla: GeneratedRussh.TerminalType.Vanilla,
+	Vt100: GeneratedRussh.TerminalType.Vt100,
+	Vt102: GeneratedRussh.TerminalType.Vt102,
+	Vt220: GeneratedRussh.TerminalType.Vt220,
+	Ansi: GeneratedRussh.TerminalType.Ansi,
+	Xterm: GeneratedRussh.TerminalType.Xterm,
+	Xterm256: GeneratedRussh.TerminalType.Xterm256,
+} as const satisfies Record<string, GeneratedRussh.TerminalType>;
+
+const terminalTypeEnumToLiteral: Record<
+	GeneratedRussh.TerminalType,
+	TerminalType
+> = {
+	[GeneratedRussh.TerminalType.Vanilla]: 'Vanilla',
+	[GeneratedRussh.TerminalType.Vt100]: 'Vt100',
+	[GeneratedRussh.TerminalType.Vt102]: 'Vt102',
+	[GeneratedRussh.TerminalType.Vt220]: 'Vt220',
+	[GeneratedRussh.TerminalType.Ansi]: 'Ansi',
+	[GeneratedRussh.TerminalType.Xterm]: 'Xterm',
+	[GeneratedRussh.TerminalType.Xterm256]: 'Xterm256',
+};
+
+const sshConnProgressEnumToLiteral = {
+	[GeneratedRussh.SshConnectionProgressEvent.TcpConnected]: 'tcpConnected',
+	[GeneratedRussh.SshConnectionProgressEvent.SshHandshake]: 'sshHandshake',
+} as const satisfies Record<
+	GeneratedRussh.SshConnectionProgressEvent,
+	SshConnectionProgress
+>;
+
+const streamEnumToLiteral = {
+	[GeneratedRussh.StreamKind.Stdout]: 'stdout',
+	[GeneratedRussh.StreamKind.Stderr]: 'stderr',
+} as const satisfies Record<GeneratedRussh.StreamKind, StreamKind>;
+
+function generatedConnDetailsToIdeal(
+	details: GeneratedRussh.ConnectionDetails,
+): ConnectionDetails {
+	const security: ConnectionDetails['security'] =
+		details.security instanceof GeneratedRussh.Security.Password
+			? { type: 'password', password: details.security.inner.password }
+			: { type: 'key', privateKey: details.security.inner.privateKeyContent };
+	return {
+		host: details.host,
+		port: details.port,
+		username: details.username,
+		security,
+	};
+}
+
+function cursorToGenerated(cursor: Cursor): GeneratedRussh.Cursor {
+	switch (cursor.mode) {
+		case 'head':
+			return new GeneratedRussh.Cursor.Head();
+		case 'tailBytes':
+			return new GeneratedRussh.Cursor.TailBytes({
+				bytes: cursor.bytes,
+			});
+		case 'seq':
+			return new GeneratedRussh.Cursor.Seq({ seq: cursor.seq });
+		case 'time':
+			return new GeneratedRussh.Cursor.TimeMs({ tMs: cursor.tMs });
+		case 'live':
+			return new GeneratedRussh.Cursor.Live();
+	}
+}
+
+function toTerminalChunk(ch: GeneratedRussh.TerminalChunk): TerminalChunk {
+	return {
+		seq: ch.seq,
+		tMs: ch.tMs,
+		stream: streamEnumToLiteral[ch.stream],
+		bytes: ch.bytes,
+	};
+}
+
+function wrapShellSession(
+	shell: GeneratedRussh.ShellSessionInterface,
+): SshShell {
+	const info = shell.getInfo();
+
+	const readBuffer: SshShell['readBuffer'] = (cursor, maxBytes) => {
+		const res = shell.readBuffer(cursorToGenerated(cursor), maxBytes);
+		return {
+			chunks: res.chunks.map(toTerminalChunk),
+			nextSeq: res.nextSeq,
+			dropped: res.dropped,
+		} satisfies BufferReadResult;
+	};
+
+	const addListener: SshShell['addListener'] = (cb, opts) => {
+		const listener = {
+			onEvent: (ev: GeneratedRussh.ShellEvent) => {
+				if (ev instanceof GeneratedRussh.ShellEvent.Chunk) {
+					cb(toTerminalChunk(ev.inner[0]!));
+				} else if (ev instanceof GeneratedRussh.ShellEvent.Dropped) {
+					cb({
+						kind: 'dropped',
+						fromSeq: ev.inner.fromSeq,
+						toSeq: ev.inner.toSeq,
+					});
+				}
+			},
+		} satisfies GeneratedRussh.ShellListener;
+
+		try {
+			const id = shell.addListener(listener, {
+				cursor: cursorToGenerated(opts.cursor),
+				coalesceMs: opts.coalesceMs,
+			});
+			if (id === 0n) {
+				throw new Error('Failed to attach shell listener (id=0)');
+			}
+			return id;
+		} catch (e) {
+			throw new Error(
+				`addListener failed: ${String((e as any)?.message ?? e)}`,
+			);
+		}
+	};
+
+	return {
+		channelId: info.channelId,
+		createdAtMs: info.createdAtMs,
+		pty: terminalTypeEnumToLiteral[info.term],
+		connectionId: info.connectionId,
+		sendData: (data, o) =>
+			shell.sendData(data, o?.signal ? { signal: o.signal } : undefined),
+		close: (o) => shell.close(o?.signal ? { signal: o.signal } : undefined),
+		resizePty: (cols, rows, o) =>
+			shell.resizePty(
+				cols,
+				rows,
+				o?.pixelWidth ?? undefined,
+				o?.pixelHeight ?? undefined,
+				o?.signal ? { signal: o.signal } : undefined,
+			),
+		// setBufferPolicy,
+		bufferStats: shell.bufferStats,
+		currentSeq: () => Number(shell.currentSeq()),
+		readBuffer,
+		addListener,
+		removeListener: (id) => shell.removeListener(id),
+	};
+}
+
+function wrapConnection(
+	conn: GeneratedRussh.SshConnectionInterface,
+): SshConnection {
+	const info = conn.getInfo();
+	return {
+		connectionId: info.connectionId,
+		connectionDetails: generatedConnDetailsToIdeal(info.connectionDetails),
+		createdAtMs: info.createdAtMs,
+		connectedAtMs: info.connectedAtMs,
+		progressTimings: {
+			tcpEstablishedAtMs: info.progressTimings.tcpEstablishedAtMs,
+			sshHandshakeAtMs: info.progressTimings.sshHandshakeAtMs,
+		},
+		startShell: async ({ onClosed, ...params }) => {
+			const shell = await conn.startShell(
+				{
+					term: terminalTypeLiteralToEnum[params.term],
+					onClosedCallback: onClosed
+						? {
+								onChange: (channelId) => onClosed(channelId),
+							}
+						: undefined,
+					terminalMode: params.terminalMode,
+					terminalPixelSize: params.terminalPixelSize,
+					terminalSize: params.terminalSize,
+					useTmux: params.useTmux,
+					tmuxSessionName: params.tmuxSessionName,
+				},
+				params.abortSignal ? { signal: params.abortSignal } : undefined,
+			);
+			return wrapShellSession(shell);
+		},
+		disconnect: (opts) =>
+			conn.disconnect(opts?.signal ? { signal: opts.signal } : undefined),
+	};
+}
+
+async function connect({
+	onServerKey,
+	onConnectionProgress,
+	onDisconnected,
+	...options
+}: ConnectOptions): Promise<SshConnection> {
+	const security =
+		options.security.type === 'password'
+			? new GeneratedRussh.Security.Password({
+					password: options.security.password,
+				})
+			: new GeneratedRussh.Security.Key({
+					privateKeyContent: options.security.privateKey,
+				});
+	const sshConnection = await GeneratedRussh.connect(
+		{
+			connectionDetails: {
+				host: options.host,
+				port: options.port,
+				username: options.username,
+				security,
+			},
+			onConnectionProgressCallback: onConnectionProgress
+				? {
+						onChange: (statusEnum) =>
+							onConnectionProgress(sshConnProgressEnumToLiteral[statusEnum]),
+					}
+				: undefined,
+			onDisconnectedCallback: onDisconnected
+				? {
+						onChange: (connectionId) => onDisconnected(connectionId),
+					}
+				: undefined,
+			onServerKeyCallback: {
+				onChange: (serverKeyInfo) =>
+					onServerKey(serverKeyInfo, options.abortSignal),
+			},
+		},
+		options.abortSignal ? { signal: options.abortSignal } : undefined,
+	);
+	return wrapConnection(sshConnection);
+}
+
+async function generateKeyPair(type: 'rsa' | 'ecdsa' | 'ed25519') {
+	const map = {
+		rsa: GeneratedRussh.KeyType.Rsa,
+		ecdsa: GeneratedRussh.KeyType.Ecdsa,
+		ed25519: GeneratedRussh.KeyType.Ed25519,
+	} as const;
+	return GeneratedRussh.generateKeyPair(map[type]);
+}
+
+function validatePrivateKey(
+	key: string,
+):
+	| { valid: true; error?: never }
+	| { valid: false; error: GeneratedRussh.SshError } {
+	try {
+		GeneratedRussh.validatePrivateKey(key);
+		return { valid: true };
+	} catch (e) {
+		return { valid: false, error: e as GeneratedRussh.SshError };
+	}
+}
+
+function extractPublicKey(
+	privateKey: string,
+):
+	| { publicKey: string; error?: never }
+	| { publicKey?: never; error: GeneratedRussh.SshError } {
+	try {
+		const publicKey = GeneratedRussh.extractPublicKey(privateKey);
+		return { publicKey };
+	} catch (e) {
+		return { error: e as GeneratedRussh.SshError };
+	}
+}
+
+// #endregion
+
+export { SshError, SshError_Tags } from './generated/uniffi_russh';
+
+export const RnRussh = {
+	uniffiInitAsync: GeneratedRussh.uniffiInitAsync,
+	connect,
+	generateKeyPair,
+	validatePrivateKey,
+	extractPublicKey,
+} satisfies RusshApi;
+</file>
+
+<file path="apps/mobile/src/app/shell/detail.tsx">
+import { type ListenerEvent } from '@fressh/react-native-uniffi-russh';
+import {
+	XtermJsWebView,
+	type XtermWebViewHandle,
+} from '@fressh/react-native-xtermjs-webview';
+
+import * as Clipboard from 'expo-clipboard';
+import * as Linking from 'expo-linking';
+import {
+	Stack,
+	useLocalSearchParams,
+	useRouter,
+	useFocusEffect,
+} from 'expo-router';
+import * as LucideIcons from 'lucide-react-native';
+import React, {
+	startTransition,
+	useCallback,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from 'react';
+import {
+	Alert,
+	Animated,
+	AppState,
+	Keyboard,
+	KeyboardAvoidingView,
+	Modal,
+	Platform,
+	Pressable,
+	ScrollView,
+	Text,
+	TextInput,
+	View,
+} from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import {
+	ACTIVE_KEYBOARD_IDS,
+	DEFAULT_KEYBOARD_ID,
+	KEYBOARDS_BY_ID,
+	MACROS_BY_KEYBOARD_ID,
+	type KeyboardDefinition,
+	type KeyboardSlot,
+	type MacroDef,
+	type ModifierKey,
+} from '@/generated/keyboard-config';
+import { useAutoConnectStore } from '@/lib/auto-connect';
+import {
+	commandPresets,
+	type CommandPreset,
+	type CommandStep,
+} from '@/lib/command-presets';
+import { getStoredConnectionId } from '@/lib/connection-utils';
+import {
+	CONFIGURATOR_URL,
+	HANDLE_DEV_SERVER_URL,
+	runAction,
+	type ActionContext,
+	type ActionId,
+} from '@/lib/keyboard-actions';
+import { runMacro } from '@/lib/keyboard-runtime';
+import { rootLogger } from '@/lib/logger';
+import { useSshStore } from '@/lib/ssh-store';
+import { useTheme } from '@/lib/theme';
+
+const logger = rootLogger.extend('TabsShellDetail');
+
+export default function TabsShellDetail() {
+	const [ready, setReady] = useState(false);
+
+	useFocusEffect(
+		React.useCallback(() => {
+			startTransition(() => {
+				setTimeout(() => {
+					// TODO: This is gross. It would be much better to switch
+					// after the navigation animation completes.
+					setReady(true);
+				}, 16);
+			});
+
+			return () => {
+				setReady(false);
+			};
+		}, []),
+	);
+
+	if (!ready) return <RouteSkeleton />;
+	return <ShellDetail />;
+}
+
+function RouteSkeleton() {
+	const theme = useTheme();
+	return (
+		<View
+			style={{
+				flex: 1,
+				justifyContent: 'center',
+				alignItems: 'center',
+				backgroundColor: theme.colors.background,
+			}}
+		>
+			<Text style={{ color: theme.colors.textPrimary, fontSize: 20 }}>
+				Loading
+			</Text>
+		</View>
+	);
+}
+
+type TmuxAttachErrorScreenProps = {
+	sessionName: string;
+	onEdit: () => void;
+};
+
+function TmuxAttachErrorScreen({
+	sessionName,
+	onEdit,
+}: TmuxAttachErrorScreenProps) {
+	const theme = useTheme();
+	return (
+		<View
+			style={{
+				flex: 1,
+				justifyContent: 'center',
+				alignItems: 'center',
+				backgroundColor: theme.colors.background,
+				padding: 24,
+			}}
+		>
+			<Text
+				style={{
+					color: theme.colors.textPrimary,
+					fontSize: 20,
+					fontWeight: '700',
+					marginBottom: 12,
+					textAlign: 'center',
+				}}
+			>
+				Tmux session not found
+			</Text>
+			<Text
+				style={{
+					color: theme.colors.textSecondary,
+					fontSize: 14,
+					textAlign: 'center',
+					marginBottom: 20,
+				}}
+			>
+				We could not attach to tmux session "{sessionName}". Create it
+				on the server and try again.
+			</Text>
+			<Pressable
+				onPress={onEdit}
+				style={{
+					backgroundColor: theme.colors.primary,
+					borderRadius: 10,
+					paddingVertical: 12,
+					paddingHorizontal: 20,
+				}}
+			>
+				<Text style={{ color: '#fff', fontWeight: '700' }}>
+					Edit Connection
+				</Text>
+			</Pressable>
+		</View>
+	);
+}
+
+type TerminalErrorBoundaryProps = {
+	children: React.ReactNode;
+	onRetry: () => void;
+};
+
+type TerminalErrorBoundaryState = {
+	hasError: boolean;
+};
+
+class TerminalErrorBoundary extends React.Component<
+	TerminalErrorBoundaryProps,
+	TerminalErrorBoundaryState
+> {
+	constructor(props: TerminalErrorBoundaryProps) {
+		super(props);
+		this.state = { hasError: false };
+	}
+
+	static getDerivedStateFromError(): TerminalErrorBoundaryState {
+		return { hasError: true };
+	}
+
+	override componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
+		logger.error('Terminal crashed', error, errorInfo);
+	}
+
+	handleRetry = () => {
+		this.setState({ hasError: false });
+		this.props.onRetry();
+	};
+
+	override render() {
+		if (this.state.hasError) {
+			return <TerminalErrorFallback onRetry={this.handleRetry} />;
+		}
+		return this.props.children;
+	}
+}
+
+function TerminalErrorFallback({ onRetry }: { onRetry: () => void }) {
+	const theme = useTheme();
+	return (
+		<View
+			style={{
+				flex: 1,
+				justifyContent: 'center',
+				alignItems: 'center',
+				backgroundColor: theme.colors.background,
+				padding: 20,
+			}}
+		>
+			<Text
+				style={{
+					color: theme.colors.textPrimary,
+					fontSize: 18,
+					marginBottom: 12,
+				}}
+			>
+				Terminal crashed
+			</Text>
+			<Pressable
+				onPress={onRetry}
+				style={{
+					paddingHorizontal: 20,
+					paddingVertical: 10,
+					borderRadius: 8,
+					backgroundColor: theme.colors.primary,
+				}}
+			>
+				<Text style={{ color: '#fff', fontSize: 16 }}>Tap to retry</Text>
+			</Pressable>
+		</View>
+	);
+}
+
+const encoder = new TextEncoder();
+const ALL_KEYBOARD_IDS = Object.keys(KEYBOARDS_BY_ID);
+const ACTIVE_KEYBOARD_IDS_FALLBACK: readonly string[] =
+	ACTIVE_KEYBOARD_IDS.length > 0 ? ACTIVE_KEYBOARD_IDS : ALL_KEYBOARD_IDS;
+const DEFAULT_KEYBOARD_ID_FALLBACK =
+	DEFAULT_KEYBOARD_ID || ACTIVE_KEYBOARD_IDS_FALLBACK[0] || '';
+
+function ShellDetail() {
+	const xtermRef = useRef<XtermWebViewHandle>(null);
+	const listenerIdRef = useRef<bigint | null>(null);
+
+	const searchParams = useLocalSearchParams<{
+		connectionId?: string;
+		channelId?: string;
+		tmuxError?: string;
+		tmuxSessionName?: string;
+		storedConnectionId?: string;
+	}>();
+
+	const connectionId = searchParams.connectionId;
+	const channelId = parseInt(searchParams.channelId ?? '');
+
+	if (!connectionId || isNaN(channelId))
+		throw new Error('Missing or invalid connectionId/channelId');
+	const hasTmuxAttachError = searchParams.tmuxError === 'attach-failed';
+	const tmuxSessionName = searchParams.tmuxSessionName;
+
+	const router = useRouter();
+	const theme = useTheme();
+	const insets = useSafeAreaInsets();
+
+	const shell = useSshStore(
+		(s) => s.shells[`${connectionId}-${channelId}` as const],
+	);
+	const connection = useSshStore((s) => s.connections[connectionId]);
+	const storedConnectionId =
+		searchParams.storedConnectionId ??
+		(connection
+			? getStoredConnectionId(connection.connectionDetails)
+			: undefined);
+	const isAutoConnecting = useAutoConnectStore((s) => s.isAutoConnecting);
+	const isReconnecting = useAutoConnectStore((s) => s.isReconnecting);
+
+	useEffect(() => {
+		if (hasTmuxAttachError) return;
+		if (shell && connection) return;
+		const autoState = useAutoConnectStore.getState();
+		if (autoState.isAutoConnecting || autoState.isReconnecting) return;
+		logger.info('shell or connection not found, replacing route with /shell');
+		router.back();
+	}, [
+		connection,
+		hasTmuxAttachError,
+		isAutoConnecting,
+		isReconnecting,
+		router,
+		shell,
+	]);
+
+	useEffect(() => {
+		const xterm = xtermRef.current;
+		return () => {
+			if (shell && listenerIdRef.current != null)
+				shell.removeListener(listenerIdRef.current);
+			listenerIdRef.current = null;
+			if (xterm) xterm.flush();
+		};
+	}, [shell]);
+
+	useEffect(() => {
+		return () => {
+			commandTimeoutsRef.current.forEach((timeout) => {
+				clearTimeout(timeout);
+			});
+			commandTimeoutsRef.current = [];
+		};
+	}, []);
+
+	const [selectedKeyboardId, setSelectedKeyboardId] = useState<string>(
+		DEFAULT_KEYBOARD_ID_FALLBACK,
+	);
+	const availableKeyboardIds = useMemo(() => new Set(ALL_KEYBOARD_IDS), []);
+
+	const currentKeyboard = useMemo<KeyboardDefinition | null>(() => {
+		if (selectedKeyboardId && KEYBOARDS_BY_ID[selectedKeyboardId]) {
+			return KEYBOARDS_BY_ID[selectedKeyboardId];
+		}
+		if (
+			DEFAULT_KEYBOARD_ID_FALLBACK &&
+			KEYBOARDS_BY_ID[DEFAULT_KEYBOARD_ID_FALLBACK]
+		) {
+			return KEYBOARDS_BY_ID[DEFAULT_KEYBOARD_ID_FALLBACK];
+		}
+		const fallbackId = ACTIVE_KEYBOARD_IDS_FALLBACK[0];
+		return fallbackId ? (KEYBOARDS_BY_ID[fallbackId] ?? null) : null;
+	}, [selectedKeyboardId]);
+
+	const currentMacros = useMemo<MacroDef[]>(
+		() =>
+			currentKeyboard ? (MACROS_BY_KEYBOARD_ID[currentKeyboard.id] ?? []) : [],
+		[currentKeyboard],
+	);
+
+	// Flash message for keyboard switching
+	const [flashKeyboardName, setFlashKeyboardName] = useState<string | null>(
+		null,
+	);
+	const flashOpacity = useRef(new Animated.Value(0)).current;
+	const isFirstMount = useRef(true);
+
+	useEffect(() => {
+		// Skip the flash on first mount
+		if (isFirstMount.current) {
+			isFirstMount.current = false;
+			return;
+		}
+
+		if (!currentKeyboard) return;
+
+		// eslint-disable-next-line @eslint-react/hooks-extra/no-direct-set-state-in-use-effect -- Animation state requires direct set in effect
+		setFlashKeyboardName(currentKeyboard.name);
+		flashOpacity.setValue(1);
+
+		const animation = Animated.timing(flashOpacity, {
+			toValue: 0,
+			duration: 800,
+			delay: 400,
+			useNativeDriver: true,
+		});
+
+		animation.start(({ finished }) => {
+			if (finished) {
+				setFlashKeyboardName(null);
+			}
+		});
+
+		return () => {
+			animation.stop();
+		};
+	}, [currentKeyboard, flashOpacity]);
+
+	const [modifierKeysActive, setModifierKeysActive] = useState<ModifierKey[]>(
+		[],
+	);
+	const [systemKeyboardEnabled, setSystemKeyboardEnabled] = useState(false);
+	const [selectionModeEnabled, setSelectionModeEnabled] = useState(false);
+	const [commandPresetsOpen, setCommandPresetsOpen] = useState(false);
+	const [commanderOpen, setCommanderOpen] = useState(false);
+	const commandTimeoutsRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+	const lastSelectionRef = useRef<{ text: string; at: number } | null>(null);
+
+	const exitSelectionMode = useCallback(() => {
+		setSelectionModeEnabled(false);
+		xtermRef.current?.setSelectionModeEnabled(false);
+	}, []);
+
+	const sendBytesRaw = useCallback(
+		(bytes: Uint8Array<ArrayBuffer>) => {
+			if (!shell) return;
+			shell.sendData(bytes.buffer).catch((e: unknown) => {
+				logger.warn('sendData failed', e);
+				router.back();
+			});
+		},
+		[shell, router],
+	);
+
+	const sendBytesWithModifiers = useCallback(
+		(bytes: Uint8Array<ArrayBuffer>) => {
+			if (!shell) return;
+			let next = bytes;
+			modifierKeysActive
+				.map((key) => MODIFIER_DEFS[key])
+				.sort((a, b) => a.orderPreference - b.orderPreference)
+				.forEach((modifier) => {
+					if (!modifier.canApplyModifierToBytes(next)) return;
+					next = modifier.applyModifierToBytes(next);
+				});
+			sendBytesRaw(next);
+		},
+		[modifierKeysActive, sendBytesRaw, shell],
+	);
+
+	const sendTextRaw = useCallback(
+		(value: string) => {
+			sendBytesRaw(encoder.encode(value));
+		},
+		[sendBytesRaw],
+	);
+
+	const sendTextWithModifiers = useCallback(
+		(value: string) => {
+			sendBytesWithModifiers(encoder.encode(value));
+		},
+		[sendBytesWithModifiers],
+	);
+
+	const clearCommandTimeouts = useCallback(() => {
+		commandTimeoutsRef.current.forEach((timeout) => {
+			clearTimeout(timeout);
+		});
+		commandTimeoutsRef.current = [];
+	}, []);
+
+	const sendCommandStep = useCallback(
+		(step: CommandStep) => {
+			const times = step.repeat ?? 1;
+			for (let i = 0; i < times; i += 1) {
+				switch (step.type) {
+					case 'text':
+						sendTextRaw(step.data);
+						break;
+					case 'enter':
+						sendBytesRaw(encoder.encode('\r'));
+						break;
+					case 'arrowDown':
+						sendBytesRaw(encoder.encode('\x1b[B'));
+						break;
+					case 'arrowUp':
+						sendBytesRaw(encoder.encode('\x1b[A'));
+						break;
+					case 'esc':
+						sendBytesRaw(encoder.encode('\x1b'));
+						break;
+					case 'space':
+						sendBytesRaw(encoder.encode(' '));
+						break;
+					case 'tab':
+						sendBytesRaw(encoder.encode('\t'));
+						break;
+					default:
+						break;
+				}
+			}
+		},
+		[sendBytesRaw, sendTextRaw],
+	);
+
+	const runCommandPreset = useCallback(
+		(preset: CommandPreset) => {
+			exitSelectionMode();
+			clearCommandTimeouts();
+			let delay = 0;
+			const baseDelay = 50;
+			preset.steps.forEach((step) => {
+				const stepDelay = step.delayMs ?? baseDelay;
+				const timeoutId = setTimeout(() => {
+					sendCommandStep(step);
+				}, delay);
+				commandTimeoutsRef.current.push(timeoutId);
+				delay += stepDelay * (step.repeat ?? 1);
+			});
+			setCommandPresetsOpen(false);
+		},
+		[clearCommandTimeouts, exitSelectionMode, sendCommandStep],
+	);
+
+	const toggleModifier = useCallback((modifier: ModifierKey) => {
+		setModifierKeysActive((prev) =>
+			prev.includes(modifier)
+				? prev.filter((entry) => entry !== modifier)
+				: [...prev, modifier],
+		);
+	}, []);
+
+	const rotateKeyboard = useCallback(() => {
+		if (ACTIVE_KEYBOARD_IDS_FALLBACK.length <= 1) return;
+		setSelectedKeyboardId((current) => {
+			const idx = Math.max(0, ACTIVE_KEYBOARD_IDS_FALLBACK.indexOf(current));
+			const nextIdx = (idx + 1) % ACTIVE_KEYBOARD_IDS_FALLBACK.length;
+			return ACTIVE_KEYBOARD_IDS_FALLBACK[nextIdx] ?? current;
+		});
+	}, []);
+
+	const selectKeyboardIfExists = useCallback(
+		(id: string) => {
+			if (!availableKeyboardIds.has(id)) return;
+			setSelectedKeyboardId(id);
+		},
+		[availableKeyboardIds],
+	);
+
+	const handlePasteClipboard = useCallback(async () => {
+		try {
+			const text = await Clipboard.getStringAsync();
+			if (text) sendTextRaw(text);
+			if (selectionModeEnabled) {
+				exitSelectionMode();
+			}
+		} catch (error) {
+			logger.warn('clipboard read failed', error);
+		}
+	}, [exitSelectionMode, sendTextRaw, selectionModeEnabled]);
+
+	const handleCopySelection = useCallback(() => {
+		const xr = xtermRef.current;
+		if (!xr) return;
+		void (async () => {
+			const selection = await xr.getSelection();
+			if (!selection) {
+				logger.info('no selection to copy');
+				return;
+			}
+			lastSelectionRef.current = { text: selection, at: Date.now() };
+			await Clipboard.setStringAsync(selection);
+			logger.info('copied selection', selection.length);
+			exitSelectionMode();
+		})();
+	}, [exitSelectionMode]);
+
+	const handleSelectionChanged = useCallback((text: string) => {
+		if (!text) return;
+		const now = Date.now();
+		if (lastSelectionRef.current?.text === text) return;
+		lastSelectionRef.current = { text, at: now };
+	}, []);
+
+	const openConfigDialog = useCallback(() => {
+		const editConnectionId = storedConnectionId ?? connectionId;
+		Alert.alert(
+			'Configure',
+			'Choose where to go',
+			[
+				{
+					text: 'Keyboard config',
+					onPress: () => {
+						void Linking.openURL(CONFIGURATOR_URL);
+					},
+				},
+				{
+					text: 'Handle dev server',
+					onPress: () => {
+						void Linking.openURL(HANDLE_DEV_SERVER_URL);
+					},
+				},
+				{
+					text: 'Host config',
+					onPress: () => {
+						router.replace({
+							pathname: '/',
+							params: { editConnectionId },
+						});
+					},
+				},
+				{ text: 'Cancel', style: 'cancel' },
+			],
+			{ cancelable: true },
+		);
+	}, [connectionId, router, storedConnectionId]);
+
+	const actionContext = useMemo<ActionContext>(
+		() => ({
+			availableKeyboardIds,
+			selectKeyboard: selectKeyboardIfExists,
+			rotateKeyboard,
+			openConfigurator: openConfigDialog,
+			sendBytes: sendBytesRaw,
+			pasteClipboard: handlePasteClipboard,
+			copySelection: handleCopySelection,
+			toggleCommandPresets: () => {
+				setCommanderOpen(false);
+				setCommandPresetsOpen((prev) => !prev);
+			},
+			openCommander: () => {
+				setCommandPresetsOpen(false);
+				setCommanderOpen(true);
+			},
+		}),
+		[
+			availableKeyboardIds,
+			handleCopySelection,
+			handlePasteClipboard,
+			openConfigDialog,
+			rotateKeyboard,
+			selectKeyboardIfExists,
+			sendBytesRaw,
+		],
+	);
+
+	const handleAction = useCallback(
+		(actionId: ActionId) => {
+			void runAction(actionId, actionContext);
+		},
+		[actionContext],
+	);
+
+	const handleSlotPress = useCallback(
+		(slot: KeyboardSlot) => {
+			if (
+				selectionModeEnabled &&
+				!(slot.type === 'action' && slot.actionId === 'COPY_SELECTION')
+			) {
+				// Any input/command should exit selection first, except explicit copy.
+				exitSelectionMode();
+			}
+			if (slot.type === 'modifier') {
+				toggleModifier(slot.modifier);
+				return;
+			}
+			if (slot.type === 'text') {
+				sendTextWithModifiers(slot.text);
+				return;
+			}
+			if (slot.type === 'bytes') {
+				sendBytesWithModifiers(new Uint8Array(slot.bytes));
+				return;
+			}
+			if (slot.type === 'macro') {
+				const macro = currentMacros.find((entry) => entry.id === slot.macroId);
+				if (!macro) return;
+				runMacro(macro, {
+					sendBytes: sendBytesRaw,
+					sendText: sendTextRaw,
+					onAction: handleAction,
+				});
+				return;
+			}
+			if (slot.type === 'action') {
+				handleAction(slot.actionId);
+				return;
+			}
+		},
+		[
+			currentMacros,
+			exitSelectionMode,
+			handleAction,
+			sendBytesRaw,
+			sendBytesWithModifiers,
+			sendTextRaw,
+			sendTextWithModifiers,
+			selectionModeEnabled,
+			toggleModifier,
+		],
+	);
+
+	// Debounced PTY resize handler
+	const resizeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const lastSizeRef = useRef<{ cols: number; rows: number } | null>(null);
+
+	const handleTerminalResize = useCallback(
+		(cols: number, rows: number) => {
+			// Skip if same size
+			if (
+				lastSizeRef.current?.cols === cols &&
+				lastSizeRef.current?.rows === rows
+			) {
+				return;
+			}
+			lastSizeRef.current = { cols, rows };
+
+			// Clear pending resize
+			if (resizeTimeoutRef.current) {
+				clearTimeout(resizeTimeoutRef.current);
+			}
+
+			// Debounce resize calls (100ms)
+			resizeTimeoutRef.current = setTimeout(() => {
+				if (!shell) return;
+				logger.info(`Resizing PTY to ${cols}x${rows}`);
+				shell.resizePty(cols, rows).catch((e: unknown) => {
+					logger.warn('resizePty failed', e);
+				});
+			}, 100);
+		},
+		[shell],
+	);
+
+	// Cleanup resize timeout on unmount
+	useEffect(() => {
+		return () => {
+			if (resizeTimeoutRef.current) {
+				clearTimeout(resizeTimeoutRef.current);
+			}
+		};
+	}, []);
+
+	useEffect(() => {
+		if (Platform.OS !== 'android') return;
+		const dismissKeyboard = () => Keyboard.dismiss();
+		dismissKeyboard();
+		if (!systemKeyboardEnabled) {
+			xtermRef.current?.setSystemKeyboardEnabled(false);
+		}
+		// eslint-disable-next-line @eslint-react/web-api/no-leaked-event-listener -- React Native AppState cleans up via subscription.remove()
+		const subscription = AppState.addEventListener('change', (nextState) => {
+			if (nextState === 'active') {
+				if (!systemKeyboardEnabled) {
+					xtermRef.current?.setSystemKeyboardEnabled(false);
+					dismissKeyboard();
+				}
+			}
+		});
+		return () => {
+			subscription.remove();
+		};
+	}, [systemKeyboardEnabled]);
+
+	const disableSystemKeyboard = useCallback(() => {
+		if (Platform.OS !== 'android') return;
+		xtermRef.current?.setSystemKeyboardEnabled(false);
+		Keyboard.dismiss();
+		setSystemKeyboardEnabled(false);
+	}, []);
+
+	const toggleSystemKeyboard = useCallback(() => {
+		if (Platform.OS !== 'android') return;
+		const next = !systemKeyboardEnabled;
+		setSystemKeyboardEnabled(next);
+		xtermRef.current?.setSystemKeyboardEnabled(next);
+		if (next) {
+			exitSelectionMode();
+			// Defer focus until after the button press releases.
+			setTimeout(() => {
+				xtermRef.current?.focus();
+			}, 0);
+		} else {
+			Keyboard.dismiss();
+		}
+	}, [exitSelectionMode, systemKeyboardEnabled]);
+
+	const handleSelectionModeChange = useCallback(
+		(enabled: boolean) => {
+			setSelectionModeEnabled(enabled);
+			if (enabled) disableSystemKeyboard();
+		},
+		[disableSystemKeyboard],
+	);
+
+	const handleTerminalCrashRetry = useCallback(() => {
+		// Navigate back to trigger auto-reconnect flow
+		router.back();
+	}, [router]);
+
+	if (hasTmuxAttachError) {
+		return (
+			<TmuxAttachErrorScreen
+				sessionName={tmuxSessionName ?? 'main'}
+				onEdit={() => {
+					router.replace({
+						pathname: '/',
+						params: { editConnectionId: storedConnectionId ?? connectionId },
+					});
+				}}
+			/>
+		);
+	}
+
+	const shouldRenderTerminal = Boolean(shell && connection);
+	if (!shouldRenderTerminal) {
+		return isAutoConnecting || isReconnecting ? <RouteSkeleton /> : null;
+	}
+
+	return (
+		<>
+			<Stack.Screen options={{ headerShown: false }} />
+			<KeyboardAvoidingView
+				// On Android, window resizing already handles keyboard avoidance.
+				// Keep KeyboardAvoidingView behavior only for iOS.
+				behavior={Platform.OS === 'ios' ? 'height' : undefined}
+				keyboardVerticalOffset={0}
+				style={{
+					flex: 1,
+					backgroundColor: theme.colors.background,
+					// Respect system status/navigation bars on Android.
+					paddingTop: Platform.OS === 'android' ? insets.top : 0,
+					// Keep a small breathing gap above the Android navigation bar.
+					paddingBottom: Platform.OS === 'android' ? insets.bottom + 4 : 0,
+				}}
+			>
+				<TerminalErrorBoundary onRetry={handleTerminalCrashRetry}>
+					<XtermJsWebView
+						ref={xtermRef}
+						style={{ flex: 1 }}
+						webViewOptions={{
+							// Prevent iOS from adding automatic top inset inside WebView
+							contentInsetAdjustmentBehavior: 'never',
+							onLayout: () => {
+								// Refit terminal when container size changes
+								xtermRef.current?.fit();
+							},
+						}}
+						logger={{
+							log: logger.info,
+							// debug: logger.debug,
+							warn: logger.warn,
+							error: logger.error,
+						}}
+						xtermOptions={{
+							theme: {
+								background: theme.colors.background,
+								foreground: theme.colors.textPrimary,
+								...(Platform.OS === 'android'
+									? {
+											// Android: reverse-style selection for readability; iOS keeps the default blue highlight.
+											selectionBackground: '#F5F5F5',
+											selectionForeground: '#000000',
+											selectionInactiveBackground: 'rgba(255, 255, 255, 0.6)',
+										}
+									: {
+											selectionBackground: 'rgba(37, 99, 235, 0.35)',
+											selectionInactiveBackground: 'rgba(37, 99, 235, 0.2)',
+										}),
+							},
+						}}
+						onResize={handleTerminalResize}
+						onSelection={handleSelectionChanged}
+						onSelectionModeChange={handleSelectionModeChange}
+						onInitialized={() => {
+							if (!shell) throw new Error('Shell not found');
+							if (Platform.OS === 'android') {
+								xtermRef.current?.setSystemKeyboardEnabled(false);
+								setSystemKeyboardEnabled(false);
+							}
+							xtermRef.current?.setSelectionModeEnabled(selectionModeEnabled);
+
+							// Replay from head, then attach live listener
+							void (async () => {
+								const res = shell.readBuffer({ mode: 'head' });
+								logger.info('readBuffer(head)', {
+									chunks: res.chunks.length,
+									nextSeq: res.nextSeq,
+									dropped: res.dropped,
+								});
+								if (res.chunks.length) {
+									const chunks = res.chunks.map((c) => c.bytes);
+									const xr = xtermRef.current;
+									if (xr) {
+										xr.writeMany(chunks.map((c) => new Uint8Array(c)));
+										xr.flush();
+									}
+								}
+								const id = shell.addListener(
+									(ev: ListenerEvent) => {
+										if ('kind' in ev) {
+											logger.warn('listener.dropped', ev);
+											return;
+										}
+										const chunk = ev;
+										const xr3 = xtermRef.current;
+										if (xr3) xr3.write(new Uint8Array(chunk.bytes));
+									},
+									{ cursor: { mode: 'seq', seq: res.nextSeq } },
+								);
+								logger.info('shell listener attached', id.toString());
+								listenerIdRef.current = id;
+							})();
+							// Focus to pop the keyboard (iOS needs the prop we set)
+							const xr2 = xtermRef.current;
+							if (xr2 && Platform.OS === 'ios') xr2.focus();
+						}}
+						onData={(terminalMessage) => {
+							if (!shell) return;
+							if (selectionModeEnabled) exitSelectionMode();
+							sendBytesRaw(encoder.encode(terminalMessage));
+						}}
+					/>
+				</TerminalErrorBoundary>
+				<TerminalKeyboard
+					keyboard={currentKeyboard}
+					modifierKeysActive={modifierKeysActive}
+					onSlotPress={handleSlotPress}
+					selectionModeEnabled={selectionModeEnabled}
+					onCopySelection={handleCopySelection}
+					onPasteClipboard={handlePasteClipboard}
+					showSystemKeyboardToggle={Platform.OS === 'android'}
+					systemKeyboardEnabled={systemKeyboardEnabled}
+					onToggleSystemKeyboard={toggleSystemKeyboard}
+				/>
+				<CommandPresetsModal
+					open={commandPresetsOpen}
+					presets={commandPresets}
+					bottomOffset={Platform.OS === 'android' ? insets.bottom + 24 : 24}
+					onClose={() => {
+						setCommandPresetsOpen(false);
+					}}
+					onSelect={runCommandPreset}
+				/>
+				<TerminalCommanderModal
+					open={commanderOpen}
+					bottomOffset={Platform.OS === 'android' ? insets.bottom + 24 : 24}
+					onClose={() => {
+						setCommanderOpen(false);
+					}}
+					onExecuteCommand={(value) => {
+						if (!value.trim()) return;
+						sendTextRaw(value);
+						sendBytesRaw(encoder.encode('\r'));
+					}}
+					onPasteText={(value) => {
+						if (!value.trim()) return;
+						sendTextRaw(value);
+					}}
+					onSendShortcut={(sequence) => {
+						sendBytesRaw(encoder.encode(sequence));
+					}}
+				/>
+				{flashKeyboardName && (
+					<Animated.View
+						pointerEvents="none"
+						style={{
+							position: 'absolute',
+							top: '40%',
+							left: 0,
+							right: 0,
+							alignItems: 'center',
+							opacity: flashOpacity,
+						}}
+					>
+						<View
+							style={{
+								backgroundColor: 'rgba(0, 0, 0, 0.75)',
+								paddingHorizontal: 20,
+								paddingVertical: 10,
+								borderRadius: 8,
+							}}
+						>
+							<Text
+								style={{
+									color: '#fff',
+									fontSize: 16,
+									fontWeight: '600',
+								}}
+							>
+								{flashKeyboardName}
+							</Text>
+						</View>
+					</Animated.View>
+				)}
+			</KeyboardAvoidingView>
+		</>
+	);
+}
+type ModifierContract = {
+	canApplyModifierToBytes: (bytes: Uint8Array<ArrayBuffer>) => boolean;
+	applyModifierToBytes: (
+		bytes: Uint8Array<ArrayBuffer>,
+	) => Uint8Array<ArrayBuffer>;
+	orderPreference: number;
+};
+
+const escapeByte = 27;
+
+const shiftModifier: ModifierContract = {
+	orderPreference: 5,
+	canApplyModifierToBytes: (bytes) =>
+		bytes.some((byte) => byte >= 97 && byte <= 122),
+	applyModifierToBytes: (bytes) => {
+		const next = new Uint8Array(bytes.length);
+		for (let i = 0; i < bytes.length; i += 1) {
+			const byte = bytes[i];
+			if (byte === undefined) continue;
+			next[i] = byte >= 97 && byte <= 122 ? byte - 32 : byte;
+		}
+		return next;
+	},
+};
+
+const ctrlModifier: ModifierContract = {
+	orderPreference: 10,
+	canApplyModifierToBytes: (bytes) => {
+		const firstByte = bytes[0];
+		if (firstByte === undefined) return false;
+		return mapByteToCtrl(firstByte) != null;
+	},
+	applyModifierToBytes: (bytes) => {
+		const firstByte = bytes[0];
+		if (firstByte === undefined) return bytes;
+		const ctrlByte = mapByteToCtrl(firstByte);
+		if (ctrlByte == null) return bytes;
+		return new Uint8Array([ctrlByte]);
+	},
+};
+
+const altModifier: ModifierContract = {
+	orderPreference: 20,
+	canApplyModifierToBytes: (bytes) => {
+		return bytes.length > 0 && bytes[0] !== escapeByte;
+	},
+	applyModifierToBytes: (bytes) => {
+		const result = new Uint8Array(bytes.length + 1);
+		result[0] = escapeByte;
+		result.set(bytes, 1);
+		return result;
+	},
+};
+
+function mapByteToCtrl(byte: number): number | null {
+	if (byte === 32) return 0; // Ctrl+Space
+	const uppercase = byte & 0b1101_1111; // Fold to uppercase / control range
+	if (uppercase >= 64 && uppercase <= 95) {
+		return uppercase & 0x1f;
+	}
+	if (byte === 63) return 127; // Ctrl+?
+	return null;
+}
+
+const cmdModifier: ModifierContract = {
+	orderPreference: 30,
+	canApplyModifierToBytes: () => false,
+	applyModifierToBytes: (bytes) => bytes,
+};
+
+const MODIFIER_DEFS: Record<ModifierKey, ModifierContract> = {
+	SHIFT: shiftModifier,
+	CTRL: ctrlModifier,
+	ALT: altModifier,
+	CMD: cmdModifier,
+};
+
+type LucideIconComponent = React.ComponentType<{
+	color?: string;
+	size?: number;
+}>;
+
+function resolveLucideIcon(name: string | null): LucideIconComponent | null {
+	if (!name) return null;
+	const iconMap = LucideIcons as unknown as Record<string, LucideIconComponent>;
+	const Icon = iconMap[name];
+	return Icon ?? null;
+}
+
+function TerminalKeyboard({
+	keyboard,
+	modifierKeysActive,
+	onSlotPress,
+	selectionModeEnabled,
+	onCopySelection,
+	onPasteClipboard,
+	showSystemKeyboardToggle,
+	systemKeyboardEnabled,
+	onToggleSystemKeyboard,
+}: {
+	keyboard: KeyboardDefinition | null;
+	modifierKeysActive: ModifierKey[];
+	onSlotPress: (slot: KeyboardSlot) => void;
+	selectionModeEnabled: boolean;
+	onCopySelection: () => void;
+	onPasteClipboard: () => void;
+	showSystemKeyboardToggle: boolean;
+	systemKeyboardEnabled: boolean;
+	onToggleSystemKeyboard: () => void;
+}) {
+	const theme = useTheme();
+	const KeyboardIcon = resolveLucideIcon('Keyboard');
+	const CopyIcon = resolveLucideIcon('Copy');
+	const PasteIcon = resolveLucideIcon('ClipboardPaste');
+
+	if (!keyboard) {
+		return (
+			<View
+				style={{
+					borderTopWidth: 1,
+					borderColor: theme.colors.border,
+					padding: 12,
+				}}
+			>
+				<Text style={{ color: theme.colors.textSecondary }}>
+					No keyboard configuration. Generate code to enable shortcuts.
+				</Text>
+			</View>
+		);
+	}
+
+	/* eslint-disable @eslint-react/no-array-index-key */
+	const rows = keyboard.grid.map((row, rowIndex) => (
+		<View key={`row-${rowIndex}`} style={{ flexDirection: 'row' }}>
+			{row.map((slot, colIndex) => {
+				if (!slot) {
+					return (
+						<View
+							key={`slot-${rowIndex}-${colIndex}`}
+							style={{ flex: 1, margin: 2 }}
+						/>
+					);
+				}
+
+				const modifierActive =
+					slot.type === 'modifier' &&
+					modifierKeysActive.includes(slot.modifier);
+				const Icon = resolveLucideIcon(slot.icon);
+
+				return (
+					<Pressable
+						key={`slot-${rowIndex}-${colIndex}`}
+						onPress={() => onSlotPress(slot)}
+						style={[
+							{
+								flex: 1,
+								margin: 2,
+								paddingVertical: 6,
+								borderRadius: 8,
+								borderWidth: 1,
+								borderColor: theme.colors.border,
+								alignItems: 'center',
+								justifyContent: 'center',
+							},
+							modifierActive && {
+								backgroundColor: theme.colors.primary,
+							},
+						]}
+					>
+						{Icon ? <Icon color={theme.colors.textPrimary} size={18} /> : null}
+						<Text
+							numberOfLines={1}
+							style={{
+								color: theme.colors.textPrimary,
+								fontSize: 10,
+								marginTop: Icon ? 2 : 0,
+							}}
+						>
+							{slot.label}
+						</Text>
+					</Pressable>
+				);
+			})}
+		</View>
+	));
+	/* eslint-enable @eslint-react/no-array-index-key */
+
+	const copyToggle = (
+		<Pressable
+			onPress={onCopySelection}
+			style={{
+				flex: 1,
+				margin: 2,
+				paddingVertical: 6,
+				borderRadius: 8,
+				borderWidth: 1,
+				borderColor: theme.colors.border,
+				alignItems: 'center',
+				justifyContent: 'center',
+			}}
+		>
+			{CopyIcon ? (
+				<CopyIcon color={theme.colors.textPrimary} size={18} />
+			) : null}
+			<Text
+				numberOfLines={1}
+				style={{
+					color: theme.colors.textPrimary,
+					fontSize: 10,
+					marginTop: CopyIcon ? 2 : 0,
+				}}
+			>
+				Copy
+			</Text>
+		</Pressable>
+	);
+
+	const pasteToggle = (
+		<Pressable
+			onPress={onPasteClipboard}
+			style={{
+				flex: 1,
+				margin: 2,
+				paddingVertical: 6,
+				borderRadius: 8,
+				borderWidth: 1,
+				borderColor: theme.colors.border,
+				alignItems: 'center',
+				justifyContent: 'center',
+			}}
+		>
+			{PasteIcon ? (
+				<PasteIcon color={theme.colors.textPrimary} size={18} />
+			) : null}
+			<Text
+				numberOfLines={1}
+				style={{
+					color: theme.colors.textPrimary,
+					fontSize: 10,
+					marginTop: PasteIcon ? 2 : 0,
+				}}
+			>
+				Paste
+			</Text>
+		</Pressable>
+	);
+
+	const systemKeyboardToggle = showSystemKeyboardToggle ? (
+		<Pressable
+			onPress={onToggleSystemKeyboard}
+			style={[
+				{
+					flex: 1,
+					margin: 2,
+					paddingVertical: 6,
+					borderRadius: 8,
+					borderWidth: 1,
+					borderColor: theme.colors.border,
+					alignItems: 'center',
+					justifyContent: 'center',
+				},
+				systemKeyboardEnabled && { backgroundColor: theme.colors.primary },
+			]}
+		>
+			{KeyboardIcon ? (
+				<KeyboardIcon color={theme.colors.textPrimary} size={18} />
+			) : null}
+			<Text
+				numberOfLines={1}
+				style={{
+					color: theme.colors.textPrimary,
+					fontSize: 10,
+					marginTop: KeyboardIcon ? 2 : 0,
+				}}
+			>
+				OS Keyboard
+			</Text>
+		</Pressable>
+	) : null;
+
+	const toggleRow =
+		selectionModeEnabled || showSystemKeyboardToggle ? (
+			<View style={{ flexDirection: 'row' }}>
+				{selectionModeEnabled ? copyToggle : null}
+				{selectionModeEnabled ? pasteToggle : null}
+				{systemKeyboardToggle}
+			</View>
+		) : null;
+
+	return (
+		<View
+			style={{
+				borderTopWidth: 1,
+				borderColor: theme.colors.border,
+				padding: 6,
+			}}
+		>
+			{toggleRow}
+			{rows}
+		</View>
+	);
+}
+
+const COMMANDER_SHORTCUTS = [
+	{
+		name: 'Ctrl+C',
+		sequence: '\x03',
+		description: 'Interrupt/Cancel current process',
+	},
+	{
+		name: 'Ctrl+D',
+		sequence: '\x04',
+		description: 'End of file (EOF) / Exit',
+	},
+	{
+		name: 'Ctrl+Z',
+		sequence: '\x1a',
+		description: 'Suspend current process',
+	},
+	{
+		name: 'Ctrl+A',
+		sequence: '\x01',
+		description: 'Move cursor to beginning of line',
+	},
+	{
+		name: 'Ctrl+E',
+		sequence: '\x05',
+		description: 'Move cursor to end of line',
+	},
+	{
+		name: 'Ctrl+K',
+		sequence: '\x0b',
+		description: 'Kill/Delete from cursor to end of line',
+	},
+	{
+		name: 'Ctrl+U',
+		sequence: '\x15',
+		description: 'Kill/Delete from cursor to beginning of line',
+	},
+	{
+		name: 'Ctrl+W',
+		sequence: '\x17',
+		description: 'Delete word before cursor',
+	},
+	{
+		name: 'Ctrl+L',
+		sequence: '\x0c',
+		description: 'Clear screen',
+	},
+	{
+		name: 'Ctrl+R',
+		sequence: '\x12',
+		description: 'Reverse search command history',
+	},
+	{
+		name: 'Tab',
+		sequence: '\t',
+		description: 'Auto-complete',
+	},
+	{
+		name: 'Escape',
+		sequence: '\x1b',
+		description: 'Escape key',
+	},
+];
+
+function CommandPresetsModal({
+	open,
+	presets,
+	bottomOffset,
+	onClose,
+	onSelect,
+}: {
+	open: boolean;
+	presets: CommandPreset[];
+	bottomOffset: number;
+	onClose: () => void;
+	onSelect: (preset: CommandPreset) => void;
+}) {
+	const theme = useTheme();
+	const uniquePresets = useMemo(() => {
+		const seen = new Set<string>();
+		return presets.filter((preset) => {
+			const key = preset.label.trim();
+			if (seen.has(key)) return false;
+			seen.add(key);
+			return true;
+		});
+	}, [presets]);
+
+	return (
+		<Modal
+			transparent
+			visible={open}
+			animationType="slide"
+			onRequestClose={onClose}
+		>
+			<Pressable
+				onPress={onClose}
+				style={{
+					flex: 1,
+					backgroundColor: theme.colors.overlay,
+					justifyContent: 'flex-end',
+					alignItems: 'flex-end',
+				}}
+			>
+				<View
+					onStartShouldSetResponder={() => true}
+					style={{
+						backgroundColor: theme.colors.background,
+						borderTopLeftRadius: 16,
+						padding: 16,
+						borderColor: theme.colors.borderStrong,
+						borderWidth: 1,
+						maxHeight: '80%',
+						width: '70%',
+						maxWidth: 320,
+						minWidth: 240,
+						marginRight: 8,
+						marginBottom: bottomOffset,
+					}}
+				>
+					<View
+						style={{
+							flexDirection: 'row',
+							alignItems: 'center',
+							justifyContent: 'space-between',
+							marginBottom: 12,
+						}}
+					>
+						<Text
+							style={{
+								color: theme.colors.textPrimary,
+								fontSize: 18,
+								fontWeight: '700',
+							}}
+						>
+							Command Presets
+						</Text>
+						<Pressable
+							onPress={onClose}
+							style={{
+								paddingHorizontal: 10,
+								paddingVertical: 6,
+								borderRadius: 8,
+								borderWidth: 1,
+								borderColor: theme.colors.border,
+							}}
+						>
+							<Text style={{ color: theme.colors.textSecondary }}>Close</Text>
+						</Pressable>
+					</View>
+					{uniquePresets.length === 0 ? (
+						<Text style={{ color: theme.colors.textSecondary }}>
+							No command presets configured.
+						</Text>
+					) : (
+						<ScrollView>
+							{uniquePresets.map((preset, index) => (
+								<Pressable
+									key={`${preset.label}-${index.toString()}`}
+									onPress={() => onSelect(preset)}
+									style={{
+										paddingVertical: 12,
+										paddingHorizontal: 12,
+										borderRadius: 10,
+										borderWidth: 1,
+										borderColor: theme.colors.border,
+										backgroundColor: theme.colors.surface,
+										marginBottom: 8,
+									}}
+								>
+									<Text
+										style={{
+											color: theme.colors.textPrimary,
+											fontSize: 14,
+											fontWeight: '600',
+										}}
+									>
+										{preset.label}
+									</Text>
+								</Pressable>
+							))}
+						</ScrollView>
+					)}
+				</View>
+			</Pressable>
+		</Modal>
+	);
+}
+
+function TerminalCommanderModal({
+	open,
+	bottomOffset,
+	onClose,
+	onExecuteCommand,
+	onPasteText,
+	onSendShortcut,
+}: {
+	open: boolean;
+	bottomOffset: number;
+	onClose: () => void;
+	onExecuteCommand: (value: string) => void;
+	onPasteText: (value: string) => void;
+	onSendShortcut: (sequence: string) => void;
+}) {
+	const theme = useTheme();
+	const [commandInput, setCommandInput] = useState('');
+	const [pasteInput, setPasteInput] = useState('');
+
+	const handleClose = useCallback(() => {
+		setCommandInput('');
+		setPasteInput('');
+		onClose();
+	}, [onClose]);
+
+	return (
+		<Modal
+			transparent
+			visible={open}
+			animationType="slide"
+			onRequestClose={handleClose}
+		>
+			<Pressable
+				onPress={handleClose}
+				style={{
+					flex: 1,
+					backgroundColor: theme.colors.overlay,
+				}}
+			>
+				<KeyboardAvoidingView
+					behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+					style={{ flex: 1, justifyContent: 'flex-end' }}
+				>
+					<View
+						onStartShouldSetResponder={() => true}
+						style={{
+							backgroundColor: theme.colors.background,
+							borderTopLeftRadius: 16,
+							padding: 16,
+							borderColor: theme.colors.borderStrong,
+							borderWidth: 1,
+							maxHeight: '85%',
+							width: '70%',
+							maxWidth: 360,
+							minWidth: 260,
+							alignSelf: 'flex-end',
+							marginRight: 8,
+							marginBottom: bottomOffset,
+						}}
+					>
+						<View
+							style={{
+								flexDirection: 'row',
+								alignItems: 'center',
+								justifyContent: 'space-between',
+								marginBottom: 12,
+							}}
+						>
+							<Text
+								style={{
+									color: theme.colors.textPrimary,
+									fontSize: 18,
+									fontWeight: '700',
+								}}
+							>
+								Terminal Commander
+							</Text>
+							<Pressable
+								onPress={handleClose}
+								style={{
+									paddingHorizontal: 10,
+									paddingVertical: 6,
+									borderRadius: 8,
+									borderWidth: 1,
+									borderColor: theme.colors.border,
+								}}
+							>
+								<Text style={{ color: theme.colors.textSecondary }}>Close</Text>
+							</Pressable>
+						</View>
+						<ScrollView>
+							<Text
+								style={{
+									color: theme.colors.textSecondary,
+									fontSize: 14,
+									fontWeight: '600',
+									marginBottom: 6,
+								}}
+							>
+								Execute Command
+							</Text>
+							<TextInput
+								value={commandInput}
+								onChangeText={setCommandInput}
+								placeholder="ls -la"
+								placeholderTextColor={theme.colors.muted}
+								style={{
+									borderWidth: 1,
+									borderColor: theme.colors.border,
+									backgroundColor: theme.colors.inputBackground,
+									color: theme.colors.textPrimary,
+									borderRadius: 10,
+									paddingHorizontal: 12,
+									paddingVertical: 10,
+									marginBottom: 10,
+								}}
+							/>
+							<Pressable
+								onPress={() => {
+									if (!commandInput.trim()) return;
+									onExecuteCommand(commandInput);
+									handleClose();
+								}}
+								style={{
+									backgroundColor: theme.colors.primary,
+									borderRadius: 10,
+									paddingVertical: 12,
+									alignItems: 'center',
+									marginBottom: 16,
+								}}
+							>
+								<Text
+									style={{
+										color: theme.colors.buttonTextOnPrimary,
+										fontWeight: '700',
+									}}
+								>
+									Execute
+								</Text>
+							</Pressable>
+							<Text
+								style={{
+									color: theme.colors.textSecondary,
+									fontSize: 14,
+									fontWeight: '600',
+									marginBottom: 6,
+								}}
+							>
+								Paste Text
+							</Text>
+							<TextInput
+								value={pasteInput}
+								onChangeText={setPasteInput}
+								placeholder="Enter text to paste..."
+								placeholderTextColor={theme.colors.muted}
+								style={{
+									borderWidth: 1,
+									borderColor: theme.colors.border,
+									backgroundColor: theme.colors.inputBackground,
+									color: theme.colors.textPrimary,
+									borderRadius: 10,
+									paddingHorizontal: 12,
+									paddingVertical: 10,
+									minHeight: 90,
+									textAlignVertical: 'top',
+									marginBottom: 10,
+								}}
+								multiline
+							/>
+							<Pressable
+								onPress={() => {
+									if (!pasteInput.trim()) return;
+									onPasteText(pasteInput);
+									handleClose();
+								}}
+								style={{
+									backgroundColor: theme.colors.primary,
+									borderRadius: 10,
+									paddingVertical: 12,
+									alignItems: 'center',
+									marginBottom: 16,
+								}}
+							>
+								<Text
+									style={{
+										color: theme.colors.buttonTextOnPrimary,
+										fontWeight: '700',
+									}}
+								>
+									Paste
+								</Text>
+							</Pressable>
+							<Text
+								style={{
+									color: theme.colors.textSecondary,
+									fontSize: 14,
+									fontWeight: '600',
+									marginBottom: 6,
+								}}
+							>
+								Shortcuts
+							</Text>
+							{COMMANDER_SHORTCUTS.map((shortcut) => (
+								<Pressable
+									key={shortcut.name}
+									onPress={() => {
+										onSendShortcut(shortcut.sequence);
+										handleClose();
+									}}
+									style={{
+										paddingVertical: 12,
+										paddingHorizontal: 12,
+										borderRadius: 10,
+										borderWidth: 1,
+										borderColor: theme.colors.border,
+										backgroundColor: theme.colors.surface,
+										marginBottom: 8,
+									}}
+								>
+									<Text
+										style={{
+											color: theme.colors.textPrimary,
+											fontSize: 14,
+											fontWeight: '600',
+										}}
+									>
+										{shortcut.name}
+									</Text>
+									<Text
+										style={{
+											color: theme.colors.textSecondary,
+											fontSize: 12,
+											marginTop: 2,
+										}}
+									>
+										{shortcut.description}
+									</Text>
+								</Pressable>
+							))}
+						</ScrollView>
+					</View>
+				</KeyboardAvoidingView>
+			</Pressable>
+		</Modal>
+	);
+}
+</file>
+
+<file path="packages/react-native-xtermjs-webview/src-internal/main.tsx">
+import { FitAddon } from '@xterm/addon-fit';
+import { Terminal, type ITerminalOptions } from '@xterm/xterm';
+import '@xterm/xterm/css/xterm.css';
+import {
+	bStrToBinary,
+	type BridgeInboundMessage,
+	type BridgeOutboundMessage,
+} from '../src/bridge';
+
+declare global {
+	interface Window {
+		terminal?: Terminal;
+		fitAddon?: FitAddon;
+		terminalWriteBase64?: (data: string) => void;
+		__FRESSH_XTERM_OPTIONS__?: ITerminalOptions;
+		ReactNativeWebView?: {
+			postMessage?: (data: string) => void;
+			injectedObjectJson?: () => string | undefined;
+		};
+		__FRESSH_XTERM_BRIDGE__?: boolean;
+		__FRESSH_XTERM_MSG_HANDLER__?: (
+			e: MessageEvent<BridgeOutboundMessage>,
+		) => void;
+	}
+}
+
+const sendToRn = (msg: BridgeInboundMessage) =>
+	window.ReactNativeWebView?.postMessage?.(JSON.stringify(msg));
+
+/**
+ * Idempotent boot guard: ensure we only install once.
+ * If the script happens to run twice (dev reloads, double-mounts), we bail out early.
+ */
+window.onload = () => {
+	try {
+		if (window.__FRESSH_XTERM_BRIDGE__) {
+			sendToRn({
+				type: 'debug',
+				message: 'bridge already installed; ignoring duplicate boot',
+			});
+			return;
+		}
+
+		const injectedObjectJson =
+			window.ReactNativeWebView?.injectedObjectJson?.();
+		let injectedObject: ITerminalOptions = {};
+		if (injectedObjectJson) {
+			try {
+				injectedObject = JSON.parse(injectedObjectJson) as ITerminalOptions;
+			} catch (err) {
+				if (window.__FRESSH_XTERM_OPTIONS__) {
+					injectedObject = window.__FRESSH_XTERM_OPTIONS__;
+					sendToRn({
+						type: 'debug',
+						message: 'injectedObjectJson invalid; using preloaded options',
+					});
+				} else {
+					sendToRn({
+						type: 'debug',
+						message: `injectedObjectJson invalid; using defaults (${String(
+							err,
+						)})`,
+					});
+				}
+			}
+		} else if (window.__FRESSH_XTERM_OPTIONS__) {
+			injectedObject = window.__FRESSH_XTERM_OPTIONS__;
+			sendToRn({
+				type: 'debug',
+				message: 'injectedObjectJson not found; using preloaded options',
+			});
+		} else {
+			sendToRn({
+				type: 'debug',
+				message: 'injectedObjectJson not found; using defaults',
+			});
+		}
+
+		window.__FRESSH_XTERM_BRIDGE__ = true;
+
+		// ---- Xterm setup
+		const term = new Terminal(injectedObject);
+		const fitAddon = new FitAddon();
+		term.loadAddon(fitAddon);
+
+		const root = document.getElementById('terminal')!;
+		term.open(root);
+		fitAddon.fit();
+		if (document.documentElement) {
+			document.documentElement.style.overflow = 'hidden';
+		}
+		if (document.body) {
+			document.body.style.overflow = 'hidden';
+		}
+		if (term.element) {
+			term.element.style.position = 'relative';
+			term.element.style.overflow = 'hidden';
+		}
+		root.style.position = 'relative';
+		root.style.overflow = 'hidden';
+
+		if (!window.ReactNativeWebView) {
+			const devTheme = {
+				background: '#0b1220',
+				foreground: '#e2e8f0',
+				selectionBackground: 'rgba(26, 115, 232, 0.35)',
+				selectionInactiveBackground: 'rgba(26, 115, 232, 0.2)',
+			};
+			term.options.theme = {
+				...(term.options.theme ?? {}),
+				...devTheme,
+			};
+			if (document.body) {
+				document.body.style.backgroundColor = devTheme.background;
+			}
+			term.writeln('Fressh handle dev view');
+			term.writeln('Long-press to enter selection mode.');
+			term.writeln('Use this page to tune selection handles.');
+			term.writeln('');
+			term.writeln('The quick brown fox jumps over the lazy dog.');
+			term.writeln('0123456789 []{}() <>,.?/ +-*/');
+		}
+
+		// Send initial size after first fit
+		if (term.cols >= 2 && term.rows >= 1) {
+			sendToRn({ type: 'sizeChanged', cols: term.cols, rows: term.rows });
+		}
+
+		const applyFontFamily = (family?: string) => {
+			if (!family) return;
+			const rootEl = (term.element ??
+				document.querySelector('.xterm')) as HTMLElement | null;
+			if (rootEl) rootEl.style.fontFamily = family;
+			const helper = document.querySelector(
+				'.xterm-helper-textarea',
+			) as HTMLElement | null;
+			if (helper) helper.style.fontFamily = family;
+			const measure = document.querySelector(
+				'.xterm-char-measure-element',
+			) as HTMLElement | null;
+			if (measure) measure.style.fontFamily = family;
+		};
+
+		applyFontFamily(injectedObject.fontFamily);
+
+		const selectionModeClass = 'fressh-selection-mode';
+		const selectionModeStyleId = 'fressh-selection-mode-style';
+		const baseSelectionOptions = {
+			disableStdin: Boolean(term.options.disableStdin),
+			screenReaderMode: Boolean(term.options.screenReaderMode),
+		};
+		let selectionModeEnabled = false;
+		let selectionModeShownAt = 0;
+		let lastSelectionText = '';
+		let longPressCleanup: (() => void) | null = null;
+		let touchCleanup: (() => void) | null = null;
+		let selectionOverlay: HTMLDivElement | null = null;
+		let startHandle: HTMLDivElement | null = null;
+		let endHandle: HTMLDivElement | null = null;
+		let activeHandle: 'start' | 'end' | null = null;
+		let activePointerId: number | null = null;
+		const selectionOverlayTint = 'rgba(0, 0, 0, 0)';
+		const minHandleGapPx = 36;
+		// Toggle handle debug visuals + oversized hitboxes (tuning aid).
+		const debugSelectionHandles = false;
+		// Lollipop handle geometry; anchor is where the circle meets the stem.
+		const selectionHandleScale = debugSelectionHandles ? 5 : 1;
+		const selectionHandleSizePx = 48 * selectionHandleScale;
+		const selectionHandleGlyphWidthPx = 48 * selectionHandleScale;
+		const selectionHandleGlyphHeightPx = 48 * selectionHandleScale;
+		const selectionHandleGlyphLeftPx = 0;
+		const selectionHandleGlyphTopPx = 0;
+		const selectionHandleBorder = debugSelectionHandles
+			? '1px dashed #ff3b30'
+			: 'none';
+		const selectionHandleClipBorder = debugSelectionHandles
+			? '1px solid #22c55e'
+			: 'none';
+		const selectionHandleClipDisplay = debugSelectionHandles ? 'block' : 'none';
+		const lollipopViewboxSize = 48;
+		const lollipopCircleCenter = { x: 24, y: 10 };
+		const lollipopJunction = { x: 24, y: 17 };
+		const longPressTimeoutMs = 500;
+		const longPressSlopPx = 8;
+		// Guard against immediate hide right after long-press selection activates.
+		const selectionHideGuardMs = 300;
+
+		const ensureSelectionModeStyle = () => {
+			if (document.getElementById(selectionModeStyleId)) return;
+			const style = document.createElement('style');
+			style.id = selectionModeStyleId;
+			style.type = 'text/css';
+			style.textContent = `
+.${selectionModeClass} .xterm .xterm-accessibility {
+	pointer-events: auto !important;
+}
+.${selectionModeClass} .xterm .xterm-accessibility-tree {
+	user-select: text !important;
+	-webkit-user-select: text !important;
+}
+.${selectionModeClass} .fressh-selection-handle {
+	position: absolute;
+	/* Hitbox scales up only when debugSelectionHandles is true. */
+	width: ${selectionHandleSizePx}px;
+	height: ${selectionHandleSizePx}px;
+	background: transparent;
+	box-sizing: border-box;
+	border: ${selectionHandleBorder};
+	touch-action: none;
+	z-index: 30;
+	pointer-events: auto;
+}
+.${selectionModeClass} .fressh-selection-handle-glyph {
+	position: absolute;
+	left: ${selectionHandleGlyphLeftPx}px;
+	top: ${selectionHandleGlyphTopPx}px;
+	width: ${selectionHandleGlyphWidthPx}px;
+	height: ${selectionHandleGlyphHeightPx}px;
+}
+.${selectionModeClass} .fressh-selection-handle-glyph path {
+	/* Temporary debug color to confirm updated handle rendering. */
+	fill: #1a73e8;
+	pointer-events: none;
+}
+.${selectionModeClass} .fressh-selection-handle-clip {
+	position: absolute;
+	border: ${selectionHandleClipBorder};
+	box-sizing: border-box;
+	pointer-events: none;
+	display: ${selectionHandleClipDisplay};
+}
+`;
+			(document.head || document.documentElement).appendChild(style);
+		};
+
+		type WorkCell = { getWidth: () => number; getChars?: () => string };
+		type LineLike = {
+			getCell?: (col: number) => WorkCell | null;
+			loadCell?: (col: number, cell: WorkCell) => WorkCell;
+		};
+
+		const getSelectionCore = () => {
+			const core = term as unknown as {
+				_mouseService?: {
+					getCoords: (
+						event: { clientX: number; clientY: number },
+						element: HTMLElement,
+						cols: number,
+						rows: number,
+						isSelection?: boolean,
+					) => [number, number] | undefined;
+				};
+				screenElement?: HTMLElement;
+				_bufferService?: {
+					cols: number;
+					rows: number;
+					buffer: {
+						ydisp: number;
+						lines: {
+							get: (idx: number) =>
+								| {
+										getCell: (col: number) => {
+											getWidth: () => number;
+											getChars?: () => string;
+										} | null;
+								  }
+								| undefined;
+						};
+					};
+				};
+				_selectionService?: {
+					clearSelection: () => void;
+					refresh: (isTextLayout: boolean) => void;
+					_fireEventIfSelectionChanged?: () => void;
+					_model: {
+						selectionStart?: [number, number];
+						selectionEnd?: [number, number];
+						selectionStartLength: number;
+						clearSelection: () => void;
+					};
+				};
+				_core?: {
+					_mouseService?: {
+						getCoords: (
+							event: { clientX: number; clientY: number },
+							element: HTMLElement,
+							cols: number,
+							rows: number,
+							isSelection?: boolean,
+						) => [number, number] | undefined;
+					};
+					_screenElement?: HTMLElement;
+					_bufferService?: {
+						cols: number;
+						rows: number;
+						buffer: {
+							ydisp: number;
+							lines: {
+								get: (idx: number) =>
+									| {
+											getCell: (col: number) => {
+												getWidth: () => number;
+												getChars?: () => string;
+											} | null;
+									  }
+									| undefined;
+							};
+						};
+					};
+					_selectionService?: {
+						clearSelection: () => void;
+						refresh: (isTextLayout: boolean) => void;
+						_fireEventIfSelectionChanged?: () => void;
+						_model: {
+							selectionStart?: [number, number];
+							selectionEnd?: [number, number];
+							selectionStartLength: number;
+							clearSelection: () => void;
+						};
+					};
+				};
+			};
+
+			const mouseService = core._mouseService ?? core._core?._mouseService;
+			const screenElement =
+				core.screenElement ??
+				core._core?._screenElement ??
+				(term.element?.querySelector('.xterm-screen') as HTMLElement | null);
+			const bufferService = core._bufferService ?? core._core?._bufferService;
+			const selectionService =
+				core._selectionService ?? core._core?._selectionService;
+			const workCell = (
+				selectionService as { _workCell?: WorkCell } | undefined
+			)?._workCell;
+
+			if (
+				!mouseService ||
+				!screenElement ||
+				!bufferService ||
+				!selectionService
+			) {
+				return null;
+			}
+			return {
+				mouseService,
+				screenElement,
+				bufferService,
+				selectionService,
+				workCell,
+			};
+		};
+
+		const getCellDimensions = () => {
+			const renderService =
+				(
+					term as unknown as {
+						_core?: {
+							_renderService?: {
+								dimensions?: {
+									css?: { cell?: { width?: number; height?: number } };
+								};
+							};
+						};
+						_renderService?: {
+							dimensions?: {
+								css?: { cell?: { width?: number; height?: number } };
+							};
+						};
+					}
+				)._renderService ??
+				(
+					term as unknown as {
+						_core?: {
+							_renderService?: {
+								dimensions?: {
+									css?: { cell?: { width?: number; height?: number } };
+								};
+							};
+						};
+					}
+				)._core?._renderService;
+			const cellWidth = renderService?.dimensions?.css?.cell?.width;
+			const cellHeight = renderService?.dimensions?.css?.cell?.height;
+			if (!cellWidth || !cellHeight) return null;
+			return { cellWidth, cellHeight };
+		};
+
+		const getHandleGapPx = (
+			start: [number, number],
+			end: [number, number],
+			dims: { cellWidth: number; cellHeight: number },
+		) => {
+			const dx = (end[0] - start[0]) * dims.cellWidth;
+			const dy = (end[1] - start[1]) * dims.cellHeight;
+			return Math.hypot(dx, dy);
+		};
+
+		const stepBufferPos = (
+			pos: [number, number],
+			dir: -1 | 1,
+			cols: number,
+		): [number, number] => {
+			let [x, y] = pos;
+			if (dir > 0) {
+				x += 1;
+				if (x >= cols) {
+					x = 0;
+					y += 1;
+				}
+			} else {
+				x -= 1;
+				if (x < 0) {
+					x = cols - 1;
+					y -= 1;
+				}
+			}
+			return [x, y];
+		};
+
+		const moveUntilMinGap = (
+			anchor: [number, number],
+			moving: [number, number],
+			dir: -1 | 1,
+			dims: { cellWidth: number; cellHeight: number },
+			bounds: { minRow: number; maxRow: number; cols: number },
+		) => {
+			let next = moving;
+			let gap = getHandleGapPx(anchor, next, dims);
+			let steps = 0;
+			const maxSteps = bounds.cols * 2;
+			while (gap < minHandleGapPx && steps < maxSteps) {
+				const candidate = stepBufferPos(next, dir, bounds.cols);
+				if (candidate[1] < bounds.minRow || candidate[1] > bounds.maxRow) break;
+				next = candidate;
+				gap = getHandleGapPx(anchor, next, dims);
+				steps += 1;
+			}
+			return { pos: next, achieved: gap >= minHandleGapPx };
+		};
+
+		const toInclusiveEnd = (
+			endExclusive: [number, number],
+			cols: number,
+			minRow: number,
+		): [number, number] => {
+			const [x, y] = endExclusive;
+			if (x > 0) return [x - 1, y];
+			if (y <= minRow) return [0, y];
+			return [cols - 1, y - 1];
+		};
+
+		// Lollipop glyph in a 48x48 viewBox: circle above the anchor, stem crosses it.
+		const lollipopPath = [
+			'M34.5 10',
+			'A10.5 10.5 0 1 0 13.5 10',
+			'A10.5 10.5 0 1 0 34.5 10',
+			// Stem: 6px longer total, 50% thinner (centered).
+			'M23 17',
+			'H25',
+			'V36',
+			'H23',
+			'Z',
+		].join(' ');
+
+		const ensureHandleGlyph = (
+			handle: HTMLDivElement,
+			kind: 'start' | 'end',
+		) => {
+			if (handle.dataset.glyph === kind) return;
+			handle.textContent = '';
+			handle.dataset.glyph = kind;
+			const glyph = document.createElement('div');
+			glyph.className = 'fressh-selection-handle-glyph';
+			const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+			svg.setAttribute('width', String(selectionHandleGlyphWidthPx));
+			svg.setAttribute('height', String(selectionHandleGlyphHeightPx));
+			svg.setAttribute(
+				'viewBox',
+				`0 0 ${lollipopViewboxSize} ${lollipopViewboxSize}`,
+			);
+			const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+			if (kind === 'end') {
+				// End handle is a vertical mirror: circle below the anchor.
+				g.setAttribute('transform', 'translate(0 48) scale(1 -1)');
+			}
+			const path = document.createElementNS(
+				'http://www.w3.org/2000/svg',
+				'path',
+			);
+			path.setAttribute('d', lollipopPath);
+			g.appendChild(path);
+			svg.appendChild(g);
+			glyph.appendChild(svg);
+			handle.appendChild(glyph);
+			const clip = document.createElement('div');
+			clip.className = 'fressh-selection-handle-clip';
+			handle.appendChild(clip);
+		};
+
+		const getHandleGlyphBounds = (handle: HTMLDivElement) => {
+			const path = handle.querySelector<SVGPathElement>('path');
+			if (!path) return null;
+			const bbox = path.getBBox();
+			if (!Number.isFinite(bbox.x) || !Number.isFinite(bbox.width)) return null;
+			const scaleX = selectionHandleGlyphWidthPx / lollipopViewboxSize;
+			const scaleY = selectionHandleGlyphHeightPx / lollipopViewboxSize;
+			const isEnd = handle.dataset.glyph === 'end';
+			const top =
+				isEnd && Number.isFinite(bbox.height)
+					? lollipopViewboxSize - (bbox.y + bbox.height)
+					: bbox.y;
+			return {
+				left: bbox.x * scaleX,
+				top: top * scaleY,
+				width: bbox.width * scaleX,
+				height: bbox.height * scaleY,
+			};
+		};
+
+		const getHandleLayout = (kind: 'start' | 'end') => {
+			const circleY =
+				kind === 'start'
+					? lollipopCircleCenter.y
+					: lollipopViewboxSize - lollipopCircleCenter.y;
+			const junctionY =
+				kind === 'start'
+					? lollipopJunction.y
+					: lollipopViewboxSize - lollipopJunction.y;
+			const glyphOffsetX =
+				(lollipopViewboxSize / 2 - lollipopCircleCenter.x) *
+				selectionHandleScale;
+			const glyphOffsetY =
+				(lollipopViewboxSize / 2 - circleY) * selectionHandleScale;
+			const anchorOffsetX =
+				glyphOffsetX + lollipopJunction.x * selectionHandleScale;
+			const anchorOffsetY = glyphOffsetY + junctionY * selectionHandleScale;
+			return {
+				glyphLeft: selectionHandleGlyphLeftPx + glyphOffsetX,
+				glyphTop: selectionHandleGlyphTopPx + glyphOffsetY,
+				anchorOffsetX,
+				anchorOffsetY,
+			};
+		};
+
+		const ensureHandleInDom = (handle: HTMLDivElement, root: HTMLElement) => {
+			if (handle.parentElement) return;
+			handle.style.visibility = 'hidden';
+			handle.style.left = '0px';
+			handle.style.top = '0px';
+			root.appendChild(handle);
+		};
+
+		const setHandleGlyphLeft = (handle: HTMLDivElement, leftPx: number) => {
+			const glyph = handle.querySelector<HTMLDivElement>(
+				'.fressh-selection-handle-glyph',
+			);
+			if (!glyph) return;
+			// Allow the glyph to overflow the hitbox so we can center the circle.
+			glyph.style.left = `${leftPx}px`;
+		};
+
+		const setHandleGlyphTop = (handle: HTMLDivElement, topPx: number) => {
+			const glyph = handle.querySelector<HTMLDivElement>(
+				'.fressh-selection-handle-glyph',
+			);
+			if (!glyph) return;
+			// Allow the glyph to overflow the hitbox so we can center the circle.
+			glyph.style.top = `${topPx}px`;
+		};
+
+		const setHandleClipRect = (
+			handle: HTMLDivElement,
+			left: number,
+			top: number,
+			width: number,
+			height: number,
+		) => {
+			const clip = handle.querySelector<HTMLDivElement>(
+				'.fressh-selection-handle-clip',
+			);
+			if (!clip) return;
+			clip.style.left = `${left}px`;
+			clip.style.top = `${top}px`;
+			clip.style.width = `${width}px`;
+			clip.style.height = `${height}px`;
+		};
+
+		const getBufferCoords = (
+			clientX: number,
+			clientY: number,
+		): [number, number] | null => {
+			const core = getSelectionCore();
+			if (!core) return null;
+			const coords = core.mouseService.getCoords(
+				{ clientX, clientY },
+				core.screenElement,
+				core.bufferService.cols,
+				core.bufferService.rows,
+				true,
+			);
+			if (!coords) return null;
+			coords[0] -= 1;
+			coords[1] -= 1;
+			coords[1] += core.bufferService.buffer.ydisp;
+			return coords as [number, number];
+		};
+
+		const getCellData = (
+			line: LineLike,
+			col: number,
+			core: { workCell?: WorkCell },
+		) => {
+			if (typeof line.getCell === 'function') {
+				return line.getCell(col) ?? null;
+			}
+			if (typeof line.loadCell === 'function' && core.workCell) {
+				return line.loadCell(col, core.workCell);
+			}
+			return null;
+		};
+
+		const normalizeSelectionColumn = (
+			line: LineLike,
+			col: number,
+			core: { workCell?: WorkCell },
+		) => {
+			let c = Math.max(0, col);
+			const initial = getCellData(line, c, core);
+			if (!initial) return c;
+			if (initial.getWidth() !== 0) return c;
+			while (c > 0) {
+				c -= 1;
+				const cell = getCellData(line, c, core);
+				if (cell && cell.getWidth() > 0) return c;
+			}
+			return c;
+		};
+
+		const expandToWord = (
+			coords: [number, number],
+		): { start: [number, number]; end: [number, number] } => {
+			const core = getSelectionCore();
+			if (!core) return { start: coords, end: coords };
+			const [xRaw, y] = coords;
+			const line = core.bufferService.buffer.lines.get(y);
+			if (!line) {
+				return { start: coords, end: coords };
+			}
+			const x = normalizeSelectionColumn(line, xRaw, core);
+			const cell = getCellData(line, x, core);
+			const char = cell?.getChars?.() ?? '';
+			const separators = term.options.wordSeparator ?? '';
+			const isSeparator = (value: string) =>
+				value.trim().length === 0 || separators.includes(value);
+			if (!char || isSeparator(char)) {
+				return { start: [x, y], end: [x, y] };
+			}
+			let left = x;
+			let right = x;
+			while (left > 0) {
+				const nextCol = normalizeSelectionColumn(line, left - 1, core);
+				const nextCell = getCellData(line, nextCol, core);
+				const nextChar = nextCell?.getChars?.() ?? '';
+				if (!nextChar || isSeparator(nextChar)) break;
+				left = nextCol;
+				if (nextCol === 0) break;
+			}
+			while (right < core.bufferService.cols - 1) {
+				const nextCol = normalizeSelectionColumn(line, right + 1, core);
+				if (nextCol <= right) break;
+				const nextCell = getCellData(line, nextCol, core);
+				const nextChar = nextCell?.getChars?.() ?? '';
+				if (!nextChar || isSeparator(nextChar)) break;
+				right = nextCol;
+				if (right >= core.bufferService.cols - 1) break;
+			}
+			return { start: [left, y], end: [right, y] };
+		};
+
+		const emitSelectionChanged = () => {
+			let text = '';
+			try {
+				text = term.getSelection() || '';
+			} catch {
+				text = '';
+			}
+			if (text === lastSelectionText) return;
+			lastSelectionText = text;
+			sendToRn({ type: 'selectionChanged', text });
+		};
+
+		const renderSelectionHandles = () => {
+			if (!selectionModeEnabled) {
+				if (startHandle) startHandle.style.display = 'none';
+				if (endHandle) endHandle.style.display = 'none';
+				return;
+			}
+			const core = getSelectionCore();
+			if (!core) return;
+			const selectionService =
+				core.selectionService as typeof core.selectionService & {
+					selectionStart?: [number, number];
+					selectionEnd?: [number, number];
+				};
+			const model = selectionService._model;
+			const selectionStart =
+				selectionService.selectionStart ?? model.selectionStart;
+			const selectionEnd = selectionService.selectionEnd ?? model.selectionEnd;
+			if (!selectionStart || !selectionEnd) {
+				if (startHandle) startHandle.style.display = 'none';
+				if (endHandle) endHandle.style.display = 'none';
+				return;
+			}
+			const dims = getCellDimensions();
+			const cellWidth = dims?.cellWidth;
+			const cellHeight = dims?.cellHeight;
+			if (!cellWidth || !cellHeight) return;
+
+			const rootEl = term.element;
+			const screenRect = core.screenElement.getBoundingClientRect();
+			const rootRect = rootEl?.getBoundingClientRect();
+			if (!rootEl || !rootRect) return;
+
+			const offsetX = screenRect.left - rootRect.left;
+			const offsetY = screenRect.top - rootRect.top;
+			const ydisp = core.bufferService.buffer.ydisp;
+			const startRow = selectionStart[1] - ydisp;
+			const endRow = selectionEnd[1] - ydisp;
+			if (startRow < 0 || startRow >= core.bufferService.rows) {
+				if (startHandle) startHandle.style.display = 'none';
+			} else {
+				const startX = offsetX + selectionStart[0] * cellWidth - 4;
+				const startY = offsetY + startRow * cellHeight;
+				startHandle = startHandle ?? document.createElement('div');
+				startHandle.className = 'fressh-selection-handle';
+				ensureHandleGlyph(startHandle, 'start');
+				ensureHandleInDom(startHandle, rootEl);
+				const startBounds = getHandleGlyphBounds(startHandle) ?? {
+					left: 0,
+					top: 0,
+					width: selectionHandleGlyphWidthPx,
+					height: selectionHandleGlyphHeightPx,
+				};
+				const startLayout = getHandleLayout('start');
+				setHandleGlyphLeft(startHandle, startLayout.glyphLeft);
+				setHandleGlyphTop(startHandle, startLayout.glyphTop);
+				setHandleClipRect(
+					startHandle,
+					startLayout.glyphLeft + startBounds.left,
+					startLayout.glyphTop + startBounds.top,
+					startBounds.width,
+					startBounds.height,
+				);
+				startHandle.style.display = 'block';
+				startHandle.style.left = `${startX - startLayout.anchorOffsetX}px`;
+				startHandle.style.top = `${startY - startLayout.anchorOffsetY}px`;
+				startHandle.style.visibility = 'visible';
+				if (!startHandle.parentElement) rootEl.appendChild(startHandle);
+			}
+
+			const endRowVisible = endRow >= 0 && endRow < core.bufferService.rows;
+			if (!endRowVisible) {
+				if (endHandle) endHandle.style.display = 'none';
+			} else {
+				const endX = offsetX + selectionEnd[0] * cellWidth - 4;
+				const endY = offsetY + (endRow + 1) * cellHeight;
+				endHandle = endHandle ?? document.createElement('div');
+				endHandle.className = 'fressh-selection-handle';
+				ensureHandleGlyph(endHandle, 'end');
+				ensureHandleInDom(endHandle, rootEl);
+				const endBounds = getHandleGlyphBounds(endHandle) ?? {
+					left: 0,
+					top: 0,
+					width: selectionHandleGlyphWidthPx,
+					height: selectionHandleGlyphHeightPx,
+				};
+				const endLayout = getHandleLayout('end');
+				setHandleGlyphLeft(endHandle, endLayout.glyphLeft);
+				setHandleGlyphTop(endHandle, endLayout.glyphTop);
+				setHandleClipRect(
+					endHandle,
+					endLayout.glyphLeft + endBounds.left,
+					endLayout.glyphTop + endBounds.top,
+					endBounds.width,
+					endBounds.height,
+				);
+				endHandle.style.display = 'block';
+				endHandle.style.left = `${endX - endLayout.anchorOffsetX}px`;
+				endHandle.style.top = `${endY - endLayout.anchorOffsetY}px`;
+				endHandle.style.visibility = 'visible';
+				if (!endHandle.parentElement) rootEl.appendChild(endHandle);
+			}
+			if (startHandle || endHandle) ensureHandleListeners();
+		};
+
+		const updateSelectionRange = (
+			start: [number, number],
+			end: [number, number],
+		) => {
+			const core = getSelectionCore();
+			if (!core) return;
+			sendToRn({
+				type: 'debug',
+				message: `updateSelectionRange start=${start[0]},${start[1]} end=${end[0]},${end[1]}`,
+			});
+			try {
+				const maxRow =
+					core.bufferService.buffer.ydisp + core.bufferService.rows - 1;
+				const minRow = core.bufferService.buffer.ydisp;
+				const startRow = Math.max(minRow, Math.min(start[1], maxRow));
+				const endRow = Math.max(minRow, Math.min(end[1], maxRow));
+				const clampColInclusive = (value: number) =>
+					Math.max(0, Math.min(value, core.bufferService.cols - 1));
+				let [sx, sy] = [clampColInclusive(start[0]), startRow];
+				let [exInclusive, ey] = [clampColInclusive(end[0]), endRow];
+				if (sy > ey || (sy === ey && sx > exInclusive)) {
+					if (activeHandle === 'start') {
+						sy = ey;
+						sx = exInclusive;
+					} else if (activeHandle === 'end') {
+						ey = sy;
+						exInclusive = sx;
+					}
+				}
+				const dims = getCellDimensions();
+				if (dims) {
+					const bounds = {
+						minRow,
+						maxRow,
+						cols: core.bufferService.cols,
+					};
+					const gap = getHandleGapPx([sx, sy], [exInclusive, ey], dims);
+					if (gap < minHandleGapPx) {
+						if (activeHandle === 'start' || activeHandle === 'end') {
+							const isStartActive = activeHandle === 'start';
+							const anchor: [number, number] = isStartActive
+								? [exInclusive, ey]
+								: [sx, sy];
+							const moving: [number, number] = isStartActive
+								? [sx, sy]
+								: [exInclusive, ey];
+							const dir: -1 | 1 = isStartActive ? -1 : 1;
+							const result = moveUntilMinGap(anchor, moving, dir, dims, bounds);
+							if (result.achieved) {
+								if (isStartActive) {
+									sx = result.pos[0];
+									sy = result.pos[1];
+								} else {
+									exInclusive = result.pos[0];
+									ey = result.pos[1];
+								}
+							} else {
+								const fallback = moveUntilMinGap(
+									moving,
+									anchor,
+									(dir * -1) as -1 | 1,
+									dims,
+									bounds,
+								);
+								if (fallback.achieved) {
+									if (isStartActive) {
+										exInclusive = fallback.pos[0];
+										ey = fallback.pos[1];
+									} else {
+										sx = fallback.pos[0];
+										sy = fallback.pos[1];
+									}
+								}
+							}
+						} else {
+							const result = moveUntilMinGap(
+								[sx, sy],
+								[exInclusive, ey],
+								1,
+								dims,
+								bounds,
+							);
+							if (result.achieved) {
+								exInclusive = result.pos[0];
+								ey = result.pos[1];
+							} else {
+								const fallback = moveUntilMinGap(
+									[exInclusive, ey],
+									[sx, sy],
+									-1,
+									dims,
+									bounds,
+								);
+								if (fallback.achieved) {
+									sx = fallback.pos[0];
+									sy = fallback.pos[1];
+								}
+							}
+						}
+					}
+				}
+				const endExclusive =
+					exInclusive < core.bufferService.cols - 1
+						? exInclusive + 1
+						: core.bufferService.cols;
+				const ex = endExclusive;
+				const length = Math.max(
+					1,
+					(ey - sy) * core.bufferService.cols + (ex - sx),
+				);
+				const selectionService =
+					core.selectionService as typeof core.selectionService & {
+						setSelection?: (col: number, row: number, length: number) => void;
+					};
+				if (selectionService.setSelection) {
+					selectionService.setSelection(sx, sy, length);
+				} else {
+					core.selectionService._model.selectionStart = [sx, sy];
+					core.selectionService._model.selectionEnd = [ex, ey];
+					core.selectionService._model.selectionStartLength = 0;
+					core.selectionService.refresh(true);
+					core.selectionService._fireEventIfSelectionChanged?.();
+				}
+				try {
+					const selectionText = term.getSelection() || '';
+					sendToRn({
+						type: 'debug',
+						message: `selection updated len=${selectionText.length} start=${sx},${sy} end=${ex},${ey} ydisp=${core.bufferService.buffer.ydisp}`,
+					});
+				} catch {
+					sendToRn({
+						type: 'debug',
+						message: `selection updated start=${sx},${sy} end=${ex},${ey} ydisp=${core.bufferService.buffer.ydisp}`,
+					});
+				}
+				renderSelectionHandles();
+			} catch (err) {
+				sendToRn({
+					type: 'debug',
+					message: `selection update error: ${String(err)}`,
+				});
+			}
+		};
+
+		const ensureHandleListeners = () => {
+			const rootEl = term.element;
+			if (!rootEl) return;
+			const attach = (handle: HTMLDivElement, kind: 'start' | 'end') => {
+				if (handle.dataset.listenersAttached === 'true') return;
+				let dragStart: { x: number; y: number } | null = null;
+				let dragOffset: { x: number; y: number } | null = null;
+				let dragging = false;
+
+				const resetDrag = () => {
+					dragStart = null;
+					dragOffset = null;
+					dragging = false;
+				};
+
+				const onPointerDown = (event: PointerEvent) => {
+					if (!selectionModeEnabled) return;
+					activeHandle = kind;
+					activePointerId = event.pointerId;
+					const layout = getHandleLayout(kind);
+					const rect = handle.getBoundingClientRect();
+					const anchorX = rect.left + layout.anchorOffsetX;
+					const anchorY = rect.top + layout.anchorOffsetY;
+					// Keep the handle anchor fixed relative to the finger until dragging begins.
+					dragStart = { x: event.clientX, y: event.clientY };
+					dragOffset = {
+						x: event.clientX - anchorX,
+						y: event.clientY - anchorY,
+					};
+					dragging = false;
+					handle.setPointerCapture(event.pointerId);
+					event.preventDefault();
+					event.stopPropagation();
+				};
+				const onPointerMove = (event: PointerEvent) => {
+					if (!selectionModeEnabled) return;
+					if (activeHandle !== kind || activePointerId !== event.pointerId)
+						return;
+					if (!dragStart || !dragOffset) return;
+					const dx = event.clientX - dragStart.x;
+					const dy = event.clientY - dragStart.y;
+					if (!dragging) {
+						if (Math.hypot(dx, dy) <= longPressSlopPx) {
+							event.preventDefault();
+							event.stopPropagation();
+							return;
+						}
+						dragging = true;
+					}
+					const core = getSelectionCore();
+					if (!core) return;
+					const screenRect = core.screenElement.getBoundingClientRect();
+					// Clamp to the screen bounds so getBufferCoords stays valid.
+					const adjustedX = event.clientX - dragOffset.x;
+					const adjustedY = event.clientY - dragOffset.y;
+					const maxX = Math.max(screenRect.left, screenRect.right - 1);
+					const maxY = Math.max(screenRect.top, screenRect.bottom - 1);
+					const clampedX = Math.min(
+						Math.max(adjustedX, screenRect.left),
+						maxX,
+					);
+					const clampedY = Math.min(
+						Math.max(adjustedY, screenRect.top),
+						maxY,
+					);
+					const coords = getBufferCoords(clampedX, clampedY);
+					if (!coords) return;
+					const line = core.bufferService.buffer.lines.get(coords[1]);
+					const normalizedCol = line
+						? normalizeSelectionColumn(line, coords[0], core)
+						: coords[0];
+					const selectionService =
+						core.selectionService as typeof core.selectionService & {
+							selectionStart?: [number, number];
+							selectionEnd?: [number, number];
+						};
+					const model = selectionService._model;
+					const start =
+						selectionService.selectionStart ?? model.selectionStart ?? coords;
+					const endExclusive =
+						selectionService.selectionEnd ?? model.selectionEnd ?? coords;
+					const end = toInclusiveEnd(
+						endExclusive,
+						core.bufferService.cols,
+						core.bufferService.buffer.ydisp,
+					);
+					if (kind === 'start') {
+						updateSelectionRange([normalizedCol, coords[1]], end);
+					} else {
+						updateSelectionRange(start, [normalizedCol, coords[1]]);
+					}
+					event.preventDefault();
+					event.stopPropagation();
+				};
+				const onPointerUp = (event: PointerEvent) => {
+					if (activePointerId !== event.pointerId) return;
+					activeHandle = null;
+					activePointerId = null;
+					resetDrag();
+					handle.releasePointerCapture(event.pointerId);
+					emitSelectionChanged();
+					event.preventDefault();
+					event.stopPropagation();
+				};
+				const onPointerCancel = (event: PointerEvent) => {
+					if (activePointerId !== event.pointerId) return;
+					activeHandle = null;
+					activePointerId = null;
+					resetDrag();
+					handle.releasePointerCapture(event.pointerId);
+					event.preventDefault();
+					event.stopPropagation();
+				};
+				handle.addEventListener('pointerdown', onPointerDown);
+				handle.addEventListener('pointermove', onPointerMove);
+				handle.addEventListener('pointerup', onPointerUp);
+				handle.addEventListener('pointercancel', onPointerCancel);
+				handle.dataset.listenersAttached = 'true';
+			};
+			if (startHandle) attach(startHandle, 'start');
+			if (endHandle) attach(endHandle, 'end');
+		};
+
+		const applySelectionMode = (
+			enabled: boolean,
+			opts: { force?: boolean } = {},
+		) => {
+			if (!enabled && selectionModeEnabled && !opts.force) {
+				if (Date.now() - selectionModeShownAt < selectionHideGuardMs) return;
+			}
+			if (selectionModeEnabled === enabled) return;
+			selectionModeEnabled = enabled;
+			if (enabled) selectionModeShownAt = Date.now();
+			ensureSelectionModeStyle();
+			const rootEl = document.body || document.documentElement;
+			rootEl?.classList.toggle(selectionModeClass, enabled);
+			if (document.body) {
+				document.body.style.boxShadow = '';
+			}
+			sendToRn({ type: 'selectionModeChanged', enabled });
+			sendToRn({
+				type: 'debug',
+				message: `selection mode ${enabled ? 'enabled' : 'disabled'}`,
+			});
+
+			const termInternals = term as unknown as {
+				_selectionService?: { enable?: () => void; disable?: () => void };
+				_core?: {
+					_selectionService?: { enable?: () => void; disable?: () => void };
+				};
+			};
+			const selectionService =
+				termInternals._selectionService ??
+				termInternals._core?._selectionService;
+
+			let mouseTrackingActive = false;
+			try {
+				const mode = term.modes?.mouseTrackingMode;
+				mouseTrackingActive = Boolean(mode && mode !== 'none');
+			} catch {
+				mouseTrackingActive = false;
+			}
+
+			if (enabled) {
+				try {
+					term.options.disableStdin = true;
+					term.options.screenReaderMode = true;
+				} catch (err) {
+					sendToRn({
+						type: 'debug',
+						message: `selection options set error: ${String(err)}`,
+					});
+				}
+				selectionService?.enable?.();
+				term.element?.classList.remove('enable-mouse-events');
+				sendToRn({
+					type: 'debug',
+					message: `selection internals ${selectionService ? 'ok' : 'missing'}`,
+				});
+				if (!touchCleanup) {
+					touchCleanup = (() => {
+						const target = term.element;
+						if (!target) return null;
+
+						const ensureOverlay = () => {
+							if (selectionOverlay) return selectionOverlay;
+							const overlay = document.createElement('div');
+							overlay.style.position = 'absolute';
+							overlay.style.left = '0';
+							overlay.style.right = '0';
+							overlay.style.top = '0';
+							overlay.style.bottom = '0';
+							overlay.style.background = selectionOverlayTint;
+							overlay.style.border = 'none';
+							overlay.style.zIndex = '20';
+							overlay.style.touchAction = 'none';
+							overlay.style.pointerEvents = 'auto';
+							const computed = window.getComputedStyle(target);
+							if (computed.position === 'static') {
+								target.style.position = 'relative';
+							}
+							target.appendChild(overlay);
+							selectionOverlay = overlay;
+							return overlay;
+						};
+
+						const overlay = ensureOverlay();
+						term.element?.style.setProperty('outline', 'none');
+
+						let tapStart: { x: number; y: number } | null = null;
+						const onTouchStart = (event: TouchEvent) => {
+							if (!selectionModeEnabled) return;
+							if (event.touches.length !== 1) return;
+							const touch = event.touches.item(0);
+							if (!touch) return;
+							tapStart = { x: touch.clientX, y: touch.clientY };
+							event.preventDefault();
+						};
+						const onTouchMove = (event: TouchEvent) => {
+							if (!tapStart) return;
+							const touch = event.touches.item(0);
+							if (!touch) return;
+							const dx = touch.clientX - tapStart.x;
+							const dy = touch.clientY - tapStart.y;
+							if (Math.hypot(dx, dy) > longPressSlopPx) {
+								tapStart = null;
+							}
+							event.preventDefault();
+						};
+						const onTouchEnd = (event: TouchEvent) => {
+							if (!tapStart) return;
+							tapStart = null;
+							applySelectionMode(false);
+							event.preventDefault();
+						};
+						const onTouchCancel = (event: TouchEvent) => {
+							tapStart = null;
+							event.preventDefault();
+						};
+
+						overlay.addEventListener('touchstart', onTouchStart, {
+							passive: false,
+						});
+						overlay.addEventListener('touchmove', onTouchMove, {
+							passive: false,
+						});
+						overlay.addEventListener('touchend', onTouchEnd, {
+							passive: false,
+						});
+						overlay.addEventListener('touchcancel', onTouchCancel, {
+							passive: false,
+						});
+
+						return () => {
+							overlay.removeEventListener('touchstart', onTouchStart);
+							overlay.removeEventListener('touchmove', onTouchMove);
+							overlay.removeEventListener('touchend', onTouchEnd);
+							overlay.removeEventListener('touchcancel', onTouchCancel);
+							overlay.style.pointerEvents = 'none';
+							overlay.style.display = 'none';
+							term.element?.style.setProperty('outline', 'none');
+						};
+					})();
+				}
+				if (selectionOverlay) {
+					selectionOverlay.style.pointerEvents = 'auto';
+					selectionOverlay.style.display = 'block';
+				}
+				renderSelectionHandles();
+			} else {
+				try {
+					term.options.disableStdin = baseSelectionOptions.disableStdin;
+					term.options.screenReaderMode = baseSelectionOptions.screenReaderMode;
+				} catch (err) {
+					sendToRn({
+						type: 'debug',
+						message: `selection options reset error: ${String(err)}`,
+					});
+				}
+				if (mouseTrackingActive) {
+					selectionService?.disable?.();
+					term.element?.classList.add('enable-mouse-events');
+				} else {
+					selectionService?.enable?.();
+					term.element?.classList.remove('enable-mouse-events');
+				}
+				activeHandle = null;
+				activePointerId = null;
+				term.clearSelection();
+				if (startHandle) startHandle.style.display = 'none';
+				if (endHandle) endHandle.style.display = 'none';
+				emitSelectionChanged();
+				if (touchCleanup) {
+					touchCleanup();
+					touchCleanup = null;
+				}
+			}
+		};
+
+		const installLongPressHandlers = () => {
+			if (longPressCleanup) return;
+			const target = getSelectionCore()?.screenElement ?? term.element;
+			if (!target) return;
+
+			let longPressTimer: ReturnType<typeof setTimeout> | null = null;
+			let startPoint: { x: number; y: number } | null = null;
+			let longPressFired = false;
+			let activePointerId: number | null = null;
+
+			const clearLongPress = () => {
+				if (longPressTimer) {
+					clearTimeout(longPressTimer);
+					longPressTimer = null;
+				}
+				startPoint = null;
+				longPressFired = false;
+				activePointerId = null;
+			};
+
+			const startLongPress = (x: number, y: number) => {
+				if (selectionModeEnabled) return;
+				startPoint = { x, y };
+				longPressFired = false;
+				longPressTimer = setTimeout(() => {
+					if (!startPoint) return;
+					const coords = getBufferCoords(startPoint.x, startPoint.y);
+					if (!coords) {
+						sendToRn({
+							type: 'debug',
+							message: `long-press coords unavailable at ${startPoint.x},${startPoint.y}`,
+						});
+						return;
+					}
+					// Enter selection mode on long-press and seed selection around the touch.
+					applySelectionMode(true, { force: true });
+					sendToRn({
+						type: 'debug',
+						message: `long-press coords ${coords[0]},${coords[1]}`,
+					});
+					let expanded = { start: coords, end: coords };
+					try {
+						expanded = expandToWord(coords);
+						sendToRn({
+							type: 'debug',
+							message: `expandToWord start=${expanded.start[0]},${expanded.start[1]} end=${expanded.end[0]},${expanded.end[1]}`,
+						});
+					} catch (err) {
+						sendToRn({
+							type: 'debug',
+							message: `expandToWord error: ${String(err)}`,
+						});
+					}
+					sendToRn({
+						type: 'debug',
+						message: `apply selection start=${expanded.start[0]},${expanded.start[1]} end=${expanded.end[0]},${expanded.end[1]}`,
+					});
+					updateSelectionRange(expanded.start, expanded.end);
+					renderSelectionHandles();
+					emitSelectionChanged();
+					longPressFired = true;
+				}, longPressTimeoutMs);
+			};
+
+			const moveLongPress = (x: number, y: number) => {
+				if (!startPoint || !longPressTimer) return;
+				const dx = x - startPoint.x;
+				const dy = y - startPoint.y;
+				if (Math.hypot(dx, dy) > longPressSlopPx) {
+					clearLongPress();
+				}
+			};
+
+			const finishLongPress = (event?: Event) => {
+				if (longPressFired) {
+					event?.preventDefault?.();
+				}
+				clearLongPress();
+			};
+
+			if ('PointerEvent' in window) {
+				const onPointerDown = (event: PointerEvent) => {
+					if (selectionModeEnabled) return;
+					if (event.pointerType && event.pointerType !== 'touch') return;
+					activePointerId = event.pointerId;
+					startLongPress(event.clientX, event.clientY);
+				};
+				const onPointerMove = (event: PointerEvent) => {
+					if (activePointerId !== event.pointerId) return;
+					moveLongPress(event.clientX, event.clientY);
+				};
+				const onPointerUp = (event: PointerEvent) => {
+					if (activePointerId !== event.pointerId) return;
+					finishLongPress(event);
+				};
+				const onPointerCancel = (event: PointerEvent) => {
+					if (activePointerId !== event.pointerId) return;
+					clearLongPress();
+				};
+				target.addEventListener('pointerdown', onPointerDown);
+				target.addEventListener('pointermove', onPointerMove);
+				target.addEventListener('pointerup', onPointerUp);
+				target.addEventListener('pointercancel', onPointerCancel);
+
+				longPressCleanup = () => {
+					target.removeEventListener('pointerdown', onPointerDown);
+					target.removeEventListener('pointermove', onPointerMove);
+					target.removeEventListener('pointerup', onPointerUp);
+					target.removeEventListener('pointercancel', onPointerCancel);
+					clearLongPress();
+				};
+				return;
+			}
+
+			const onTouchStart = (event: TouchEvent) => {
+				if (selectionModeEnabled) return;
+				if (event.touches.length !== 1) return;
+				const touch = event.touches.item(0);
+				if (!touch) return;
+				startLongPress(touch.clientX, touch.clientY);
+			};
+			const onTouchMove = (event: TouchEvent) => {
+				if (!startPoint || !longPressTimer) return;
+				const touch = event.touches.item(0);
+				if (!touch) return;
+				moveLongPress(touch.clientX, touch.clientY);
+			};
+			const onTouchEnd = (event: TouchEvent) => {
+				finishLongPress(event);
+			};
+			const onTouchCancel = () => {
+				clearLongPress();
+			};
+
+			target.addEventListener('touchstart', onTouchStart, { passive: true });
+			target.addEventListener('touchmove', onTouchMove, { passive: true });
+			target.addEventListener('touchend', onTouchEnd, { passive: false });
+			target.addEventListener('touchcancel', onTouchCancel, {
+				passive: true,
+			});
+
+			longPressCleanup = () => {
+				target.removeEventListener('touchstart', onTouchStart);
+				target.removeEventListener('touchmove', onTouchMove);
+				target.removeEventListener('touchend', onTouchEnd);
+				target.removeEventListener('touchcancel', onTouchCancel);
+				clearLongPress();
+			};
+		};
+
+		installLongPressHandlers();
+		term.onResize(() => {
+			if (selectionModeEnabled) renderSelectionHandles();
+		});
+
+		// Expose for debugging (typed)
+		window.terminal = term;
+		window.fitAddon = fitAddon;
+
+		term.onData((data) => {
+			sendToRn({ type: 'input', str: data });
+		});
+
+		// Report terminal size changes back to RN (for PTY resize)
+		term.onResize(({ cols, rows }) => {
+			if (cols >= 2 && rows >= 1) {
+				sendToRn({ type: 'sizeChanged', cols, rows });
+			}
+		});
+
+		// Remove old handler if any (just in case)
+		if (window.__FRESSH_XTERM_MSG_HANDLER__)
+			window.removeEventListener(
+				'message',
+				window.__FRESSH_XTERM_MSG_HANDLER__!,
+			);
+
+		// RN -> WebView handler (write, resize, setFont, setTheme, setOptions, clear, focus)
+		const handler = (e: MessageEvent<BridgeOutboundMessage>) => {
+			try {
+				const msg = e.data;
+
+				if (!msg || typeof msg.type !== 'string') return;
+
+				// TODO: https://xtermjs.org/docs/guides/flowcontrol/#ideas-for-a-better-mechanism
+				const termWrite = (bStr: string) => {
+					const bytes = bStrToBinary(bStr);
+					term.write(bytes);
+				};
+
+				switch (msg.type) {
+					case 'write': {
+						termWrite(msg.bStr);
+						break;
+					}
+					case 'writeMany': {
+						for (const bStr of msg.chunks) {
+							termWrite(bStr);
+						}
+						break;
+					}
+					case 'resize': {
+						term.resize(msg.cols, msg.rows);
+						break;
+					}
+					case 'fit': {
+						fitAddon.fit();
+						// Report new size after fit (onResize may not fire if size unchanged)
+						if (term.cols >= 2 && term.rows >= 1) {
+							sendToRn({
+								type: 'sizeChanged',
+								cols: term.cols,
+								rows: term.rows,
+							});
+						}
+						break;
+					}
+					case 'getSelection': {
+						const text = term.getSelection();
+						sendToRn({ type: 'selection', requestId: msg.requestId, text });
+						break;
+					}
+					case 'setSelectionMode': {
+						sendToRn({
+							type: 'debug',
+							message: `setSelectionMode ${msg.enabled ? 'on' : 'off'}`,
+						});
+						applySelectionMode(msg.enabled, { force: true });
+						break;
+					}
+					case 'setOptions': {
+						const { theme, ...rest } = msg.opts;
+						for (const key in rest) {
+							if (key === 'cols' || key === 'rows') continue;
+							const value = rest[key as keyof typeof rest];
+							// eslint-disable-next-line @typescript-eslint/no-explicit-any
+							(term.options as any)[key] = value;
+						}
+						if (theme) {
+							term.options.theme = {
+								...term.options.theme,
+								...theme,
+							};
+						}
+						applyFontFamily(msg.opts.fontFamily);
+						if (theme?.background) {
+							document.body.style.backgroundColor = theme.background;
+						}
+						break;
+					}
+					case 'clear': {
+						term.clear();
+						break;
+					}
+					case 'focus': {
+						term.focus();
+						break;
+					}
+				}
+			} catch (err) {
+				sendToRn({
+					type: 'debug',
+					message: `message handler error: ${String(err)}`,
+				});
+			}
+		};
+
+		window.__FRESSH_XTERM_MSG_HANDLER__ = handler;
+		window.addEventListener('message', handler);
+
+		// Initial handshake (send once)
+		setTimeout(() => {
+			const ta = document.querySelector(
+				'.xterm-helper-textarea',
+			) as HTMLTextAreaElement | null;
+			if (!ta) throw new Error('xterm-helper-textarea not found');
+			ta.setAttribute('autocomplete', 'off');
+			ta.setAttribute('autocorrect', 'off');
+			ta.setAttribute('autocapitalize', 'none');
+			ta.setAttribute('spellcheck', 'false');
+			ta.setAttribute('inputmode', 'verbatim');
+
+			return sendToRn({ type: 'initialized' });
+		}, 200);
+	} catch (e) {
+		sendToRn({
+			type: 'debug',
+			message: `error in xtermjs-webview: ${String(e)}`,
+		});
+	}
+};
+</file>
+
+</files>

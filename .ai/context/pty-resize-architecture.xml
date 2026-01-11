@@ -1,0 +1,3120 @@
+This file is a merged representation of a subset of the codebase, containing specifically included files, combined into a single document by Repomix.
+
+<file_summary>
+This section contains a summary of this file.
+
+<purpose>
+This file contains a packed representation of a subset of the repository's contents that is considered the most important context.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.
+</purpose>
+
+<file_format>
+The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Repository files (if enabled)
+5. Multiple file entries, each consisting of:
+  - File path as an attribute
+  - Full contents of the file
+</file_format>
+
+<usage_guidelines>
+- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.
+</usage_guidelines>
+
+<notes>
+- Some files may have been excluded based on .gitignore rules and Repomix's configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Only files matching these patterns are included: docs/pty-resize-architecture.md, packages/react-native-uniffi-russh/rust/uniffi-russh/src/ssh_connection.rs, packages/react-native-uniffi-russh/rust/uniffi-russh/src/ssh_shell.rs, packages/react-native-xtermjs-webview/src/index.tsx, packages/react-native-xtermjs-webview/src/bridge.ts, packages/react-native-xtermjs-webview/src-internal/main.tsx, apps/mobile/src/app/shell/detail.tsx, packages/react-native-uniffi-russh/src/api.ts, packages/react-native-xtermjs-webview/index.html
+- Files matching patterns in .gitignore are excluded
+- Files matching default ignore patterns are excluded
+- Files are sorted by Git change count (files with more changes are at the bottom)
+</notes>
+
+</file_summary>
+
+<directory_structure>
+apps/
+  mobile/
+    src/
+      app/
+        shell/
+          detail.tsx
+docs/
+  pty-resize-architecture.md
+packages/
+  react-native-uniffi-russh/
+    rust/
+      uniffi-russh/
+        src/
+          ssh_connection.rs
+          ssh_shell.rs
+    src/
+      api.ts
+  react-native-xtermjs-webview/
+    src/
+      bridge.ts
+      index.tsx
+    src-internal/
+      main.tsx
+    index.html
+</directory_structure>
+
+<files>
+This section contains the contents of the repository's files.
+
+<file path="docs/pty-resize-architecture.md">
+# PTY Resize Architecture Analysis
+
+## Problem Statement
+
+When connecting to a remote tmux session via Fressh mobile app, the terminal displays at a fixed size (set at connection time) and **never updates** when the screen size changes. The same tmux session viewed from a desktop terminal correctly fills the screen and responds to window resizing.
+
+**Symptoms:**
+- tmux status bar (green bar) appears in the middle of the screen instead of the bottom
+- Remote applications don't adapt to the mobile screen dimensions
+- Resizing the screen (keyboard show/hide, rotation) has no effect on the remote PTY
+
+## Root Cause
+
+The issue is a **three-layer architecture gap** where terminal resize events don't propagate from the UI to the remote SSH PTY:
+
+1. **xterm.js resizes visually** but doesn't report the new dimensions back to React Native
+2. **No API exists** in the SSH shell interface to send PTY resize commands
+3. **The remote shell/tmux never receives** SSH window-change notifications
+
+## Architecture Analysis
+
+### Current Data Flow (Broken)
+
+```
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│  Screen Resize  │────▶│  xterm.js fit() │────▶│  Visual resize  │ ✅
+└─────────────────┘     └─────────────────┘     └─────────────────┘
+                                │
+                                ▼
+                        ❌ NO CALLBACK
+                        (cols/rows not reported)
+                                │
+                                ▼
+                        ❌ NO API METHOD
+                        (shell.resizePty() missing)
+                                │
+                                ▼
+                        ❌ REMOTE PTY UNCHANGED
+                        (tmux stays at initial size)
+```
+
+### Expected Data Flow (Fixed)
+
+```
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│  Screen Resize  │────▶│  xterm.js fit() │────▶│  Visual resize  │
+└─────────────────┘     └─────────────────┘     └─────────────────┘
+                                │
+                                ▼
+                        ┌─────────────────┐
+                        │ onResize(c,r)   │  Report new cols/rows
+                        └─────────────────┘
+                                │
+                                ▼
+                        ┌─────────────────┐
+                        │ shell.resize()  │  Send to SSH channel
+                        └─────────────────┘
+                                │
+                                ▼
+                        ┌─────────────────┐
+                        │ PTY window-change│  SSH protocol message
+                        └─────────────────┘
+                                │
+                                ▼
+                        ┌─────────────────┐
+                        │ tmux resizes    │  Remote app adapts
+                        └─────────────────┘
+```
+
+## Evidence from Codebase
+
+### 1. PTY Size Set Only Once at Shell Startup
+
+**File:** `packages/react-native-uniffi-russh/rust/uniffi-russh/src/ssh_connection.rs`
+**Lines:** 231-241
+
+```rust
+ch.request_pty(
+    true,
+    term.as_ssh_name(),
+    col_width,      // Set once at startup
+    row_height,     // Never updated after
+    pixel_width,
+    pixel_height,
+    &modes,
+)
+.await?;
+ch.request_shell(true).await?;
+```
+
+The PTY dimensions are passed during the initial `request_pty()` call and are never updated afterward.
+
+### 2. Shell Interface Missing Resize Method
+
+**File:** `packages/react-native-uniffi-russh/lib/typescript/src/api.ts`
+**Lines:** 121-149
+
+```typescript
+export type SshShell = {
+    readonly channelId: number;
+    readonly pty: TerminalType;
+    readonly connectionId: string;
+
+    sendData: (data: ArrayBuffer) => Promise<void>;
+    close: () => Promise<void>;
+
+    // MISSING:
+    // resizePty(cols: number, rows: number): Promise<void>;
+};
+```
+
+The `SshShell` interface only exposes `sendData()` and `close()`. There is no method to send PTY resize requests.
+
+### 3. Rust Shell Session Lacks Resize Capability
+
+**File:** `packages/react-native-uniffi-russh/rust/uniffi-russh/src/ssh_shell.rs`
+**Lines:** 226-242
+
+```rust
+impl ShellSession {
+    pub async fn send_data(&self, data: Vec<u8>) -> Result<(), SshError>
+    pub async fn close(&self) -> Result<(), SshError>
+    // No resize_pty() method
+}
+```
+
+The Rust `ShellSession` struct doesn't implement any PTY resize functionality.
+
+### 4. xterm.js fit() Doesn't Report Back
+
+**File:** `packages/react-native-xtermjs-webview/src/index.tsx`
+**Lines:** 220-222
+
+```typescript
+const fit = useCallback(() => {
+    sendToWebView({ type: 'fit' });  // Fire and forget
+}, [sendToWebView]);
+```
+
+The `fit()` method sends a message to the webview but receives no response with the new dimensions.
+
+### 5. Bridge Missing Size Change Message
+
+**File:** `packages/react-native-xtermjs-webview/src/bridge.ts`
+
+```typescript
+// Inbound messages (WebView → React Native)
+export type BridgeInboundMessage =
+    | { type: 'initialized' }
+    | { type: 'input'; str: string }
+    | { type: 'debug'; message: string };
+    // MISSING: { type: 'sizeChanged'; cols: number; rows: number }
+```
+
+There's no message type for reporting terminal size changes from the webview back to React Native.
+
+### 6. Current onLayout Handler (Incomplete)
+
+**File:** `apps/mobile/src/app/shell/detail.tsx`
+**Lines:** 385-388
+
+```typescript
+onLayout: () => {
+    // Refit terminal when container size changes
+    xtermRef.current?.fit();
+    // MISSING: Get new size and send to SSH shell
+},
+```
+
+The layout handler calls `fit()` but doesn't query the new dimensions or update the SSH PTY.
+
+## Required Fixes
+
+### Layer 1: xterm.js WebView Bridge
+
+**Files to modify:**
+- `packages/react-native-xtermjs-webview/src/bridge.ts`
+- `packages/react-native-xtermjs-webview/src-internal/main.tsx`
+
+**Changes:**
+1. Add `sizeChanged` message type to `BridgeInboundMessage`
+2. After `fitAddon.fit()`, send new `term.cols` and `term.rows` back to RN
+
+### Layer 2: React Native XtermJsWebView Component
+
+**Files to modify:**
+- `packages/react-native-xtermjs-webview/src/index.tsx`
+
+**Changes:**
+1. Add `onResize?: (cols: number, rows: number) => void` callback prop
+2. Handle incoming `sizeChanged` messages and invoke the callback
+
+### Layer 3: Rust SSH Shell
+
+**Files to modify:**
+- `packages/react-native-uniffi-russh/rust/uniffi-russh/src/ssh_shell.rs`
+- `packages/react-native-uniffi-russh/src/api.ts`
+
+**Changes:**
+1. Add `resize_pty(cols: u32, rows: u32)` method to `ShellSession`
+2. Implement SSH `window-change` request using the channel
+3. Export the method via UniFFI bindings
+4. Add `resizePty()` to TypeScript interface
+
+### Layer 4: Mobile App Integration
+
+**Files to modify:**
+- `apps/mobile/src/app/shell/detail.tsx`
+
+**Changes:**
+1. Add `onResize` handler to `XtermJsWebView`
+2. Call `shell.resizePty(cols, rows)` when size changes
+
+## SSH Protocol Reference
+
+The SSH protocol supports PTY resize via `SSH_MSG_CHANNEL_REQUEST` with request type `"window-change"`:
+
+```
+byte      SSH_MSG_CHANNEL_REQUEST (98)
+uint32    recipient channel
+string    "window-change"
+boolean   want reply (FALSE)
+uint32    terminal width, columns
+uint32    terminal height, rows
+uint32    terminal width, pixels
+uint32    terminal height, pixels
+```
+
+The russh library should support this via the channel's request mechanism.
+
+## Testing
+
+After implementing the fix:
+
+1. Connect to a remote server with tmux running
+2. Verify tmux fills the screen initially
+3. Rotate the device - tmux should resize
+4. Show/hide the keyboard - tmux should resize
+5. The green tmux status bar should always be at the bottom
+</file>
+
+<file path="apps/mobile/src/app/shell/detail.tsx">
+import { type ListenerEvent } from '@fressh/react-native-uniffi-russh';
+import {
+	XtermJsWebView,
+	type XtermWebViewHandle,
+} from '@fressh/react-native-xtermjs-webview';
+
+import * as Clipboard from 'expo-clipboard';
+import * as Linking from 'expo-linking';
+import {
+	Stack,
+	useLocalSearchParams,
+	useRouter,
+	useFocusEffect,
+} from 'expo-router';
+import * as LucideIcons from 'lucide-react-native';
+import React, {
+	startTransition,
+	useCallback,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from 'react';
+import {
+	Animated,
+	KeyboardAvoidingView,
+	Platform,
+	Pressable,
+	Text,
+	View,
+} from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import {
+	ACTIVE_KEYBOARD_IDS,
+	DEFAULT_KEYBOARD_ID,
+	KEYBOARDS_BY_ID,
+	MACROS_BY_KEYBOARD_ID,
+	type KeyboardDefinition,
+	type KeyboardSlot,
+	type MacroDef,
+	type ModifierKey,
+} from '@/generated/keyboard-config';
+import {
+	CONFIGURATOR_URL,
+	runAction,
+	type ActionContext,
+	type ActionId,
+} from '@/lib/keyboard-actions';
+import { runMacro } from '@/lib/keyboard-runtime';
+import { rootLogger } from '@/lib/logger';
+import { useSshStore } from '@/lib/ssh-store';
+import { useTheme } from '@/lib/theme';
+
+const logger = rootLogger.extend('TabsShellDetail');
+
+export default function TabsShellDetail() {
+	const [ready, setReady] = useState(false);
+
+	useFocusEffect(
+		React.useCallback(() => {
+			startTransition(() => {
+				setTimeout(() => {
+					// TODO: This is gross. It would be much better to switch
+					// after the navigation animation completes.
+					setReady(true);
+				}, 16);
+			});
+
+			return () => {
+				setReady(false);
+			};
+		}, []),
+	);
+
+	if (!ready) return <RouteSkeleton />;
+	return <ShellDetail />;
+}
+
+function RouteSkeleton() {
+	const theme = useTheme();
+	return (
+		<View
+			style={{
+				flex: 1,
+				justifyContent: 'center',
+				alignItems: 'center',
+				backgroundColor: theme.colors.background,
+			}}
+		>
+			<Text style={{ color: theme.colors.textPrimary, fontSize: 20 }}>
+				Loading
+			</Text>
+		</View>
+	);
+}
+
+const encoder = new TextEncoder();
+const ALL_KEYBOARD_IDS = Object.keys(KEYBOARDS_BY_ID);
+const ACTIVE_KEYBOARD_IDS_FALLBACK: readonly string[] =
+	ACTIVE_KEYBOARD_IDS.length > 0 ? ACTIVE_KEYBOARD_IDS : ALL_KEYBOARD_IDS;
+const DEFAULT_KEYBOARD_ID_FALLBACK =
+	DEFAULT_KEYBOARD_ID || ACTIVE_KEYBOARD_IDS_FALLBACK[0] || '';
+
+function ShellDetail() {
+	const xtermRef = useRef<XtermWebViewHandle>(null);
+	const listenerIdRef = useRef<bigint | null>(null);
+
+	const searchParams = useLocalSearchParams<{
+		connectionId?: string;
+		channelId?: string;
+	}>();
+
+	if (!searchParams.connectionId || !searchParams.channelId)
+		throw new Error('Missing connectionId or channelId');
+
+	const connectionId = searchParams.connectionId;
+	const channelId = parseInt(searchParams.channelId);
+
+	const router = useRouter();
+	const theme = useTheme();
+	const insets = useSafeAreaInsets();
+
+	const shell = useSshStore(
+		(s) => s.shells[`${connectionId}-${channelId}` as const],
+	);
+	const connection = useSshStore((s) => s.connections[connectionId]);
+
+	useEffect(() => {
+		if (shell && connection) return;
+		logger.info('shell or connection not found, replacing route with /shell');
+		router.back();
+	}, [connection, router, shell]);
+
+	useEffect(() => {
+		const xterm = xtermRef.current;
+		return () => {
+			if (shell && listenerIdRef.current != null)
+				shell.removeListener(listenerIdRef.current);
+			listenerIdRef.current = null;
+			if (xterm) xterm.flush();
+		};
+	}, [shell]);
+
+	const [selectedKeyboardId, setSelectedKeyboardId] =
+		useState<string>(DEFAULT_KEYBOARD_ID_FALLBACK);
+	const availableKeyboardIds = useMemo(
+		() => new Set(ALL_KEYBOARD_IDS),
+		[],
+	);
+
+	const currentKeyboard = useMemo<KeyboardDefinition | null>(() => {
+		if (selectedKeyboardId && KEYBOARDS_BY_ID[selectedKeyboardId]) {
+			return KEYBOARDS_BY_ID[selectedKeyboardId];
+		}
+		if (
+			DEFAULT_KEYBOARD_ID_FALLBACK &&
+			KEYBOARDS_BY_ID[DEFAULT_KEYBOARD_ID_FALLBACK]
+		) {
+			return KEYBOARDS_BY_ID[DEFAULT_KEYBOARD_ID_FALLBACK];
+		}
+		const fallbackId = ACTIVE_KEYBOARD_IDS_FALLBACK[0];
+		return fallbackId ? KEYBOARDS_BY_ID[fallbackId] ?? null : null;
+	}, [selectedKeyboardId]);
+
+	const currentMacros = useMemo<MacroDef[]>(
+		() =>
+			currentKeyboard
+				? MACROS_BY_KEYBOARD_ID[currentKeyboard.id] ?? []
+				: [],
+		[currentKeyboard],
+	);
+
+	// Flash message for keyboard switching
+	const [flashKeyboardName, setFlashKeyboardName] = useState<string | null>(
+		null,
+	);
+	const flashOpacity = useRef(new Animated.Value(0)).current;
+	const isFirstMount = useRef(true);
+
+	useEffect(() => {
+		// Skip the flash on first mount
+		if (isFirstMount.current) {
+			isFirstMount.current = false;
+			return;
+		}
+
+		if (!currentKeyboard) return;
+
+		setFlashKeyboardName(currentKeyboard.name);
+		flashOpacity.setValue(1);
+
+		Animated.timing(flashOpacity, {
+			toValue: 0,
+			duration: 800,
+			delay: 400,
+			useNativeDriver: true,
+		}).start(() => {
+			setFlashKeyboardName(null);
+		});
+	}, [currentKeyboard, flashOpacity]);
+
+	const [modifierKeysActive, setModifierKeysActive] = useState<ModifierKey[]>(
+		[],
+	);
+
+	const sendBytesRaw = useCallback(
+		(bytes: Uint8Array<ArrayBuffer>) => {
+			if (!shell) return;
+			shell.sendData(bytes.buffer).catch((e: unknown) => {
+				logger.warn('sendData failed', e);
+				router.back();
+			});
+		},
+		[shell, router],
+	);
+
+	const sendBytesWithModifiers = useCallback(
+		(bytes: Uint8Array<ArrayBuffer>) => {
+			if (!shell) return;
+			let next = bytes;
+			modifierKeysActive
+				.map((key) => MODIFIER_DEFS[key])
+				.sort((a, b) => a.orderPreference - b.orderPreference)
+				.forEach((modifier) => {
+					if (!modifier.canApplyModifierToBytes(next)) return;
+					next = modifier.applyModifierToBytes(next);
+				});
+			sendBytesRaw(next);
+		},
+		[modifierKeysActive, sendBytesRaw, shell],
+	);
+
+	const sendTextRaw = useCallback(
+		(value: string) => {
+			sendBytesRaw(encoder.encode(value));
+		},
+		[sendBytesRaw],
+	);
+
+	const sendTextWithModifiers = useCallback(
+		(value: string) => {
+			sendBytesWithModifiers(encoder.encode(value));
+		},
+		[sendBytesWithModifiers],
+	);
+
+	const toggleModifier = useCallback((modifier: ModifierKey) => {
+		setModifierKeysActive((prev) =>
+			prev.includes(modifier)
+				? prev.filter((entry) => entry !== modifier)
+				: [...prev, modifier],
+		);
+	}, []);
+
+	const rotateKeyboard = useCallback(() => {
+		if (ACTIVE_KEYBOARD_IDS_FALLBACK.length <= 1) return;
+		setSelectedKeyboardId((current) => {
+			const idx = Math.max(0, ACTIVE_KEYBOARD_IDS_FALLBACK.indexOf(current));
+			const nextIdx = (idx + 1) % ACTIVE_KEYBOARD_IDS_FALLBACK.length;
+			return ACTIVE_KEYBOARD_IDS_FALLBACK[nextIdx] ?? current;
+		});
+	}, []);
+
+	const selectKeyboardIfExists = useCallback(
+		(id: string) => {
+			if (!availableKeyboardIds.has(id)) return;
+			setSelectedKeyboardId(id);
+		},
+		[availableKeyboardIds],
+	);
+
+	const handlePasteClipboard = useCallback(async () => {
+		try {
+			const text = await Clipboard.getStringAsync();
+			if (text) sendTextRaw(text);
+		} catch (error) {
+			logger.warn('clipboard read failed', error);
+		}
+	}, [sendTextRaw]);
+
+	const handleCopySelection = useCallback(() => {
+		logger.warn('copy selection not supported on native terminal');
+	}, []);
+
+	const actionContext = useMemo<ActionContext>(
+		() => ({
+			availableKeyboardIds,
+			selectKeyboard: selectKeyboardIfExists,
+			rotateKeyboard,
+			openConfigurator: () => {
+				void Linking.openURL(CONFIGURATOR_URL);
+			},
+			sendBytes: sendBytesRaw,
+			pasteClipboard: handlePasteClipboard,
+			copySelection: handleCopySelection,
+			toggleCommandPresets: () => {
+				logger.warn('command presets not available');
+			},
+			openCommander: () => {
+				logger.warn('commander not available');
+			},
+		}),
+		[
+			availableKeyboardIds,
+			handleCopySelection,
+			handlePasteClipboard,
+			rotateKeyboard,
+			selectKeyboardIfExists,
+			sendBytesRaw,
+		],
+	);
+
+	const handleAction = useCallback(
+		(actionId: ActionId) => {
+			void runAction(actionId, actionContext);
+		},
+		[actionContext],
+	);
+
+	const handleSlotPress = useCallback(
+		(slot: KeyboardSlot) => {
+			if (slot.type === 'modifier') {
+				toggleModifier(slot.modifier);
+				return;
+			}
+			if (slot.type === 'text') {
+				sendTextWithModifiers(slot.text);
+				return;
+			}
+			if (slot.type === 'bytes') {
+				sendBytesWithModifiers(new Uint8Array(slot.bytes));
+				return;
+			}
+			if (slot.type === 'macro') {
+				const macro = currentMacros.find(
+					(entry) => entry.id === slot.macroId,
+				);
+				if (!macro) return;
+				runMacro(macro, {
+					sendBytes: sendBytesRaw,
+					sendText: sendTextRaw,
+					onAction: handleAction,
+				});
+				return;
+			}
+			if (slot.type === 'action') {
+				handleAction(slot.actionId);
+				return;
+			}
+		},
+		[
+			currentMacros,
+			handleAction,
+			sendBytesRaw,
+			sendBytesWithModifiers,
+			sendTextRaw,
+			sendTextWithModifiers,
+			toggleModifier,
+		],
+	);
+
+	return (
+		<>
+			<Stack.Screen options={{ headerShown: false }} />
+			<KeyboardAvoidingView
+				// On Android, window resizing already handles keyboard avoidance.
+				// Keep KeyboardAvoidingView behavior only for iOS.
+				behavior={Platform.OS === 'ios' ? 'height' : undefined}
+				keyboardVerticalOffset={0}
+				style={{
+					flex: 1,
+					backgroundColor: theme.colors.background,
+					// Respect system status/navigation bars on Android.
+					paddingTop: Platform.OS === 'android' ? insets.top : 0,
+					// Keep a small breathing gap above the Android navigation bar.
+					paddingBottom: Platform.OS === 'android' ? insets.bottom + 4 : 0,
+				}}
+			>
+				<XtermJsWebView
+					ref={xtermRef}
+					style={{ flex: 1 }}
+					webViewOptions={{
+						// Prevent iOS from adding automatic top inset inside WebView
+						contentInsetAdjustmentBehavior: 'never',
+						onLayout: () => {
+							// Refit terminal when container size changes
+							xtermRef.current?.fit();
+						},
+					}}
+					logger={{
+						log: logger.info,
+						// debug: logger.debug,
+						warn: logger.warn,
+						error: logger.error,
+					}}
+					xtermOptions={{
+						theme: {
+							background: theme.colors.background,
+							foreground: theme.colors.textPrimary,
+						},
+					}}
+					onInitialized={() => {
+						if (!shell) throw new Error('Shell not found');
+
+						// Replay from head, then attach live listener
+						void (async () => {
+							const res = shell.readBuffer({ mode: 'head' });
+							logger.info('readBuffer(head)', {
+								chunks: res.chunks.length,
+								nextSeq: res.nextSeq,
+								dropped: res.dropped,
+							});
+							if (res.chunks.length) {
+								const chunks = res.chunks.map((c) => c.bytes);
+								const xr = xtermRef.current;
+								if (xr) {
+									xr.writeMany(chunks.map((c) => new Uint8Array(c)));
+									xr.flush();
+								}
+							}
+							const id = shell.addListener(
+								(ev: ListenerEvent) => {
+									if ('kind' in ev) {
+										logger.warn('listener.dropped', ev);
+										return;
+									}
+									const chunk = ev;
+									const xr3 = xtermRef.current;
+									if (xr3) xr3.write(new Uint8Array(chunk.bytes));
+								},
+								{ cursor: { mode: 'seq', seq: res.nextSeq } },
+							);
+							logger.info('shell listener attached', id.toString());
+							listenerIdRef.current = id;
+						})();
+						// Focus to pop the keyboard (iOS needs the prop we set)
+						const xr2 = xtermRef.current;
+						if (xr2) xr2.focus();
+					}}
+					onData={(terminalMessage) => {
+						if (!shell) return;
+						sendBytesRaw(encoder.encode(terminalMessage));
+					}}
+				/>
+				<TerminalKeyboard
+					keyboard={currentKeyboard}
+					modifierKeysActive={modifierKeysActive}
+					onSlotPress={handleSlotPress}
+				/>
+				{flashKeyboardName && (
+					<Animated.View
+						pointerEvents="none"
+						style={{
+							position: 'absolute',
+							top: '40%',
+							left: 0,
+							right: 0,
+							alignItems: 'center',
+							opacity: flashOpacity,
+						}}
+					>
+						<View
+							style={{
+								backgroundColor: 'rgba(0, 0, 0, 0.75)',
+								paddingHorizontal: 20,
+								paddingVertical: 10,
+								borderRadius: 8,
+							}}
+						>
+							<Text
+								style={{
+									color: '#fff',
+									fontSize: 16,
+									fontWeight: '600',
+								}}
+							>
+								{flashKeyboardName}
+							</Text>
+						</View>
+					</Animated.View>
+				)}
+			</KeyboardAvoidingView>
+		</>
+	);
+}
+type ModifierContract = {
+	canApplyModifierToBytes: (bytes: Uint8Array<ArrayBuffer>) => boolean;
+	applyModifierToBytes: (
+		bytes: Uint8Array<ArrayBuffer>,
+	) => Uint8Array<ArrayBuffer>;
+	orderPreference: number;
+};
+
+const escapeByte = 27;
+
+const shiftModifier: ModifierContract = {
+	orderPreference: 5,
+	canApplyModifierToBytes: (bytes) =>
+		bytes.some((byte) => byte >= 97 && byte <= 122),
+	applyModifierToBytes: (bytes) => {
+		const next = new Uint8Array(bytes.length);
+		for (let i = 0; i < bytes.length; i += 1) {
+			const byte = bytes[i];
+			if (byte === undefined) continue;
+			next[i] = byte >= 97 && byte <= 122 ? byte - 32 : byte;
+		}
+		return next;
+	},
+};
+
+const ctrlModifier: ModifierContract = {
+	orderPreference: 10,
+	canApplyModifierToBytes: (bytes) => {
+		const firstByte = bytes[0];
+		if (firstByte === undefined) return false;
+		return mapByteToCtrl(firstByte) != null;
+	},
+	applyModifierToBytes: (bytes) => {
+		const firstByte = bytes[0];
+		if (firstByte === undefined) return bytes;
+		const ctrlByte = mapByteToCtrl(firstByte);
+		if (ctrlByte == null) return bytes;
+		return new Uint8Array([ctrlByte]);
+	},
+};
+
+const altModifier: ModifierContract = {
+	orderPreference: 20,
+	canApplyModifierToBytes: (bytes) => {
+		return bytes.length > 0 && bytes[0] !== escapeByte;
+	},
+	applyModifierToBytes: (bytes) => {
+		const result = new Uint8Array(bytes.length + 1);
+		result[0] = escapeByte;
+		result.set(bytes, 1);
+		return result;
+	},
+};
+
+function mapByteToCtrl(byte: number): number | null {
+	if (byte === 32) return 0; // Ctrl+Space
+	const uppercase = byte & 0b1101_1111; // Fold to uppercase / control range
+	if (uppercase >= 64 && uppercase <= 95) {
+		return uppercase & 0x1f;
+	}
+	if (byte === 63) return 127; // Ctrl+?
+	return null;
+}
+
+const cmdModifier: ModifierContract = {
+	orderPreference: 30,
+	canApplyModifierToBytes: () => false,
+	applyModifierToBytes: (bytes) => bytes,
+};
+
+const MODIFIER_DEFS: Record<ModifierKey, ModifierContract> = {
+	SHIFT: shiftModifier,
+	CTRL: ctrlModifier,
+	ALT: altModifier,
+	CMD: cmdModifier,
+};
+
+type LucideIconComponent = React.ComponentType<{
+	color?: string;
+	size?: number;
+}>;
+
+function resolveLucideIcon(name: string | null): LucideIconComponent | null {
+	if (!name) return null;
+	const iconMap =
+		LucideIcons as unknown as Record<string, LucideIconComponent>;
+	const Icon = iconMap[name];
+	return Icon ?? null;
+}
+
+function TerminalKeyboard({
+	keyboard,
+	modifierKeysActive,
+	onSlotPress,
+}: {
+	keyboard: KeyboardDefinition | null;
+	modifierKeysActive: ModifierKey[];
+	onSlotPress: (slot: KeyboardSlot) => void;
+}) {
+	const theme = useTheme();
+
+	if (!keyboard) {
+		return (
+			<View
+				style={{
+					borderTopWidth: 1,
+					borderColor: theme.colors.border,
+					padding: 12,
+				}}
+			>
+				<Text style={{ color: theme.colors.textSecondary }}>
+					No keyboard configuration. Generate code to enable shortcuts.
+				</Text>
+			</View>
+		);
+	}
+
+	/* eslint-disable @eslint-react/no-array-index-key */
+	const rows = keyboard.grid.map((row, rowIndex) => (
+		<View key={`row-${rowIndex}`} style={{ flexDirection: 'row' }}>
+			{row.map((slot, colIndex) => {
+				if (!slot) {
+					return (
+						<View
+							key={`slot-${rowIndex}-${colIndex}`}
+							style={{ flex: 1, margin: 2 }}
+						/>
+					);
+				}
+
+				const modifierActive =
+					slot.type === 'modifier' &&
+					modifierKeysActive.includes(slot.modifier);
+				const Icon = resolveLucideIcon(slot.icon);
+
+				return (
+					<Pressable
+						key={`slot-${rowIndex}-${colIndex}`}
+						onPress={() => onSlotPress(slot)}
+						style={[
+							{
+								flex: 1,
+								margin: 2,
+								paddingVertical: 6,
+								borderRadius: 8,
+								borderWidth: 1,
+								borderColor: theme.colors.border,
+								alignItems: 'center',
+								justifyContent: 'center',
+							},
+							modifierActive && {
+								backgroundColor: theme.colors.primary,
+							},
+						]}
+					>
+						{Icon ? (
+							<Icon color={theme.colors.textPrimary} size={18} />
+						) : null}
+						<Text
+							numberOfLines={1}
+							style={{
+								color: theme.colors.textPrimary,
+								fontSize: 10,
+								marginTop: Icon ? 2 : 0,
+							}}
+						>
+							{slot.label}
+						</Text>
+					</Pressable>
+				);
+			})}
+		</View>
+	));
+	/* eslint-enable @eslint-react/no-array-index-key */
+
+	return (
+		<View
+			style={{
+				borderTopWidth: 1,
+				borderColor: theme.colors.border,
+				padding: 6,
+			}}
+		>
+			{rows}
+		</View>
+	);
+}
+</file>
+
+<file path="packages/react-native-xtermjs-webview/index.html">
+<!doctype html>
+<html style="margin: 0; padding: 0; width: 100%; height: 100%">
+	<head>
+		<meta charset="UTF-8" />
+		<meta
+			name="viewport"
+			content="width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=1, user-scalable=no"
+		/>
+		<style>
+			/* Ensure xterm fills container and background extends to bottom */
+			.xterm {
+				height: 100% !important;
+			}
+			.xterm-viewport {
+				background-color: inherit !important;
+			}
+			.xterm-screen {
+				height: 100% !important;
+			}
+		</style>
+	</head>
+	<body style="margin: 0; padding: 0px; width: 100%; height: 100%">
+		<div
+			id="terminal"
+			style="margin: 0; padding: 0; width: 100%; height: 100%"
+		></div>
+		<script type="module" src="/src-internal/main.tsx"></script>
+	</body>
+</html>
+</file>
+
+<file path="packages/react-native-xtermjs-webview/src/bridge.ts">
+import { Base64 } from 'js-base64';
+type ITerminalOptions = import('@xterm/xterm').ITerminalOptions;
+type ITerminalInitOnlyOptions = import('@xterm/xterm').ITerminalInitOnlyOptions;
+// Messages posted from the WebView (xterm page) to React Native
+export type BridgeInboundMessage =
+	| { type: 'initialized' }
+	| { type: 'input'; str: string }
+	| { type: 'debug'; message: string };
+
+// Messages injected from React Native into the WebView (xterm page)
+export type BridgeOutboundMessage =
+	| { type: 'write'; bStr: string }
+	| { type: 'writeMany'; chunks: string[] }
+	| { type: 'resize'; cols: number; rows: number }
+	| { type: 'fit' }
+	| {
+			type: 'setOptions';
+			opts: Partial<Omit<ITerminalOptions, keyof ITerminalInitOnlyOptions>>;
+	  }
+	| { type: 'clear' }
+	| { type: 'focus' };
+
+export const binaryToBStr = (binary: Uint8Array): string =>
+	Base64.fromUint8Array(binary);
+export const bStrToBinary = (bStr: string): Uint8Array =>
+	Base64.toUint8Array(bStr);
+</file>
+
+<file path="packages/react-native-uniffi-russh/rust/uniffi-russh/src/ssh_connection.rs">
+use std::fmt;
+use std::sync::{Arc, Weak};
+
+use tokio::sync::{broadcast, Mutex as AsyncMutex};
+
+use russh::client::{Config, Handle as ClientHandle};
+use russh::keys::PrivateKeyWithHashAlg;
+use russh::{self, client, ChannelMsg, Disconnect};
+
+use crate::private_key::normalize_openssh_ed25519_seed_key;
+use crate::ssh_shell::{
+    append_and_broadcast, Chunk, ShellSession, ShellSessionInfo, StartShellOptions, StreamKind,
+    DEFAULT_BROADCAST_CHUNK_CAPACITY, DEFAULT_MAX_CHUNK_SIZE, DEFAULT_SHELL_RING_BUFFER_CAPACITY,
+    DEFAULT_TERMINAL_MODES, DEFAULT_TERM_COALESCE_MS, DEFAULT_TERM_COL_WIDTH,
+    DEFAULT_TERM_PIXEL_HEIGHT, DEFAULT_TERM_PIXEL_WIDTH, DEFAULT_TERM_ROW_HEIGHT,
+};
+use crate::utils::{now_ms, SshError};
+use russh::keys::PublicKeyBase64;
+use std::sync::atomic::AtomicUsize;
+
+use std::{
+    collections::HashMap,
+    sync::{atomic::AtomicU64, Mutex},
+};
+
+fn server_public_key_to_info(
+    host: &str,
+    port: u16,
+    remote_ip: Option<String>,
+    pk: &russh::keys::PublicKey,
+) -> ServerPublicKeyInfo {
+    // Algorithm identifier (e.g., "ssh-ed25519", "rsa-sha2-512")
+    let algorithm = pk.algorithm().to_string();
+
+    // Key blob (base64)
+    let key_base64 = pk.public_key_base64();
+
+    // Fingerprints via russh-keys/ssh-key helpers
+    let fingerprint_sha256 = format!("{}", pk.fingerprint(russh::keys::ssh_key::HashAlg::Sha256));
+
+    ServerPublicKeyInfo {
+        host: host.to_string(),
+        port,
+        remote_ip,
+        algorithm,
+        fingerprint_sha256,
+        key_base64,
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Enum)]
+pub enum Security {
+    Password { password: String },
+    Key { private_key_content: String }, // (key-based auth can be wired later)
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct ConnectionDetails {
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub security: Security,
+}
+
+#[derive(Clone, uniffi::Record)]
+pub struct ConnectOptions {
+    pub connection_details: ConnectionDetails,
+    pub on_connection_progress_callback: Option<Arc<dyn ConnectProgressCallback>>,
+    pub on_disconnected_callback: Option<Arc<dyn ConnectionDisconnectedCallback>>,
+    pub on_server_key_callback: Arc<dyn ServerKeyCallback>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, uniffi::Enum)]
+pub enum SshConnectionProgressEvent {
+    // Before any progress events, assume: TcpConnecting
+    TcpConnected,
+    SshHandshake,
+    // If promise has not resolved, assume: Authenticating
+    // After promise resolves, assume: Connected
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct SshConnectionInfoProgressTimings {
+    // TODO: We should have a field for each SshConnectionProgressEvent. Would be great if this were enforced by the compiler.
+    pub tcp_established_at_ms: f64,
+    pub ssh_handshake_at_ms: f64,
+}
+
+#[uniffi::export(with_foreign)]
+pub trait ConnectProgressCallback: Send + Sync {
+    fn on_change(&self, status: SshConnectionProgressEvent);
+}
+
+#[uniffi::export(with_foreign)]
+pub trait ConnectionDisconnectedCallback: Send + Sync {
+    fn on_change(&self, connection_id: String);
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct ServerPublicKeyInfo {
+    pub host: String,
+    pub port: u16,
+    pub remote_ip: Option<String>,
+    pub algorithm: String,
+    pub fingerprint_sha256: String, // e.g., "SHA256:..." (no padding)
+    pub key_base64: String,         // raw key blob (base64)
+}
+
+#[uniffi::export(with_foreign)]
+#[async_trait::async_trait]
+pub trait ServerKeyCallback: Send + Sync {
+    async fn on_change(&self, server_key_info: ServerPublicKeyInfo) -> bool;
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct SshConnectionInfo {
+    pub connection_id: String,
+    pub connection_details: ConnectionDetails,
+    pub created_at_ms: f64,
+    pub connected_at_ms: f64,
+    pub progress_timings: SshConnectionInfoProgressTimings,
+}
+
+/// Minimal client::Handler with optional server key callback.
+pub(crate) struct NoopHandler {
+    pub on_server_key_callback: Arc<dyn ServerKeyCallback>,
+    pub host: String,
+    pub port: u16,
+    pub remote_ip: Option<String>,
+}
+impl client::Handler for NoopHandler {
+    type Error = SshError;
+    fn check_server_key(
+        &mut self,
+        server_public_key: &russh::keys::PublicKey,
+    ) -> impl std::future::Future<
+        Output = std::result::Result<bool, <Self as russh::client::Handler>::Error>,
+    > + std::marker::Send {
+        let cb = self.on_server_key_callback.clone();
+        let host = self.host.clone();
+        let port = self.port;
+        let remote_ip = self.remote_ip.clone();
+        // Build structured info for UI/decision.
+        let info = server_public_key_to_info(&host, port, remote_ip, server_public_key);
+        async move {
+            // Delegate decision to user callback (async via UniFFI).
+            let accept = cb.on_change(info).await;
+            Ok(accept)
+        }
+    }
+}
+
+#[derive(uniffi::Object)]
+pub struct SshConnection {
+    pub info: SshConnectionInfo,
+    pub on_disconnected_callback: Option<Arc<dyn ConnectionDisconnectedCallback>>,
+
+    pub(crate) client_handle: AsyncMutex<ClientHandle<NoopHandler>>,
+
+    pub(crate) shells: AsyncMutex<HashMap<u32, Arc<ShellSession>>>,
+
+    // Weak self for child sessions to refer back without cycles.
+    pub(crate) self_weak: AsyncMutex<Weak<SshConnection>>,
+}
+
+impl fmt::Debug for SshConnection {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SshConnectionHandle")
+            .field("info.connection_details", &self.info.connection_details)
+            .field("info.created_at_ms", &self.info.created_at_ms)
+            .field("info.connected_at_ms", &self.info.connected_at_ms)
+            .finish()
+    }
+}
+
+#[uniffi::export(async_runtime = "tokio")]
+impl SshConnection {
+    /// Convenience snapshot for property-like access in TS.
+    pub fn get_info(&self) -> SshConnectionInfo {
+        self.info.clone()
+    }
+
+    pub async fn start_shell(
+        &self,
+        opts: StartShellOptions,
+    ) -> Result<Arc<ShellSession>, SshError> {
+        let started_at_ms = now_ms();
+
+        let term = opts.term;
+        let on_closed_callback = opts.on_closed_callback.clone();
+
+        let client_handle = self.client_handle.lock().await;
+
+        let ch = client_handle.channel_open_session().await?;
+        let channel_id: u32 = ch.id().into();
+
+        let mut modes: Vec<(russh::Pty, u32)> = DEFAULT_TERMINAL_MODES.to_vec();
+        if let Some(terminal_mode_params) = &opts.terminal_mode {
+            for m in terminal_mode_params {
+                if let Some(pty) = russh::Pty::from_u8(m.opcode) {
+                    if let Some(pos) = modes.iter().position(|(p, _)| *p as u8 == m.opcode) {
+                        modes[pos].1 = m.value; // override
+                    } else {
+                        modes.push((pty, m.value)); // add
+                    }
+                }
+            }
+        }
+
+        let row_height = opts
+            .terminal_size
+            .as_ref()
+            .and_then(|s| s.row_height)
+            .unwrap_or(DEFAULT_TERM_ROW_HEIGHT);
+        let col_width = opts
+            .terminal_size
+            .as_ref()
+            .and_then(|s| s.col_width)
+            .unwrap_or(DEFAULT_TERM_COL_WIDTH);
+        let pixel_width = opts
+            .terminal_pixel_size
+            .as_ref()
+            .and_then(|s| s.pixel_width)
+            .unwrap_or(DEFAULT_TERM_PIXEL_WIDTH);
+        let pixel_height = opts
+            .terminal_pixel_size
+            .as_ref()
+            .and_then(|s| s.pixel_height)
+            .unwrap_or(DEFAULT_TERM_PIXEL_HEIGHT);
+
+        ch.request_pty(
+            true,
+            term.as_ssh_name(),
+            col_width,
+            row_height,
+            pixel_width,
+            pixel_height,
+            &modes,
+        )
+        .await?;
+        ch.request_shell(true).await?;
+
+        // Split for read/write; spawn reader.
+        let (mut reader, writer) = ch.split();
+
+        // Setup ring + broadcast for this session
+        let (tx, _rx) = broadcast::channel::<Arc<Chunk>>(DEFAULT_BROADCAST_CHUNK_CAPACITY);
+        let ring = Arc::new(Mutex::new(std::collections::VecDeque::<Arc<Chunk>>::new()));
+        let used_bytes = Arc::new(Mutex::new(0usize));
+        let next_seq = Arc::new(AtomicU64::new(1));
+        let head_seq = Arc::new(AtomicU64::new(1));
+        let tail_seq = Arc::new(AtomicU64::new(0));
+        let dropped_bytes_total = Arc::new(AtomicU64::new(0));
+        let ring_bytes_capacity = Arc::new(AtomicUsize::new(DEFAULT_SHELL_RING_BUFFER_CAPACITY));
+        let default_coalesce_ms = AtomicU64::new(DEFAULT_TERM_COALESCE_MS);
+
+        let ring_clone = ring.clone();
+        let used_bytes_clone = used_bytes.clone();
+        let tx_clone = tx.clone();
+        let ring_bytes_capacity_c = ring_bytes_capacity.clone();
+        let dropped_bytes_total_c = dropped_bytes_total.clone();
+        let head_seq_c = head_seq.clone();
+        let tail_seq_c = tail_seq.clone();
+        let next_seq_c = next_seq.clone();
+
+        let on_closed_callback_for_reader = on_closed_callback.clone();
+
+        let reader_task = tokio::spawn(async move {
+            let max_chunk = DEFAULT_MAX_CHUNK_SIZE;
+            loop {
+                match reader.wait().await {
+                    Some(ChannelMsg::Data { data }) => {
+                        append_and_broadcast(
+                            &data,
+                            StreamKind::Stdout,
+                            &ring_clone,
+                            &used_bytes_clone,
+                            &ring_bytes_capacity_c,
+                            &dropped_bytes_total_c,
+                            &head_seq_c,
+                            &tail_seq_c,
+                            &next_seq_c,
+                            &tx_clone,
+                            max_chunk,
+                        );
+                    }
+                    Some(ChannelMsg::ExtendedData { data, .. }) => {
+                        append_and_broadcast(
+                            &data,
+                            StreamKind::Stderr,
+                            &ring_clone,
+                            &used_bytes_clone,
+                            &ring_bytes_capacity_c,
+                            &dropped_bytes_total_c,
+                            &head_seq_c,
+                            &tail_seq_c,
+                            &next_seq_c,
+                            &tx_clone,
+                            max_chunk,
+                        );
+                    }
+                    Some(ChannelMsg::Close) | None => {
+                        if let Some(sl) = on_closed_callback_for_reader.as_ref() {
+                            sl.on_change(channel_id);
+                        }
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+        });
+
+        let session = Arc::new(ShellSession {
+            info: ShellSessionInfo {
+                channel_id,
+                created_at_ms: started_at_ms,
+                connected_at_ms: now_ms(),
+                term,
+                connection_id: self.info.connection_id.clone(),
+            },
+            on_closed_callback,
+            parent: self.self_weak.lock().await.clone(),
+
+            writer: AsyncMutex::new(writer),
+            reader_task,
+
+            // Ring buffer
+            ring,
+            ring_bytes_capacity,
+            used_bytes,
+            dropped_bytes_total,
+            head_seq,
+            tail_seq,
+
+            // Listener tasks management
+            sender: tx,
+            listener_tasks: Arc::new(Mutex::new(HashMap::new())),
+            next_listener_id: AtomicU64::new(1),
+            coalesce_ms: default_coalesce_ms,
+            rt_handle: tokio::runtime::Handle::current(),
+        });
+
+        self.shells.lock().await.insert(channel_id, session.clone());
+
+        Ok(session)
+    }
+
+    pub async fn disconnect(&self) -> Result<(), SshError> {
+        // TODO: Check if we need to close all these if we are about to disconnect?
+        let sessions: Vec<Arc<ShellSession>> = {
+            let map = self.shells.lock().await;
+            map.values().cloned().collect()
+        };
+        for s in sessions {
+            s.close().await?;
+        }
+
+        let h = self.client_handle.lock().await;
+        h.disconnect(Disconnect::ByApplication, "bye", "").await?;
+
+        if let Some(on_disconnected_callback) = self.on_disconnected_callback.as_ref() {
+            on_disconnected_callback.on_change(self.info.connection_id.clone());
+        }
+
+        Ok(())
+    }
+}
+
+#[uniffi::export(async_runtime = "tokio")]
+pub async fn connect(options: ConnectOptions) -> Result<Arc<SshConnection>, SshError> {
+    let started_at_ms = now_ms();
+    let details = ConnectionDetails {
+        host: options.connection_details.host.clone(),
+        port: options.connection_details.port,
+        username: options.connection_details.username.clone(),
+        security: options.connection_details.security.clone(),
+    };
+
+    // TCP
+    let addr = format!("{}:{}", details.host, details.port);
+    let socket = tokio::net::TcpStream::connect(&addr).await?;
+    let local_port = socket.local_addr()?.port();
+
+    let tcp_established_at_ms = now_ms();
+    if let Some(sl) = options.on_connection_progress_callback.as_ref() {
+        sl.on_change(SshConnectionProgressEvent::TcpConnected);
+    }
+    let cfg = Arc::new(Config::default());
+    let remote_ip = socket.peer_addr().ok().map(|a| a.ip().to_string());
+    let mut handle: ClientHandle<NoopHandler> = russh::client::connect_stream(
+        cfg,
+        socket,
+        NoopHandler {
+            on_server_key_callback: options.on_server_key_callback.clone(),
+            host: options.connection_details.host.clone(),
+            port: options.connection_details.port,
+            remote_ip,
+        },
+    )
+    .await?;
+    let ssh_handshake_at_ms = now_ms();
+    if let Some(sl) = options.on_connection_progress_callback.as_ref() {
+        sl.on_change(SshConnectionProgressEvent::SshHandshake);
+    }
+    let auth_result = match &details.security {
+        Security::Password { password } => {
+            handle
+                .authenticate_password(details.username.clone(), password.clone())
+                .await?
+        }
+        Security::Key {
+            private_key_content,
+        } => {
+            // Normalize and parse using shared helper so RN-validated keys match runtime parsing.
+            let (_canonical, parsed) = normalize_openssh_ed25519_seed_key(private_key_content)?;
+            let pk_with_hash = PrivateKeyWithHashAlg::new(Arc::new(parsed), None);
+            handle
+                .authenticate_publickey(details.username.clone(), pk_with_hash)
+                .await?
+        }
+    };
+    if !matches!(auth_result, russh::client::AuthResult::Success) {
+        return Err(auth_result.into());
+    }
+
+    let connection_id = format!(
+        "{}@{}:{}:{}",
+        details.username, details.host, details.port, local_port
+    );
+    let conn = Arc::new(SshConnection {
+        info: SshConnectionInfo {
+            connection_id,
+            connection_details: details,
+            created_at_ms: started_at_ms,
+            connected_at_ms: now_ms(),
+            progress_timings: SshConnectionInfoProgressTimings {
+                tcp_established_at_ms,
+                ssh_handshake_at_ms,
+            },
+        },
+        client_handle: AsyncMutex::new(handle),
+        shells: AsyncMutex::new(HashMap::new()),
+        self_weak: AsyncMutex::new(Weak::new()),
+        on_disconnected_callback: options.on_disconnected_callback.clone(),
+    });
+    // Initialize weak self reference.
+    *conn.self_weak.lock().await = Arc::downgrade(&conn);
+    Ok(conn)
+}
+</file>
+
+<file path="packages/react-native-uniffi-russh/rust/uniffi-russh/src/ssh_shell.rs">
+use std::{
+    collections::HashMap,
+    sync::{
+        atomic::{AtomicU64, AtomicUsize, Ordering},
+        Arc, Mutex,
+    },
+    time::Duration,
+};
+
+use bytes::Bytes;
+
+use crate::{
+    ssh_connection::SshConnection,
+    utils::{now_ms, SshError},
+};
+use russh::{self, client};
+use tokio::sync::{broadcast, Mutex as AsyncMutex};
+
+// Note: russh accepts an untyped string for the terminal type
+#[derive(Debug, Clone, Copy, PartialEq, uniffi::Enum)]
+pub enum TerminalType {
+    Vanilla,
+    Vt100,
+    Vt102,
+    Vt220,
+    Ansi,
+    Xterm,
+    Xterm256,
+}
+impl TerminalType {
+    pub(crate) fn as_ssh_name(self) -> &'static str {
+        match self {
+            TerminalType::Vanilla => "vanilla",
+            TerminalType::Vt100 => "vt100",
+            TerminalType::Vt102 => "vt102",
+            TerminalType::Vt220 => "vt220",
+            TerminalType::Ansi => "ansi",
+            TerminalType::Xterm => "xterm",
+            TerminalType::Xterm256 => "xterm-256color",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, uniffi::Enum)]
+pub enum StreamKind {
+    Stdout,
+    Stderr,
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct TerminalChunk {
+    pub seq: u64,
+    pub t_ms: f64,
+    pub stream: StreamKind,
+    pub bytes: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct DroppedRange {
+    pub from_seq: u64,
+    pub to_seq: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Enum)]
+pub enum ShellEvent {
+    Chunk(TerminalChunk),
+    Dropped { from_seq: u64, to_seq: u64 },
+}
+
+#[uniffi::export(with_foreign)]
+pub trait ShellListener: Send + Sync {
+    fn on_event(&self, ev: ShellEvent);
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, uniffi::Record)]
+pub struct TerminalMode {
+    pub opcode: u8, // PTY opcode (matches russh::Pty discriminants)
+    pub value: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, uniffi::Record)]
+pub struct TerminalSize {
+    pub row_height: Option<u32>,
+    pub col_width: Option<u32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, uniffi::Record)]
+pub struct TerminalPixelSize {
+    pub pixel_width: Option<u32>,
+    pub pixel_height: Option<u32>,
+}
+
+#[derive(Clone, uniffi::Record)]
+pub struct StartShellOptions {
+    pub term: TerminalType,
+    pub terminal_mode: Option<Vec<TerminalMode>>,
+    pub terminal_size: Option<TerminalSize>,
+    pub terminal_pixel_size: Option<TerminalPixelSize>,
+    pub on_closed_callback: Option<Arc<dyn ShellClosedCallback>>,
+}
+
+#[uniffi::export(with_foreign)]
+pub trait ShellClosedCallback: Send + Sync {
+    fn on_change(&self, channel_id: u32);
+}
+
+/// Snapshot of shell session info for property-like access in TS.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct ShellSessionInfo {
+    pub channel_id: u32,
+    pub created_at_ms: f64,
+    pub connected_at_ms: f64,
+    pub term: TerminalType,
+    pub connection_id: String,
+}
+
+#[derive(uniffi::Object)]
+pub struct ShellSession {
+    pub info: ShellSessionInfo,
+    pub on_closed_callback: Option<Arc<dyn ShellClosedCallback>>,
+
+    // Weak backref; avoid retain cycle.
+    pub(crate) parent: std::sync::Weak<SshConnection>,
+
+    pub(crate) writer: AsyncMutex<russh::ChannelWriteHalf<client::Msg>>,
+    // We keep the reader task to allow cancellation on close.
+    pub(crate) reader_task: tokio::task::JoinHandle<()>,
+
+    // Ring buffer
+    pub(crate) ring: Arc<Mutex<std::collections::VecDeque<Arc<Chunk>>>>,
+    pub(crate) ring_bytes_capacity: Arc<AtomicUsize>,
+    pub(crate) used_bytes: Arc<Mutex<usize>>,
+    pub(crate) dropped_bytes_total: Arc<AtomicU64>,
+    pub(crate) head_seq: Arc<AtomicU64>,
+    pub(crate) tail_seq: Arc<AtomicU64>,
+
+    // Live broadcast
+    pub(crate) sender: broadcast::Sender<Arc<Chunk>>,
+
+    // Listener tasks management
+    pub(crate) listener_tasks: Arc<Mutex<HashMap<u64, tokio::task::JoinHandle<()>>>>,
+    pub(crate) next_listener_id: AtomicU64,
+    pub(crate) coalesce_ms: AtomicU64,
+    pub(crate) rt_handle: tokio::runtime::Handle,
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Enum)]
+pub enum Cursor {
+    Head,                     // start from the beginning
+    TailBytes { bytes: u64 }, // start from the end of the last N bytes
+    Seq { seq: u64 },         // start from the given sequence number
+    TimeMs { t_ms: f64 },     // start from the given time in milliseconds
+    Live,                     // start from the live stream
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct ListenerOptions {
+    pub cursor: Cursor,
+    pub coalesce_ms: Option<u32>, // coalesce chunks into this many milliseconds
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct BufferReadResult {
+    pub chunks: Vec<TerminalChunk>,
+    pub next_seq: u64,
+    pub dropped: Option<DroppedRange>,
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct BufferStats {
+    pub ring_bytes_count: u64,
+    pub used_bytes: u64,
+    pub head_seq: u64,
+    pub tail_seq: u64,
+    pub dropped_bytes_total: u64,
+
+    pub chunks_count: u64,
+}
+
+// Internal chunk type kept in ring/broadcast
+#[derive(Debug)]
+pub(crate) struct Chunk {
+    // TODO: This is very similar to TerminalChunk. The only difference is the bytes field
+    seq: u64,
+    t_ms: f64,
+    stream: StreamKind,
+    bytes: Bytes,
+}
+
+/// ---------- Methods ----------
+pub(crate) static DEFAULT_TERMINAL_MODES: &[(russh::Pty, u32)] = &[
+    (russh::Pty::ECHO, 1), // This will cause the terminal to echo the characters back to the client.
+    (russh::Pty::ECHOK, 1), // After the line-kill character (often Ctrl+U), echo a newline.
+    (russh::Pty::ECHOE, 1), // Visually erase on backspace (erase using BS-SP-BS sequence).
+    (russh::Pty::ICANON, 1), // Canonical (cooked) mode: line editing; input delivered line-by-line.
+    (russh::Pty::ISIG, 1), // Generate signals on special chars (e.g., Ctrl+C -> SIGINT, Ctrl+Z -> SIGTSTP).
+    (russh::Pty::ICRNL, 1), // Convert carriage return (CR, \r) to newline (NL, \n) on input.
+    (russh::Pty::ONLCR, 1), // Convert newline (NL) to CR+NL on output (LF -> CRLF).
+    (russh::Pty::TTY_OP_ISPEED, 38400), // Set input baud rate (here 38400). The baud rate is the number of characters per second.
+    (russh::Pty::TTY_OP_OSPEED, 38400), // Set output baud rate (here 38400). The baud rate is the number of characters per second.
+];
+
+pub(crate) static DEFAULT_TERM_ROW_HEIGHT: u32 = 24;
+pub(crate) static DEFAULT_TERM_COL_WIDTH: u32 = 80;
+pub(crate) static DEFAULT_TERM_PIXEL_WIDTH: u32 = 0;
+pub(crate) static DEFAULT_TERM_PIXEL_HEIGHT: u32 = 0;
+pub(crate) static DEFAULT_TERM_COALESCE_MS: u64 = 16;
+
+// Number of recent live chunks retained by the broadcast channel for each
+// subscriber. If a subscriber falls behind this many messages, they will get a
+// Lagged error and skip to the latest. Tune to: peak_chunks_per_sec × max_pause_sec.
+pub(crate) static DEFAULT_BROADCAST_CHUNK_CAPACITY: usize = 1024;
+
+// Byte budget for the on-heap replay/history ring buffer. When the total bytes
+// of stored chunks exceed this, oldest chunks are evicted. Increase for a
+// longer replay window at the cost of memory.
+pub(crate) static DEFAULT_SHELL_RING_BUFFER_CAPACITY: usize = 2 * 1024 * 1024; // default 2MiB
+
+// Upper bound for the size of a single appended/broadcast chunk. Incoming data
+// is split into slices no larger than this. Smaller values reduce latency and
+// loss impact; larger values reduce per-message overhead.
+pub(crate) static DEFAULT_MAX_CHUNK_SIZE: usize = 16 * 1024; // 16KB
+
+pub(crate) static DEFAULT_READ_BUFFER_MAX_BYTES: u64 = 512 * 1024; // 512KB
+
+#[uniffi::export(async_runtime = "tokio")]
+impl ShellSession {
+    pub fn get_info(&self) -> ShellSessionInfo {
+        self.info.clone()
+    }
+
+    /// Send bytes to the active shell (stdin).
+    pub async fn send_data(&self, data: Vec<u8>) -> Result<(), SshError> {
+        let w = self.writer.lock().await;
+        w.data(&data[..]).await?;
+        Ok(())
+    }
+
+    /// Close the associated shell channel and stop its reader task.
+    pub async fn close(&self) -> Result<(), SshError> {
+        self.close_internal().await
+    }
+
+    /// Buffer statistics snapshot.
+    pub fn buffer_stats(&self) -> BufferStats {
+        let used = *self.used_bytes.lock().unwrap_or_else(|p| p.into_inner()) as u64;
+        let chunks_count = match self.ring.lock() {
+            Ok(q) => q.len() as u64,
+            Err(p) => p.into_inner().len() as u64,
+        };
+        BufferStats {
+            ring_bytes_count: self.ring_bytes_capacity.load(Ordering::Relaxed) as u64,
+            used_bytes: used,
+            chunks_count,
+            head_seq: self.head_seq.load(Ordering::Relaxed),
+            tail_seq: self.tail_seq.load(Ordering::Relaxed),
+            dropped_bytes_total: self.dropped_bytes_total.load(Ordering::Relaxed),
+        }
+    }
+
+    /// Current next sequence number.
+    pub fn current_seq(&self) -> u64 {
+        self.tail_seq.load(Ordering::Relaxed).saturating_add(1)
+    }
+
+    /// Read the ring buffer from a cursor.
+    pub fn read_buffer(&self, cursor: Cursor, max_bytes: Option<u64>) -> BufferReadResult {
+        let max_total = max_bytes.unwrap_or(DEFAULT_READ_BUFFER_MAX_BYTES) as usize;
+        let mut out_chunks: Vec<TerminalChunk> = Vec::new();
+        let mut dropped: Option<DroppedRange> = None;
+        let head_seq_now = self.head_seq.load(Ordering::Relaxed);
+        let tail_seq_now = self.tail_seq.load(Ordering::Relaxed);
+
+        // Lock ring to determine start and collect arcs, then drop lock.
+        let (_start_idx_unused, _start_seq, arcs): (usize, u64, Vec<Arc<Chunk>>) = {
+            let ring = match self.ring.lock() {
+                Ok(g) => g,
+                Err(p) => p.into_inner(),
+            };
+            let (start_seq, idx) = match cursor {
+                Cursor::Head => (head_seq_now, 0usize),
+                Cursor::Seq { seq: mut s } => {
+                    if s < head_seq_now {
+                        dropped = Some(DroppedRange {
+                            from_seq: s,
+                            to_seq: head_seq_now - 1,
+                        });
+                        s = head_seq_now;
+                    }
+                    let idx = s.saturating_sub(head_seq_now) as usize;
+                    (s, idx.min(ring.len()))
+                }
+                Cursor::TimeMs { t_ms: t } => {
+                    // linear scan to find first chunk with t_ms >= t
+                    let mut idx = 0usize;
+                    let mut s = head_seq_now;
+                    for (i, ch) in ring.iter().enumerate() {
+                        if ch.t_ms >= t {
+                            idx = i;
+                            s = ch.seq;
+                            break;
+                        }
+                    }
+                    (s, idx)
+                }
+                Cursor::TailBytes { bytes: n } => {
+                    // Walk from tail backwards until approx n bytes, then forward.
+                    let mut bytes = 0usize;
+                    let mut idx = ring.len();
+                    for i in (0..ring.len()).rev() {
+                        let b = ring[i].bytes.len();
+                        if bytes >= n as usize {
+                            idx = i + 1;
+                            break;
+                        }
+                        bytes += b;
+                        idx = i;
+                    }
+                    let s = if idx < ring.len() {
+                        ring[idx].seq
+                    } else {
+                        tail_seq_now.saturating_add(1)
+                    };
+                    (s, idx)
+                }
+                Cursor::Live => (tail_seq_now.saturating_add(1), ring.len()),
+            };
+            let arcs: Vec<Arc<Chunk>> = ring.iter().skip(idx).cloned().collect();
+            (idx, start_seq, arcs)
+        };
+
+        // Build output respecting max_bytes
+        let mut total = 0usize;
+        for ch in arcs {
+            let len = ch.bytes.len();
+            if total + len > max_total {
+                break;
+            }
+            out_chunks.push(TerminalChunk {
+                seq: ch.seq,
+                t_ms: ch.t_ms,
+                stream: ch.stream,
+                bytes: ch.bytes.clone().to_vec(),
+            });
+            total += len;
+        }
+        let next_seq = if let Some(last) = out_chunks.last() {
+            last.seq + 1
+        } else {
+            tail_seq_now.saturating_add(1)
+        };
+        BufferReadResult {
+            chunks: out_chunks,
+            next_seq,
+            dropped,
+        }
+    }
+
+    /// Add a listener with optional replay and live follow.
+    pub fn add_listener(
+        &self,
+        listener: Arc<dyn ShellListener>,
+        opts: ListenerOptions,
+    ) -> Result<u64, SshError> {
+        // Snapshot for replay; emit from task to avoid re-entrant callbacks during FFI.
+        let replay = self.read_buffer(opts.cursor.clone(), None);
+        let mut rx = self.sender.subscribe();
+        let id = self.next_listener_id.fetch_add(1, Ordering::Relaxed);
+        let default_coalesce_ms = self.coalesce_ms.load(Ordering::Relaxed) as u32;
+        let coalesce_ms = opts.coalesce_ms.unwrap_or(default_coalesce_ms);
+
+        let rt = self.rt_handle.clone();
+        let handle = rt.spawn(async move {
+            // Emit replay first
+            if let Some(dr) = replay.dropped.as_ref() {
+                listener.on_event(ShellEvent::Dropped { from_seq: dr.from_seq, to_seq: dr.to_seq });
+            }
+            for ch in replay.chunks.into_iter() {
+                listener.on_event(ShellEvent::Chunk(ch));
+            }
+
+            let mut last_seq_seen: u64 = replay.next_seq.saturating_sub(1);
+            let mut acc: Vec<u8> = Vec::new();
+            let mut acc_stream: Option<StreamKind>;
+            let mut acc_last_seq: u64;
+            let mut acc_last_t: f64;
+            let window = Duration::from_millis(coalesce_ms as u64);
+            let mut pending_drop_from: Option<u64> = None;
+
+            loop {
+                // First receive an item
+                let first = match rx.recv().await {
+                    Ok(c) => c,
+                    Err(broadcast::error::RecvError::Lagged(_n)) => { pending_drop_from = Some(last_seq_seen.saturating_add(1)); continue; }
+                    Err(broadcast::error::RecvError::Closed) => break,
+                };
+                if let Some(from) = pending_drop_from.take() {
+                    if from <= first.seq.saturating_sub(1) {
+                        listener.on_event(ShellEvent::Dropped { from_seq: from, to_seq: first.seq - 1 });
+                    }
+                }
+                // Start accumulating
+                acc.clear(); acc_stream = Some(first.stream); acc_last_seq = first.seq; acc_last_t = first.t_ms; acc.extend_from_slice(&first.bytes);
+                last_seq_seen = first.seq;
+
+                // Drain within window while same stream
+                let mut deadline = tokio::time::Instant::now() + window;
+                loop {
+                    let timeout = tokio::time::sleep_until(deadline);
+                    tokio::pin!(timeout);
+                    tokio::select! {
+                        _ = &mut timeout => break,
+                        msg = rx.recv() => {
+                            match msg {
+                                Ok(c) => {
+                                    if Some(c.stream) == acc_stream { acc.extend_from_slice(&c.bytes); acc_last_seq = c.seq; acc_last_t = c.t_ms; last_seq_seen = c.seq; }
+                                    else { // flush and start new
+                                        let chunk = TerminalChunk { seq: acc_last_seq, t_ms: acc_last_t, stream: acc_stream.unwrap_or(StreamKind::Stdout), bytes: std::mem::take(&mut acc) };
+                                        listener.on_event(ShellEvent::Chunk(chunk));
+                                        acc_stream = Some(c.stream); acc_last_seq = c.seq; acc_last_t = c.t_ms; acc.extend_from_slice(&c.bytes); last_seq_seen = c.seq;
+                                        deadline = tokio::time::Instant::now() + window;
+                                    }
+                                }
+                                Err(broadcast::error::RecvError::Lagged(_n)) => { pending_drop_from = Some(last_seq_seen.saturating_add(1)); break; }
+                                Err(broadcast::error::RecvError::Closed) => { break; }
+                            }
+                        }
+                    }
+                }
+                if let Some(s) = acc_stream.take() {
+                    let chunk = TerminalChunk { seq: acc_last_seq, t_ms: acc_last_t, stream: s, bytes: std::mem::take(&mut acc) };
+                    listener.on_event(ShellEvent::Chunk(chunk));
+                }
+            }
+        });
+        if let Ok(mut map) = self.listener_tasks.lock() {
+            map.insert(id, handle);
+        }
+        Ok(id)
+    }
+
+    pub fn remove_listener(&self, id: u64) {
+        if let Ok(mut map) = self.listener_tasks.lock() {
+            if let Some(h) = map.remove(&id) {
+                h.abort();
+            }
+        }
+    }
+}
+
+// Internal lifecycle helpers (not exported via UniFFI)
+impl ShellSession {
+    async fn close_internal(&self) -> Result<(), SshError> {
+        // Try to close channel gracefully; ignore error.
+        self.writer.lock().await.close().await.ok();
+        self.reader_task.abort();
+        if let Some(sl) = self.on_closed_callback.as_ref() {
+            sl.on_change(self.info.channel_id);
+        }
+        // Clear parent's notion of active shell if it matches us.
+        if let Some(parent) = self.parent.upgrade() {
+            parent.shells.lock().await.remove(&self.info.channel_id);
+        }
+        Ok(())
+    }
+
+    // /// This was on the public interface but I don't think we need it
+    // pub async fn set_buffer_policy(&self, ring_bytes: Option<u64>, coalesce_ms: Option<u32>) {
+    //     if let Some(rb) = ring_bytes { self.ring_bytes_capacity.store(rb as usize, Ordering::Relaxed); self.evict_if_needed(); }
+    //     if let Some(cm) = coalesce_ms { self.default_coalesce_ms.store(cm as u64, Ordering::Relaxed); }
+    // }
+
+    // fn evict_if_needed(&self) {
+    //     let cap = self.ring_bytes_capacity.load(Ordering::Relaxed);
+    //     let mut ring = match self.ring.lock() { Ok(g) => g, Err(p) => p.into_inner() };
+    //     let mut used = self.used_bytes.lock().unwrap_or_else(|p| p.into_inner());
+    //     while *used > cap {
+    //         if let Some(front) = ring.pop_front() {
+    //             *used -= front.bytes.len();
+    //             self.dropped_bytes_total.fetch_add(front.bytes.len() as u64, Ordering::Relaxed);
+    //             self.head_seq.store(front.seq.saturating_add(1), Ordering::Relaxed);
+    //         } else { break; }
+    //     }
+    // }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn append_and_broadcast(
+    data: &[u8],
+    stream: StreamKind,
+    ring: &Arc<Mutex<std::collections::VecDeque<Arc<Chunk>>>>,
+    used_bytes: &Arc<Mutex<usize>>,
+    ring_bytes_capacity: &Arc<AtomicUsize>,
+    dropped_bytes_total: &Arc<AtomicU64>,
+    head_seq: &Arc<AtomicU64>,
+    tail_seq: &Arc<AtomicU64>,
+    next_seq: &Arc<AtomicU64>,
+    sender: &broadcast::Sender<Arc<Chunk>>,
+    max_chunk: usize,
+) {
+    let mut offset = 0usize;
+    while offset < data.len() {
+        let end = (offset + max_chunk).min(data.len());
+        let slice = &data[offset..end];
+        let seq = next_seq.fetch_add(1, Ordering::Relaxed);
+        let t_ms = now_ms();
+        let chunk = Arc::new(Chunk {
+            seq,
+            t_ms,
+            stream,
+            bytes: Bytes::copy_from_slice(slice),
+        });
+        // push to ring
+        {
+            let mut q = match ring.lock() {
+                Ok(g) => g,
+                Err(p) => p.into_inner(),
+            };
+            q.push_back(chunk.clone());
+        }
+        {
+            let mut used = used_bytes.lock().unwrap_or_else(|p| p.into_inner());
+            *used += slice.len();
+            tail_seq.store(seq, Ordering::Relaxed);
+            // evict if needed
+            let cap = ring_bytes_capacity.load(Ordering::Relaxed);
+            if *used > cap {
+                let mut q = match ring.lock() {
+                    Ok(g) => g,
+                    Err(p) => p.into_inner(),
+                };
+                while *used > cap {
+                    if let Some(front) = q.pop_front() {
+                        *used -= front.bytes.len();
+                        dropped_bytes_total.fetch_add(front.bytes.len() as u64, Ordering::Relaxed);
+                        head_seq.store(front.seq.saturating_add(1), Ordering::Relaxed);
+                    } else {
+                        break;
+                    }
+                }
+            }
+        }
+        // broadcast
+        let _ = sender.send(chunk);
+
+        offset = end;
+    }
+}
+</file>
+
+<file path="packages/react-native-xtermjs-webview/src/index.tsx">
+import React, {
+	useEffect,
+	useImperativeHandle,
+	useMemo,
+	useRef,
+	useCallback,
+	useState,
+} from 'react';
+import { WebView, type WebViewMessageEvent } from 'react-native-webview';
+import htmlString from '../dist-internal/index.html?raw';
+import {
+	binaryToBStr,
+	bStrToBinary,
+	type BridgeInboundMessage,
+	type BridgeOutboundMessage,
+} from './bridge';
+import { jetBrainsMonoTtfBase64 } from './jetbrains-mono';
+
+export { bStrToBinary, binaryToBStr };
+
+type StrictOmit<T, K extends keyof T> = Omit<T, K>;
+type ITerminalOptions = import('@xterm/xterm').ITerminalOptions;
+type WebViewOptions = React.ComponentProps<typeof WebView>;
+
+const defaultCoalescingThreshold = 8 * 1024;
+const jetBrainsMonoStyleId = 'fressh-jetbrains-mono';
+const jetBrainsMonoFontCss = `
+@font-face {
+	font-family: 'JetBrains Mono';
+	src: url(data:font/ttf;base64,${jetBrainsMonoTtfBase64}) format('truetype');
+	font-weight: 400;
+	font-style: normal;
+	font-display: swap;
+}
+`;
+
+/**
+ * Message from this pkg to calling RN
+ */
+export type XtermInbound =
+	| { type: 'initialized' }
+	| { type: 'data'; data: Uint8Array }
+	| { type: 'debug'; message: string };
+
+export type XtermWebViewHandle = {
+	write: (data: Uint8Array) => void; // bytes in (batched)
+	// Efficiently write many chunks in one postMessage (for initial replay)
+	writeMany: (chunks: Uint8Array[]) => void;
+	flush: () => void; // force-flush outgoing writes
+	clear: () => void;
+	focus: () => void;
+	resize: (size: { cols: number; rows: number }) => void;
+	fit: () => void;
+};
+
+const defaultWebViewProps: WebViewOptions = {
+	// WebView behavior that suits terminals
+	// ios
+	keyboardDisplayRequiresUserAction: false,
+	pullToRefreshEnabled: false,
+	bounces: false,
+	textInteractionEnabled: false,
+	allowsLinkPreview: false,
+	// android
+	setSupportMultipleWindows: false,
+	overScrollMode: 'never',
+	setBuiltInZoomControls: false,
+	setDisplayZoomControls: false,
+	textZoom: 100,
+	// both
+	originWhitelist: ['*'],
+	scalesPageToFit: false,
+	contentMode: 'mobile',
+};
+
+const defaultXtermOptions: Partial<ITerminalOptions> = {
+	allowProposedApi: true,
+	convertEol: true,
+	scrollback: 10000,
+	cursorBlink: true,
+	// Tablet focus-mode defaults (JetBrains Mono preferred).
+	// Note: WebView must have the font available or it will fall back.
+	fontFamily:
+		'"JetBrains Mono", "Roboto Mono", ui-monospace, Menlo, Monaco, "Cascadia Mono", "Segoe UI Mono", monospace',
+	fontSize: 16,
+};
+
+type UserControllableWebViewProps = StrictOmit<
+	WebViewOptions,
+	'source' | 'style' | 'injectedJavaScriptBeforeContentLoaded'
+>;
+
+export type XtermJsWebViewProps = {
+	ref: React.RefObject<XtermWebViewHandle | null>;
+	style?: WebViewOptions['style'];
+	webViewOptions?: UserControllableWebViewProps;
+	xtermOptions?: Partial<ITerminalOptions>;
+	onInitialized?: () => void;
+	onData?: (data: string) => void;
+	logger?: {
+		debug?: (...args: unknown[]) => void;
+		log?: (...args: unknown[]) => void;
+		warn?: (...args: unknown[]) => void;
+		error?: (...args: unknown[]) => void;
+	};
+	coalescingThreshold?: number;
+	size?: {
+		cols: number;
+		rows: number;
+	};
+	autoFit?: boolean;
+};
+
+function xTermOptionsEquals(
+	a: Partial<ITerminalOptions> | null,
+	b: Partial<ITerminalOptions> | null,
+): boolean {
+	if (a == b) return true;
+	if (a == null && b == null) return true;
+	if (a == null || b == null) return false;
+	const keys = new Set<string>([
+		...Object.keys(a as object),
+		...Object.keys(b as object),
+	]);
+	for (const k of keys) {
+		const key = k as keyof ITerminalOptions;
+		if (a[key] !== b[key]) return false;
+	}
+	return true;
+}
+
+export function XtermJsWebView({
+	ref,
+	style,
+	webViewOptions = defaultWebViewProps,
+	xtermOptions = defaultXtermOptions,
+	onInitialized,
+	onData,
+	coalescingThreshold = defaultCoalescingThreshold,
+	logger,
+	size,
+	autoFit = true,
+}: XtermJsWebViewProps) {
+	const webRef = useRef<WebView>(null);
+	const [initialized, setInitialized] = useState(false);
+
+	// ---- RN -> WebView message sender
+	const sendToWebView = useCallback(
+		(obj: BridgeOutboundMessage) => {
+			const webViewRef = webRef.current;
+			if (!webViewRef) return;
+			const payload = JSON.stringify(obj);
+			logger?.debug?.(`sending msg to webview: ${payload}`);
+			const js = `window.dispatchEvent(new MessageEvent('message',{data:${payload}})); true;`;
+			webViewRef.injectJavaScript(js);
+		},
+		[logger],
+	);
+
+	// ---- rAF + 8KB coalescer for writes
+	const bufRef = useRef<Uint8Array | null>(null);
+	const rafRef = useRef<number | null>(null);
+
+	const flush = useCallback(() => {
+		if (!bufRef.current) return;
+		const bStr = binaryToBStr(bufRef.current);
+		bufRef.current = null;
+		if (rafRef.current != null) {
+			cancelAnimationFrame(rafRef.current);
+			rafRef.current = null;
+		}
+		sendToWebView({ type: 'write', bStr });
+	}, [sendToWebView]);
+
+	const schedule = useCallback(() => {
+		if (rafRef.current != null) return;
+		rafRef.current = requestAnimationFrame(() => {
+			rafRef.current = null;
+			flush();
+		});
+	}, [flush]);
+
+	const write = useCallback(
+		(data: Uint8Array) => {
+			if (!data || data.length === 0) return;
+			if (!bufRef.current) {
+				bufRef.current = data;
+			} else {
+				const a = bufRef.current;
+				const merged = new Uint8Array(a.length + data.length);
+				merged.set(a, 0);
+				merged.set(data, a.length);
+				bufRef.current = merged;
+			}
+			if ((bufRef.current?.length ?? 0) >= coalescingThreshold) flush();
+			else schedule();
+		},
+		[coalescingThreshold, flush, schedule],
+	);
+
+	const writeMany = useCallback(
+		(chunks: Uint8Array[]) => {
+			if (!chunks || chunks.length === 0) return;
+			flush(); // Ensure any pending small buffered write is flushed before bulk write
+			const bStrs = chunks.map(binaryToBStr);
+			sendToWebView({ type: 'writeMany', chunks: bStrs });
+		},
+		[flush, sendToWebView],
+	);
+
+	// Cleanup pending rAF on unmount
+	useEffect(() => {
+		return () => {
+			if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
+			rafRef.current = null;
+			bufRef.current = null;
+		};
+	}, []);
+
+	const fit = useCallback(() => {
+		sendToWebView({ type: 'fit' });
+	}, [sendToWebView]);
+
+	const autoFitFn = useCallback(() => {
+		if (!autoFit) return;
+		fit();
+	}, [autoFit, fit]);
+
+	const appliedSizeRef = useRef<{ cols: number; rows: number } | null>(null);
+
+	useEffect(() => {
+		if (!initialized) return;
+		const appliedSize = appliedSizeRef.current;
+		if (!size) return;
+		if (appliedSize?.cols === size.cols && appliedSize?.rows === size.rows)
+			return;
+
+		logger?.log?.(`calling resize`, size);
+		sendToWebView({ type: 'resize', cols: size.cols, rows: size.rows });
+		autoFitFn();
+
+		appliedSizeRef.current = size;
+	}, [size, sendToWebView, logger, autoFitFn, initialized]);
+
+	useImperativeHandle(ref, () => ({
+		write,
+		writeMany,
+		flush,
+		clear: () => sendToWebView({ type: 'clear' }),
+		focus: () => {
+			sendToWebView({ type: 'focus' });
+			webRef.current?.requestFocus();
+		},
+		resize: (size: { cols: number; rows: number }) => {
+			sendToWebView({ type: 'resize', cols: size.cols, rows: size.rows });
+			autoFitFn();
+			appliedSizeRef.current = size;
+		},
+		fit,
+	}));
+
+	const mergedXTermOptions = useMemo(
+		() => ({
+			...defaultXtermOptions,
+			...xtermOptions,
+		}),
+		[xtermOptions],
+	);
+
+	const appliedXtermOptionsRef = useRef<Partial<ITerminalOptions> | null>(null);
+
+	useEffect(() => {
+		if (!initialized) return;
+		const appliedXtermOptions = appliedXtermOptionsRef.current;
+		if (xTermOptionsEquals(appliedXtermOptions, mergedXTermOptions)) return;
+		logger?.log?.(`setting options: `, mergedXTermOptions);
+		sendToWebView({ type: 'setOptions', opts: mergedXTermOptions });
+		autoFitFn();
+
+		appliedXtermOptionsRef.current = mergedXTermOptions;
+	}, [mergedXTermOptions, sendToWebView, logger, initialized, autoFitFn]);
+
+	const onMessage = useCallback(
+		(e: WebViewMessageEvent) => {
+			try {
+				const msg: BridgeInboundMessage = JSON.parse(e.nativeEvent.data);
+				logger?.log?.(`received msg from webview: `, msg);
+				if (msg.type === 'initialized') {
+					onInitialized?.();
+					autoFitFn();
+					setInitialized(true);
+					return;
+				}
+				if (msg.type === 'input') {
+					// const bytes = bStrToBinary(msg.bStr);
+					// onData?.(bytes);
+					onData?.(msg.str);
+					return;
+				}
+				if (msg.type === 'debug') {
+					logger?.log?.(`received debug msg from webview: `, msg.message);
+					return;
+				}
+				webViewOptions?.onMessage?.(e);
+			} catch (error) {
+				logger?.warn?.(
+					`received unknown msg from webview: `,
+					e.nativeEvent.data,
+					error,
+				);
+			}
+		},
+		[logger, webViewOptions, onInitialized, autoFitFn, onData],
+	);
+
+	const onContentProcessDidTerminate = useCallback<
+		NonNullable<WebViewOptions['onContentProcessDidTerminate']>
+	>(
+		(e) => {
+			logger?.warn?.('WebView Crashed on iOS! onContentProcessDidTerminate');
+			webViewOptions?.onContentProcessDidTerminate?.(e);
+		},
+		[logger, webViewOptions],
+	);
+
+	const onRenderProcessGone = useCallback<
+		NonNullable<WebViewOptions['onRenderProcessGone']>
+	>(
+		(e) => {
+			logger?.warn?.('WebView Crashed on Android! onRenderProcessGone');
+			webViewOptions?.onRenderProcessGone?.(e);
+		},
+		[logger, webViewOptions],
+	);
+
+	const onLoadEnd = useCallback<NonNullable<WebViewOptions['onLoadEnd']>>(
+		(e) => {
+			logger?.log?.('WebView onLoadEnd');
+			webViewOptions?.onLoadEnd?.(e);
+		},
+		[logger, webViewOptions],
+	);
+
+	const mergedWebViewOptions = useMemo(
+		() => ({
+			...defaultWebViewProps,
+			...webViewOptions,
+			onContentProcessDidTerminate,
+			onRenderProcessGone,
+			onLoadEnd,
+		}),
+		[
+			webViewOptions,
+			onContentProcessDidTerminate,
+			onRenderProcessGone,
+			onLoadEnd,
+		],
+	);
+
+	// Inject JetBrains Mono into the WebView document so xterm can use it reliably,
+	// and set the background early to avoid white flashes.
+	const injectedJavaScriptBeforeContentLoaded = useMemo(() => {
+		const backgroundScript = mergedXTermOptions.theme?.background
+			? `document.body.style.backgroundColor = '${mergedXTermOptions.theme.background}';`
+			: '';
+		const optionsScript = `window.__FRESSH_XTERM_OPTIONS__ = ${JSON.stringify(
+			mergedXTermOptions,
+		)};`;
+
+		return `
+			(function () {
+				var styleId = '${jetBrainsMonoStyleId}';
+				if (!document.getElementById(styleId)) {
+					var style = document.createElement('style');
+					style.id = styleId;
+					style.type = 'text/css';
+					style.textContent = ${JSON.stringify(jetBrainsMonoFontCss)};
+					(document.head || document.documentElement).appendChild(style);
+				}
+				${optionsScript}
+				${backgroundScript}
+			})();
+			true;
+		`;
+	}, [mergedXTermOptions]);
+
+	return (
+		<WebView
+			ref={webRef}
+			source={{ html: htmlString }}
+			onMessage={onMessage}
+			style={style}
+			injectedJavaScriptObject={mergedXTermOptions}
+			injectedJavaScriptBeforeContentLoaded={
+				injectedJavaScriptBeforeContentLoaded
+			}
+			{...mergedWebViewOptions}
+		/>
+	);
+}
+</file>
+
+<file path="packages/react-native-xtermjs-webview/src-internal/main.tsx">
+import { FitAddon } from '@xterm/addon-fit';
+import { Terminal, type ITerminalOptions } from '@xterm/xterm';
+import '@xterm/xterm/css/xterm.css';
+import {
+	bStrToBinary,
+	type BridgeInboundMessage,
+	type BridgeOutboundMessage,
+} from '../src/bridge';
+
+declare global {
+	interface Window {
+		terminal?: Terminal;
+		fitAddon?: FitAddon;
+		terminalWriteBase64?: (data: string) => void;
+		__FRESSH_XTERM_OPTIONS__?: ITerminalOptions;
+		ReactNativeWebView?: {
+			postMessage?: (data: string) => void;
+			injectedObjectJson?: () => string | undefined;
+		};
+		__FRESSH_XTERM_BRIDGE__?: boolean;
+		__FRESSH_XTERM_MSG_HANDLER__?: (
+			e: MessageEvent<BridgeOutboundMessage>,
+		) => void;
+	}
+}
+
+const sendToRn = (msg: BridgeInboundMessage) =>
+	window.ReactNativeWebView?.postMessage?.(JSON.stringify(msg));
+
+/**
+ * Idempotent boot guard: ensure we only install once.
+ * If the script happens to run twice (dev reloads, double-mounts), we bail out early.
+ */
+window.onload = () => {
+	try {
+		if (window.__FRESSH_XTERM_BRIDGE__) {
+			sendToRn({
+				type: 'debug',
+				message: 'bridge already installed; ignoring duplicate boot',
+			});
+			return;
+		}
+
+		const injectedObjectJson =
+			window.ReactNativeWebView?.injectedObjectJson?.();
+		let injectedObject: ITerminalOptions = {};
+		if (injectedObjectJson) {
+			try {
+				injectedObject = JSON.parse(injectedObjectJson) as ITerminalOptions;
+			} catch (err) {
+				if (window.__FRESSH_XTERM_OPTIONS__) {
+					injectedObject = window.__FRESSH_XTERM_OPTIONS__;
+					sendToRn({
+						type: 'debug',
+						message:
+							'injectedObjectJson invalid; using preloaded options',
+					});
+				} else {
+					sendToRn({
+						type: 'debug',
+						message: `injectedObjectJson invalid; using defaults (${String(
+							err,
+						)})`,
+					});
+				}
+			}
+		} else if (window.__FRESSH_XTERM_OPTIONS__) {
+			injectedObject = window.__FRESSH_XTERM_OPTIONS__;
+			sendToRn({
+				type: 'debug',
+				message: 'injectedObjectJson not found; using preloaded options',
+			});
+		} else {
+			sendToRn({
+				type: 'debug',
+				message: 'injectedObjectJson not found; using defaults',
+			});
+		}
+
+		window.__FRESSH_XTERM_BRIDGE__ = true;
+
+		// ---- Xterm setup
+		const term = new Terminal(injectedObject);
+		const fitAddon = new FitAddon();
+		term.loadAddon(fitAddon);
+
+		const root = document.getElementById('terminal')!;
+		term.open(root);
+		fitAddon.fit();
+
+		const applyFontFamily = (family?: string) => {
+			if (!family) return;
+			const rootEl = (term.element ??
+				document.querySelector('.xterm')) as HTMLElement | null;
+			if (rootEl) rootEl.style.fontFamily = family;
+			const helper = document.querySelector(
+				'.xterm-helper-textarea',
+			) as HTMLElement | null;
+			if (helper) helper.style.fontFamily = family;
+			const measure = document.querySelector(
+				'.xterm-char-measure-element',
+			) as HTMLElement | null;
+			if (measure) measure.style.fontFamily = family;
+		};
+
+		applyFontFamily(injectedObject.fontFamily);
+
+		// Expose for debugging (typed)
+		window.terminal = term;
+		window.fitAddon = fitAddon;
+
+		term.onData((data) => {
+			sendToRn({ type: 'input', str: data });
+		});
+
+		// Remove old handler if any (just in case)
+		if (window.__FRESSH_XTERM_MSG_HANDLER__)
+			window.removeEventListener(
+				'message',
+				window.__FRESSH_XTERM_MSG_HANDLER__!,
+			);
+
+		// RN -> WebView handler (write, resize, setFont, setTheme, setOptions, clear, focus)
+		const handler = (e: MessageEvent<BridgeOutboundMessage>) => {
+			try {
+				const msg = e.data;
+
+				if (!msg || typeof msg.type !== 'string') return;
+
+				// TODO: https://xtermjs.org/docs/guides/flowcontrol/#ideas-for-a-better-mechanism
+				const termWrite = (bStr: string) => {
+					const bytes = bStrToBinary(bStr);
+					term.write(bytes);
+				};
+
+				switch (msg.type) {
+					case 'write': {
+						termWrite(msg.bStr);
+						break;
+					}
+					case 'writeMany': {
+						for (const bStr of msg.chunks) {
+							termWrite(bStr);
+						}
+						break;
+					}
+					case 'resize': {
+						term.resize(msg.cols, msg.rows);
+						break;
+					}
+					case 'fit': {
+						fitAddon.fit();
+						break;
+					}
+					case 'setOptions': {
+						const newOpts: ITerminalOptions & { cols?: never; rows?: never } = {
+							...term.options,
+							...msg.opts,
+							theme: {
+								...term.options.theme,
+								...msg.opts.theme,
+							},
+						};
+						delete newOpts.cols;
+						delete newOpts.rows;
+						term.options = newOpts;
+						applyFontFamily(newOpts.fontFamily);
+						if (
+							'theme' in newOpts &&
+							newOpts.theme &&
+							'background' in newOpts.theme &&
+							newOpts.theme.background
+						) {
+							document.body.style.backgroundColor = newOpts.theme.background;
+						}
+						break;
+					}
+					case 'clear': {
+						term.clear();
+						break;
+					}
+					case 'focus': {
+						term.focus();
+						break;
+					}
+				}
+			} catch (err) {
+				sendToRn({
+					type: 'debug',
+					message: `message handler error: ${String(err)}`,
+				});
+			}
+		};
+
+		window.__FRESSH_XTERM_MSG_HANDLER__ = handler;
+		window.addEventListener('message', handler);
+
+		// Initial handshake (send once)
+		setTimeout(() => {
+			const ta = document.querySelector(
+				'.xterm-helper-textarea',
+			) as HTMLTextAreaElement | null;
+			if (!ta) throw new Error('xterm-helper-textarea not found');
+			ta.setAttribute('autocomplete', 'off');
+			ta.setAttribute('autocorrect', 'off');
+			ta.setAttribute('autocapitalize', 'none');
+			ta.setAttribute('spellcheck', 'false');
+			ta.setAttribute('inputmode', 'verbatim');
+
+			return sendToRn({ type: 'initialized' });
+		}, 200);
+	} catch (e) {
+		sendToRn({
+			type: 'debug',
+			message: `error in xtermjs-webview: ${String(e)}`,
+		});
+	}
+};
+</file>
+
+<file path="packages/react-native-uniffi-russh/src/api.ts">
+/**
+ * We cannot make the generated code match this API exactly because uniffi
+ * - Doesn't support ts literals for rust enums
+ * - Doesn't support passing a js object with methods and properties to or from rust.
+ *
+ * The second issue is much harder to get around than the first.
+ * In practice it means that if you want to pass an object with callbacks and props to rust, it need to be in seperate args.
+ * If you want to pass an object with callbacks and props from rust to js (like ssh handles), you need to instead only pass an object with callbacks
+ * just make one of the callbacks a sync info() callback.
+ *
+ * Then in this api wrapper we can smooth over those rough edges.
+ * See: - https://jhugman.github.io/uniffi-bindgen-react-native/idioms/callback-interfaces.html
+ */
+import * as GeneratedRussh from './index';
+
+// #region Ideal API
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Core types
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type TerminalType =
+	| 'Vanilla'
+	| 'Vt100'
+	| 'Vt102'
+	| 'Vt220'
+	| 'Ansi'
+	| 'Xterm'
+	| 'Xterm256';
+
+export type ConnectionDetails = {
+	host: string;
+	port: number;
+	username: string;
+	security:
+		| { type: 'password'; password: string }
+		| { type: 'key'; privateKey: string };
+};
+
+/**
+ * This status is only to provide updates for discrete events
+ * during the connect() promise.
+ *
+ * It is no longer relevant after the connect() promise is resolved.
+ */
+export type SshConnectionProgress =
+	| 'tcpConnected' // TCP established, starting SSH handshake
+	| 'sshHandshake'; // SSH protocol negotiation complete
+
+export type ConnectOptions = ConnectionDetails & {
+	onConnectionProgress?: (status: SshConnectionProgress) => void;
+	onDisconnected?: (connectionId: string) => void;
+	onServerKey: (
+		serverKeyInfo: GeneratedRussh.ServerPublicKeyInfo,
+		signal?: AbortSignal,
+	) => Promise<boolean>;
+	abortSignal?: AbortSignal;
+};
+
+export type StartShellOptions = {
+	term: TerminalType;
+	terminalMode?: GeneratedRussh.TerminalMode[];
+	terminalPixelSize?: GeneratedRussh.TerminalPixelSize;
+	terminalSize?: GeneratedRussh.TerminalSize;
+	onClosed?: (shellId: number) => void;
+	abortSignal?: AbortSignal;
+};
+
+export type StreamKind = 'stdout' | 'stderr';
+
+export type TerminalChunk = {
+	seq: bigint;
+	/** Milliseconds since UNIX epoch (double). */
+	tMs: number;
+	stream: StreamKind;
+	bytes: ArrayBuffer;
+};
+
+export type DropNotice = { kind: 'dropped'; fromSeq: bigint; toSeq: bigint };
+export type ListenerEvent = TerminalChunk | DropNotice;
+
+export type Cursor =
+	| { mode: 'head' } // earliest available in ring
+	| { mode: 'tailBytes'; bytes: bigint } // last N bytes (best-effort)
+	| { mode: 'seq'; seq: bigint } // from a given sequence
+	| { mode: 'time'; tMs: number } // from timestamp
+	| { mode: 'live' }; // no replay, live only
+
+export type ListenerOptions = {
+	cursor: Cursor;
+	/** Optional per-listener coalescing window in ms (e.g., 10–25). */
+	coalesceMs?: number;
+};
+
+export type BufferReadResult = {
+	chunks: TerminalChunk[];
+	nextSeq: bigint;
+	dropped?: { fromSeq: bigint; toSeq: bigint };
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Handles
+// ─────────────────────────────────────────────────────────────────────────────
+
+type ProgressTimings = {
+	tcpEstablishedAtMs: number;
+	sshHandshakeAtMs: number;
+};
+
+export type SshConnection = {
+	readonly connectionId: string;
+	readonly createdAtMs: number;
+	readonly connectedAtMs: number;
+	readonly connectionDetails: ConnectionDetails;
+	readonly progressTimings: ProgressTimings;
+
+	startShell: (opts: StartShellOptions) => Promise<SshShell>;
+	disconnect: (opts?: { signal?: AbortSignal }) => Promise<void>;
+};
+
+export type SshShell = {
+	readonly channelId: number;
+	readonly createdAtMs: number;
+	readonly pty: TerminalType;
+	readonly connectionId: string;
+
+	// I/O
+	sendData: (
+		data: ArrayBuffer,
+		opts?: { signal?: AbortSignal },
+	) => Promise<void>;
+	close: (opts?: { signal?: AbortSignal }) => Promise<void>;
+
+	// Buffer policy & stats
+	// setBufferPolicy: (policy: {
+	//   ringBytes?: number;
+	//   coalesceMs?: number;
+	// }) => Promise<void>;
+	bufferStats: () => GeneratedRussh.BufferStats;
+	currentSeq: () => number;
+
+	// Replay + live
+	readBuffer: (cursor: Cursor, maxBytes?: bigint) => BufferReadResult;
+	addListener: (
+		cb: (ev: ListenerEvent) => void,
+		opts: ListenerOptions,
+	) => bigint;
+	removeListener: (id: bigint) => void;
+};
+
+type RusshApi = {
+	uniffiInitAsync: () => Promise<void>;
+	connect: (opts: ConnectOptions) => Promise<SshConnection>;
+	generateKeyPair: (
+		type: 'rsa' | 'ecdsa' | 'ed25519',
+		// TODO: Add these
+		// passphrase?: string;
+		// keySize?: number;
+		// comment?: string;
+	) => Promise<string>;
+	validatePrivateKey: (
+		key: string,
+	) =>
+		| { valid: true; error?: never }
+		| { valid: false; error: GeneratedRussh.SshError };
+	extractPublicKey: (
+		privateKey: string,
+	) =>
+		| { publicKey: string; error?: never }
+		| { publicKey?: never; error: GeneratedRussh.SshError };
+};
+
+// #endregion
+
+// #region Wrapper to match the ideal API
+
+const terminalTypeLiteralToEnum = {
+	Vanilla: GeneratedRussh.TerminalType.Vanilla,
+	Vt100: GeneratedRussh.TerminalType.Vt100,
+	Vt102: GeneratedRussh.TerminalType.Vt102,
+	Vt220: GeneratedRussh.TerminalType.Vt220,
+	Ansi: GeneratedRussh.TerminalType.Ansi,
+	Xterm: GeneratedRussh.TerminalType.Xterm,
+	Xterm256: GeneratedRussh.TerminalType.Xterm256,
+} as const satisfies Record<string, GeneratedRussh.TerminalType>;
+
+const terminalTypeEnumToLiteral: Record<
+	GeneratedRussh.TerminalType,
+	TerminalType
+> = {
+	[GeneratedRussh.TerminalType.Vanilla]: 'Vanilla',
+	[GeneratedRussh.TerminalType.Vt100]: 'Vt100',
+	[GeneratedRussh.TerminalType.Vt102]: 'Vt102',
+	[GeneratedRussh.TerminalType.Vt220]: 'Vt220',
+	[GeneratedRussh.TerminalType.Ansi]: 'Ansi',
+	[GeneratedRussh.TerminalType.Xterm]: 'Xterm',
+	[GeneratedRussh.TerminalType.Xterm256]: 'Xterm256',
+};
+
+const sshConnProgressEnumToLiteral = {
+	[GeneratedRussh.SshConnectionProgressEvent.TcpConnected]: 'tcpConnected',
+	[GeneratedRussh.SshConnectionProgressEvent.SshHandshake]: 'sshHandshake',
+} as const satisfies Record<
+	GeneratedRussh.SshConnectionProgressEvent,
+	SshConnectionProgress
+>;
+
+const streamEnumToLiteral = {
+	[GeneratedRussh.StreamKind.Stdout]: 'stdout',
+	[GeneratedRussh.StreamKind.Stderr]: 'stderr',
+} as const satisfies Record<GeneratedRussh.StreamKind, StreamKind>;
+
+function generatedConnDetailsToIdeal(
+	details: GeneratedRussh.ConnectionDetails,
+): ConnectionDetails {
+	const security: ConnectionDetails['security'] =
+		details.security instanceof GeneratedRussh.Security.Password
+			? { type: 'password', password: details.security.inner.password }
+			: { type: 'key', privateKey: details.security.inner.privateKeyContent };
+	return {
+		host: details.host,
+		port: details.port,
+		username: details.username,
+		security,
+	};
+}
+
+function cursorToGenerated(cursor: Cursor): GeneratedRussh.Cursor {
+	switch (cursor.mode) {
+		case 'head':
+			return new GeneratedRussh.Cursor.Head();
+		case 'tailBytes':
+			return new GeneratedRussh.Cursor.TailBytes({
+				bytes: cursor.bytes,
+			});
+		case 'seq':
+			return new GeneratedRussh.Cursor.Seq({ seq: cursor.seq });
+		case 'time':
+			return new GeneratedRussh.Cursor.TimeMs({ tMs: cursor.tMs });
+		case 'live':
+			return new GeneratedRussh.Cursor.Live();
+	}
+}
+
+function toTerminalChunk(ch: GeneratedRussh.TerminalChunk): TerminalChunk {
+	return {
+		seq: ch.seq,
+		tMs: ch.tMs,
+		stream: streamEnumToLiteral[ch.stream],
+		bytes: ch.bytes,
+	};
+}
+
+function wrapShellSession(
+	shell: GeneratedRussh.ShellSessionInterface,
+): SshShell {
+	const info = shell.getInfo();
+
+	const readBuffer: SshShell['readBuffer'] = (cursor, maxBytes) => {
+		const res = shell.readBuffer(cursorToGenerated(cursor), maxBytes);
+		return {
+			chunks: res.chunks.map(toTerminalChunk),
+			nextSeq: res.nextSeq,
+			dropped: res.dropped,
+		} satisfies BufferReadResult;
+	};
+
+	const addListener: SshShell['addListener'] = (cb, opts) => {
+		const listener = {
+			onEvent: (ev: GeneratedRussh.ShellEvent) => {
+				if (ev instanceof GeneratedRussh.ShellEvent.Chunk) {
+					cb(toTerminalChunk(ev.inner[0]!));
+				} else if (ev instanceof GeneratedRussh.ShellEvent.Dropped) {
+					cb({
+						kind: 'dropped',
+						fromSeq: ev.inner.fromSeq,
+						toSeq: ev.inner.toSeq,
+					});
+				}
+			},
+		} satisfies GeneratedRussh.ShellListener;
+
+		try {
+			const id = shell.addListener(listener, {
+				cursor: cursorToGenerated(opts.cursor),
+				coalesceMs: opts.coalesceMs,
+			});
+			if (id === 0n) {
+				throw new Error('Failed to attach shell listener (id=0)');
+			}
+			return id;
+		} catch (e) {
+			throw new Error(
+				`addListener failed: ${String((e as any)?.message ?? e)}`,
+			);
+		}
+	};
+
+	return {
+		channelId: info.channelId,
+		createdAtMs: info.createdAtMs,
+		pty: terminalTypeEnumToLiteral[info.term],
+		connectionId: info.connectionId,
+		sendData: (data, o) =>
+			shell.sendData(data, o?.signal ? { signal: o.signal } : undefined),
+		close: (o) => shell.close(o?.signal ? { signal: o.signal } : undefined),
+		// setBufferPolicy,
+		bufferStats: shell.bufferStats,
+		currentSeq: () => Number(shell.currentSeq()),
+		readBuffer,
+		addListener,
+		removeListener: (id) => shell.removeListener(id),
+	};
+}
+
+function wrapConnection(
+	conn: GeneratedRussh.SshConnectionInterface,
+): SshConnection {
+	const info = conn.getInfo();
+	return {
+		connectionId: info.connectionId,
+		connectionDetails: generatedConnDetailsToIdeal(info.connectionDetails),
+		createdAtMs: info.createdAtMs,
+		connectedAtMs: info.connectedAtMs,
+		progressTimings: {
+			tcpEstablishedAtMs: info.progressTimings.tcpEstablishedAtMs,
+			sshHandshakeAtMs: info.progressTimings.sshHandshakeAtMs,
+		},
+		startShell: async ({ onClosed, ...params }) => {
+			const shell = await conn.startShell(
+				{
+					term: terminalTypeLiteralToEnum[params.term],
+					onClosedCallback: onClosed
+						? {
+								onChange: (channelId) => onClosed(channelId),
+							}
+						: undefined,
+					terminalMode: params.terminalMode,
+					terminalPixelSize: params.terminalPixelSize,
+					terminalSize: params.terminalSize,
+				},
+				params.abortSignal ? { signal: params.abortSignal } : undefined,
+			);
+			return wrapShellSession(shell);
+		},
+		disconnect: (opts) =>
+			conn.disconnect(opts?.signal ? { signal: opts.signal } : undefined),
+	};
+}
+
+async function connect({
+	onServerKey,
+	onConnectionProgress,
+	onDisconnected,
+	...options
+}: ConnectOptions): Promise<SshConnection> {
+	const security =
+		options.security.type === 'password'
+			? new GeneratedRussh.Security.Password({
+					password: options.security.password,
+				})
+			: new GeneratedRussh.Security.Key({
+					privateKeyContent: options.security.privateKey,
+				});
+	const sshConnection = await GeneratedRussh.connect(
+		{
+			connectionDetails: {
+				host: options.host,
+				port: options.port,
+				username: options.username,
+				security,
+			},
+			onConnectionProgressCallback: onConnectionProgress
+				? {
+						onChange: (statusEnum) =>
+							onConnectionProgress(sshConnProgressEnumToLiteral[statusEnum]),
+					}
+				: undefined,
+			onDisconnectedCallback: onDisconnected
+				? {
+						onChange: (connectionId) => onDisconnected(connectionId),
+					}
+				: undefined,
+			onServerKeyCallback: {
+				onChange: (serverKeyInfo) =>
+					onServerKey(serverKeyInfo, options.abortSignal),
+			},
+		},
+		options.abortSignal ? { signal: options.abortSignal } : undefined,
+	);
+	return wrapConnection(sshConnection);
+}
+
+async function generateKeyPair(type: 'rsa' | 'ecdsa' | 'ed25519') {
+	const map = {
+		rsa: GeneratedRussh.KeyType.Rsa,
+		ecdsa: GeneratedRussh.KeyType.Ecdsa,
+		ed25519: GeneratedRussh.KeyType.Ed25519,
+	} as const;
+	return GeneratedRussh.generateKeyPair(map[type]);
+}
+
+function validatePrivateKey(
+	key: string,
+):
+	| { valid: true; error?: never }
+	| { valid: false; error: GeneratedRussh.SshError } {
+	try {
+		GeneratedRussh.validatePrivateKey(key);
+		return { valid: true };
+	} catch (e) {
+		return { valid: false, error: e as GeneratedRussh.SshError };
+	}
+}
+
+function extractPublicKey(
+	privateKey: string,
+):
+	| { publicKey: string; error?: never }
+	| { publicKey?: never; error: GeneratedRussh.SshError } {
+	try {
+		const publicKey = GeneratedRussh.extractPublicKey(privateKey);
+		return { publicKey };
+	} catch (e) {
+		return { error: e as GeneratedRussh.SshError };
+	}
+}
+
+// #endregion
+
+export { SshError, SshError_Tags } from './generated/uniffi_russh';
+
+export const RnRussh = {
+	uniffiInitAsync: GeneratedRussh.uniffiInitAsync,
+	connect,
+	generateKeyPair,
+	validatePrivateKey,
+	extractPublicKey,
+} satisfies RusshApi;
+</file>
+
+</files>

@@ -1,5 +1,6 @@
 use std::fmt;
 use std::sync::{Arc, Weak};
+use std::time::Duration;
 
 use tokio::sync::{broadcast, Mutex as AsyncMutex};
 
@@ -22,6 +23,12 @@ use std::{
     collections::HashMap,
     sync::{atomic::AtomicU64, Mutex},
 };
+
+// Mobile-friendly keepalive defaults.
+const KEEPALIVE_INTERVAL_SECS: u64 = 30;
+const KEEPALIVE_MAX: usize = 3;
+// Short probe window to catch immediate tmux attach failures.
+const TMUX_ATTACH_PROBE_TIMEOUT_MS: u64 = 300;
 
 fn server_public_key_to_info(
     host: &str,
@@ -188,10 +195,13 @@ impl SshConnection {
 
         let term = opts.term;
         let on_closed_callback = opts.on_closed_callback.clone();
+        let use_tmux = opts.use_tmux;
+        let tmux_session_name = opts.tmux_session_name.clone();
 
-        let client_handle = self.client_handle.lock().await;
-
-        let ch = client_handle.channel_open_session().await?;
+        let ch = {
+            let client_handle = self.client_handle.lock().await;
+            client_handle.channel_open_session().await?
+        };
         let channel_id: u32 = ch.id().into();
 
         let mut modes: Vec<(russh::Pty, u32)> = DEFAULT_TERMINAL_MODES.to_vec();
@@ -238,7 +248,24 @@ impl SshConnection {
             &modes,
         )
         .await?;
-        ch.request_shell(true).await?;
+
+        if use_tmux {
+            let tmux_name = tmux_session_name
+                .as_deref()
+                .unwrap_or_default()
+                .trim()
+                .to_string();
+            if tmux_name.is_empty() {
+                self.disconnect().await.ok();
+                return Err(SshError::TmuxAttachFailed(
+                    "Missing tmux session name".to_string(),
+                ));
+            }
+            let cmd = format!("tmux attach -t {tmux_name}");
+            ch.exec(true, cmd).await?;
+        } else {
+            ch.request_shell(true).await?;
+        }
 
         // Split for read/write; spawn reader.
         let (mut reader, writer) = ch.split();
@@ -264,6 +291,60 @@ impl SshConnection {
         let next_seq_c = next_seq.clone();
 
         let on_closed_callback_for_reader = on_closed_callback.clone();
+
+        if use_tmux {
+            // Probe once for an immediate tmux attach failure before surfacing the shell.
+            let probe = tokio::time::timeout(
+                Duration::from_millis(TMUX_ATTACH_PROBE_TIMEOUT_MS),
+                reader.wait(),
+            )
+            .await;
+            match probe {
+                Ok(Some(ChannelMsg::ExitStatus { exit_status })) if exit_status != 0 => {
+                    self.disconnect().await.ok();
+                    return Err(SshError::TmuxAttachFailed(format!(
+                        "tmux attach exited with status {exit_status}"
+                    )));
+                }
+                Ok(Some(ChannelMsg::Close)) | Ok(None) => {
+                    self.disconnect().await.ok();
+                    return Err(SshError::TmuxAttachFailed(
+                        "tmux attach closed the channel".to_string(),
+                    ));
+                }
+                Ok(Some(ChannelMsg::Data { data })) => {
+                    append_and_broadcast(
+                        &data,
+                        StreamKind::Stdout,
+                        &ring_clone,
+                        &used_bytes_clone,
+                        &ring_bytes_capacity_c,
+                        &dropped_bytes_total_c,
+                        &head_seq_c,
+                        &tail_seq_c,
+                        &next_seq_c,
+                        &tx_clone,
+                        DEFAULT_MAX_CHUNK_SIZE,
+                    );
+                }
+                Ok(Some(ChannelMsg::ExtendedData { data, .. })) => {
+                    append_and_broadcast(
+                        &data,
+                        StreamKind::Stderr,
+                        &ring_clone,
+                        &used_bytes_clone,
+                        &ring_bytes_capacity_c,
+                        &dropped_bytes_total_c,
+                        &head_seq_c,
+                        &tail_seq_c,
+                        &next_seq_c,
+                        &tx_clone,
+                        DEFAULT_MAX_CHUNK_SIZE,
+                    );
+                }
+                _ => {}
+            }
+        }
 
         let reader_task = tokio::spawn(async move {
             let max_chunk = DEFAULT_MAX_CHUNK_SIZE;
@@ -385,7 +466,10 @@ pub async fn connect(options: ConnectOptions) -> Result<Arc<SshConnection>, SshE
     if let Some(sl) = options.on_connection_progress_callback.as_ref() {
         sl.on_change(SshConnectionProgressEvent::TcpConnected);
     }
-    let cfg = Arc::new(Config::default());
+    let mut cfg = Config::default();
+    cfg.keepalive_interval = Some(Duration::from_secs(KEEPALIVE_INTERVAL_SECS));
+    cfg.keepalive_max = KEEPALIVE_MAX;
+    let cfg = Arc::new(cfg);
     let remote_ip = socket.peer_addr().ok().map(|a| a.ip().to_string());
     let mut handle: ClientHandle<NoopHandler> = russh::client::connect_stream(
         cfg,

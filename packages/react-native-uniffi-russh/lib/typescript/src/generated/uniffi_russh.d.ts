@@ -266,6 +266,8 @@ export type StartShellOptions = {
     terminalMode: Array<TerminalMode> | undefined;
     terminalSize: TerminalSize | undefined;
     terminalPixelSize: TerminalPixelSize | undefined;
+    useTmux: boolean;
+    tmuxSessionName: string | undefined;
     onClosedCallback: ShellClosedCallback | undefined;
 };
 /**
@@ -743,6 +745,7 @@ export declare enum SshError_Tags {
     UnsupportedKeyType = "UnsupportedKeyType",
     Auth = "Auth",
     ShellAlreadyRunning = "ShellAlreadyRunning",
+    TmuxAttachFailed = "TmuxAttachFailed",
     Russh = "Russh",
     RusshKeys = "RusshKeys"
 }
@@ -976,6 +979,77 @@ export declare const SshError: Readonly<{
             stack?: string;
             cause?: unknown;
         };
+        isError(error: unknown): error is Error;
+        captureStackTrace(targetObject: object, constructorOpt?: Function): void;
+        prepareStackTrace(err: Error, stackTraces: NodeJS.CallSite[]): any;
+        stackTraceLimit: number;
+    };
+    TmuxAttachFailed: {
+        new (v0: string): {
+            readonly tag: SshError_Tags.TmuxAttachFailed;
+            readonly inner: Readonly<[string]>;
+            /**
+             * @private
+             * This field is private and should not be used, use `tag` instead.
+             */
+            readonly [uniffiTypeNameSymbol]: "SshError";
+            name: string;
+            message: string;
+            stack?: string;
+            cause?: unknown;
+        };
+        "new"(v0: string): {
+            readonly tag: SshError_Tags.TmuxAttachFailed;
+            readonly inner: Readonly<[string]>;
+            /**
+             * @private
+             * This field is private and should not be used, use `tag` instead.
+             */
+            readonly [uniffiTypeNameSymbol]: "SshError";
+            name: string;
+            message: string;
+            stack?: string;
+            cause?: unknown;
+        };
+        instanceOf(obj: any): obj is {
+            readonly tag: SshError_Tags.TmuxAttachFailed;
+            readonly inner: Readonly<[string]>;
+            /**
+             * @private
+             * This field is private and should not be used, use `tag` instead.
+             */
+            readonly [uniffiTypeNameSymbol]: "SshError";
+            name: string;
+            message: string;
+            stack?: string;
+            cause?: unknown;
+        };
+        hasInner(obj: any): obj is {
+            readonly tag: SshError_Tags.TmuxAttachFailed;
+            readonly inner: Readonly<[string]>;
+            /**
+             * @private
+             * This field is private and should not be used, use `tag` instead.
+             */
+            readonly [uniffiTypeNameSymbol]: "SshError";
+            name: string;
+            message: string;
+            stack?: string;
+            cause?: unknown;
+        };
+        getInner(obj: {
+            readonly tag: SshError_Tags.TmuxAttachFailed;
+            readonly inner: Readonly<[string]>;
+            /**
+             * @private
+             * This field is private and should not be used, use `tag` instead.
+             */
+            readonly [uniffiTypeNameSymbol]: "SshError";
+            name: string;
+            message: string;
+            stack?: string;
+            cause?: unknown;
+        }): Readonly<[string]>;
         isError(error: unknown): error is Error;
         captureStackTrace(targetObject: object, constructorOpt?: Function): void;
         prepareStackTrace(err: Error, stackTraces: NodeJS.CallSite[]): any;
@@ -1243,6 +1317,14 @@ export interface ShellSessionInterface {
     readBuffer(cursor: Cursor, maxBytes: /*u64*/ bigint | undefined): BufferReadResult;
     removeListener(id: bigint): void;
     /**
+     * Resize the PTY window. Call when the terminal UI size changes.
+     * This sends an SSH "window-change" request to the server, which will
+     * deliver SIGWINCH to the remote process (e.g., tmux, vim).
+     */
+    resizePty(cols: number, rows: number, pixelWidth: /*u32*/ number | undefined, pixelHeight: /*u32*/ number | undefined, asyncOpts_?: {
+        signal: AbortSignal;
+    }): Promise<void>;
+    /**
      * Send bytes to the active shell (stdin).
      */
     sendData(data: ArrayBuffer, asyncOpts_?: {
@@ -1278,6 +1360,14 @@ export declare class ShellSession extends UniffiAbstractObject implements ShellS
      */
     readBuffer(cursor: Cursor, maxBytes: /*u64*/ bigint | undefined): BufferReadResult;
     removeListener(id: bigint): void;
+    /**
+     * Resize the PTY window. Call when the terminal UI size changes.
+     * This sends an SSH "window-change" request to the server, which will
+     * deliver SIGWINCH to the remote process (e.g., tmux, vim).
+     */
+    resizePty(cols: number, rows: number, pixelWidth: /*u32*/ number | undefined, pixelHeight: /*u32*/ number | undefined, asyncOpts_?: {
+        signal: AbortSignal;
+    }): Promise<void>;
     /**
      * Send bytes to the active shell (stdin).
      */
