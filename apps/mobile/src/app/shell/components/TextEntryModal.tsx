@@ -1,12 +1,7 @@
-import React, {
-	useCallback,
-	useEffect,
-	useMemo,
-	useRef,
-	useState,
-} from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import {
 	Dimensions,
+	InteractionManager,
 	KeyboardAvoidingView,
 	Modal,
 	Platform,
@@ -45,19 +40,23 @@ export function TextEntryModal({
 	const [value, setValue] = useState('');
 	const [textAreaHeight, setTextAreaHeight] = useState(minHeight);
 
-	useEffect(() => {
-		if (!open) return;
-		const timeout = setTimeout(() => {
-			inputRef.current?.focus();
-		}, 50);
-		return () => clearTimeout(timeout);
-	}, [open]);
+	const handleModalShow = useCallback(() => {
+		// Modal is now fully visible - safe to focus
+		if (Platform.OS === 'android') {
+			InteractionManager.runAfterInteractions(() => {
+				requestAnimationFrame(() => {
+					inputRef.current?.focus();
+				});
+			});
+			return;
+		}
+		inputRef.current?.focus();
+	}, []);
 
 	const handleClose = useCallback(() => {
-		setValue('');
-		setTextAreaHeight(minHeight);
+		// Preserve text when closing - user can reopen and continue editing
 		onClose();
-	}, [minHeight, onClose]);
+	}, [onClose]);
 
 	const handleClear = useCallback(() => {
 		setValue('');
@@ -68,8 +67,11 @@ export function TextEntryModal({
 	const handlePaste = useCallback(() => {
 		if (!value) return;
 		onPaste(value);
-		handleClose();
-	}, [handleClose, onPaste, value]);
+		// Clear text only after successful paste
+		setValue('');
+		setTextAreaHeight(minHeight);
+		onClose();
+	}, [minHeight, onClose, onPaste, value]);
 
 	return (
 		<Modal
@@ -77,6 +79,7 @@ export function TextEntryModal({
 			visible={open}
 			animationType="slide"
 			onRequestClose={handleClose}
+			onShow={handleModalShow}
 		>
 			<Pressable
 				onPress={handleClose}
@@ -124,7 +127,8 @@ export function TextEntryModal({
 							onChangeText={setValue}
 							placeholder="Enter text to paste..."
 							placeholderTextColor={theme.colors.muted}
-							autoFocus
+							autoFocus={Platform.OS === 'ios'}
+							showSoftInputOnFocus={true}
 							multiline
 							textAlignVertical="top"
 							style={{
