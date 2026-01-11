@@ -749,14 +749,40 @@ function ShellDetail() {
 	}, [exitSelectionMode, sendTextRaw, selectionModeEnabled]);
 
 	const handlePasteTextEntry = useCallback(
-		(value: string) => {
+		async (value: string) => {
 			if (!value) return;
-			sendTextRaw(value);
 			if (selectionModeEnabled) {
 				exitSelectionMode();
 			}
+
+			const textBytes = encoder.encode(value);
+			const enterBytes = encoder.encode('\r');
+
+			if (scrollbackActiveRef.current) {
+				if (!isValidCancelKey(cancelKeyBytes)) {
+					logger.warn('cancelKey invalid; cannot auto-exit scrollback');
+					return;
+				}
+				clearScrollbackState();
+				try {
+					await sendBytesQueued([cancelKeyBytes, textBytes, enterBytes], {
+						interSegmentDelayMs: touchEnterDelayMs,
+					});
+				} catch (error) {
+					logger.warn('paste text entry failed', error);
+				}
+				return;
+			}
+
+			void sendBytesQueued([textBytes, enterBytes]);
 		},
-		[exitSelectionMode, sendTextRaw, selectionModeEnabled],
+		[
+			cancelKeyBytes,
+			clearScrollbackState,
+			exitSelectionMode,
+			selectionModeEnabled,
+			sendBytesQueued,
+		],
 	);
 
 	const handleCopySelection = useCallback(() => {
