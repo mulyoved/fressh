@@ -145,6 +145,14 @@ export type XtermJsWebViewProps = {
 		instanceId: string;
 		requestId: number;
 	}) => void;
+	onTmuxScrollBatch?: (event: {
+		direction: 'up' | 'down';
+		pages: number;
+		lines: number;
+		instanceId: string;
+		seq?: number;
+		ts?: number;
+	}) => void;
 	logger?: {
 		debug?: (...args: unknown[]) => void;
 		log?: (...args: unknown[]) => void;
@@ -209,6 +217,7 @@ export function XtermJsWebView({
 	onResize,
 	onScrollbackModeChange,
 	onTmuxEnterCopyMode,
+	onTmuxScrollBatch,
 	coalescingThreshold = defaultCoalescingThreshold,
 	logger,
 	size,
@@ -510,6 +519,17 @@ export function XtermJsWebView({
 					});
 					return;
 				}
+				if (msg.type === 'tmuxScrollBatch') {
+					onTmuxScrollBatch?.({
+						direction: msg.direction,
+						pages: msg.pages,
+						lines: msg.lines,
+						instanceId: msg.instanceId,
+						seq: msg.seq,
+						ts: msg.ts,
+					});
+					return;
+				}
 				webViewOptions?.onMessage?.(e);
 			} catch (error) {
 				logger?.warn?.(
@@ -531,6 +551,7 @@ export function XtermJsWebView({
 			onSelectionModeChange,
 			onScrollbackModeChange,
 			onTmuxEnterCopyMode,
+			onTmuxScrollBatch,
 		],
 	);
 

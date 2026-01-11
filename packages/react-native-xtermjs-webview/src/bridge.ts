@@ -17,7 +17,16 @@ export type BridgeInboundMessage =
 			instanceId: string;
 			requestId?: number;
 	  }
-	| { type: 'tmuxEnterCopyMode'; instanceId: string; requestId: number };
+	| { type: 'tmuxEnterCopyMode'; instanceId: string; requestId: number }
+	| {
+			type: 'tmuxScrollBatch';
+			direction: 'up' | 'down';
+			pages: number;
+			lines: number;
+			instanceId: string;
+			seq?: number;
+			ts?: number;
+	  };
 
 export type TouchScrollConfig =
 	| { enabled: false }
@@ -33,6 +42,24 @@ export type TouchScrollConfig =
 			copyModeKey?: string;
 			exitKey?: string;
 			cancelKey?: string;
+			coalesceMs?: number;
+			minFlushMs?: number;
+			maxFlushMs?: number;
+			maxPagesPerFlush?: number;
+			maxExtraLines?: number;
+			maxBacklogPages?: number;
+			velocityMultiplierEnabled?: boolean;
+			velocityThreshold?: number;
+			velocityBoost?: number;
+			velocityBoostMax?: number;
+			velocitySmoothing?: number;
+			backlogMultiplierEnabled?: boolean;
+			backlogBoostRefPages?: number;
+			backlogBoostMax?: number;
+			rttEwmaAlpha?: number;
+			debugOverlay?: boolean;
+			debugTelemetry?: boolean;
+			debugTelemetryIntervalMs?: number;
 			debug?: boolean;
 	  };
 

@@ -334,6 +334,10 @@ const tmuxPrefixKey = '\x02';
 const tmuxCopyModeKey = '[';
 const tmuxCancelKey = 'q';
 const tmuxExitKey = 'q';
+const tmuxScrollUpKey = '\x1b[1;5A';
+const tmuxScrollDownKey = '\x1b[1;5B';
+const tmuxPageUpKey = '\x1b[5~';
+const tmuxPageDownKey = '\x1b[6~';
 const touchEnterDelayMs = 10;
 const ALL_KEYBOARD_IDS = Object.keys(KEYBOARDS_BY_ID);
 const ACTIVE_KEYBOARD_IDS_FALLBACK: readonly string[] =
@@ -511,6 +515,25 @@ function ShellDetail() {
 						slopPx: 10,
 						maxLinesPerFrame: 6,
 						flickVelocity: 1.2,
+						coalesceMs: 24,
+						minFlushMs: 16,
+						maxFlushMs: 80,
+						maxPagesPerFlush: 8,
+						maxExtraLines: 12,
+						maxBacklogPages: 50,
+						velocityMultiplierEnabled: true,
+						velocityThreshold: 0.9,
+						velocityBoost: 0.8,
+						velocityBoostMax: 6,
+						velocitySmoothing: 0.2,
+						backlogMultiplierEnabled: true,
+						backlogBoostRefPages: 2,
+						backlogBoostMax: 2,
+						rttEwmaAlpha: 0.2,
+						debug: __DEV__,
+						debugOverlay: __DEV__,
+						debugTelemetry: __DEV__,
+						debugTelemetryIntervalMs: 120,
 						enterDelayMs: touchEnterDelayMs,
 						prefixKey: tmuxPrefixKey,
 						copyModeKey: tmuxCopyModeKey,
@@ -1168,6 +1191,37 @@ fi
 		[sendBytesQueued],
 	);
 
+	const handleTmuxScrollBatch = useCallback(
+		(event: {
+			direction: 'up' | 'down';
+			pages: number;
+			lines: number;
+			instanceId: string;
+		}) => {
+			if (!shell) return;
+			if (
+				currentInstanceIdRef.current &&
+				event.instanceId !== currentInstanceIdRef.current
+			) {
+				return;
+			}
+			if (selectionModeEnabled) return;
+
+			const pages = Math.max(0, event.pages);
+			const lines = Math.max(0, event.lines);
+			if (!pages && !lines) return;
+
+			const pageKey = event.direction === 'up' ? tmuxPageUpKey : tmuxPageDownKey;
+			const lineKey =
+				event.direction === 'up' ? tmuxScrollUpKey : tmuxScrollDownKey;
+			let payload = '';
+			if (pages > 0) payload += pageKey.repeat(pages);
+			if (lines > 0) payload += lineKey.repeat(lines);
+			void sendBytesOrdered(encoder.encode(payload));
+		},
+		[shell, selectionModeEnabled, sendBytesOrdered],
+	);
+
 	const handleWebViewInput = useCallback(
 		(input: { str: string; kind: 'typing' | 'scroll'; instanceId: string }) => {
 			if (!shell) return;
@@ -1343,6 +1397,7 @@ fi
 							onInput={handleWebViewInput}
 							onScrollbackModeChange={handleScrollbackModeChange}
 							onTmuxEnterCopyMode={handleTmuxEnterCopyMode}
+							onTmuxScrollBatch={handleTmuxScrollBatch}
 						/>
 						{scrollbackVisible && (
 							<Pressable
