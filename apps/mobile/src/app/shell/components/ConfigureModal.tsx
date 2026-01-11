@@ -17,6 +17,7 @@ export function ConfigureModal({
 	onHostConfig,
 	onRequestFeature,
 	onOpenGitHubIssues,
+	onOpenKeyboardDocs,
 }: {
 	open: boolean;
 	bottomOffset: number;
@@ -26,6 +27,7 @@ export function ConfigureModal({
 	onHostConfig: () => void;
 	onRequestFeature: () => void;
 	onOpenGitHubIssues: () => void;
+	onOpenKeyboardDocs: () => void;
 }) {
 	const theme = useTheme();
 
@@ -155,6 +157,20 @@ export function ConfigureModal({
 							)}
 						</Pressable>
 					))}
+					<Pressable
+						onPress={onOpenKeyboardDocs}
+						style={{ marginTop: 10, alignSelf: 'flex-start' }}
+					>
+						<Text
+							style={{
+								color: theme.colors.primary,
+								fontSize: 12,
+								fontWeight: '600',
+							}}
+						>
+							Keyboard config docs
+						</Text>
+					</Pressable>
 				</View>
 			</Pressable>
 		</Modal>

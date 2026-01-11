@@ -87,21 +87,25 @@ export function TextEntryModal({
 			>
 				<KeyboardAvoidingView
 					behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-					style={{ flex: 1, justifyContent: 'flex-end' }}
+					style={{
+						flex: 1,
+						justifyContent: 'center',
+						paddingBottom: bottomOffset,
+					}}
 				>
 					<View
 						onStartShouldSetResponder={() => true}
 						style={{
 							backgroundColor: theme.colors.background,
-							borderTopLeftRadius: 16,
-							borderTopRightRadius: 16,
+							borderRadius: 16,
 							padding: 16,
 							borderColor: theme.colors.borderStrong,
 							borderWidth: 1,
 							maxHeight: '85%',
-							width: '100%',
-							alignSelf: 'stretch',
-							marginBottom: bottomOffset,
+							width: '90%',
+							maxWidth: 520,
+							minWidth: 280,
+							alignSelf: 'center',
 						}}
 					>
 						<Text

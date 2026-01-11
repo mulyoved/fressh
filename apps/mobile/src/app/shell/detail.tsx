@@ -151,6 +151,8 @@ const isLargePayload = (bytes: Uint8Array) => {
 };
 
 const GITHUB_ISSUES_URL = 'https://github.com/mulyoved/fressh/issues';
+const KEYBOARD_CONFIG_DOC_URL =
+	'https://github.com/mulyoved/fressh/blob/dev/docs/keyboard-configurator.md';
 
 export default function TabsShellDetail() {
 	const [ready, setReady] = useState(false);
@@ -808,6 +810,11 @@ function ShellDetail() {
 		void Linking.openURL(GITHUB_ISSUES_URL);
 	}, []);
 
+	const handleOpenKeyboardDocs = useCallback(() => {
+		setConfigureOpen(false);
+		void Linking.openURL(KEYBOARD_CONFIG_DOC_URL);
+	}, []);
+
 	const handleOpenFeatureRequest = useCallback(() => {
 		setConfigureOpen(false);
 		setFeatureRequestError(undefined);
@@ -815,7 +822,7 @@ function ShellDetail() {
 	}, []);
 
 	const handleFeatureRequestSubmit = useCallback(
-		async (title: string, description: string) => {
+		async (description: string) => {
 			if (!connection) {
 				setFeatureRequestError('No SSH connection available');
 				return;
@@ -824,16 +831,56 @@ function ShellDetail() {
 			setFeatureRequestSubmitting(true);
 			setFeatureRequestError(undefined);
 
-			// Escape single quotes for shell safety
-			const escapedTitle = title.replace(/'/g, "'\\''");
-			const escapedDescription = description.replace(/'/g, "'\\''");
+			const escapeSingleQuotes = (value: string) =>
+				value.replace(/'/g, "'\\''");
+			const escapedDescription = escapeSingleQuotes(description);
+			const escapedPrompt = escapeSingleQuotes(
+				'Generate a concise GitHub issue title (max 72 chars) for this feature request. Return only the title line, no quotes.',
+			);
 
-			// Build the gh CLI command
-			const command = `gh issue create --repo mulyoved/fressh --title 'Feature Request: ${escapedTitle}' --body '${escapedDescription}'`;
+			const command = `
+description='${escapedDescription}'
+prompt='${escapedPrompt}'
+prompt=$(printf '%s\\n\\n%s\\n' "$prompt" "$description")
+
+if ! command -v claude >/dev/null 2>&1; then
+  echo 'claude CLI not found. Install Claude Code CLI (claude).' >&2
+  false
+else
+  claude_help=$(claude --help 2>/dev/null)
+  raw_title=''
+  if printf '%s' "$claude_help" | grep -q -- '--print'; then
+    raw_title=$(claude --print "$prompt")
+  elif printf '%s' "$claude_help" | grep -q -- ' -p'; then
+    raw_title=$(claude -p "$prompt")
+  else
+    echo 'claude CLI does not support --print or -p prompt flags.' >&2
+    false
+  fi
+  claude_status=$?
+  if [ $claude_status -ne 0 ]; then
+    echo 'Claude failed to generate a title.' >&2
+    false
+  else
+    title=$(printf '%s' "$raw_title" | tr -d '\\r' | head -n 1 | sed 's/^['"'"'"[:space:]]*//;s/['"'"'"[:space:]]*$//' | tr -s '[:space:]' ' ')
+    title=$(printf '%s' "$title" | cut -c1-72)
+    if [ -z "$title" ]; then
+      echo 'Claude returned an empty title.' >&2
+      false
+    else
+      gh issue create --repo mulyoved/fressh --title "Feature Request: $title" --body "$description"
+    fi
+  fi
+fi
+`.trim();
 
 			try {
 				// Execute via side-channel SSH session (doesn't interfere with current terminal)
-				const result = await executeSideChannelCommand(connection, command);
+				const result = await executeSideChannelCommand(
+					connection,
+					command,
+					60000,
+				);
 
 				if (result.success) {
 					logger.info('Feature request submitted successfully', {
@@ -858,7 +905,7 @@ function ShellDetail() {
 				} else {
 					const errorMsg =
 						result.error ||
-						'Failed to create issue. Make sure gh CLI is installed and authenticated on the remote host.';
+						'Failed to create issue. Make sure gh and claude CLIs are installed and authenticated on the remote host.';
 					logger.error('Feature request failed', { error: errorMsg });
 					setFeatureRequestError(errorMsg);
 				}
@@ -1349,6 +1396,7 @@ function ShellDetail() {
 					onDevServer={handleDevServer}
 					onHostConfig={handleHostConfig}
 					onOpenGitHubIssues={handleOpenGitHubIssues}
+					onOpenKeyboardDocs={handleOpenKeyboardDocs}
 					onRequestFeature={handleOpenFeatureRequest}
 				/>
 				<FeatureRequestModal

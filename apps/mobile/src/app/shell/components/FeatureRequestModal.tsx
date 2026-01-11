@@ -23,27 +23,24 @@ export function FeatureRequestModal({
 	open: boolean;
 	bottomOffset: number;
 	onClose: () => void;
-	onSubmit: (title: string, description: string) => void;
+	onSubmit: (description: string) => void;
 	isSubmitting?: boolean;
 	error?: string;
 }) {
 	const theme = useTheme();
-	const [title, setTitle] = useState('');
 	const [description, setDescription] = useState('');
 
 	const handleClose = useCallback(() => {
-		setTitle('');
 		setDescription('');
 		onClose();
 	}, [onClose]);
 
 	const handleSubmit = useCallback(() => {
-		if (!title.trim() || !description.trim() || isSubmitting) return;
-		onSubmit(title.trim(), description.trim());
-	}, [title, description, isSubmitting, onSubmit]);
+		if (!description.trim() || isSubmitting) return;
+		onSubmit(description.trim());
+	}, [description, isSubmitting, onSubmit]);
 
-	const canSubmit =
-		title.trim().length > 0 && description.trim().length > 0 && !isSubmitting;
+	const canSubmit = description.trim().length > 0 && !isSubmitting;
 
 	return (
 		<Modal
@@ -124,33 +121,6 @@ export function FeatureRequestModal({
 									marginBottom: 6,
 								}}
 							>
-								Title
-							</Text>
-							<TextInput
-								value={title}
-								onChangeText={setTitle}
-								placeholder="Brief summary of your request"
-								placeholderTextColor={theme.colors.muted}
-								editable={!isSubmitting}
-								style={{
-									borderWidth: 1,
-									borderColor: theme.colors.border,
-									backgroundColor: theme.colors.inputBackground,
-									color: theme.colors.textPrimary,
-									borderRadius: 10,
-									paddingHorizontal: 12,
-									paddingVertical: 10,
-									marginBottom: 16,
-								}}
-							/>
-							<Text
-								style={{
-									color: theme.colors.textSecondary,
-									fontSize: 14,
-									fontWeight: '600',
-									marginBottom: 6,
-								}}
-							>
 								Description
 							</Text>
 							<TextInput
@@ -211,8 +181,10 @@ export function FeatureRequestModal({
 									marginBottom: 16,
 								}}
 							>
-								Creates a GitHub issue via the remote server. Requires gh CLI
-								installed and authenticated on the server (gh auth login).
+								The title is generated automatically from your description.
+								Creates a GitHub issue via the remote server. Requires gh and
+								claude CLIs installed and authenticated on the server (gh auth
+								login).
 							</Text>
 							<Pressable
 								onPress={handleSubmit}
