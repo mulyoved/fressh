@@ -1,0 +1,1598 @@
+<context>
+<metadata>
+  <topic>Terminal UI Optimization</topic>
+  <mode>topic-based</mode>
+  <branch>connect-ok</branch>
+  <commit>a788805719724a83df5ddc41a3d4a0eaa67d940e</commit>
+  <generated>2025-12-30</generated>
+  <token_budget>160000</token_budget>
+  <token_estimate>8000</token_estimate>
+</metadata>
+
+<instructions>
+You are reviewing a Terminal UI Optimization implementation plan for a React Native mobile SSH client app.
+
+The goal is to maximize terminal screen real estate by:
+1. Increasing terminal font size (10 -> 20)
+2. Removing header from shell detail screen
+3. Removing terminal borders and padding
+4. Hiding tab bar on shell detail screen
+5. Adding a third keyboard toolbar row with settings button
+6. Creating a settings modal (replacing header "Close Shell" action)
+
+Review the implementation plan and source files. Provide feedback on:
+- Correctness of the proposed changes
+- Missing edge cases or considerations
+- Better approaches if applicable
+- Potential issues with the implementation order
+</instructions>
+
+<design_document path="docs/terminal-ui-optimization-plan.md">
+# Terminal UI Optimization Plan
+
+## Overview
+Maximize terminal screen real estate by removing all chrome (headers, borders, tab bars) and consolidating actions into the keyboard toolbar.
+
+## Current State Analysis
+
+### Screenshot Analysis
+From the current shell detail screen:
+- **Header bar**: Shows "muly@dev-remote-machine-1" with "Close Shell" button (~50px)
+- **Terminal borders**: 2px border on all sides + 8px left/right padding
+- **Gap**: 4px gap between terminal and keyboard
+- **Keyboard toolbar**: 2 rows, 100px height total
+- **Bottom tab bar**: Hosts, Shells, Settings (~50px)
+
+### Current File Structure
+```
+apps/mobile/src/app/(tabs)/
+├── _layout.tsx          # Tab bar configuration (NativeTabs)
+├── shell/
+│   ├── _layout.tsx      # Shell stack configuration
+│   ├── index.tsx        # Shell list
+│   └── detail.tsx       # Shell terminal view (MAIN FILE TO MODIFY)
+
+packages/react-native-xtermjs-webview/src/
+└── index.tsx            # Xterm configuration (font settings)
+```
+
+---
+
+## Detailed Implementation Plan
+
+### Step 1: Increase Terminal Font Size
+
+**File:** `/home/muly/fressh/packages/react-native-xtermjs-webview/src/index.tsx`
+
+**Current Code (lines 65-72):**
+```typescript
+const defaultXtermOptions: Partial<ITerminalOptions> = {
+  allowProposedApi: true,
+  convertEol: true,
+  scrollback: 10000,
+  cursorBlink: true,
+  fontFamily: 'Menlo, ui-monospace, monospace',
+  fontSize: 10,
+};
+```
+
+**Change to:**
+```typescript
+const defaultXtermOptions: Partial<ITerminalOptions> = {
+  allowProposedApi: true,
+  convertEol: true,
+  scrollback: 10000,
+  cursorBlink: true,
+  fontFamily: 'ui-monospace, Menlo, Monaco, "Cascadia Mono", "Segoe UI Mono", "Roboto Mono", monospace',
+  fontSize: 20,
+};
+```
+
+**Rationale:**
+- Double font size (10 -> 20) for better readability on tablet
+- Use system monospace font stack for maximum compatibility across devices
+
+---
+
+### Step 2: Remove Header from Shell Detail
+
+**File:** `/home/muly/fressh/apps/mobile/src/app/(tabs)/shell/detail.tsx`
+
+**Current Code (lines 170-199):**
+```typescript
+<Stack.Screen
+  options={{
+    headerBackVisible: true,
+    title: `${connection?.connectionDetails.username}@${connection?.connectionDetails.host}`,
+    headerRight: () => (
+      <Pressable
+        accessibilityLabel="Close Shell"
+        // ... Close Shell button
+      </Pressable>
+    ),
+  }}
+/>
+```
+
+**Change to:**
+```typescript
+<Stack.Screen
+  options={{
+    headerShown: false,
+  }}
+/>
+```
+
+**Note:** The "Close Shell" functionality will be moved to the settings button in the keyboard toolbar.
+
+---
+
+### Step 3: Remove Terminal Borders and Padding
+
+**File:** `/home/muly/fressh/apps/mobile/src/app/(tabs)/shell/detail.tsx`
+
+#### 3a. Remove outer View padding (lines 158-168)
+
+**Current:**
+```typescript
+<View
+  style={{
+    justifyContent: 'flex-start',
+    backgroundColor: theme.colors.background,
+    paddingTop: 2,
+    paddingLeft: 8,
+    paddingRight: 8,
+    paddingBottom: 0,
+    marginBottom,
+    flex: 1,
+  }}
+>
+```
+
+**Change to:**
+```typescript
+<View
+  style={{
+    justifyContent: 'flex-start',
+    backgroundColor: theme.colors.background,
+    paddingTop: 0,
+    paddingLeft: 0,
+    paddingRight: 0,
+    paddingBottom: 0,
+    flex: 1,
+  }}
+>
+```
+
+**Note:** Also remove `marginBottom` since we're hiding the tab bar.
+
+#### 3b. Remove KeyboardAvoidingView gap (line 204)
+
+**Current:**
+```typescript
+<KeyboardAvoidingView
+  behavior="height"
+  keyboardVerticalOffset={120}
+  style={{ flex: 1, gap: 4 }}
+>
+```
+
+**Change to:**
+```typescript
+<KeyboardAvoidingView
+  behavior="height"
+  keyboardVerticalOffset={120}
+  style={{ flex: 1, gap: 0 }}
+>
+```
+
+#### 3c. Remove terminal container border (lines 207-212)
+
+**Current:**
+```typescript
+<View
+  style={{
+    flex: 1,
+    borderWidth: 2,
+    borderColor: theme.colors.border,
+  }}
+>
+```
+
+**Change to:**
+```typescript
+<View
+  style={{
+    flex: 1,
+  }}
+>
+```
+
+---
+
+### Step 4: Hide Tab Bar on Shell Detail Screen
+
+**File:** `/home/muly/fressh/apps/mobile/src/app/(tabs)/shell/detail.tsx`
+
+There are multiple approaches to hide the tab bar:
+
+#### Option A: Use Expo Router's native tabs hiding (Recommended)
+Add to Stack.Screen options or use a layout effect to hide tabs when this screen is focused.
+
+#### Option B: Remove useBottomTabSpacing
+**Current Code (line 123):**
+```typescript
+const marginBottom = useBottomTabSpacing();
+```
+
+This hook adds bottom margin to account for the tab bar. Since we're removing the tab bar on this screen, we can remove this.
+
+#### Option C: Conditional Tab Bar Visibility
+Modify `/home/muly/fressh/apps/mobile/src/app/(tabs)/_layout.tsx` to hide tabs based on current route.
+
+**Implementation:** Check Expo Router documentation for `tabBarStyle: { display: 'none' }` or use a context/state to conditionally hide tabs.
+
+---
+
+### Step 5: Add Third Keyboard Row with Settings Button
+
+**File:** `/home/muly/fressh/apps/mobile/src/app/(tabs)/shell/detail.tsx`
+
+#### 5a. Update KeyboardToolbar height
+
+**Current (lines 302-331):**
+```typescript
+function KeyboardToolbar() {
+  const theme = useTheme();
+  return (
+    <View
+      style={{
+        height: 100,  // 2 rows × 50px each
+        borderWidth: 1,
+        borderColor: theme.colors.border,
+      }}
+    >
+```
+
+**Change to:**
+```typescript
+function KeyboardToolbar() {
+  const theme = useTheme();
+  return (
+    <View
+      style={{
+        height: 150,  // 3 rows × 50px each
+        borderWidth: 0,  // Remove border
+      }}
+    >
+```
+
+#### 5b. Add third row
+
+**Current structure:**
+```typescript
+<KeyboardToolbarRow>
+  {/* Row 1: ESC, /, |, HOME, UP, END, PGUP */}
+</KeyboardToolbarRow>
+<KeyboardToolbarRow>
+  {/* Row 2: TAB, CTRL, ALT, LEFT, DOWN, RIGHT, PGDN */}
+</KeyboardToolbarRow>
+```
+
+**New structure:**
+```typescript
+<KeyboardToolbarRow>
+  {/* Row 1: ESC, /, |, HOME, UP, END, PGUP */}
+</KeyboardToolbarRow>
+<KeyboardToolbarRow>
+  {/* Row 2: TAB, CTRL, ALT, LEFT, DOWN, RIGHT, PGDN */}
+</KeyboardToolbarRow>
+<KeyboardToolbarRow>
+  {/* Row 3: Settings button + empty slots for future keys */}
+  <SettingsButton />
+  <EmptySlot />
+  <EmptySlot />
+  <EmptySlot />
+  <EmptySlot />
+  <EmptySlot />
+  <EmptySlot />
+</KeyboardToolbarRow>
+```
+
+---
+
+### Step 6: Create Settings Button and Modal
+
+**File:** `/home/muly/fressh/apps/mobile/src/app/(tabs)/shell/detail.tsx`
+
+#### 6a. Add state for modal visibility
+
+```typescript
+function ShellDetail() {
+  const [settingsModalVisible, setSettingsModalVisible] = useState(false);
+  // ... existing code
+}
+```
+
+#### 6b. Create SettingsButton component
+
+```typescript
+function SettingsButton() {
+  const theme = useTheme();
+  const { setSettingsModalVisible } = useContextSafe(ShellDetailContext);
+
+  return (
+    <Pressable
+      style={{
+        flex: 1,
+        alignItems: 'center',
+        justifyContent: 'center',
+        borderWidth: 1,
+        borderColor: theme.colors.border,
+      }}
+      onPress={() => setSettingsModalVisible(true)}
+    >
+      <Ionicons name="settings-outline" size={20} color={theme.colors.textPrimary} />
+    </Pressable>
+  );
+}
+```
+
+#### 6c. Create Settings Modal
+
+```typescript
+function SettingsModal({ visible, onClose, onCloseShell }: {
+  visible: boolean;
+  onClose: () => void;
+  onCloseShell: () => void;
+}) {
+  const theme = useTheme();
+
+  return (
+    <Modal
+      visible={visible}
+      transparent
+      animationType="fade"
+      onRequestClose={onClose}
+    >
+      <Pressable
+        style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' }}
+        onPress={onClose}
+      >
+        <View style={{ backgroundColor: theme.colors.surface, padding: 20, borderTopLeftRadius: 16, borderTopRightRadius: 16 }}>
+          <Pressable
+            style={{ padding: 16, borderRadius: 8 }}
+            onPress={onCloseShell}
+          >
+            <Text style={{ color: theme.colors.danger, fontSize: 16 }}>Close Shell</Text>
+          </Pressable>
+
+          {/* Placeholder for future actions */}
+          <Pressable
+            style={{ padding: 16, borderRadius: 8, opacity: 0.5 }}
+            disabled
+          >
+            <Text style={{ color: theme.colors.textSecondary, fontSize: 16 }}>Reconnect (coming soon)</Text>
+          </Pressable>
+
+          <Pressable
+            style={{ padding: 16, borderRadius: 8, marginTop: 8 }}
+            onPress={onClose}
+          >
+            <Text style={{ color: theme.colors.textPrimary, fontSize: 16, textAlign: 'center' }}>Cancel</Text>
+          </Pressable>
+        </View>
+      </Pressable>
+    </Modal>
+  );
+}
+```
+
+#### 6d. Add EmptySlot component for future keys
+
+```typescript
+function EmptySlot() {
+  const theme = useTheme();
+  return (
+    <View
+      style={{
+        flex: 1,
+        borderWidth: 1,
+        borderColor: theme.colors.border,
+        opacity: 0.3,
+      }}
+    />
+  );
+}
+```
+
+---
+
+## Implementation Order
+
+| Step | Description | Effort | Risk |
+|------|-------------|--------|------|
+| 1 | Font size & family | Low | Low |
+| 2 | Remove header | Low | Low |
+| 3 | Remove borders/padding | Low | Low |
+| 4 | Hide tab bar | Medium | Medium |
+| 5 | Add 3rd keyboard row | Medium | Low |
+| 6 | Settings modal | Medium | Low |
+
+**Recommended order:** 1 -> 3 -> 2 -> 5 -> 6 -> 4
+
+Start with font changes (immediate visual feedback), then structural changes, then navigation changes last (most complex).
+
+---
+
+## Testing Checklist
+
+- [ ] Font size is readable on tablet
+- [ ] Terminal uses full screen width (no left/right gaps)
+- [ ] Terminal uses full height (no top gap from header)
+- [ ] No gap between terminal and keyboard
+- [ ] Tab bar is hidden when viewing terminal
+- [ ] Third keyboard row displays correctly
+- [ ] Settings button opens modal
+- [ ] "Close Shell" in modal works correctly
+- [ ] Can navigate back to shell list after closing shell
+- [ ] Hot reload works during development
+
+---
+
+## Future Enhancements (Out of Scope)
+
+- Add more keys to third row (INSERT, DELETE, etc.)
+- Reconnect functionality in settings
+- Copy/Paste actions
+- Font size adjustment in settings
+- Keyboard layout customization
+</design_document>
+
+<critical_files>
+<file path="apps/mobile/src/app/(tabs)/shell/detail.tsx" lines="531" priority="critical">
+import { Ionicons } from '@expo/vector-icons';
+import { type ListenerEvent } from '@fressh/react-native-uniffi-russh';
+import {
+	XtermJsWebView,
+	type XtermWebViewHandle,
+} from '@fressh/react-native-xtermjs-webview';
+
+import {
+	Stack,
+	useLocalSearchParams,
+	useRouter,
+	useFocusEffect,
+} from 'expo-router';
+import React, {
+	createContext,
+	startTransition,
+	useCallback,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from 'react';
+import {
+	KeyboardAvoidingView,
+	Pressable,
+	Text,
+	View,
+	type StyleProp,
+	type ViewStyle,
+} from 'react-native';
+import { rootLogger } from '@/lib/logger';
+import { useSshStore } from '@/lib/ssh-store';
+import { useTheme } from '@/lib/theme';
+import { useBottomTabSpacing } from '@/lib/useBottomTabSpacing';
+import { useContextSafe } from '@/lib/utils';
+
+type IconName = keyof typeof Ionicons.glyphMap;
+
+const logger = rootLogger.extend('TabsShellDetail');
+
+export default function TabsShellDetail() {
+	const [ready, setReady] = useState(false);
+
+	useFocusEffect(
+		React.useCallback(() => {
+			startTransition(() => {
+				setTimeout(() => {
+					// TODO: This is gross. It would be much better to switch
+					// after the navigation animation completes.
+					setReady(true);
+				}, 16);
+			});
+
+			return () => {
+				setReady(false);
+			};
+		}, []),
+	);
+
+	if (!ready) return <RouteSkeleton />;
+	return <ShellDetail />;
+}
+
+function RouteSkeleton() {
+	const theme = useTheme();
+	return (
+		<View
+			style={{
+				flex: 1,
+				justifyContent: 'center',
+				alignItems: 'center',
+				backgroundColor: theme.colors.background,
+			}}
+		>
+			<Text style={{ color: theme.colors.textPrimary, fontSize: 20 }}>
+				Loading
+			</Text>
+		</View>
+	);
+}
+
+const encoder = new TextEncoder();
+
+function ShellDetail() {
+	const xtermRef = useRef<XtermWebViewHandle>(null);
+	const listenerIdRef = useRef<bigint | null>(null);
+
+	const searchParams = useLocalSearchParams<{
+		connectionId?: string;
+		channelId?: string;
+	}>();
+
+	if (!searchParams.connectionId || !searchParams.channelId)
+		throw new Error('Missing connectionId or channelId');
+
+	const connectionId = searchParams.connectionId;
+	const channelId = parseInt(searchParams.channelId);
+
+	const router = useRouter();
+	const theme = useTheme();
+
+	const shell = useSshStore(
+		(s) => s.shells[`${connectionId}-${channelId}` as const],
+	);
+	const connection = useSshStore((s) => s.connections[connectionId]);
+
+	useEffect(() => {
+		if (shell && connection) return;
+		logger.info('shell or connection not found, replacing route with /shell');
+		router.back();
+	}, [connection, router, shell]);
+
+	useEffect(() => {
+		const xterm = xtermRef.current;
+		return () => {
+			if (shell && listenerIdRef.current != null)
+				shell.removeListener(listenerIdRef.current);
+			listenerIdRef.current = null;
+			if (xterm) xterm.flush();
+		};
+	}, [shell]);
+
+	const marginBottom = useBottomTabSpacing();
+
+	const [modifierKeysActive, setModifierKeysActive] = useState<
+		KeyboardToolbarModifierButtonProps[]
+	>([]);
+
+	const sendBytes = useCallback(
+		(bytes: Uint8Array<ArrayBuffer>) => {
+			if (!shell) return;
+
+			modifierKeysActive
+				.sort((a, b) => a.orderPreference - b.orderPreference)
+				.forEach((m) => {
+					if (!m.canApplyModifierToBytes(bytes)) return;
+					bytes = m.applyModifierToBytes(bytes);
+				});
+
+			shell.sendData(bytes.buffer).catch((e: unknown) => {
+				logger.warn('sendData failed', e);
+				router.back();
+			});
+		},
+		[shell, router, modifierKeysActive],
+	);
+	const toolbarContext: KeyboardToolbarContextType = useMemo(
+		() => ({
+			modifierKeysActive,
+			setModifierKeysActive,
+			sendBytes,
+		}),
+		[sendBytes, modifierKeysActive],
+	);
+
+	return (
+		<>
+			<View
+				style={{
+					justifyContent: 'flex-start',
+					backgroundColor: theme.colors.background,
+					paddingTop: 2,
+					paddingLeft: 8,
+					paddingRight: 8,
+					paddingBottom: 0,
+					marginBottom,
+					flex: 1,
+				}}
+			>
+				<Stack.Screen
+					options={{
+						headerBackVisible: true,
+						title: `${connection?.connectionDetails.username}@${connection?.connectionDetails.host}`,
+						headerRight: () => (
+							<Pressable
+								accessibilityLabel="Close Shell"
+								hitSlop={10}
+								onPress={async () => {
+									logger.info('Close Shell button pressed');
+									if (!shell) return;
+									try {
+										await shell.close();
+									} catch (e) {
+										logger.warn('Failed to close shell', e);
+									}
+								}}
+								style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}
+							>
+								<Ionicons
+									name="close"
+									size={20}
+									color={theme.colors.textPrimary}
+								/>
+								<Text style={{ color: theme.colors.textPrimary }}>
+									Close Shell
+								</Text>
+							</Pressable>
+						),
+					}}
+				/>
+				<KeyboardAvoidingView
+					behavior="height"
+					keyboardVerticalOffset={120}
+					style={{ flex: 1, gap: 4 }}
+				>
+					<KeyboardToolBarContext value={toolbarContext}>
+						<View
+							style={{
+								flex: 1,
+								borderWidth: 2,
+								borderColor: theme.colors.border,
+							}}
+						>
+							<XtermJsWebView
+								ref={xtermRef}
+								style={{ flex: 1 }}
+								webViewOptions={{
+									// Prevent iOS from adding automatic top inset inside WebView
+									contentInsetAdjustmentBehavior: 'never',
+								}}
+								logger={{
+									log: logger.info,
+									// debug: logger.debug,
+									warn: logger.warn,
+									error: logger.error,
+								}}
+								xtermOptions={{
+									theme: {
+										background: theme.colors.background,
+										foreground: theme.colors.textPrimary,
+									},
+								}}
+								onInitialized={() => {
+									if (!shell) throw new Error('Shell not found');
+
+									// Replay from head, then attach live listener
+									void (async () => {
+										const res = shell.readBuffer({ mode: 'head' });
+										logger.info('readBuffer(head)', {
+											chunks: res.chunks.length,
+											nextSeq: res.nextSeq,
+											dropped: res.dropped,
+										});
+										if (res.chunks.length) {
+											const chunks = res.chunks.map((c) => c.bytes);
+											const xr = xtermRef.current;
+											if (xr) {
+												xr.writeMany(chunks.map((c) => new Uint8Array(c)));
+												xr.flush();
+											}
+										}
+										const id = shell.addListener(
+											(ev: ListenerEvent) => {
+												if ('kind' in ev) {
+													logger.warn('listener.dropped', ev);
+													return;
+												}
+												const chunk = ev;
+												const xr3 = xtermRef.current;
+												if (xr3) xr3.write(new Uint8Array(chunk.bytes));
+											},
+											{ cursor: { mode: 'seq', seq: res.nextSeq } },
+										);
+										logger.info('shell listener attached', id.toString());
+										listenerIdRef.current = id;
+									})();
+									// Focus to pop the keyboard (iOS needs the prop we set)
+									const xr2 = xtermRef.current;
+									if (xr2) xr2.focus();
+								}}
+								onData={(terminalMessage) => {
+									if (!shell) return;
+									const bytes = encoder.encode(terminalMessage);
+									sendBytes(bytes);
+								}}
+							/>
+						</View>
+						<KeyboardToolbar />
+					</KeyboardToolBarContext>
+				</KeyboardAvoidingView>
+			</View>
+			{/* <KeyboardToolbar
+				offset={{
+					opened: -80,
+				}}
+			/> */}
+		</>
+	);
+}
+
+type KeyboardToolbarContextType = {
+	modifierKeysActive: KeyboardToolbarModifierButtonProps[];
+	setModifierKeysActive: React.Dispatch<
+		React.SetStateAction<KeyboardToolbarModifierButtonProps[]>
+	>;
+	sendBytes: (bytes: Uint8Array<ArrayBuffer>) => void;
+};
+const KeyboardToolBarContext = createContext<KeyboardToolbarContextType | null>(
+	null,
+);
+
+function KeyboardToolbar() {
+	const theme = useTheme();
+	return (
+		<View
+			style={{
+				height: 100,
+				borderWidth: 1,
+				borderColor: theme.colors.border,
+			}}
+		>
+			<KeyboardToolbarRow>
+				<KeyboardToolbarButtonPreset preset="esc" />
+				<KeyboardToolbarButtonPreset preset="/" />
+				<KeyboardToolbarButtonPreset preset="|" />
+				<KeyboardToolbarButtonPreset preset="home" />
+				<KeyboardToolbarButtonPreset preset="up" />
+				<KeyboardToolbarButtonPreset preset="end" />
+				<KeyboardToolbarButtonPreset preset="pgup" />
+			</KeyboardToolbarRow>
+			<KeyboardToolbarRow>
+				<KeyboardToolbarButtonPreset preset="tab" />
+				<KeyboardToolbarButtonPreset preset="ctrl" />
+				<KeyboardToolbarButtonPreset preset="alt" />
+				<KeyboardToolbarButtonPreset preset="left" />
+				<KeyboardToolbarButtonPreset preset="down" />
+				<KeyboardToolbarButtonPreset preset="right" />
+				<KeyboardToolbarButtonPreset preset="pgdn" />
+			</KeyboardToolbarRow>
+		</View>
+	);
+}
+
+function KeyboardToolbarRow({ children }: { children?: React.ReactNode }) {
+	return <View style={{ flexDirection: 'row', flex: 1 }}>{children}</View>;
+}
+
+type KeyboardToolbarButtonPresetType =
+	| 'esc'
+	| '/'
+	| '|'
+	| 'home'
+	| 'up'
+	| 'end'
+	| 'pgup'
+	| 'pgdn'
+	| 'tab'
+	| 'ctrl'
+	| 'alt'
+	| 'left'
+	| 'down'
+	| 'right'
+	| 'insert'
+	| 'delete'
+	| 'pageup'
+	| 'pagedown';
+
+function KeyboardToolbarButtonPreset({
+	preset,
+	style,
+}: {
+	style?: StyleProp<ViewStyle>;
+	preset: KeyboardToolbarButtonPresetType;
+}) {
+	return (
+		<KeyboardToolbarButton
+			{...keyboardToolbarButtonPresetToProps[preset]}
+			style={style}
+		/>
+	);
+}
+
+type ModifierContract = {
+	canApplyModifierToBytes: (bytes: Uint8Array<ArrayBuffer>) => boolean;
+	applyModifierToBytes: (
+		bytes: Uint8Array<ArrayBuffer>,
+	) => Uint8Array<ArrayBuffer>;
+	orderPreference: number;
+};
+
+const escapeByte = 27;
+
+const ctrlModifier: ModifierContract = {
+	orderPreference: 10,
+	canApplyModifierToBytes: (bytes) => {
+		const firstByte = bytes[0];
+		if (firstByte === undefined) return false;
+		return mapByteToCtrl(firstByte) != null;
+	},
+	applyModifierToBytes: (bytes) => {
+		const firstByte = bytes[0];
+		if (firstByte === undefined) return bytes;
+		const ctrlByte = mapByteToCtrl(firstByte);
+		if (ctrlByte == null) return bytes;
+		return new Uint8Array([ctrlByte]);
+	},
+};
+
+const altModifier: ModifierContract = {
+	orderPreference: 20,
+	canApplyModifierToBytes: (bytes) => {
+		return bytes.length > 0 && bytes[0] !== escapeByte;
+	},
+	applyModifierToBytes: (bytes) => {
+		const result = new Uint8Array(bytes.length + 1);
+		result[0] = escapeByte;
+		result.set(bytes, 1);
+		return result;
+	},
+};
+
+function mapByteToCtrl(byte: number): number | null {
+	if (byte === 32) return 0; // Ctrl+Space
+	const uppercase = byte & 0b1101_1111; // Fold to uppercase / control range
+	if (uppercase >= 64 && uppercase <= 95) {
+		return uppercase & 0x1f;
+	}
+	if (byte === 63) return 127; // Ctrl+?
+	return null;
+}
+
+const keyboardToolbarButtonPresetToProps: Record<
+	KeyboardToolbarButtonPresetType,
+	KeyboardToolbarButtonProps
+> = {
+	esc: { label: 'ESC', sendBytes: new Uint8Array([27]) },
+	'/': { label: '/', sendBytes: new Uint8Array([47]) },
+	'|': { label: '|', sendBytes: new Uint8Array([124]) },
+	home: { label: 'HOME', sendBytes: new Uint8Array([27, 91, 72]) },
+	end: { label: 'END', sendBytes: new Uint8Array([27, 91, 70]) },
+	pgup: { label: 'PGUP', sendBytes: new Uint8Array([27, 91, 53, 126]) },
+	pgdn: { label: 'PGDN', sendBytes: new Uint8Array([27, 91, 54, 126]) },
+	tab: { label: 'TAB', sendBytes: new Uint8Array([9]) },
+	left: { iconName: 'arrow-back', sendBytes: new Uint8Array([27, 91, 68]) },
+	up: { iconName: 'arrow-up', sendBytes: new Uint8Array([27, 91, 65]) },
+	down: { iconName: 'arrow-down', sendBytes: new Uint8Array([27, 91, 66]) },
+	right: {
+		iconName: 'arrow-forward',
+		sendBytes: new Uint8Array([27, 91, 67]),
+	},
+	insert: { label: 'INSERT', sendBytes: new Uint8Array([27, 91, 50, 126]) },
+	delete: { label: 'DELETE', sendBytes: new Uint8Array([27, 91, 51, 126]) },
+	pageup: { label: 'PAGEUP', sendBytes: new Uint8Array([27, 91, 53, 126]) },
+	pagedown: { label: 'PAGEDOWN', sendBytes: new Uint8Array([27, 91, 54, 126]) },
+	ctrl: { label: 'CTRL', type: 'modifier', ...ctrlModifier },
+	alt: { label: 'ALT', type: 'modifier', ...altModifier },
+};
+
+type KeyboardToolbarButtonViewProps =
+	| {
+			label: string;
+	  }
+	| {
+			iconName: IconName;
+	  };
+
+type KeyboardToolbarModifierButtonProps = {
+	type: 'modifier';
+} & ModifierContract &
+	KeyboardToolbarButtonViewProps;
+type KeyboardToolbarInstantButtonProps = {
+	type?: 'sendBytes';
+	sendBytes: Uint8Array<ArrayBuffer>;
+} & KeyboardToolbarButtonViewProps;
+
+type KeyboardToolbarButtonProps =
+	| KeyboardToolbarModifierButtonProps
+	| KeyboardToolbarInstantButtonProps;
+
+const propsToKey = (props: KeyboardToolbarButtonProps) =>
+	'label' in props ? props.label : props.iconName;
+
+function KeyboardToolbarButton({
+	style,
+	...props
+}: KeyboardToolbarButtonProps & { style?: StyleProp<ViewStyle> }) {
+	const theme = useTheme();
+	const { sendBytes, modifierKeysActive, setModifierKeysActive } =
+		useContextSafe(KeyboardToolBarContext);
+
+	const isTextLabel = 'label' in props;
+	const children = isTextLabel ? (
+		<Text style={{ color: theme.colors.textPrimary }}>{props.label}</Text>
+	) : (
+		<Ionicons
+			name={props.iconName}
+			size={20}
+			color={theme.colors.textPrimary}
+		/>
+	);
+
+	const modifierActive =
+		props.type === 'modifier' &&
+		!!modifierKeysActive.find((m) => propsToKey(m) === propsToKey(props));
+
+	return (
+		<Pressable
+			style={[
+				{
+					flex: 1,
+					alignItems: 'center',
+					justifyContent: 'center',
+					borderWidth: 1,
+					borderColor: theme.colors.border,
+				},
+				modifierActive && { backgroundColor: theme.colors.primary },
+				style,
+			]}
+			onPress={() => {
+				if (props.type === 'modifier') {
+					setModifierKeysActive((modifierKeysActive) =>
+						modifierKeysActive.find((m) => propsToKey(m) === propsToKey(props))
+							? modifierKeysActive.filter(
+									(m) => propsToKey(m) !== propsToKey(props),
+								)
+							: [...modifierKeysActive, props],
+					);
+					return;
+				}
+
+				if ('sendBytes' in props) {
+					sendBytes(new Uint8Array(props.sendBytes));
+					return;
+				}
+				throw new Error('Invalid button type');
+			}}
+		>
+			{children}
+		</Pressable>
+	);
+}
+</file>
+
+<file path="packages/react-native-xtermjs-webview/src/index.tsx" lines="364" priority="critical">
+import React, {
+	useEffect,
+	useImperativeHandle,
+	useMemo,
+	useRef,
+	useCallback,
+	useState,
+} from 'react';
+import { WebView, type WebViewMessageEvent } from 'react-native-webview';
+import htmlString from '../dist-internal/index.html?raw';
+import {
+	binaryToBStr,
+	bStrToBinary,
+	type BridgeInboundMessage,
+	type BridgeOutboundMessage,
+} from './bridge';
+
+export { bStrToBinary, binaryToBStr };
+
+type StrictOmit<T, K extends keyof T> = Omit<T, K>;
+type ITerminalOptions = import('@xterm/xterm').ITerminalOptions;
+type WebViewOptions = React.ComponentProps<typeof WebView>;
+
+const defaultCoalescingThreshold = 8 * 1024;
+
+/**
+ * Message from this pkg to calling RN
+ */
+export type XtermInbound =
+	| { type: 'initialized' }
+	| { type: 'data'; data: Uint8Array }
+	| { type: 'debug'; message: string };
+
+export type XtermWebViewHandle = {
+	write: (data: Uint8Array) => void; // bytes in (batched)
+	// Efficiently write many chunks in one postMessage (for initial replay)
+	writeMany: (chunks: Uint8Array[]) => void;
+	flush: () => void; // force-flush outgoing writes
+	clear: () => void;
+	focus: () => void;
+	resize: (size: { cols: number; rows: number }) => void;
+	fit: () => void;
+};
+
+const defaultWebViewProps: WebViewOptions = {
+	// WebView behavior that suits terminals
+	// ios
+	keyboardDisplayRequiresUserAction: false,
+	pullToRefreshEnabled: false,
+	bounces: false,
+	textInteractionEnabled: false,
+	allowsLinkPreview: false,
+	// android
+	setSupportMultipleWindows: false,
+	overScrollMode: 'never',
+	setBuiltInZoomControls: false,
+	setDisplayZoomControls: false,
+	textZoom: 100,
+	// both
+	originWhitelist: ['*'],
+	scalesPageToFit: false,
+	contentMode: 'mobile',
+};
+
+const defaultXtermOptions: Partial<ITerminalOptions> = {
+	allowProposedApi: true,
+	convertEol: true,
+	scrollback: 10000,
+	cursorBlink: true,
+	fontFamily: 'Menlo, ui-monospace, monospace',
+	fontSize: 10,
+};
+
+type UserControllableWebViewProps = StrictOmit<
+	WebViewOptions,
+	'source' | 'style' | 'injectedJavaScriptBeforeContentLoaded'
+>;
+
+export type XtermJsWebViewProps = {
+	ref: React.RefObject<XtermWebViewHandle | null>;
+	style?: WebViewOptions['style'];
+	webViewOptions?: UserControllableWebViewProps;
+	xtermOptions?: Partial<ITerminalOptions>;
+	onInitialized?: () => void;
+	onData?: (data: string) => void;
+	logger?: {
+		debug?: (...args: unknown[]) => void;
+		log?: (...args: unknown[]) => void;
+		warn?: (...args: unknown[]) => void;
+		error?: (...args: unknown[]) => void;
+	};
+	coalescingThreshold?: number;
+	size?: {
+		cols: number;
+		rows: number;
+	};
+	autoFit?: boolean;
+};
+
+function xTermOptionsEquals(
+	a: Partial<ITerminalOptions> | null,
+	b: Partial<ITerminalOptions> | null,
+): boolean {
+	if (a == b) return true;
+	if (a == null && b == null) return true;
+	if (a == null || b == null) return false;
+	const keys = new Set<string>([
+		...Object.keys(a as object),
+		...Object.keys(b as object),
+	]);
+	for (const k of keys) {
+		const key = k as keyof ITerminalOptions;
+		if (a[key] !== b[key]) return false;
+	}
+	return true;
+}
+
+export function XtermJsWebView({
+	ref,
+	style,
+	webViewOptions = defaultWebViewProps,
+	xtermOptions = defaultXtermOptions,
+	onInitialized,
+	onData,
+	coalescingThreshold = defaultCoalescingThreshold,
+	logger,
+	size,
+	autoFit = true,
+}: XtermJsWebViewProps) {
+	const webRef = useRef<WebView>(null);
+	const [initialized, setInitialized] = useState(false);
+
+	// ---- RN -> WebView message sender
+	const sendToWebView = useCallback(
+		(obj: BridgeOutboundMessage) => {
+			const webViewRef = webRef.current;
+			if (!webViewRef) return;
+			const payload = JSON.stringify(obj);
+			logger?.debug?.(`sending msg to webview: ${payload}`);
+			const js = `window.dispatchEvent(new MessageEvent('message',{data:${payload}})); true;`;
+			webViewRef.injectJavaScript(js);
+		},
+		[logger],
+	);
+
+	// ---- rAF + 8KB coalescer for writes
+	const bufRef = useRef<Uint8Array | null>(null);
+	const rafRef = useRef<number | null>(null);
+
+	const flush = useCallback(() => {
+		if (!bufRef.current) return;
+		const bStr = binaryToBStr(bufRef.current);
+		bufRef.current = null;
+		if (rafRef.current != null) {
+			cancelAnimationFrame(rafRef.current);
+			rafRef.current = null;
+		}
+		sendToWebView({ type: 'write', bStr });
+	}, [sendToWebView]);
+
+	const schedule = useCallback(() => {
+		if (rafRef.current != null) return;
+		rafRef.current = requestAnimationFrame(() => {
+			rafRef.current = null;
+			flush();
+		});
+	}, [flush]);
+
+	const write = useCallback(
+		(data: Uint8Array) => {
+			if (!data || data.length === 0) return;
+			if (!bufRef.current) {
+				bufRef.current = data;
+			} else {
+				const a = bufRef.current;
+				const merged = new Uint8Array(a.length + data.length);
+				merged.set(a, 0);
+				merged.set(data, a.length);
+				bufRef.current = merged;
+			}
+			if ((bufRef.current?.length ?? 0) >= coalescingThreshold) flush();
+			else schedule();
+		},
+		[coalescingThreshold, flush, schedule],
+	);
+
+	const writeMany = useCallback(
+		(chunks: Uint8Array[]) => {
+			if (!chunks || chunks.length === 0) return;
+			flush(); // Ensure any pending small buffered write is flushed before bulk write
+			const bStrs = chunks.map(binaryToBStr);
+			sendToWebView({ type: 'writeMany', chunks: bStrs });
+		},
+		[flush, sendToWebView],
+	);
+
+	// Cleanup pending rAF on unmount
+	useEffect(() => {
+		return () => {
+			if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
+			rafRef.current = null;
+			bufRef.current = null;
+		};
+	}, []);
+
+	const fit = useCallback(() => {
+		sendToWebView({ type: 'fit' });
+	}, [sendToWebView]);
+
+	const autoFitFn = useCallback(() => {
+		if (!autoFit) return;
+		fit();
+	}, [autoFit, fit]);
+
+	const appliedSizeRef = useRef<{ cols: number; rows: number } | null>(null);
+
+	useEffect(() => {
+		if (!initialized) return;
+		const appliedSize = appliedSizeRef.current;
+		if (!size) return;
+		if (appliedSize?.cols === size.cols && appliedSize?.rows === size.rows)
+			return;
+
+		logger?.log?.(`calling resize`, size);
+		sendToWebView({ type: 'resize', cols: size.cols, rows: size.rows });
+		autoFitFn();
+
+		appliedSizeRef.current = size;
+	}, [size, sendToWebView, logger, autoFitFn, initialized]);
+
+	useImperativeHandle(ref, () => ({
+		write,
+		writeMany,
+		flush,
+		clear: () => sendToWebView({ type: 'clear' }),
+		focus: () => {
+			sendToWebView({ type: 'focus' });
+			webRef.current?.requestFocus();
+		},
+		resize: (size: { cols: number; rows: number }) => {
+			sendToWebView({ type: 'resize', cols: size.cols, rows: size.rows });
+			autoFitFn();
+			appliedSizeRef.current = size;
+		},
+		fit,
+	}));
+
+	const mergedXTermOptions = useMemo(
+		() => ({
+			...defaultXtermOptions,
+			...xtermOptions,
+		}),
+		[xtermOptions],
+	);
+
+	const appliedXtermOptionsRef = useRef<Partial<ITerminalOptions> | null>(null);
+
+	useEffect(() => {
+		if (!initialized) return;
+		const appliedXtermOptions = appliedXtermOptionsRef.current;
+		if (xTermOptionsEquals(appliedXtermOptions, mergedXTermOptions)) return;
+		logger?.log?.(`setting options: `, mergedXTermOptions);
+		sendToWebView({ type: 'setOptions', opts: mergedXTermOptions });
+		autoFitFn();
+
+		appliedXtermOptionsRef.current = mergedXTermOptions;
+	}, [mergedXTermOptions, sendToWebView, logger, initialized, autoFitFn]);
+
+	const onMessage = useCallback(
+		(e: WebViewMessageEvent) => {
+			try {
+				const msg: BridgeInboundMessage = JSON.parse(e.nativeEvent.data);
+				logger?.log?.(`received msg from webview: `, msg);
+				if (msg.type === 'initialized') {
+					onInitialized?.();
+					autoFitFn();
+					setInitialized(true);
+					return;
+				}
+				if (msg.type === 'input') {
+					// const bytes = bStrToBinary(msg.bStr);
+					// onData?.(bytes);
+					onData?.(msg.str);
+					return;
+				}
+				if (msg.type === 'debug') {
+					logger?.log?.(`received debug msg from webview: `, msg.message);
+					return;
+				}
+				webViewOptions?.onMessage?.(e);
+			} catch (error) {
+				logger?.warn?.(
+					`received unknown msg from webview: `,
+					e.nativeEvent.data,
+					error,
+				);
+			}
+		},
+		[logger, webViewOptions, onInitialized, autoFitFn, onData],
+	);
+
+	const onContentProcessDidTerminate = useCallback<
+		NonNullable<WebViewOptions['onContentProcessDidTerminate']>
+	>(
+		(e) => {
+			logger?.warn?.('WebView Crashed on iOS! onContentProcessDidTerminate');
+			webViewOptions?.onContentProcessDidTerminate?.(e);
+		},
+		[logger, webViewOptions],
+	);
+
+	const onRenderProcessGone = useCallback<
+		NonNullable<WebViewOptions['onRenderProcessGone']>
+	>(
+		(e) => {
+			logger?.warn?.('WebView Crashed on Android! onRenderProcessGone');
+			webViewOptions?.onRenderProcessGone?.(e);
+		},
+		[logger, webViewOptions],
+	);
+
+	const onLoadEnd = useCallback<NonNullable<WebViewOptions['onLoadEnd']>>(
+		(e) => {
+			logger?.log?.('WebView onLoadEnd');
+			webViewOptions?.onLoadEnd?.(e);
+		},
+		[logger, webViewOptions],
+	);
+
+	const mergedWebViewOptions = useMemo(
+		() => ({
+			...defaultWebViewProps,
+			...webViewOptions,
+			onContentProcessDidTerminate,
+			onRenderProcessGone,
+			onLoadEnd,
+		}),
+		[
+			webViewOptions,
+			onContentProcessDidTerminate,
+			onRenderProcessGone,
+			onLoadEnd,
+		],
+	);
+
+	return (
+		<WebView
+			ref={webRef}
+			source={{ html: htmlString }}
+			onMessage={onMessage}
+			style={style}
+			injectedJavaScriptObject={mergedXTermOptions}
+			injectedJavaScriptBeforeContentLoaded={
+				mergedXTermOptions.theme?.background
+					? `
+					document.body.style.backgroundColor = '${mergedXTermOptions.theme.background}';
+					true;
+					`
+					: undefined
+			}
+			{...mergedWebViewOptions}
+		/>
+	);
+}
+</file>
+
+<file path="apps/mobile/src/app/(tabs)/_layout.tsx" lines="57" priority="critical">
+import { FontAwesome6, MaterialCommunityIcons } from '@expo/vector-icons';
+import {
+	Icon,
+	Label,
+	NativeTabs,
+	VectorIcon,
+} from 'expo-router/unstable-native-tabs';
+import React from 'react';
+import { useTheme } from '@/lib/theme';
+
+export default function TabsLayout() {
+	const theme = useTheme();
+	return (
+		<NativeTabs
+			// common
+			backgroundColor={theme.colors.surface}
+			iconColor={theme.colors.muted}
+			labelStyle={{ color: theme.colors.muted }}
+			tintColor={theme.colors.primary}
+			shadowColor={theme.colors.shadow}
+			// android
+			backBehavior="initialRoute"
+			indicatorColor={theme.colors.primary}
+			// labelVisibilityMode="labeled"
+			// rippleColor={theme.colors.transparent}
+			// ios
+			// blurEffect="systemChromeMaterial"
+			// disableTransparentOnScrollEdge={true}
+		>
+			<NativeTabs.Trigger name="index">
+				<Label selectedStyle={{ color: theme.colors.textPrimary }}>Hosts</Label>
+				<Icon
+					src={<VectorIcon family={FontAwesome6} name="server" />}
+					selectedColor={theme.colors.textPrimary}
+				/>
+			</NativeTabs.Trigger>
+			<NativeTabs.Trigger name="shell">
+				<Icon
+					src={<VectorIcon family={MaterialCommunityIcons} name="console" />}
+					selectedColor={theme.colors.textPrimary}
+				/>
+				<Label selectedStyle={{ color: theme.colors.textPrimary }}>
+					Shells
+				</Label>
+			</NativeTabs.Trigger>
+			<NativeTabs.Trigger name="settings">
+				<Icon
+					src={<VectorIcon family={MaterialCommunityIcons} name="cog" />}
+					selectedColor={theme.colors.textPrimary}
+				/>
+				<Label selectedStyle={{ color: theme.colors.textPrimary }}>
+					Settings
+				</Label>
+			</NativeTabs.Trigger>
+		</NativeTabs>
+	);
+}
+</file>
+</critical_files>
+
+<supporting_files>
+<file path="apps/mobile/src/app/(tabs)/shell/_layout.tsx" lines="23" priority="supporting">
+import { Stack } from 'expo-router';
+import React from 'react';
+import { useTheme } from '@/lib/theme';
+
+export default function TabsShellStack() {
+	const theme = useTheme();
+	return (
+		<Stack
+			screenOptions={{
+				headerBlurEffect: undefined,
+				headerTransparent: false,
+				headerStyle: { backgroundColor: theme.colors.surface },
+				headerTintColor: theme.colors.textPrimary,
+				headerTitleStyle: {
+					color: theme.colors.textPrimary,
+				},
+			}}
+		>
+			<Stack.Screen name="index" options={{ title: 'Shells' }} />
+			<Stack.Screen name="detail" options={{ title: 'SSH Shell' }} />
+		</Stack>
+	);
+}
+</file>
+
+<file path="apps/mobile/src/lib/theme.tsx" lines="111" priority="supporting">
+import React from 'react';
+import { preferences } from './preferences';
+
+export interface AppTheme {
+	colors: {
+		background: string;
+		surface: string;
+		terminalBackground: string;
+		border: string;
+		borderStrong: string;
+		textPrimary: string;
+		textSecondary: string;
+		muted: string;
+		primary: string;
+		buttonTextOnPrimary: string;
+		inputBackground: string;
+		danger: string;
+		overlay: string;
+		transparent: string;
+		shadow: string;
+		primaryDisabled: string;
+	};
+}
+
+export const darkTheme: AppTheme = {
+	colors: {
+		background: '#0B1324',
+		surface: '#111B34',
+		terminalBackground: '#0E172B',
+		border: '#2A3655',
+		borderStrong: '#1E293B',
+		textPrimary: '#E5E7EB',
+		textSecondary: '#C6CBD3',
+		muted: '#9AA0A6',
+		primary: '#2563EB',
+		buttonTextOnPrimary: '#FFFFFF',
+		inputBackground: '#0E172B',
+		danger: '#FCA5A5',
+		overlay: 'rgba(0,0,0,0.4)',
+		transparent: 'transparent',
+		shadow: '#000000',
+		primaryDisabled: '#3B82F6',
+	},
+};
+
+export const lightTheme: AppTheme = {
+	colors: {
+		background: '#F9FAFB',
+		surface: '#FFFFFF',
+		terminalBackground: '#F3F4F6',
+		border: '#E5E7EB',
+		borderStrong: '#D1D5DB',
+		textPrimary: '#111827',
+		textSecondary: '#374151',
+		muted: '#6B7280',
+		primary: '#2563EB',
+		buttonTextOnPrimary: '#FFFFFF',
+		inputBackground: '#FFFFFF',
+		danger: '#DC2626',
+		overlay: 'rgba(0,0,0,0.2)',
+		transparent: 'transparent',
+		shadow: '#000000',
+		primaryDisabled: '#93C5FD',
+	},
+};
+
+export type ThemeName = 'dark' | 'light';
+export const themes: Record<ThemeName, AppTheme> = {
+	dark: darkTheme,
+	light: lightTheme,
+};
+
+interface ThemeContextValue {
+	theme: AppTheme;
+	themeName: ThemeName;
+	setThemeName: (name: ThemeName) => void;
+}
+
+const ThemeContext = React.createContext<ThemeContextValue | undefined>(
+	undefined,
+);
+
+export function ThemeProvider(props: { children: React.ReactNode }) {
+	const [themeName, setThemeName] = preferences.theme.useThemePref();
+	const theme = themes[themeName];
+
+	const value = React.useMemo<ThemeContextValue>(
+		() => ({
+			theme,
+			themeName,
+			setThemeName,
+		}),
+		[theme, themeName, setThemeName],
+	);
+
+	return <ThemeContext value={value}>{props.children}</ThemeContext>;
+}
+
+export function useTheme() {
+	const ctx = React.use(ThemeContext);
+	if (!ctx) throw new Error('useTheme must be used within ThemeProvider');
+	return ctx.theme;
+}
+
+export function useThemeControls() {
+	const ctx = React.use(ThemeContext);
+	if (!ctx)
+		throw new Error('useThemeControls must be used within ThemeProvider');
+	const { themeName, setThemeName } = ctx;
+	return { themeName, setThemeName };
+}
+</file>
+
+<file path="apps/mobile/src/lib/useBottomTabSpacing.ts" lines="12" priority="supporting">
+import { Platform } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+
+export function useBottomTabSpacing() {
+	const insets = useSafeAreaInsets();
+	const estimatedTabBarHeight = Platform.select({
+		ios: 49,
+		android: 80,
+		default: 56,
+	});
+	return insets.bottom + estimatedTabBarHeight;
+}
+</file>
+
+<file path="apps/mobile/src/lib/utils.ts" lines="24" priority="supporting">
+import { QueryClient } from '@tanstack/react-query';
+import { use, type Context } from 'react';
+
+export const queryClient = new QueryClient();
+
+export type StrictOmit<T, K extends keyof T> = Omit<T, K>;
+
+export const AbortSignalTimeout = (timeout: number) => {
+	// AbortSignal.timeout is not available as of expo 54
+	// TypeError: AbortSignal.timeout is not a function (it is undefined)
+	const controller = new AbortController();
+	setTimeout(() => {
+		controller.abort();
+	}, timeout);
+	return controller.signal;
+};
+
+export const useContextSafe = <T>(context: Context<T>) => {
+	const contextValue = use(context);
+	if (!contextValue) {
+		throw new Error('Context not found');
+	}
+	return contextValue;
+};
+</file>
+</supporting_files>
+</context>

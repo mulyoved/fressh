@@ -17,7 +17,6 @@ export default function TabsShellStack() {
 			}}
 		>
 			<Stack.Screen name="index" options={{ title: 'Shells' }} />
-			<Stack.Screen name="detail" options={{ title: 'SSH Shell' }} />
 		</Stack>
 	);
 }

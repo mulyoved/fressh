@@ -96,6 +96,8 @@ pub struct StartShellOptions {
     pub terminal_mode: Option<Vec<TerminalMode>>,
     pub terminal_size: Option<TerminalSize>,
     pub terminal_pixel_size: Option<TerminalPixelSize>,
+    pub use_tmux: bool,
+    pub tmux_session_name: Option<String>,
     pub on_closed_callback: Option<Arc<dyn ShellClosedCallback>>,
 }
 
@@ -233,6 +235,27 @@ impl ShellSession {
     pub async fn send_data(&self, data: Vec<u8>) -> Result<(), SshError> {
         let w = self.writer.lock().await;
         w.data(&data[..]).await?;
+        Ok(())
+    }
+
+    /// Resize the PTY window. Call when the terminal UI size changes.
+    /// This sends an SSH "window-change" request to the server, which will
+    /// deliver SIGWINCH to the remote process (e.g., tmux, vim).
+    pub async fn resize_pty(
+        &self,
+        cols: u32,
+        rows: u32,
+        pixel_width: Option<u32>,
+        pixel_height: Option<u32>,
+    ) -> Result<(), SshError> {
+        let w = self.writer.lock().await;
+        w.window_change(
+            cols,
+            rows,
+            pixel_width.unwrap_or(0),
+            pixel_height.unwrap_or(0),
+        )
+        .await?;
         Ok(())
     }
 

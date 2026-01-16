@@ -1,0 +1,4 @@
+- Create a detailed design and execution plan for the task requests
+- Save plan in app/docs/design/\*.md
+- Ask zen MCP to review the plan, if tool not available ask the user to install it
+- Don't change anything but the design document until we approve the plan

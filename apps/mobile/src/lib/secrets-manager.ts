@@ -3,6 +3,7 @@ import { queryOptions } from '@tanstack/react-query';
 import * as Crypto from 'expo-crypto';
 import * as SecureStore from 'expo-secure-store';
 import * as z from 'zod';
+import { getStoredConnectionId } from './connection-utils';
 import { rootLogger } from './logger';
 import { queryClient, type StrictOmit } from './utils';
 
@@ -388,21 +389,34 @@ const getKeyQueryOptions = (keyId: string) =>
 		queryFn: () => betterKeyStorage.getEntry(keyId),
 	});
 
-export const connectionDetailsSchema = z.object({
+const storedConnectionDetailsSchema = z.object({
 	host: z.string().min(1),
 	port: z.number().min(1),
 	username: z.string().min(1),
-	security: z.discriminatedUnion('type', [
-		z.object({
-			type: z.literal('password'),
-			password: z.string().min(1),
-		}),
-		z.object({
-			type: z.literal('key'),
-			keyId: z.string().min(1),
-		}),
-	]),
+	security: z.object({
+		type: z.literal('key'),
+		keyId: z.string().min(1),
+	}),
+	useTmux: z.boolean().optional(),
+	tmuxSessionName: z.string().optional(),
+	autoConnect: z.boolean().optional(),
 });
+
+export const connectionDetailsSchema = storedConnectionDetailsSchema
+	.extend({
+		useTmux: z.boolean(),
+		tmuxSessionName: z.string(),
+		autoConnect: z.boolean(),
+	})
+	.superRefine((value, ctx) => {
+		if (!value.useTmux) return;
+		if (value.tmuxSessionName.trim().length > 0) return;
+		ctx.addIssue({
+			code: z.ZodIssueCode.custom,
+			message: 'Tmux session name is required when tmux is enabled.',
+			path: ['tmuxSessionName'],
+		});
+	});
 
 const betterConnectionStorage = makeBetterSecureStore({
 	storagePrefix: 'connection',
@@ -412,21 +426,28 @@ const betterConnectionStorage = makeBetterSecureStore({
 		modifiedAtMs: z.int(),
 		label: z.string().optional(),
 	}),
-	parseValue: (value) => connectionDetailsSchema.parse(JSON.parse(value)),
+	parseValue: (value) => storedConnectionDetailsSchema.parse(JSON.parse(value)),
 });
 
 export type InputConnectionDetails = z.infer<typeof connectionDetailsSchema>;
+export type StoredConnectionDetails = z.infer<
+	typeof storedConnectionDetailsSchema
+>;
 
 async function upsertConnection(params: {
-	details: InputConnectionDetails;
+	details: StoredConnectionDetails;
 	priority: number;
 	label?: string;
 }) {
-	const id =
-		`${params.details.username}-${params.details.host}-${params.details.port}`.replaceAll(
-			'.',
-			'_',
-		);
+	const normalizedDetails: InputConnectionDetails = {
+		...params.details,
+		useTmux: params.details.useTmux ?? true,
+		tmuxSessionName: params.details.tmuxSessionName?.trim().length
+			? params.details.tmuxSessionName.trim()
+			: 'main',
+		autoConnect: params.details.autoConnect ?? false,
+	};
+	const id = getStoredConnectionId(params.details);
 	await betterConnectionStorage.upsertEntry({
 		id,
 		metadata: {
@@ -435,11 +456,11 @@ async function upsertConnection(params: {
 			createdAtMs: Date.now(),
 			label: params.label,
 		},
-		value: JSON.stringify(params.details),
+		value: JSON.stringify(normalizedDetails),
 	});
 	logger.debug('invalidating connection query');
 	await queryClient.invalidateQueries({ queryKey: [connectionQueryKey] });
-	return params.details;
+	return normalizedDetails;
 }
 
 async function deleteConnection(id: string) {
@@ -451,13 +472,42 @@ const connectionQueryKey = 'connections';
 
 const listConnectionsQueryOptions = queryOptions({
 	queryKey: [connectionQueryKey],
-	queryFn: () => betterConnectionStorage.listEntriesWithValues(),
+	queryFn: async () => {
+		const entries = await betterConnectionStorage.listEntries();
+		const results: ((typeof entries)[number] & {
+			value: StoredConnectionDetails;
+		})[] = [];
+		for (const entry of entries) {
+			try {
+				const { value } = await betterConnectionStorage.getEntry(entry.id);
+				results.push({ ...entry, value });
+			} catch (error) {
+				logger.info('Dropping legacy connection entry', {
+					id: entry.id,
+					error: String(error),
+				});
+				await betterConnectionStorage.deleteEntry(entry.id);
+			}
+		}
+		return results;
+	},
 });
 
 const getConnectionQueryOptions = (id: string) =>
 	queryOptions({
 		queryKey: [connectionQueryKey, id],
-		queryFn: () => betterConnectionStorage.getEntry(id),
+		queryFn: async () => {
+			try {
+				return await betterConnectionStorage.getEntry(id);
+			} catch (error) {
+				logger.info('Dropping legacy connection entry', {
+					id,
+					error: String(error),
+				});
+				await betterConnectionStorage.deleteEntry(id);
+				return null;
+			}
+		},
 	});
 
 export const secretsManager = {

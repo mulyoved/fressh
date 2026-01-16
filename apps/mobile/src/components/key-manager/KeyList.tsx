@@ -465,7 +465,7 @@ function KeyRow(props: {
 								onPress={handleCopyPublicKey}
 								style={{
 									backgroundColor: copied
-										? theme.colors.success ?? '#22c55e'
+										? theme.colors.primaryDisabled
 										: theme.colors.primary,
 									borderRadius: 8,
 									paddingVertical: 8,

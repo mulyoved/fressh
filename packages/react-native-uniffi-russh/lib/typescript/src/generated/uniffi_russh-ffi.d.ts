@@ -32,6 +32,7 @@ interface NativeModuleInterface {
     ubrn_uniffi_uniffi_russh_fn_method_shellsession_get_info(ptr: bigint, uniffi_out_err: UniffiRustCallStatus): Uint8Array;
     ubrn_uniffi_uniffi_russh_fn_method_shellsession_read_buffer(ptr: bigint, cursor: Uint8Array, maxBytes: Uint8Array, uniffi_out_err: UniffiRustCallStatus): Uint8Array;
     ubrn_uniffi_uniffi_russh_fn_method_shellsession_remove_listener(ptr: bigint, id: bigint, uniffi_out_err: UniffiRustCallStatus): void;
+    ubrn_uniffi_uniffi_russh_fn_method_shellsession_resize_pty(ptr: bigint, cols: number, rows: number, pixelWidth: Uint8Array, pixelHeight: Uint8Array): bigint;
     ubrn_uniffi_uniffi_russh_fn_method_shellsession_send_data(ptr: bigint, data: Uint8Array): bigint;
     ubrn_uniffi_uniffi_russh_fn_clone_sshconnection(ptr: bigint, uniffi_out_err: UniffiRustCallStatus): bigint;
     ubrn_uniffi_uniffi_russh_fn_free_sshconnection(ptr: bigint, uniffi_out_err: UniffiRustCallStatus): void;
@@ -110,6 +111,7 @@ interface NativeModuleInterface {
     ubrn_uniffi_uniffi_russh_checksum_method_shellsession_get_info(): number;
     ubrn_uniffi_uniffi_russh_checksum_method_shellsession_read_buffer(): number;
     ubrn_uniffi_uniffi_russh_checksum_method_shellsession_remove_listener(): number;
+    ubrn_uniffi_uniffi_russh_checksum_method_shellsession_resize_pty(): number;
     ubrn_uniffi_uniffi_russh_checksum_method_shellsession_send_data(): number;
     ubrn_uniffi_uniffi_russh_checksum_method_sshconnection_disconnect(): number;
     ubrn_uniffi_uniffi_russh_checksum_method_sshconnection_get_info(): number;

@@ -2,6 +2,7 @@ import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import {
 	type SshShell,
 	type SshConnection,
+	SshError_Tags,
 } from '@fressh/react-native-uniffi-russh';
 import { FlashList } from '@shopify/flash-list';
 import { formatDistanceToNow } from 'date-fns';
@@ -19,12 +20,13 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useShallow } from 'zustand/react/shallow';
+import { getStoredConnectionId } from '@/lib/connection-utils';
 import { rootLogger } from '@/lib/logger';
 import { preferences } from '@/lib/preferences';
-import {} from '@/lib/query-fns';
+import { secretsManager } from '@/lib/secrets-manager';
 import { useSshStore } from '@/lib/ssh-store';
 import { useTheme } from '@/lib/theme';
-import { AbortSignalTimeout } from '@/lib/utils';
+import { AbortSignalTimeout, queryClient } from '@/lib/utils';
 
 const logger = rootLogger.extend('TabsShellList');
 
@@ -104,12 +106,29 @@ function LoadedState() {
 					void actionTarget.connection.disconnect();
 					setActionTarget(null);
 				}}
-				onStartShell={() => {
+				onStartShell={async () => {
 					if (!actionTarget) return;
 					if (!('connection' in actionTarget)) return;
+					const { connectionDetails } = actionTarget.connection;
+					const storedId = getStoredConnectionId(connectionDetails);
+					let useTmux = true;
+					let tmuxSessionName = 'main';
+					try {
+						const entry = await queryClient.fetchQuery(
+							secretsManager.connections.query.get(storedId),
+						);
+						if (entry?.value) {
+							useTmux = entry.value.useTmux ?? true;
+							tmuxSessionName = entry.value.tmuxSessionName ?? 'main';
+						}
+					} catch (error) {
+						logger.warn('Failed to load connection settings', error);
+					}
 					void actionTarget.connection
 						.startShell({
 							term: 'Xterm',
+							useTmux,
+							tmuxSessionName,
 							abortSignal: AbortSignalTimeout(5_000),
 						})
 						.then((shellHandle) => {
@@ -120,6 +139,23 @@ function LoadedState() {
 									channelId: shellHandle.channelId,
 								},
 							});
+						})
+						.catch((error) => {
+							const err = error as { tag?: string };
+							if (err?.tag === SshError_Tags.TmuxAttachFailed) {
+								router.push({
+									pathname: '/shell/detail',
+									params: {
+										connectionId: actionTarget.connection.connectionId,
+										channelId: '0',
+										tmuxError: 'attach-failed',
+										tmuxSessionName,
+										storedConnectionId: storedId,
+									},
+								});
+								return;
+							}
+							logger.warn('Failed to start shell', error);
 						});
 					setActionTarget(null);
 				}}
