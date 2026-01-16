@@ -161,19 +161,27 @@ const KEYBOARD_CONFIG_DOC_URL =
 
 export default function TabsShellDetail() {
 	const [ready, setReady] = useState(false);
+	const hasShownRef = useRef(false);
 
 	useFocusEffect(
 		React.useCallback(() => {
+			if (hasShownRef.current) {
+				setReady(true);
+				return undefined;
+			}
+
+			let timeout: ReturnType<typeof setTimeout> | null = null;
 			startTransition(() => {
-				setTimeout(() => {
+				timeout = setTimeout(() => {
 					// TODO: This is gross. It would be much better to switch
 					// after the navigation animation completes.
+					hasShownRef.current = true;
 					setReady(true);
 				}, 16);
 			});
 
 			return () => {
-				setReady(false);
+				if (timeout) clearTimeout(timeout);
 			};
 		}, []),
 	);

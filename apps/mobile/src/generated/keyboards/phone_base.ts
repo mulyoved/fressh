@@ -14,29 +14,13 @@ export const keyboard_phone_base = {
         "icon": "Settings"
       },
       {
-        "type": "bytes",
-        "bytes": [
-          2,
-          110
-        ],
-        "label": "Next all",
-        "icon": null
-      },
-      {
-        "type": "bytes",
-        "bytes": [
-          27,
-          115
-        ],
-        "label": "~",
-        "icon": "LineSquiggle"
-      },
-      {
         "type": "action",
         "actionId": "PASTE_CLIPBOARD",
         "label": "Paste",
         "icon": "ClipboardPaste"
       },
+      null,
+      null,
       null,
       {
         "type": "bytes",
@@ -114,9 +98,13 @@ export const keyboard_phone_base = {
         "icon": "ChevronsUp"
       },
       {
-        "type": "macro",
-        "macroId": "reply_1",
-        "label": "1",
+        "type": "bytes",
+        "bytes": [
+          27,
+          91,
+          90
+        ],
+        "label": "S-Tab",
         "icon": null
       },
       {
@@ -128,10 +116,22 @@ export const keyboard_phone_base = {
         "icon": null
       },
       {
-        "type": "macro",
-        "macroId": "reply_2",
-        "label": "2",
+        "type": "bytes",
+        "bytes": [
+          2,
+          110
+        ],
+        "label": "Next all",
         "icon": null
+      },
+      {
+        "type": "bytes",
+        "bytes": [
+          27,
+          115
+        ],
+        "label": "~",
+        "icon": "LineSquiggle"
       },
       {
         "type": "bytes",
@@ -141,18 +141,7 @@ export const keyboard_phone_base = {
         "label": "TAB",
         "icon": null
       },
-      {
-        "type": "macro",
-        "macroId": "cmd_fix",
-        "label": "fix",
-        "icon": null
-      },
-      {
-        "type": "macro",
-        "macroId": "reply_3",
-        "label": "3",
-        "icon": null
-      },
+      null,
       {
         "type": "bytes",
         "bytes": [
@@ -194,17 +183,42 @@ export const keyboard_phone_base = {
         "label": "PAGE_DOWN",
         "icon": "ChevronsDown"
       },
-      null,
-      null,
-      null,
+      {
+        "type": "macro",
+        "macroId": "cmd_fix",
+        "label": "fix",
+        "icon": null
+      },
+      {
+        "type": "macro",
+        "macroId": "cmd_yes",
+        "label": "yes",
+        "icon": null
+      },
       {
         "type": "macro",
         "macroId": "cmd_skip",
         "label": "skip",
         "icon": null
       },
-      null,
-      null,
+      {
+        "type": "macro",
+        "macroId": "reply_1",
+        "label": "1",
+        "icon": null
+      },
+      {
+        "type": "macro",
+        "macroId": "reply_2",
+        "label": "2",
+        "icon": null
+      },
+      {
+        "type": "macro",
+        "macroId": "reply_3",
+        "label": "3",
+        "icon": null
+      },
       {
         "type": "action",
         "actionId": "OPEN_TEXT_EDITOR",

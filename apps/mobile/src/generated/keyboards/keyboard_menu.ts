@@ -185,6 +185,12 @@ export const keyboard_keyboard_menu = {
       },
       {
         "type": "macro",
+        "macroId": "cmd_yes",
+        "label": "yes",
+        "icon": null
+      },
+      {
+        "type": "macro",
         "macroId": "cmd_skip",
         "label": "skip",
         "icon": null
@@ -207,8 +213,16 @@ export const keyboard_keyboard_menu = {
         "label": "Copy",
         "icon": "Copy"
       },
-      null,
-      null,
+      {
+        "type": "bytes",
+        "bytes": [
+          27,
+          91,
+          90
+        ],
+        "label": "S-Tab",
+        "icon": null
+      },
       null,
       null,
       null

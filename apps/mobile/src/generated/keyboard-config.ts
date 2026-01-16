@@ -56,6 +56,13 @@ export const MACROS_BY_KEYBOARD_ID: Record<string, MacroDef[]> = {
       "script": "{\n  \"type\": \"command\",\n  \"value\": \"fix\"\n}"
     },
     {
+      "id": "cmd_yes",
+      "name": "Command: yes",
+      "label": "yes",
+      "category": "Commands",
+      "script": "{\n  \"type\": \"command\",\n  \"value\": \"yes\"\n}"
+    },
+    {
       "id": "cmd_skip",
       "name": "Command: skip",
       "label": "skip",
@@ -70,6 +77,13 @@ export const MACROS_BY_KEYBOARD_ID: Record<string, MacroDef[]> = {
       "label": "fix",
       "category": "Commands",
       "script": "{\n  \"type\": \"command\",\n  \"value\": \"fix\"\n}"
+    },
+    {
+      "id": "cmd_yes",
+      "name": "Command: yes",
+      "label": "yes",
+      "category": "Commands",
+      "script": "{\n  \"type\": \"command\",\n  \"value\": \"yes\"\n}"
     },
     {
       "id": "cmd_skip",

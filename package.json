@@ -8,6 +8,7 @@
     "node": ">=22"
   },
   "scripts": {
+    "dev:android": "lsof -ti:8081 | xargs kill -9 2>/dev/null || true; adb connect 100.113.210.6:5555 || true; adb reverse tcp:8081 tcp:8081 || true; adb shell settings put global debug_http_host localhost:8081 || true; adb shell am start -a android.intent.action.VIEW -d \"exp+fressh://expo-development-client/?url=http%3A%2F%2Flocalhost%3A8081\" || true; adb shell am broadcast -a com.facebook.react.devsupport.RELOAD_APP_ACTION || true; cd apps/mobile && EXPO_USE_METRO_WORKSPACE_ROOT=0 pnpm exec expo start --dev-client --port 8081 -c",
     "fmt:root": "prettier --cache --write .",
     "fmt:check:root": "prettier --check .",
     "fmt:root:nix": "nix fmt flake.nix",
