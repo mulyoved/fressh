@@ -25,6 +25,35 @@ export const preferences = {
 			] as const;
 		},
 	},
+	updates: {
+		lastCheckAt: {
+			_key: 'updates.lastCheckAt',
+			get: (): string | null =>
+				storage.getString(preferences.updates.lastCheckAt._key) ?? null,
+			set: (value: string | null) => {
+				if (value === null) {
+					storage.delete(preferences.updates.lastCheckAt._key);
+				} else {
+					storage.set(preferences.updates.lastCheckAt._key, value);
+				}
+			},
+			useLastCheckAt: (): [string | null, (value: string | null) => void] => {
+				const [value, setValue] = useMMKVString(
+					preferences.updates.lastCheckAt._key,
+				);
+				return [
+					value ?? null,
+					(next: string | null) => {
+						if (next === null) {
+							setValue(undefined);
+						} else {
+							setValue(next);
+						}
+					},
+				] as const;
+			},
+		},
+	},
 	shellListViewMode: {
 		_key: 'shellListViewMode',
 		_resolve: (rawMode: string | undefined): ShellListViewMode =>

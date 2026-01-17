@@ -1566,7 +1566,6 @@ fi
 					onSlotPress={handleSlotPress}
 					selectionModeEnabled={selectionModeEnabled}
 					onCopySelection={handleCopySelection}
-					onPasteClipboard={handlePasteClipboard}
 				/>
 				<CommandPresetsModal
 					open={commandPresetsOpen}

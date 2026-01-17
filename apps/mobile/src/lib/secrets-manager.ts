@@ -527,6 +527,7 @@ export const secretsManager = {
 		utils: {
 			upsertConnection,
 			deleteConnection,
+			listEntriesWithValues: betterConnectionStorage.listEntriesWithValues,
 		},
 		query: {
 			list: listConnectionsQueryOptions,

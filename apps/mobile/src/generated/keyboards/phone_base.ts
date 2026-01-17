@@ -19,8 +19,15 @@ export const keyboard_phone_base = {
         "label": "Paste",
         "icon": "ClipboardPaste"
       },
-      null,
-      null,
+      {
+        "type": "bytes",
+        "bytes": [
+          27,
+          115
+        ],
+        "label": "~",
+        "icon": "LineSquiggle"
+      },
       null,
       {
         "type": "bytes",
@@ -62,8 +69,10 @@ export const keyboard_phone_base = {
         "type": "action",
         "actionId": "TOGGLE_COMMAND_PRESETS",
         "label": "Cmds",
-        "icon": "Command"
-      }
+        "icon": "Command",
+        "span": 2
+      },
+      null
     ],
     [
       {
@@ -127,21 +136,23 @@ export const keyboard_phone_base = {
       {
         "type": "bytes",
         "bytes": [
-          27,
-          115
-        ],
-        "label": "~",
-        "icon": "LineSquiggle"
-      },
-      {
-        "type": "bytes",
-        "bytes": [
           9
         ],
         "label": "TAB",
         "icon": null
       },
-      null,
+      {
+        "type": "text",
+        "text": "/",
+        "label": "/",
+        "icon": null
+      },
+      {
+        "type": "text",
+        "text": "$",
+        "label": "$",
+        "icon": null
+      },
       {
         "type": "bytes",
         "bytes": [
@@ -225,6 +236,18 @@ export const keyboard_phone_base = {
         "label": "Text",
         "icon": "Type"
       }
+    ],
+    [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
     ]
   ]
 } as const

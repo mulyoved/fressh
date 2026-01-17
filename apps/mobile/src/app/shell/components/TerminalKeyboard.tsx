@@ -14,18 +14,14 @@ export function TerminalKeyboard({
 	onSlotPress,
 	selectionModeEnabled,
 	onCopySelection,
-	onPasteClipboard,
 }: {
 	keyboard: KeyboardDefinition | null;
 	modifierKeysActive: ModifierKey[];
 	onSlotPress: (slot: KeyboardSlot) => void;
 	selectionModeEnabled: boolean;
 	onCopySelection: () => void;
-	onPasteClipboard: () => void;
 }) {
 	const theme = useTheme();
-	const CopyIcon = resolveLucideIcon('Copy');
-	const PasteIcon = resolveLucideIcon('ClipboardPaste');
 	const keyMinHeight = 44;
 	const repeatDelayMs = 320;
 	const repeatIntervalMs = 70;
@@ -96,139 +92,98 @@ export function TerminalKeyboard({
 	}
 
 	/* eslint-disable @eslint-react/no-array-index-key */
-	const rows = keyboard.grid.map((row, rowIndex) => (
-		<View key={`row-${rowIndex}`} style={{ flexDirection: 'row' }}>
-			{row.map((slot, colIndex) => {
-				if (!slot) {
-					return (
-						<View
-							key={`slot-${rowIndex}-${colIndex}`}
-							style={{ flex: 1, margin: 2, minHeight: keyMinHeight }}
-						/>
-					);
-				}
+	const visibleGrid = keyboard.grid.filter((row) =>
+		row.some((slot) => slot !== null),
+	);
+	const rows = visibleGrid.map((row, rowIndex) => {
+		const cells = [];
+		let col = 0;
+		while (col < row.length) {
+			const slot = row[col];
+			const rawSpan =
+				typeof slot?.span === 'number' && slot.span > 1 ? slot.span : 1;
+			const span = Math.min(rawSpan, row.length - col);
 
-				const modifierActive =
-					slot.type === 'modifier' &&
-					modifierKeysActive.includes(slot.modifier);
-				const Icon = resolveLucideIcon(slot.icon);
-				const showLabel = !(Icon && iconOnlyLabels.has(slot.label));
-				const isRepeatable =
-					slot.type === 'bytes' && repeatableLabels.has(slot.label);
-				const flexValue =
-					typeof slot.span === 'number' && slot.span > 1 ? slot.span : 1;
-
-				return (
-					<Pressable
-						key={`slot-${rowIndex}-${colIndex}`}
-						onPress={isRepeatable ? undefined : () => onSlotPress(slot)}
-						onPressIn={isRepeatable ? () => startRepeat(slot) : undefined}
-						onPressOut={isRepeatable ? clearRepeat : undefined}
-						style={[
-							{
-								flex: flexValue,
-								margin: 2,
-								minHeight: keyMinHeight,
-								paddingVertical: 6,
-								borderRadius: 8,
-								borderWidth: 1,
-								borderColor: theme.colors.border,
-								alignItems: 'center',
-								justifyContent: 'center',
-							},
-							modifierActive && {
-								backgroundColor: theme.colors.primary,
-							},
-						]}
-					>
-						{Icon ? <Icon color={theme.colors.textPrimary} size={18} /> : null}
-						{showLabel ? (
-							<Text
-								numberOfLines={1}
-								style={{
-									color: theme.colors.textPrimary,
-									fontSize: 10,
-									marginTop: Icon ? 2 : 0,
-								}}
-							>
-								{slot.label}
-							</Text>
-						) : null}
-					</Pressable>
+			if (!slot) {
+				cells.push(
+					<View
+						key={`slot-${rowIndex}-${col}`}
+						style={{ flex: 1, margin: 2, minHeight: keyMinHeight }}
+					/>,
 				);
-			})}
-		</View>
-	));
+				col += 1;
+				continue;
+			}
+
+			const isSelectionCopySlot =
+				selectionModeEnabled &&
+				slot.type === 'action' &&
+				slot.actionId === 'PASTE_CLIPBOARD';
+			const effectiveLabel = isSelectionCopySlot ? 'Copy' : slot.label;
+			const effectiveIconName = isSelectionCopySlot ? 'Copy' : slot.icon;
+			const modifierActive =
+				slot.type === 'modifier' &&
+				modifierKeysActive.includes(slot.modifier);
+			const Icon = resolveLucideIcon(effectiveIconName);
+			const showLabel = !(Icon && iconOnlyLabels.has(effectiveLabel));
+			const isRepeatable =
+				slot.type === 'bytes' && repeatableLabels.has(slot.label);
+
+			cells.push(
+				<Pressable
+					key={`slot-${rowIndex}-${col}`}
+					onPress={
+						isRepeatable
+							? undefined
+							: isSelectionCopySlot
+								? onCopySelection
+								: () => onSlotPress(slot)
+					}
+					onPressIn={isRepeatable ? () => startRepeat(slot) : undefined}
+					onPressOut={isRepeatable ? clearRepeat : undefined}
+					style={[
+						{
+							flex: span,
+							margin: 2,
+							minHeight: keyMinHeight,
+							paddingVertical: 6,
+							borderRadius: 8,
+							borderWidth: 1,
+							borderColor: theme.colors.border,
+							alignItems: 'center',
+							justifyContent: 'center',
+						},
+						modifierActive && {
+							backgroundColor: theme.colors.primary,
+						},
+					]}
+				>
+					{Icon ? <Icon color={theme.colors.textPrimary} size={18} /> : null}
+					{showLabel ? (
+						<Text
+							numberOfLines={1}
+							style={{
+								color: theme.colors.textPrimary,
+								fontSize: 10,
+								marginTop: Icon ? 2 : 0,
+							}}
+						>
+							{effectiveLabel}
+						</Text>
+					) : null}
+				</Pressable>,
+			);
+
+			col += span;
+		}
+
+		return (
+			<View key={`row-${rowIndex}`} style={{ flexDirection: 'row' }}>
+				{cells}
+			</View>
+		);
+	});
 	/* eslint-enable @eslint-react/no-array-index-key */
-
-	const copyToggle = (
-		<Pressable
-			onPress={onCopySelection}
-			style={{
-				flex: 1,
-				margin: 2,
-				minHeight: keyMinHeight,
-				paddingVertical: 6,
-				borderRadius: 8,
-				borderWidth: 1,
-				borderColor: theme.colors.border,
-				alignItems: 'center',
-				justifyContent: 'center',
-			}}
-		>
-			{CopyIcon ? (
-				<CopyIcon color={theme.colors.textPrimary} size={18} />
-			) : null}
-			<Text
-				numberOfLines={1}
-				style={{
-					color: theme.colors.textPrimary,
-					fontSize: 10,
-					marginTop: CopyIcon ? 2 : 0,
-				}}
-			>
-				Copy
-			</Text>
-		</Pressable>
-	);
-
-	const pasteToggle = (
-		<Pressable
-			onPress={onPasteClipboard}
-			style={{
-				flex: 1,
-				margin: 2,
-				minHeight: keyMinHeight,
-				paddingVertical: 6,
-				borderRadius: 8,
-				borderWidth: 1,
-				borderColor: theme.colors.border,
-				alignItems: 'center',
-				justifyContent: 'center',
-			}}
-		>
-			{PasteIcon ? (
-				<PasteIcon color={theme.colors.textPrimary} size={18} />
-			) : null}
-			<Text
-				numberOfLines={1}
-				style={{
-					color: theme.colors.textPrimary,
-					fontSize: 10,
-					marginTop: PasteIcon ? 2 : 0,
-				}}
-			>
-				Paste
-			</Text>
-		</Pressable>
-	);
-
-	const toggleRow = selectionModeEnabled ? (
-		<View style={{ flexDirection: 'row' }}>
-			{copyToggle}
-			{pasteToggle}
-		</View>
-	) : null;
 
 	return (
 		<View
@@ -238,7 +193,6 @@ export function TerminalKeyboard({
 				padding: 6,
 			}}
 		>
-			{toggleRow}
 			{rows}
 		</View>
 	);

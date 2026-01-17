@@ -32,9 +32,15 @@ If the build seems to ignore native changes, add `--clear-cache`.
 cd apps/mobile
 eas build:run -p android --latest
 ```
-Or download the APK from EAS and:
+Note: `build:run` is for emulator builds. For a physical device, download the APK
+from EAS and:
 ```bash
 adb install -r path/to/app-dev.apk
+```
+Tip: you can grab the latest development APK URL via:
+```bash
+cd apps/mobile
+eas build:list --platform android --status finished --limit 1 --json --non-interactive
 ```
 
 5) Start Metro for dev client

@@ -49,7 +49,7 @@ const config: ExpoConfig = {
 		fallbackToCacheTimeout: 0,
 		url: `https://u.expo.dev/${projectId}`,
 	},
-	runtimeVersion: packageJson.version,
+	runtimeVersion: packageJson.dependencies?.expo ?? packageJson.version,
 	plugins: [
 		'expo-router',
 		[

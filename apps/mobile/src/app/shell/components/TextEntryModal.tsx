@@ -1,7 +1,8 @@
-import React, { useCallback, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
 	Dimensions,
 	InteractionManager,
+	Keyboard,
 	KeyboardAvoidingView,
 	Modal,
 	Platform,
@@ -39,21 +40,55 @@ export function TextEntryModal({
 	}, [minHeight]);
 	const [value, setValue] = useState('');
 	const [textAreaHeight, setTextAreaHeight] = useState(minHeight);
+	const focusTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+	const focusInput = useCallback((delayMs = 0) => {
+		if (focusTimeoutRef.current) {
+			clearTimeout(focusTimeoutRef.current);
+			focusTimeoutRef.current = null;
+		}
+		if (delayMs > 0) {
+			focusTimeoutRef.current = setTimeout(() => {
+				inputRef.current?.blur();
+				inputRef.current?.focus();
+			}, delayMs);
+			return;
+		}
+		inputRef.current?.blur();
+		inputRef.current?.focus();
+	}, []);
 
 	const handleModalShow = useCallback(() => {
 		// Modal is now fully visible - safe to focus
 		if (Platform.OS === 'android') {
 			InteractionManager.runAfterInteractions(() => {
 				requestAnimationFrame(() => {
-					inputRef.current?.focus();
+					focusInput();
+					focusInput(120);
 				});
 			});
 			return;
 		}
-		inputRef.current?.focus();
-	}, []);
+		focusInput();
+	}, [focusInput]);
+
+	useEffect(
+		() => () => {
+			if (focusTimeoutRef.current) {
+				clearTimeout(focusTimeoutRef.current);
+				focusTimeoutRef.current = null;
+			}
+		},
+		[],
+	);
 
 	const handleClose = useCallback(() => {
+		// Ensure the OS keyboard is dismissed when leaving the dialog.
+		Keyboard.dismiss();
+		if (focusTimeoutRef.current) {
+			clearTimeout(focusTimeoutRef.current);
+			focusTimeoutRef.current = null;
+		}
 		// Preserve text when closing - user can reopen and continue editing
 		onClose();
 	}, [onClose]);
@@ -66,6 +101,8 @@ export function TextEntryModal({
 
 	const handlePaste = useCallback(() => {
 		if (!value) return;
+		// Hide the OS keyboard after pasting to avoid it reopening under the terminal.
+		Keyboard.dismiss();
 		onPaste(value);
 		// Clear text only after successful paste
 		setValue('');
@@ -127,7 +164,7 @@ export function TextEntryModal({
 							onChangeText={setValue}
 							placeholder="Enter text to paste..."
 							placeholderTextColor={theme.colors.muted}
-							autoFocus={Platform.OS === 'ios'}
+							autoFocus
 							showSoftInputOnFocus={true}
 							multiline
 							textAlignVertical="top"
