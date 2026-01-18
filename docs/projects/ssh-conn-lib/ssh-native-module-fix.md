@@ -220,8 +220,7 @@ above.
 
 ## Testing
 
-1. Build a Dev Client (or run a development build) so the native module is
-   loaded.
+1. Build a local preview APK so the native module is loaded.
 2. Connect, navigate to the shell, then press back to unmount while the shell is
    active.
 3. Capture logs:

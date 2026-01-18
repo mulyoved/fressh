@@ -10,6 +10,7 @@ import {
 
 import * as Clipboard from 'expo-clipboard';
 import * as Linking from 'expo-linking';
+import * as Updates from 'expo-updates';
 import {
 	Stack,
 	useLocalSearchParams,
@@ -953,6 +954,57 @@ function ShellDetail() {
 		void Linking.openURL(HANDLE_DEV_SERVER_URL);
 	}, []);
 
+	const handleCheckUpdates = useCallback(async () => {
+		setConfigureOpen(false);
+		if (!Updates.isEnabled) {
+			Alert.alert(
+				'Updates disabled',
+				'Over-the-air updates are disabled in this build. Install a preview or production build from EAS to use updates.',
+			);
+			return;
+		}
+		try {
+			const update = await Updates.checkForUpdateAsync();
+			if (!update.isAvailable) {
+				Alert.alert('Up to date', 'No new updates are available.');
+				return;
+			}
+			await Updates.fetchUpdateAsync();
+			Alert.alert(
+				'Update ready',
+				'Restart the app now to apply the update?',
+				[
+					{ text: 'Later', style: 'cancel' },
+					{ text: 'Restart', onPress: () => void Updates.reloadAsync() },
+				],
+			);
+		} catch (error) {
+			Alert.alert(
+				'Update check failed',
+				error instanceof Error ? error.message : 'Unable to check for updates.',
+			);
+		}
+	}, []);
+
+	const handleReloadUpdates = useCallback(() => {
+		setConfigureOpen(false);
+		if (!Updates.isEnabled) {
+			Alert.alert(
+				'Updates disabled',
+				'Over-the-air updates are disabled in this build. Install a preview or production build from EAS to use updates.',
+			);
+			return;
+		}
+		Alert.alert(
+			'Reload update?',
+			'Restart the app to apply the latest downloaded update?',
+			[
+				{ text: 'Cancel', style: 'cancel' },
+				{ text: 'Reload', onPress: () => void Updates.reloadAsync() },
+			],
+		);
+	}, []);
+
 	const handleHostConfig = useCallback(() => {
 		setConfigureOpen(false);
 		const editConnectionId = storedConnectionId ?? connectionId;
@@ -1611,6 +1663,8 @@ fi
 					}}
 					onKeyboardConfig={handleKeyboardConfig}
 					onDevServer={handleDevServer}
+					onCheckUpdates={handleCheckUpdates}
+					onReloadUpdates={handleReloadUpdates}
 					onHostConfig={handleHostConfig}
 					onOpenGitHubIssues={handleOpenGitHubIssues}
 					onOpenKeyboardDocs={handleOpenKeyboardDocs}

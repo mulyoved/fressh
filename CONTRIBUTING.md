@@ -49,8 +49,11 @@ pnpm exec turbo lint
 
 ```
 cd apps/mobile
-pnpm run android
+pnpm exec eas build --local --profile preview --platform android
 ```
+
+Install the APK and use preview updates for JS-only changes. See
+`docs/dev-builds.md` for the full workflow.
 
 ### Releasing
 

@@ -1,14 +1,16 @@
-# Dev Builds (EAS)
+# Preview Builds (Local)
 
-This repo uses an Expo dev client for Android builds. Any change to native code
-or generated UniFFI bindings requires a new EAS development build.
+This repo uses **preview** builds (release-like) for day-to-day development
+instead of debug/dev-client builds. Preview builds use `expo-updates`, so the app
+runs standalone and only checks the update server on launch; no Metro or steady
+connection required.
 
 ## When You Must Rebuild
 - Rust or UniFFI changes in `packages/react-native-uniffi-russh`
 - Native module changes that affect Android/iOS bridge code
 - Anything that adds/removes native methods (JS expects a new native symbol)
 
-## Standard EAS Dev Build Procedure (Android)
+## Standard Preview Build Procedure (Android, local)
 1) Sync workspace deps
 ```bash
 pnpm install
@@ -20,45 +22,23 @@ pnpm --filter @fressh/react-native-uniffi-russh build:android
 ```
 Confirm the generated files are updated and tracked.
 
-3) Build the dev client via EAS (cloud)
+3) Build the preview APK locally
 ```bash
 cd apps/mobile
-eas build --platform android --profile development
+pnpm exec eas build --local --profile preview --platform android
 ```
-If the build seems to ignore native changes, add `--clear-cache`.
+Tip: add `--clear-cache` if the build seems to ignore native changes.
 
 4) Install the new APK
 ```bash
-cd apps/mobile
-eas build:run -p android --latest
+adb install -r path/to/app-preview.apk
 ```
-Note: `build:run` is for emulator builds. For a physical device, download the APK
-from EAS and:
-```bash
-adb install -r path/to/app-dev.apk
-```
-Tip: you can grab the latest development APK URL via:
-```bash
-cd apps/mobile
-eas build:list --platform android --status finished --limit 1 --json --non-interactive
-```
+EAS prints the output path at the end of the build.
 
-5) Start Metro for dev client
-```bash
-cd apps/mobile
-pnpm exec expo start --dev-client
-```
+5) Launch the app
+Preview builds run standalone and do not require Metro.
 
-6) Verify native changes are present
-- Trigger the feature that uses the new native method.
-- If the app logs “method … is undefined” or similar, the device still has an
-  older dev client.
-
-## Notes
-- EAS builds use the current git state. Avoid local-only changes when building.
-- Generated artifacts (UniFFI bindings) must be committed for EAS to see them.
-
-## JS-Only Updates (EAS Update)
+## JS-Only Updates (Preview OTA)
 Use this when you only changed JS/TS (no native/Rust/UniFFI changes) and want
 fast iteration without rebuilding.
 
@@ -68,64 +48,63 @@ fast iteration without rebuilding.
   - `updates.enabled: true`
   - `updates.url: https://u.expo.dev/<projectId>`
   - `runtimeVersion` is a **string** (bare workflow does not support policy).
-- Install a fresh build once after enabling updates (EAS build + install).
+- Install a fresh preview build once after enabling updates.
 
-### Publish a JS update
+### Publish a JS update (preview)
 ```bash
 cd apps/mobile
-pnpm exec eas update --branch <branch> --message "Describe change"
+pnpm exec eas update --branch preview --message "Describe change"
 ```
+Reopen the app to apply the update. No steady connection is required after the
+update is downloaded.
 
-### Channel + branch mapping
+## Channel + Branch Mapping
 The build profiles pin to channels in `eas.json`:
-- `development` → `channel: development`
-- `preview` → `channel: preview`
+- `preview` → `channel: preview` (default)
 - `production` → `channel: production`
+- `development` → `channel: development` (dev client, not used by default)
 
 Publish updates to the matching branch (or update the channel to point at a
 different branch):
 
 ```bash
-# production builds
-pnpm exec eas update --branch production --message "..."
-
 # preview builds
 pnpm exec eas update --branch preview --message "..."
 
-# dev client builds
-pnpm exec eas update --branch development --message "..."
+# production builds
+pnpm exec eas update --branch production --message "..."
 ```
 
-### Default rule (dev mode)
-When iterating locally or testing with dev clients, **only** publish to the
-`development` branch unless you explicitly intend to update `preview` or
-`production`.
+### Default rule (preview mode)
+During development, always use the **preview** channel/branch unless you
+explicitly intend to update production.
 
 ## Build + Update Policy (Quick Reference)
-Keep Git branches and EAS update branches separate: **Git branches are source
-control**, EAS branches/channels are deployment targets.
 
-Use this mapping to stay consistent:
-
-- **Development (default for day-to-day work)**
-  - Build: `pnpm exec eas build --profile development --platform android`
-  - OTA: `pnpm exec eas update --branch development`
-  - Use this unless you explicitly want preview/production.
-- **Preview (QA/internal testing)**
-  - Build: `pnpm exec eas build --profile preview --platform android`
+- **Preview (default for day-to-day work)**
+  - Build: `pnpm exec eas build --local --profile preview --platform android`
   - OTA: `pnpm exec eas update --branch preview`
 - **Production (release only)**
   - Build: `pnpm exec eas build --profile production --platform android`
   - OTA: `pnpm exec eas update --branch production`
+- **Development (dev client, legacy)**
+  - Build: `pnpm exec eas build --profile development --platform android`
+  - OTA: `pnpm exec eas update --branch development`
+  - Requires Metro (`pnpm exec expo start --dev-client`)
 
-**Rule:** during development, always use the **development** channel/branch
-unless explicitly asked to use preview or production.
+**Rule:** use preview unless explicitly asked to use production or dev client.
 
 ### Confirm updates are enabled on-device
 ```bash
 adb shell cmd package dump com.finalapp.vibe2 | rg "expo.modules.updates"
 ```
 Expected: `expo.modules.updates.ENABLED=true`.
+
+## Notes
+- Local builds use your working tree (no need to commit), but keep generated
+  artifacts tracked for teammates or future cloud builds.
+- When distributing to others, build from a clean commit and publish matching
+  updates.
 
 ## Common Gotchas
 - Run `eas build` from `apps/mobile` for non-interactive builds. Running from

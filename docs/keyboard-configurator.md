@@ -36,12 +36,12 @@ curl -X POST http://localhost:3000/api/keyboards/generate
 - Output path defaults to `/home/muly/fressh/apps/mobile/src/generated`.
 - Override with `KEYBOARD_CODEGEN_DIR` if needed.
 
-5) Reload the mobile app so JS picks up regenerated files:
+5) Publish a preview update so the app picks up regenerated files:
 ```
 cd /home/muly/fressh/apps/mobile
-pnpm exec expo start --dev-client
+pnpm exec eas update --branch preview --message "Update keyboard layouts"
 ```
-- Then reload from the device/emulator Dev Menu.
+- Reopen the app to apply the update.
 
 ## What To Edit (react-ttyd)
 
@@ -71,4 +71,3 @@ pnpm exec expo start --dev-client
 
 - `apps/mobile/src/lib/keyboard-actions.ts` (action handling)
 - `apps/mobile/src/generated/*` (generated layouts + metadata)
-

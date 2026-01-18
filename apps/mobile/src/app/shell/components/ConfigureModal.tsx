@@ -14,6 +14,8 @@ export function ConfigureModal({
 	onClose,
 	onKeyboardConfig,
 	onDevServer,
+	onCheckUpdates,
+	onReloadUpdates,
 	onHostConfig,
 	onRequestFeature,
 	onOpenGitHubIssues,
@@ -24,6 +26,8 @@ export function ConfigureModal({
 	onClose: () => void;
 	onKeyboardConfig: () => void;
 	onDevServer: () => void;
+	onCheckUpdates: () => void;
+	onReloadUpdates: () => void;
 	onHostConfig: () => void;
 	onRequestFeature: () => void;
 	onOpenGitHubIssues: () => void;
@@ -41,6 +45,16 @@ export function ConfigureModal({
 			label: 'Dev server',
 			description: 'Handle dev server',
 			onPress: onDevServer,
+		},
+		{
+			label: 'Check OTA',
+			description: 'Check and download the latest update',
+			onPress: onCheckUpdates,
+		},
+		{
+			label: 'Reload OTA',
+			description: 'Restart to apply the latest update',
+			onPress: onReloadUpdates,
 		},
 		{
 			label: 'Host config',

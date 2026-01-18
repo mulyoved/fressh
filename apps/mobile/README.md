@@ -10,17 +10,33 @@ experience. packages:
 
 ```bash
 pnpm install
-pnpm exec expo start
 ```
 
-Open using Expo Go, an emulator, or a simulator.
+### Run (preview build, default)
 
-For a high-level feature overview, see the root [`README.md`](../../README.md).
+Build and install a preview APK locally:
+
+```bash
+cd apps/mobile
+pnpm exec eas build --local --profile preview --platform android
+adb install -r path/to/app-preview.apk
+```
+
+For JS-only changes, publish an update to the preview channel:
+
+```bash
+cd apps/mobile
+pnpm exec eas update --branch preview --message "Describe change"
+```
+
+Preview builds run standalone and do not require Expo Go or a Metro server. For
+the full workflow (native rebuilds, OTA policy), see
+[`docs/dev-builds.md`](../../docs/dev-builds.md).
 
 ### Development notes
 
 - Edit files under `app/` (file-based routing)
-- Ensure Android/iOS tooling is installed for native builds
+- Ensure Android tooling is installed for local builds
 
 ### Links
 

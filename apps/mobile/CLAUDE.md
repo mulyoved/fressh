@@ -3,17 +3,18 @@
 ## Build Configuration
 
 - **Platform**: Android only
-- **Build System**: EAS (Expo Application Services)
+- **Build System**: EAS (local preview builds by default)
 
 ### Building
 
-Use EAS to build the app:
+Use a local preview build:
 
 ```bash
-eas build --platform android --profile development
+pnpm exec eas build --local --profile preview --platform android
 ```
 
-For the full dev build procedure (including native/UniFFI changes), see:
+For the full preview build + OTA update procedure (including native/UniFFI
+changes), see:
 `docs/dev-builds.md`.
 
 ### Native Dependencies

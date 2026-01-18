@@ -20,11 +20,11 @@ This is a pnpm + Turbo monorepo.
 - `pnpm exec turbo lint:check` is the CI-safe version (no auto-fix).
 - `pnpm exec turbo fmt` / `pnpm exec turbo fmt:check` runs Prettier.
 - `pnpm exec turbo test` runs package tests (includes mobile e2e).
-- Mobile: `cd apps/mobile && pnpm run android` or `pnpm run ios`.
+- Mobile (preview default): `cd apps/mobile && pnpm exec eas build --local --profile preview --platform android`.
 - Web: `cd apps/web && pnpm run dev` for local site.
 - Optional dev shells: `nix develop .#default` (or `.#android-emulator`).
 - Docker: `just docker-build`.
-- Dev client builds (EAS): see `docs/dev-builds.md`.
+- Preview builds + updates (EAS): see `docs/dev-builds.md`.
 
 ## Wireless ADB (Android Development)
 adb connect 100.113.210.6:5555
