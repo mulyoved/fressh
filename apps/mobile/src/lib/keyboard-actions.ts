@@ -5,6 +5,9 @@ import { rootLogger } from '@/lib/logger';
 export const MAIN_MENU_KEYBOARD_ID = 'main_menu';
 export const SECONDARY_MENU_KEYBOARD_ID = 'secondary_menu';
 export const KEYBOARD_MENU_KEYBOARD_ID = 'keyboard_menu';
+// Primary vs one-shot layouts used by the advanced switch.
+export const PHONE_BASE_KEYBOARD_ID = 'phone_base';
+export const ADVANCED_KEYBOARD_ID = 'advanced_keyboard';
 
 export const CONFIGURATOR_URL =
 	'https://dev-remote-machine-1.tail83108.ts.net:4002/keyboard-configurator';
@@ -16,6 +19,7 @@ export const KNOWN_ACTION_IDS = [
 	'OPEN_MAIN_MENU',
 	'OPEN_SECONDARY_MENU',
 	'OPEN_KEYBOARD_MENU',
+	'OPEN_ADVANCED_KEYBOARD',
 	'TOGGLE_COMMAND_PRESETS',
 	'OPEN_COMMANDER',
 	'OPEN_TEXT_EDITOR',
@@ -62,6 +66,12 @@ export async function runAction(
 		case 'OPEN_KEYBOARD_MENU': {
 			if (context.availableKeyboardIds.has(KEYBOARD_MENU_KEYBOARD_ID)) {
 				context.selectKeyboard(KEYBOARD_MENU_KEYBOARD_ID);
+			}
+			return;
+		}
+		case 'OPEN_ADVANCED_KEYBOARD': {
+			if (context.availableKeyboardIds.has(ADVANCED_KEYBOARD_ID)) {
+				context.selectKeyboard(ADVANCED_KEYBOARD_ID);
 			}
 			return;
 		}

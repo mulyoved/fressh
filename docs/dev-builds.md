@@ -117,6 +117,8 @@ The Android release keystore is stored in Bitwarden under **â€œfressh keystoreâ€
 
 ### Build a release-signed APK locally
 Ensure `bw` is logged in and `BW_SESSION` is set (for example, `bw unlock --raw`).
+The release keystore is stored locally at `apps/mobile/android/app/fressh-upload-key.keystore`
+and is gitignored. If the file already exists, you can skip the Bitwarden fetch.
 ```bash
 cd apps/mobile/android
 
@@ -126,6 +128,7 @@ alias=$(printf '%s' "$item" | jq -r '.login.username')
 pass=$(printf '%s' "$item" | jq -r '.login.password')
 printf '%s' "$item" | jq -r '.fields[] | select(.name=="keystore").value' \
   | base64 -d > app/fressh-upload-key.keystore
+chmod 600 app/fressh-upload-key.keystore
 
 ORG_GRADLE_PROJECT_FRESSH_UPLOAD_STORE_FILE=fressh-upload-key.keystore \
 ORG_GRADLE_PROJECT_FRESSH_UPLOAD_STORE_PASSWORD="$pass" \

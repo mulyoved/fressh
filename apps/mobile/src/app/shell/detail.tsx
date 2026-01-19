@@ -58,8 +58,10 @@ import {
 } from '@/lib/command-presets';
 import { getStoredConnectionId } from '@/lib/connection-utils';
 import {
+	ADVANCED_KEYBOARD_ID,
 	CONFIGURATOR_URL,
 	HANDLE_DEV_SERVER_URL,
+	PHONE_BASE_KEYBOARD_ID,
 	runAction,
 	type ActionContext,
 	type ActionId,
@@ -927,6 +929,9 @@ function ShellDetail() {
 	const handleCopySelection = useCallback(() => {
 		const xr = xtermRef.current;
 		if (!xr) return;
+		const shouldAutoReturn =
+			currentKeyboard?.id === ADVANCED_KEYBOARD_ID &&
+			availableKeyboardIds.has(PHONE_BASE_KEYBOARD_ID);
 		void (async () => {
 			const selection = await xr.getSelection();
 			if (!selection) {
@@ -937,8 +942,17 @@ function ShellDetail() {
 			await Clipboard.setStringAsync(selection);
 			logger.info('copied selection', selection.length);
 			exitSelectionMode();
+			// Advanced keyboard is a one-shot layout; copy counts as a key press.
+			if (shouldAutoReturn) {
+				setSelectedKeyboardId(PHONE_BASE_KEYBOARD_ID);
+			}
 		})();
-	}, [exitSelectionMode]);
+	}, [
+		availableKeyboardIds,
+		currentKeyboard,
+		exitSelectionMode,
+		setSelectedKeyboardId,
+	]);
 
 	const handleSelectionChanged = useCallback((text: string) => {
 		if (!text) return;
@@ -1296,35 +1310,47 @@ fi
 				// Any input/command should exit selection first, except explicit copy.
 				exitSelectionMode();
 			}
-			if (slot.type === 'modifier') {
-				toggleModifier(slot.modifier);
-				return;
+			const shouldAutoReturn =
+				currentKeyboard?.id === ADVANCED_KEYBOARD_ID &&
+				availableKeyboardIds.has(PHONE_BASE_KEYBOARD_ID);
+
+			switch (slot.type) {
+				case 'modifier':
+					toggleModifier(slot.modifier);
+					break;
+				case 'text':
+					sendTextWithModifiers(slot.text);
+					break;
+				case 'bytes':
+					sendBytesWithModifiers(new Uint8Array(slot.bytes));
+					break;
+				case 'macro': {
+					const macro = currentMacros.find((entry) => entry.id === slot.macroId);
+					if (macro) {
+						runMacro(macro, {
+							sendBytes: sendBytesRaw,
+							sendText: sendTextRaw,
+							onAction: handleAction,
+						});
+					}
+					break;
+				}
+				case 'action':
+					handleAction(slot.actionId);
+					break;
+				default:
+					break;
 			}
-			if (slot.type === 'text') {
-				sendTextWithModifiers(slot.text);
-				return;
-			}
-			if (slot.type === 'bytes') {
-				sendBytesWithModifiers(new Uint8Array(slot.bytes));
-				return;
-			}
-			if (slot.type === 'macro') {
-				const macro = currentMacros.find((entry) => entry.id === slot.macroId);
-				if (!macro) return;
-				runMacro(macro, {
-					sendBytes: sendBytesRaw,
-					sendText: sendTextRaw,
-					onAction: handleAction,
-				});
-				return;
-			}
-			if (slot.type === 'action') {
-				handleAction(slot.actionId);
-				return;
+
+			// Advanced keyboard is a one-shot layout; return after any key press.
+			if (shouldAutoReturn) {
+				setSelectedKeyboardId(PHONE_BASE_KEYBOARD_ID);
 			}
 		},
 		[
+			availableKeyboardIds,
 			currentMacros,
+			currentKeyboard,
 			exitSelectionMode,
 			handleAction,
 			sendBytesRaw,
@@ -1332,6 +1358,7 @@ fi
 			sendTextRaw,
 			sendTextWithModifiers,
 			selectionModeEnabled,
+			setSelectedKeyboardId,
 			toggleModifier,
 		],
 	);
