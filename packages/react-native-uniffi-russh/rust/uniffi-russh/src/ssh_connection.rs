@@ -25,8 +25,8 @@ use std::{
 };
 
 // Mobile-friendly keepalive defaults.
-const KEEPALIVE_INTERVAL_SECS: u64 = 30;
-const KEEPALIVE_MAX: usize = 3;
+const KEEPALIVE_INTERVAL_SECS: u64 = 15;
+const KEEPALIVE_MAX: usize = 6;
 // Short probe window to catch immediate tmux attach failures.
 const TMUX_ATTACH_PROBE_TIMEOUT_MS: u64 = 300;
 

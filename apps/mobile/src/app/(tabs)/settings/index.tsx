@@ -1,4 +1,5 @@
 import * as Clipboard from 'expo-clipboard';
+import * as FileSystem from 'expo-file-system/legacy';
 import * as Updates from 'expo-updates';
 import { Link } from 'expo-router';
 import React from 'react';
@@ -476,61 +477,68 @@ function BackupRestoreModal({
 		setTimeout(() => setCopied(false), 1500);
 	}, [backupText]);
 
-	const doRestore = React.useCallback(async () => {
-		setRestoreError(null);
-		setIsRestoring(true);
-		try {
-			const parsed = JSON.parse(restoreText);
-			if (!parsed || typeof parsed !== 'object') {
-				throw new Error('Invalid backup format.');
-			}
-			if (parsed.version !== 1) {
-				throw new Error('Unsupported backup version.');
-			}
-			const keys = Array.isArray(parsed.keys) ? parsed.keys : [];
-			const connections = Array.isArray(parsed.connections)
-				? parsed.connections
-				: [];
-
-			// Restore keys first so connection key references remain valid.
-			let restoredKeys = 0;
-			for (const key of keys) {
-				if (!key?.id || !key?.value) continue;
-				await secretsManager.keys.utils.upsertPrivateKey({
-					keyId: key.id,
-					value: key.value,
-					metadata: {
-						priority: key.metadata?.priority ?? 0,
-						label: key.metadata?.label,
-						isDefault: key.metadata?.isDefault ?? false,
-					},
-				});
-				restoredKeys += 1;
-			}
-
-			let restoredConnections = 0;
-			for (const entry of connections) {
-				if (!entry?.value) continue;
-				await secretsManager.connections.utils.upsertConnection({
-					details: entry.value,
-					priority: entry.metadata?.priority ?? 0,
-					label: entry.metadata?.label,
-				});
-				restoredConnections += 1;
-			}
-
-			Alert.alert(
-				'Restore complete',
-				`Restored ${restoredKeys} keys and ${restoredConnections} connections.`,
-			);
-		} catch (error) {
-			setRestoreError(
-				error instanceof Error ? error.message : 'Restore failed.',
-			);
-		} finally {
-			setIsRestoring(false);
+	const restorePayload = React.useCallback(async (payload: string) => {
+		const parsed = JSON.parse(payload);
+		if (!parsed || typeof parsed !== 'object') {
+			throw new Error('Invalid backup format.');
 		}
-	}, [restoreText]);
+		if (parsed.version !== 1) {
+			throw new Error('Unsupported backup version.');
+		}
+		const keys = Array.isArray(parsed.keys) ? parsed.keys : [];
+		const connections = Array.isArray(parsed.connections)
+			? parsed.connections
+			: [];
+
+		// Restore keys first so connection key references remain valid.
+		let restoredKeys = 0;
+		for (const key of keys) {
+			if (!key?.id || !key?.value) continue;
+			await secretsManager.keys.utils.upsertPrivateKey({
+				keyId: key.id,
+				value: key.value,
+				metadata: {
+					priority: key.metadata?.priority ?? 0,
+					label: key.metadata?.label,
+					isDefault: key.metadata?.isDefault ?? false,
+				},
+			});
+			restoredKeys += 1;
+		}
+
+		let restoredConnections = 0;
+		for (const entry of connections) {
+			if (!entry?.value) continue;
+			await secretsManager.connections.utils.upsertConnection({
+				details: entry.value,
+				priority: entry.metadata?.priority ?? 0,
+				label: entry.metadata?.label,
+			});
+			restoredConnections += 1;
+		}
+
+		Alert.alert(
+			'Restore complete',
+			`Restored ${restoredKeys} keys and ${restoredConnections} connections.`,
+		);
+	}, []);
+
+	const doRestore = React.useCallback(
+		async (payload: string) => {
+			setRestoreError(null);
+			setIsRestoring(true);
+			try {
+				await restorePayload(payload);
+			} catch (error) {
+				setRestoreError(
+					error instanceof Error ? error.message : 'Restore failed.',
+				);
+			} finally {
+				setIsRestoring(false);
+			}
+		},
+		[restorePayload],
+	);
 
 	const handleRestore = React.useCallback(() => {
 		if (!restoreText.trim()) return;
@@ -543,7 +551,7 @@ function BackupRestoreModal({
 					text: 'Restore',
 					style: 'destructive',
 					onPress: () => {
-						void doRestore();
+						void doRestore(restoreText);
 					},
 				},
 			],
@@ -554,6 +562,43 @@ function BackupRestoreModal({
 		const text = await Clipboard.getStringAsync();
 		setRestoreText(text);
 	}, []);
+
+	const handleImportFromFile = React.useCallback(async () => {
+		setRestoreError(null);
+		try {
+			const baseDir = FileSystem.documentDirectory;
+			if (!baseDir) {
+				throw new Error('Local storage is unavailable.');
+			}
+			const path = `${baseDir}backup.json`;
+			const info = await FileSystem.getInfoAsync(path);
+			if (!info.exists) {
+				throw new Error('No backup found at files/backup.json.');
+			}
+			const text = await FileSystem.readAsStringAsync(path, {
+				encoding: FileSystem.EncodingType.UTF8,
+			});
+			setRestoreText(text);
+			Alert.alert(
+				'Restore backup from file?',
+				'This will merge the backup into your existing data. Matching key IDs will be overwritten.',
+				[
+					{ text: 'Cancel', style: 'cancel' },
+					{
+						text: 'Restore',
+						style: 'destructive',
+						onPress: () => {
+							void doRestore(text);
+						},
+					},
+				],
+			);
+		} catch (error) {
+			setRestoreError(
+				error instanceof Error ? error.message : 'Import failed.',
+			);
+		}
+	}, [doRestore]);
 
 	return (
 		<Modal
@@ -613,7 +658,6 @@ function BackupRestoreModal({
 							</Pressable>
 						</View>
 						<ScrollView
-							style={{ flex: 1 }}
 							contentContainerStyle={{ paddingBottom: 16 }}
 							keyboardShouldPersistTaps="handled"
 						>
@@ -772,6 +816,28 @@ function BackupRestoreModal({
 									</Text>
 								</Pressable>
 							</View>
+							<Pressable
+								onPress={handleImportFromFile}
+								disabled={isRestoring}
+								style={{
+									borderWidth: 1,
+									borderColor: theme.colors.border,
+									borderRadius: 10,
+									paddingVertical: 10,
+									alignItems: 'center',
+									marginBottom: 12,
+									opacity: isRestoring ? 0.6 : 1,
+								}}
+							>
+								<Text
+									style={{
+										color: theme.colors.textSecondary,
+										fontWeight: '600',
+									}}
+								>
+									Import from files/backup.json
+								</Text>
+							</Pressable>
 							{restoreError ? (
 								<Text style={{ color: theme.colors.danger, marginBottom: 8 }}>
 									{restoreError}

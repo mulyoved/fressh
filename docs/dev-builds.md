@@ -106,6 +106,77 @@ Expected: `expo.modules.updates.ENABLED=true`.
 - When distributing to others, build from a clean commit and publish matching
   updates.
 
+## Android Release Keystore + Data-Preserving Migration
+Use this when moving devices to a stable release keystore without losing data.
+
+### Keystore source (Bitwarden)
+The Android release keystore is stored in Bitwarden under **“fressh keystore”**.
+- `login.username` → key alias
+- `login.password` → store/key password
+- Custom field `keystore` → base64-encoded keystore file
+
+### Build a release-signed APK locally
+Ensure `bw` is logged in and `BW_SESSION` is set (for example, `bw unlock --raw`).
+```bash
+cd apps/mobile/android
+
+# Requires an active Bitwarden session.
+item=$(bw get item "fressh keystore" --raw)
+alias=$(printf '%s' "$item" | jq -r '.login.username')
+pass=$(printf '%s' "$item" | jq -r '.login.password')
+printf '%s' "$item" | jq -r '.fields[] | select(.name=="keystore").value' \
+  | base64 -d > app/fressh-upload-key.keystore
+
+ORG_GRADLE_PROJECT_FRESSH_UPLOAD_STORE_FILE=fressh-upload-key.keystore \
+ORG_GRADLE_PROJECT_FRESSH_UPLOAD_STORE_PASSWORD="$pass" \
+ORG_GRADLE_PROJECT_FRESSH_UPLOAD_KEY_ALIAS="$alias" \
+ORG_GRADLE_PROJECT_FRESSH_UPLOAD_KEY_PASSWORD="$pass" \
+./gradlew assembleRelease -PreactNativeArchitectures=arm64-v8a
+```
+APK output:
+`apps/mobile/android/app/build/outputs/apk/release/app-release.apk`
+
+To allow `adb shell run-as` during a one-time restore, build a debuggable
+release:
+```bash
+./gradlew assembleRelease -PreactNativeArchitectures=arm64-v8a \
+  -PFRESSH_DEBUGGABLE_RELEASE=true
+```
+
+### Data-preserving migration (debug → release keystore)
+1) **Create backup JSON on the device**
+   - In-app: `Settings → Backup & Restore → Generate Backup → Copy`
+   - Or (from the shell screen) `Config → Export backup` if available.
+2) **Store the backup** in Bitwarden or a secure local file.  
+   Backups include private keys and connection profiles.
+3) **If signatures don’t match**, uninstall the old app:
+   ```bash
+   adb uninstall com.finalapp.vibe2
+   ```
+4) **Install the debuggable release APK** (for restore only):
+   ```bash
+   adb install -r apps/mobile/android/app/build/outputs/apk/release/app-release.apk
+   ```
+5) **ADB restore (no clipboard):**
+   ```bash
+   adb push /path/to/backup.json /data/local/tmp/backup.json
+   adb shell run-as com.finalapp.vibe2 cp /data/local/tmp/backup.json \
+     /data/user/0/com.finalapp.vibe2/files/backup.json
+   ```
+   Then in-app:  
+   `Settings → Backup & Restore → Import from files/backup.json → Restore`.
+6) **Install the final non-debuggable release APK** (same keystore):
+   ```bash
+   ./gradlew assembleRelease -PreactNativeArchitectures=arm64-v8a
+   adb install -r apps/mobile/android/app/build/outputs/apk/release/app-release.apk
+   ```
+
+Notes:
+- Keep the device **unlocked** and **dismiss the notification shade** if
+  driving the UI via ADB taps.
+- If the previous install already used the same keystore, you can skip the
+  uninstall and use `adb install -r` to preserve data.
+
 ## Common Gotchas
 - Run `eas build` from `apps/mobile` for non-interactive builds. Running from
   repo root can fail with “android.package is required”.

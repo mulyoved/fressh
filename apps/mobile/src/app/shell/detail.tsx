@@ -9,6 +9,7 @@ import {
 } from '@fressh/react-native-xtermjs-webview';
 
 import * as Clipboard from 'expo-clipboard';
+import * as FileSystem from 'expo-file-system/legacy';
 import * as Linking from 'expo-linking';
 import * as Updates from 'expo-updates';
 import {
@@ -27,6 +28,7 @@ import React, {
 } from 'react';
 import {
 	Alert,
+	ActivityIndicator,
 	Animated,
 	AppState,
 	Keyboard,
@@ -362,9 +364,13 @@ const DEFAULT_KEYBOARD_ID_FALLBACK =
 function ShellDetail() {
 	const xtermRef = useRef<XtermWebViewHandle>(null);
 	const listenerIdRef = useRef<bigint | null>(null);
+	const attachedShellKeyRef = useRef<string | null>(null);
+	const hasAttachedOnceRef = useRef(false);
 	const tmuxControlShellRef = useRef<SshShell | null>(null);
 	const tmuxControlListenerRef = useRef<bigint | null>(null);
 	const tmuxControlWriterRef = useRef<OrderedWriter | null>(null);
+	const [terminalReady, setTerminalReady] = useState(false);
+	const [hasRenderedTerminal, setHasRenderedTerminal] = useState(false);
 
 	const searchParams = useLocalSearchParams<{
 		connectionId?: string;
@@ -455,6 +461,7 @@ function ShellDetail() {
 			if (shell && listenerIdRef.current != null)
 				shell.removeListener(listenerIdRef.current);
 			listenerIdRef.current = null;
+			attachedShellKeyRef.current = null;
 			if (xterm) xterm.flush();
 		};
 	}, [shell]);
@@ -1005,6 +1012,113 @@ function ShellDetail() {
 		);
 	}, []);
 
+	const handleExportBackup = useCallback(async () => {
+		setConfigureOpen(false);
+		try {
+			const [keys, connections] = await Promise.all([
+				secretsManager.keys.utils.listEntriesWithValues(),
+				secretsManager.connections.utils.listEntriesWithValues(),
+			]);
+			const payload = {
+				version: 1,
+				createdAt: new Date().toISOString(),
+				keys: keys.map((entry) => ({
+					id: entry.id,
+					metadata: entry.metadata,
+					value: entry.value,
+				})),
+				connections: connections.map((entry) => ({
+					id: entry.id,
+					metadata: entry.metadata,
+					value: entry.value,
+				})),
+			};
+			const backupText = JSON.stringify(payload, null, 2);
+			const backupPath = FileSystem.documentDirectory
+				? `${FileSystem.documentDirectory}backup.json`
+				: null;
+			if (backupPath) {
+				await FileSystem.writeAsStringAsync(backupPath, backupText, {
+					encoding: FileSystem.EncodingType.UTF8,
+				});
+			}
+			await Clipboard.setStringAsync(backupText);
+			Alert.alert(
+				'Backup copied',
+				`Copied ${backupText.length.toLocaleString()} characters to the clipboard.${backupPath ? ' Saved to files/backup.json for ADB.' : ''}`,
+			);
+		} catch (error) {
+			Alert.alert(
+				'Backup failed',
+				error instanceof Error ? error.message : 'Failed to create backup.',
+			);
+		}
+	}, []);
+
+	const restoreBackupPayload = useCallback(async (backupText: string) => {
+		const parsed = JSON.parse(backupText);
+		if (!parsed || typeof parsed !== 'object') {
+			throw new Error('Invalid backup format.');
+		}
+		if (parsed.version !== 1) {
+			throw new Error('Unsupported backup version.');
+		}
+		const keys = Array.isArray(parsed.keys) ? parsed.keys : [];
+		const connections = Array.isArray(parsed.connections)
+			? parsed.connections
+			: [];
+
+		let restoredKeys = 0;
+		for (const key of keys) {
+			if (!key?.id || !key?.value) continue;
+			await secretsManager.keys.utils.upsertPrivateKey({
+				keyId: key.id,
+				value: key.value,
+				metadata: {
+					priority: key.metadata?.priority ?? 0,
+					label: key.metadata?.label,
+					isDefault: key.metadata?.isDefault ?? false,
+				},
+			});
+			restoredKeys += 1;
+		}
+
+		let restoredConnections = 0;
+		for (const entry of connections) {
+			if (!entry?.value) continue;
+			await secretsManager.connections.utils.upsertConnection({
+				details: entry.value,
+				priority: entry.metadata?.priority ?? 0,
+				label: entry.metadata?.label,
+			});
+			restoredConnections += 1;
+		}
+
+		Alert.alert(
+			'Restore complete',
+			`Restored ${restoredKeys} keys and ${restoredConnections} connections.`,
+		);
+	}, []);
+
+	const handleImportBackup = useCallback(async () => {
+		setConfigureOpen(false);
+		try {
+			if (!FileSystem.documentDirectory) {
+				throw new Error('Document directory unavailable.');
+			}
+			const backupPath = `${FileSystem.documentDirectory}backup.json`;
+			const backupText = await FileSystem.readAsStringAsync(backupPath, {
+				encoding: FileSystem.EncodingType.UTF8,
+			});
+			await restoreBackupPayload(backupText);
+		} catch (error) {
+			Alert.alert(
+				'Restore failed',
+				error instanceof Error ? error.message : 'Restore failed.',
+			);
+		}
+	}, [restoreBackupPayload]);
+
 	const handleHostConfig = useCallback(() => {
 		setConfigureOpen(false);
 		const editConnectionId = storedConnectionId ?? connectionId;
@@ -1452,22 +1566,41 @@ fi
 		clearScrollbackState();
 	}, [cancelKeyBytes, sendBytesOrdered, clearScrollbackState]);
 
-	const handleTerminalInitialized = useCallback(
-		(instanceId: string) => {
-			currentInstanceIdRef.current = instanceId;
-			scrollbackActiveRef.current = false;
-			scrollbackPhaseRef.current = 'active';
-			setScrollbackActive(false);
+	const attachShellToTerminal = useCallback(() => {
+		if (!terminalReady) return;
+		if (!shell) return;
+		const xterm = xtermRef.current;
+		if (!xterm) return;
 
-			if (!shell) throw new Error('Shell not found');
-			if (Platform.OS === 'android') {
-				xtermRef.current?.setSystemKeyboardEnabled(true);
-				setSystemKeyboardEnabled(true);
+		const shellKey = `${shell.connectionId}-${shell.channelId}`;
+		if (attachedShellKeyRef.current !== shellKey) {
+			hasAttachedOnceRef.current = false;
+		}
+		if (
+			listenerIdRef.current != null &&
+			attachedShellKeyRef.current === shellKey
+		) {
+			return;
+		}
+
+		if (listenerIdRef.current != null) {
+			try {
+				shell.removeListener(listenerIdRef.current);
+			} catch (error) {
+				logger.warn('Failed to remove prior shell listener', error);
 			}
-			xtermRef.current?.setSelectionModeEnabled(selectionModeEnabled);
+			listenerIdRef.current = null;
+		}
+		attachedShellKeyRef.current = shellKey;
 
-			// Replay from head, then attach live listener
-			void (async () => {
+		if (Platform.OS === 'android') {
+			xterm.setSystemKeyboardEnabled(true);
+			setSystemKeyboardEnabled(true);
+		}
+		xterm.setSelectionModeEnabled(selectionModeEnabled);
+
+		void (async () => {
+			if (!hasAttachedOnceRef.current) {
 				const res = shell.readBuffer({ mode: 'head' });
 				logger.info('readBuffer(head)', {
 					chunks: res.chunks.length,
@@ -1476,11 +1609,8 @@ fi
 				});
 				if (res.chunks.length) {
 					const chunks = res.chunks.map((c) => c.bytes);
-					const xr = xtermRef.current;
-					if (xr) {
-						xr.writeMany(chunks.map((c) => new Uint8Array(c)));
-						xr.flush();
-					}
+					xterm.writeMany(chunks.map((c) => new Uint8Array(c)));
+					xterm.flush();
 				}
 				const id = shell.addListener(
 					(ev: ListenerEvent) => {
@@ -1489,20 +1619,62 @@ fi
 							return;
 						}
 						const chunk = ev;
-						const xr3 = xtermRef.current;
-						if (xr3) xr3.write(new Uint8Array(chunk.bytes));
+						xtermRef.current?.write(new Uint8Array(chunk.bytes));
 					},
 					{ cursor: { mode: 'seq', seq: res.nextSeq } },
 				);
 				logger.info('shell listener attached', id.toString());
 				listenerIdRef.current = id;
-			})();
-			// Focus to pop the keyboard (iOS needs the prop we set)
-			const xr2 = xtermRef.current;
-			if (xr2 && Platform.OS === 'ios') xr2.focus();
+				hasAttachedOnceRef.current = true;
+				return;
+			}
+
+			const id = shell.addListener(
+				(ev: ListenerEvent) => {
+					if ('kind' in ev) {
+						logger.warn('listener.dropped', ev);
+						return;
+					}
+					const chunk = ev;
+					xtermRef.current?.write(new Uint8Array(chunk.bytes));
+				},
+				{ cursor: { mode: 'live' } },
+			);
+			logger.info('shell listener attached (live)', id.toString());
+			listenerIdRef.current = id;
+		})();
+
+		// Focus to pop the keyboard (iOS needs the prop we set).
+		if (Platform.OS === 'ios') xterm.focus();
+	}, [selectionModeEnabled, shell, terminalReady]);
+
+	const handleTerminalInitialized = useCallback(
+		(instanceId: string) => {
+			currentInstanceIdRef.current = instanceId;
+			scrollbackActiveRef.current = false;
+			scrollbackPhaseRef.current = 'active';
+			setScrollbackActive(false);
+			hasAttachedOnceRef.current = false;
+
+			if (listenerIdRef.current != null && shell) {
+				try {
+					shell.removeListener(listenerIdRef.current);
+				} catch (error) {
+					logger.warn('Failed to remove prior shell listener', error);
+				}
+			}
+			listenerIdRef.current = null;
+			attachedShellKeyRef.current = null;
+
+			setTerminalReady(true);
+			setHasRenderedTerminal(true);
 		},
-		[shell, selectionModeEnabled],
+		[shell],
 	);
+
+	useEffect(() => {
+		attachShellToTerminal();
+	}, [attachShellToTerminal]);
 
 	if (hasTmuxAttachError) {
 		return (
@@ -1518,8 +1690,10 @@ fi
 		);
 	}
 
-	const shouldRenderTerminal = Boolean(shell && connection);
+	const shouldRenderTerminal = hasRenderedTerminal || Boolean(shell && connection);
 	const scrollbackVisible = scrollbackActive;
+	const showReconnectOverlay =
+		(isAutoConnecting || isReconnecting) && (!shell || !connection);
 	const ScrollbackIcon = resolveLucideIcon('ArrowDownToLine');
 	if (!shouldRenderTerminal) {
 		return isAutoConnecting || isReconnecting ? <RouteSkeleton /> : null;
@@ -1665,6 +1839,8 @@ fi
 					onDevServer={handleDevServer}
 					onCheckUpdates={handleCheckUpdates}
 					onReloadUpdates={handleReloadUpdates}
+					onExportBackup={handleExportBackup}
+					onImportBackup={handleImportBackup}
 					onHostConfig={handleHostConfig}
 					onOpenGitHubIssues={handleOpenGitHubIssues}
 					onOpenKeyboardDocs={handleOpenKeyboardDocs}
@@ -1682,6 +1858,53 @@ fi
 					isSubmitting={featureRequestSubmitting}
 					error={featureRequestError}
 				/>
+				{showReconnectOverlay && (
+					<View
+						style={{
+							position: 'absolute',
+							top: 0,
+							left: 0,
+							right: 0,
+							bottom: 0,
+							alignItems: 'center',
+							justifyContent: 'center',
+							backgroundColor: theme.colors.overlay,
+						}}
+					>
+						<View
+							style={{
+								paddingHorizontal: 20,
+								paddingVertical: 16,
+								borderRadius: 12,
+								backgroundColor: theme.colors.surface,
+								borderWidth: 1,
+								borderColor: theme.colors.border,
+								alignItems: 'center',
+							}}
+						>
+							<ActivityIndicator color={theme.colors.textPrimary} />
+							<Text
+								style={{
+									marginTop: 8,
+									color: theme.colors.textPrimary,
+									fontSize: 16,
+									fontWeight: '600',
+								}}
+							>
+								Reconnecting...
+							</Text>
+							<Text
+								style={{
+									marginTop: 4,
+									color: theme.colors.textSecondary,
+									fontSize: 12,
+								}}
+							>
+								Keeping your session ready
+							</Text>
+						</View>
+					</View>
+				)}
 				{flashKeyboardName && (
 					<Animated.View
 						pointerEvents="none"

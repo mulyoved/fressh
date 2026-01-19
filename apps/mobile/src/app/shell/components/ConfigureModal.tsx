@@ -16,6 +16,8 @@ export function ConfigureModal({
 	onDevServer,
 	onCheckUpdates,
 	onReloadUpdates,
+	onExportBackup,
+	onImportBackup,
 	onHostConfig,
 	onRequestFeature,
 	onOpenGitHubIssues,
@@ -28,6 +30,8 @@ export function ConfigureModal({
 	onDevServer: () => void;
 	onCheckUpdates: () => void;
 	onReloadUpdates: () => void;
+	onExportBackup: () => void;
+	onImportBackup: () => void;
 	onHostConfig: () => void;
 	onRequestFeature: () => void;
 	onOpenGitHubIssues: () => void;
@@ -55,6 +59,16 @@ export function ConfigureModal({
 			label: 'Reload OTA',
 			description: 'Restart to apply the latest update',
 			onPress: onReloadUpdates,
+		},
+		{
+			label: 'Export backup',
+			description: 'Copy backup JSON to clipboard',
+			onPress: onExportBackup,
+		},
+		{
+			label: 'Import backup',
+			description: 'Restore backup from files/backup.json',
+			onPress: onImportBackup,
 		},
 		{
 			label: 'Host config',

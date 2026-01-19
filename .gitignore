@@ -42,3 +42,7 @@ mnt/*
 .turbo/
 .direnv/
 .cache/
+
+# Local backups & artifacts
+backup.json
+apps/mobile/*.apk

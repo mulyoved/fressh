@@ -67,6 +67,7 @@ const config: ExpoConfig = {
 		'expo-secure-store',
 		'expo-font',
 		'expo-dev-client',
+		'./plugins/with-foreground-service',
 	],
 	experiments: { typedRoutes: true, reactCompiler: true },
 	extra: {

@@ -1,6 +1,6 @@
 import { usePathname, useRouter } from 'expo-router';
 import React from 'react';
-import { AppState } from 'react-native';
+import { AppState, Platform } from 'react-native';
 import { create } from 'zustand';
 import { useShallow } from 'zustand/react/shallow';
 import { pickLatestConnection } from './connection-utils';
@@ -13,9 +13,13 @@ import {
 } from './secrets-manager';
 import { useSshStore } from './ssh-store';
 import { queryClient } from './utils';
+import {
+	startForegroundService,
+	stopForegroundService,
+} from './foreground-service';
 
 const logger = rootLogger.extend('AutoConnect');
-const RECONNECT_DELAYS_MS = [1_000, 3_000, 5_000];
+const RECONNECT_DELAYS_MS = [500, 1_000, 2_000, 5_000, 10_000];
 
 type AutoConnectState = {
 	isAutoConnecting: boolean;
@@ -54,6 +58,7 @@ export function AutoConnectManager() {
 	const pathname = usePathname();
 	const connect = useSshStore((s) => s.connect);
 	const shells = useSshStore(useShallow((s) => Object.values(s.shells)));
+	const connections = useSshStore((s) => s.connections);
 	const latestShell = React.useMemo(() => {
 		if (shells.length === 0) return null;
 		return shells.reduce((latest, shell) =>
@@ -81,6 +86,9 @@ export function AutoConnectManager() {
 	);
 	const prevShellCountRef = React.useRef(shells.length);
 	const isActiveRef = React.useRef(isActiveState(AppState.currentState));
+	const foregroundKeyRef = React.useRef<string | null>(null);
+	const allowBackgroundRef = React.useRef(false);
+	const didInitRef = React.useRef(false);
 
 	const clearReconnectTimer = React.useCallback(() => {
 		if (reconnectTimerRef.current) {
@@ -185,10 +193,15 @@ export function AutoConnectManager() {
 	]);
 
 	const runAutoConnectOnce = React.useCallback(async () => {
-		if (!isActiveRef.current) return;
-		if (isAutoConnecting || isReconnecting) return;
+		if (
+			!isActiveRef.current &&
+			!(Platform.OS === 'android' && allowBackgroundRef.current)
+		)
+			return;
+		const autoState = useAutoConnectStore.getState();
+		if (autoState.isAutoConnecting || autoState.isReconnecting) return;
 		await attemptAutoConnect();
-	}, [attemptAutoConnect, isAutoConnecting, isReconnecting]);
+	}, [attemptAutoConnect]);
 
 	// On disconnect, retry a few times with backoff before giving up.
 	const scheduleReconnect = React.useCallback(async () => {
@@ -196,7 +209,10 @@ export function AutoConnectManager() {
 		setReconnecting(true);
 
 		const attemptWithBackoff = async (attempt: number) => {
-			if (!isActiveRef.current) {
+			if (
+				!isActiveRef.current &&
+				!(Platform.OS === 'android' && allowBackgroundRef.current)
+			) {
 				setReconnecting(false);
 				return;
 			}
@@ -218,6 +234,49 @@ export function AutoConnectManager() {
 	}, [attemptAutoConnect, isAutoConnecting, isReconnecting, setReconnecting]);
 
 	React.useEffect(() => {
+		if (Platform.OS !== 'android') return;
+		const shouldRunService = shells.length > 0;
+		allowBackgroundRef.current = shouldRunService;
+
+		if (!shouldRunService) {
+			if (foregroundKeyRef.current !== null) {
+				foregroundKeyRef.current = null;
+				void stopForegroundService();
+			}
+			return;
+		}
+
+		const connection = latestShell
+			? connections[latestShell.connectionId]
+			: undefined;
+		const title = 'Fressh Terminal';
+		const message = connection
+			? `Connected to ${connection.connectionDetails.username}@${connection.connectionDetails.host}`
+			: isReconnecting || isAutoConnecting
+				? 'Reconnecting...'
+				: 'Keeping SSH connection alive';
+		const nextKey = `${title}|${message}`;
+		if (foregroundKeyRef.current === nextKey) return;
+		foregroundKeyRef.current = nextKey;
+		void startForegroundService({ title, message });
+	}, [
+		connections,
+		isAutoConnecting,
+		isReconnecting,
+		latestShell,
+		shells.length,
+	]);
+
+	React.useEffect(() => {
+		return () => {
+			if (Platform.OS !== 'android') return;
+			void stopForegroundService();
+		};
+	}, []);
+
+	React.useEffect(() => {
+		if (didInitRef.current) return;
+		didInitRef.current = true;
 		void runAutoConnectOnce();
 	}, [runAutoConnectOnce]);
 
@@ -234,7 +293,11 @@ export function AutoConnectManager() {
 				return;
 			}
 			if (!wasActive && isActiveRef.current) {
-				void runAutoConnectOnce();
+				if (shells.length === 0) {
+					void scheduleReconnect();
+				} else {
+					void runAutoConnectOnce();
+				}
 			}
 		});
 
@@ -242,11 +305,20 @@ export function AutoConnectManager() {
 			subscription.remove();
 			clearReconnectTimer();
 		};
-	}, [clearReconnectTimer, runAutoConnectOnce, setReconnecting]);
+	}, [
+		clearReconnectTimer,
+		runAutoConnectOnce,
+		scheduleReconnect,
+		setReconnecting,
+		shells.length,
+	]);
 
 	React.useEffect(() => {
 		// Detect a shell drop and kick off a reconnect cycle.
-		if (!isActiveRef.current) {
+		if (
+			!isActiveRef.current &&
+			!(Platform.OS === 'android' && allowBackgroundRef.current)
+		) {
 			prevShellCountRef.current = shells.length;
 			return;
 		}
