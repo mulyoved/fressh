@@ -37,6 +37,15 @@ lifecycle as the notification bridge. It does not introduce cloud push.
   SSH connection is gone.
 - Do not make `working` or `clear` status changes create Android notifications.
 
+## GitHub Tracking
+
+- M-Dev remote event stream:
+  [mulyoved/skills#39](https://github.com/mulyoved/skills/issues/39)
+- Fressh Android notification bridge:
+  [mulyoved/fressh#56](https://github.com/mulyoved/fressh/issues/56)
+- Parent request:
+  [mulyoved/fressh#55](https://github.com/mulyoved/fressh/issues/55)
+
 ## Architecture
 
 Remote `mdev` is the notification-producing boundary. When an agent wrapper or
