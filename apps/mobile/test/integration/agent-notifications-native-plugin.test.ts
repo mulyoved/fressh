@@ -89,6 +89,45 @@ void test('committed Android service passes agent alert intent extras to MainAct
 	assert.match(source, /putExtra\(EXTRA_AGENT_WINDOW_ID, windowId\)/);
 });
 
+void test('foreground service plugin passes agent alert intent extras to MainActivity', async () => {
+	const source = await foregroundPluginSource();
+
+	assert.match(source, /EXTRA_AGENT_CONNECTION_ID = "agentConnectionId"/);
+	assert.match(source, /EXTRA_AGENT_SESSION = "agentSession"/);
+	assert.match(source, /EXTRA_AGENT_TARGET = "agentTarget"/);
+	assert.match(source, /EXTRA_AGENT_WINDOW_ID = "agentWindowId"/);
+	assert.match(source, /putExtra\(EXTRA_AGENT_CONNECTION_ID, connectionId\)/);
+	assert.match(source, /putExtra\(EXTRA_AGENT_SESSION, session\)/);
+	assert.match(source, /putExtra\(EXTRA_AGENT_TARGET, target\)/);
+	assert.match(source, /putExtra\(EXTRA_AGENT_WINDOW_ID, windowId\)/);
+});
+
+void test('committed Android service uses notificationId for agent alert pending intent identity', async () => {
+	const source = await committedSshForegroundServiceSource();
+
+	assert.doesNotMatch(
+		source,
+		/connectionId\.hashCode\(\)\s+xor\s+windowId\.hashCode\(\)/,
+	);
+	assert.match(
+		source,
+		/buildAgentAlertNotification\([\s\S]*notificationId: Int[\s\S]*PendingIntent\.getActivity\(\s*context,\s*notificationId,/,
+	);
+});
+
+void test('foreground service plugin uses notificationId for agent alert pending intent identity', async () => {
+	const source = await foregroundPluginSource();
+
+	assert.doesNotMatch(
+		source,
+		/connectionId\.hashCode\(\)\s+xor\s+windowId\.hashCode\(\)/,
+	);
+	assert.match(
+		source,
+		/buildAgentAlertNotification\([\s\S]*notificationId: Int[\s\S]*PendingIntent\.getActivity\(\s*context,\s*notificationId,/,
+	);
+});
+
 void test('agent notification native wrapper checks permission and method availability', async () => {
 	const source = await agentNotificationsNativeSource();
 
@@ -209,6 +248,27 @@ void test('agent notification wrapper checks permission before posting native al
 	await wrapper.postAgentAlertNotification(agentAlertInput);
 
 	assert.deepEqual(calls, ['permission', 'native-post']);
+});
+
+void test('agent notification wrapper passes exact notification id to native cancel', async () => {
+	const calls: number[] = [];
+	const { logger } = createTestLogger();
+	const wrapper = createAgentNotificationsNativeWrapper({
+		getPlatformOS: () => 'android',
+		getNativeModule: () => ({
+			cancelAgentAlert: async (notificationId) => {
+				calls.push(notificationId);
+			},
+		}),
+		ensureNotificationPermission: async () => {
+			throw new Error('cancel should not check notification permission');
+		},
+		logger,
+	});
+
+	await wrapper.cancelAgentAlertNotification(98765);
+
+	assert.deepEqual(calls, [98765]);
 });
 
 void test('agent notification wrapper skips native post when notification permission is denied', async () => {

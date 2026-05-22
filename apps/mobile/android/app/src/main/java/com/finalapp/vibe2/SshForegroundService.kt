@@ -122,6 +122,7 @@ class SshForegroundService : Service() {
 
     private fun buildAgentAlertNotification(
       context: Context,
+      notificationId: Int,
       title: String,
       message: String,
       connectionId: String,
@@ -138,7 +139,7 @@ class SshForegroundService : Service() {
       }
       val pendingIntent = PendingIntent.getActivity(
         context,
-        connectionId.hashCode() xor windowId.hashCode(),
+        notificationId,
         intent,
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
       )
@@ -180,6 +181,7 @@ class SshForegroundService : Service() {
       val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
       manager.notify(notificationId, buildAgentAlertNotification(
         context,
+        notificationId,
         title,
         message,
         connectionId,
