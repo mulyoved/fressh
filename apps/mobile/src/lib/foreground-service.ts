@@ -13,7 +13,7 @@ const nativeForegroundService =
 
 let didRequestNotificationPermission = false;
 
-async function ensureNotificationPermission() {
+export async function ensureNotificationPermission() {
 	if (Platform.OS !== 'android') return true;
 	if (typeof Platform.Version === 'number' && Platform.Version < 33) return true;
 	try {

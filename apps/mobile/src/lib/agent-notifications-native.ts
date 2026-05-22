@@ -1,10 +1,11 @@
 import { NativeModules, Platform } from 'react-native';
+import { ensureNotificationPermission } from './foreground-service';
 import { rootLogger } from './logger';
 
 const logger = rootLogger.extend('AgentNotifications');
 
 type AgentNotificationsNativeModule = {
-	postAgentAlert: (
+	postAgentAlert?: (
 		notificationId: number,
 		title: string,
 		message: string,
@@ -13,7 +14,7 @@ type AgentNotificationsNativeModule = {
 		target: string,
 		windowId: string,
 	) => Promise<void>;
-	cancelAgentAlert: (notificationId: number) => Promise<void>;
+	cancelAgentAlert?: (notificationId: number) => Promise<void>;
 };
 
 const nativeModule = NativeModules.FresshForegroundService as
@@ -30,6 +31,15 @@ export async function postAgentAlertNotification(input: {
 	windowId: string;
 }) {
 	if (Platform.OS !== 'android' || !nativeModule) return;
+	if (typeof nativeModule.postAgentAlert !== 'function') {
+		logger.warn('agent alert notification post unavailable');
+		return;
+	}
+	const allowed = await ensureNotificationPermission();
+	if (!allowed) {
+		logger.warn('notification permission not granted; skipping agent alert');
+		return;
+	}
 	try {
 		await nativeModule.postAgentAlert(
 			input.notificationId,
@@ -47,6 +57,10 @@ export async function postAgentAlertNotification(input: {
 
 export async function cancelAgentAlertNotification(notificationId: number) {
 	if (Platform.OS !== 'android' || !nativeModule) return;
+	if (typeof nativeModule.cancelAgentAlert !== 'function') {
+		logger.warn('agent alert notification cancel unavailable');
+		return;
+	}
 	try {
 		await nativeModule.cancelAgentAlert(notificationId);
 	} catch (error) {

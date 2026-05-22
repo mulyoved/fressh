@@ -1,0 +1,73 @@
+package com.finalapp.vibe2
+
+import com.facebook.react.bridge.Promise
+import com.facebook.react.bridge.ReactApplicationContext
+import com.facebook.react.bridge.ReactContextBaseJavaModule
+import com.facebook.react.bridge.ReactMethod
+
+class ForegroundServiceModule(
+  private val reactContext: ReactApplicationContext
+) : ReactContextBaseJavaModule(reactContext) {
+  override fun getName(): String = "FresshForegroundService"
+
+  @ReactMethod
+  fun start(title: String, message: String, promise: Promise) {
+    try {
+      SshForegroundService.start(reactContext, title, message)
+      promise.resolve(null)
+    } catch (e: Exception) {
+      promise.reject("FOREGROUND_SERVICE_START_FAILED", e)
+    }
+  }
+
+  @ReactMethod
+  fun stop(promise: Promise) {
+    try {
+      SshForegroundService.stop(reactContext)
+      promise.resolve(null)
+    } catch (e: Exception) {
+      promise.reject("FOREGROUND_SERVICE_STOP_FAILED", e)
+    }
+  }
+
+  @ReactMethod
+  fun postAgentAlert(
+    notificationId: Int,
+    title: String,
+    message: String,
+    connectionId: String,
+    session: String,
+    target: String,
+    windowId: String,
+    promise: Promise
+  ) {
+    try {
+      SshForegroundService.postAgentAlert(
+        reactContext.applicationContext,
+        notificationId,
+        title,
+        message,
+        connectionId,
+        session,
+        target,
+        windowId
+      )
+      promise.resolve(null)
+    } catch (e: Exception) {
+      promise.reject("AGENT_ALERT_POST_FAILED", e)
+    }
+  }
+
+  @ReactMethod
+  fun cancelAgentAlert(notificationId: Int, promise: Promise) {
+    try {
+      SshForegroundService.cancelAgentAlert(
+        reactContext.applicationContext,
+        notificationId
+      )
+      promise.resolve(null)
+    } catch (e: Exception) {
+      promise.reject("AGENT_ALERT_CANCEL_FAILED", e)
+    }
+  }
+}
