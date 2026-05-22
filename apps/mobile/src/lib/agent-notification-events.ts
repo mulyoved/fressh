@@ -65,8 +65,7 @@ export function parseAgentNotificationLine(
 	const parseOptions = {
 		nowMs: options?.nowMs ?? Date.now(),
 		maxFutureSkewMs:
-			options?.maxFutureSkewMs ??
-			DEFAULT_AGENT_NOTIFICATION_MAX_FUTURE_SKEW_MS,
+			options?.maxFutureSkewMs ?? DEFAULT_AGENT_NOTIFICATION_MAX_FUTURE_SKEW_MS,
 	};
 	let parsed: unknown;
 	try {
@@ -176,4 +175,34 @@ export class AgentNotificationDedupe {
 		}
 		return ids;
 	}
+}
+
+export type HandleAgentNotificationEventInput = {
+	event: AgentNotificationEvent;
+	connectionId: string;
+	onPending: (input: {
+		key: string;
+		notificationId: number;
+		event: AgentNotificationEvent;
+	}) => void;
+	notifyPending: () => void;
+	dedupe: AgentNotificationDedupe;
+};
+
+export function handleAgentNotificationEvent({
+	event,
+	connectionId,
+	onPending,
+	notifyPending,
+	dedupe,
+}: HandleAgentNotificationEventInput) {
+	const key = createAgentNotificationPendingKey({
+		connectionId,
+		session: event.session,
+		windowId: event.windowId,
+	});
+	const notificationId = createStableNotificationId(key);
+	if (!dedupe.markPendingIfNew(key, notificationId)) return;
+	notifyPending();
+	onPending({ key, notificationId, event });
 }

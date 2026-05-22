@@ -6,6 +6,7 @@ import {
 	buildAgentNotificationListenCommand,
 	createAgentNotificationPendingKey,
 	createStableNotificationId,
+	handleAgentNotificationEvent,
 	parseAgentNotificationLine,
 } from '../../src/lib/agent-notification-events';
 
@@ -193,8 +194,7 @@ void test('parseAgentNotificationLine rejects tmux status timestamps beyond futu
 
 void test('parseAgentNotificationLine accepts timestamps inside future skew', () => {
 	const nowMs = 10_000;
-	const createdAtMs =
-		nowMs + DEFAULT_AGENT_NOTIFICATION_MAX_FUTURE_SKEW_MS;
+	const createdAtMs = nowMs + DEFAULT_AGENT_NOTIFICATION_MAX_FUTURE_SKEW_MS;
 	assert.deepEqual(
 		parseAgentNotificationLine(
 			JSON.stringify({
@@ -306,4 +306,56 @@ void test('dedupe acknowledges matching pending keys', () => {
 	);
 	assert.equal(dedupe.markPendingIfNew(conn1Main12, 42), true);
 	assert.equal(dedupe.markPendingIfNew(conn2Main12, 44), false);
+});
+
+void test('handleAgentNotificationEvent signals and handles new pending events once', () => {
+	const dedupe = new AgentNotificationDedupe();
+	const event = {
+		id: 'main:@12:1000:waiting',
+		type: 'tmux_status' as const,
+		session: 'main',
+		target: 'main:4',
+		windowId: '@12',
+		windowIndex: '4',
+		windowName: 'fressh',
+		status: 'waiting' as const,
+		icon: '💬' as const,
+		createdAtMs: 1000,
+	};
+	let signalCount = 0;
+	const pending: { key: string; notificationId: number }[] = [];
+
+	const input = {
+		event,
+		connectionId: 'conn-1',
+		dedupe,
+		notifyPending: () => {
+			signalCount += 1;
+		},
+		onPending: ({
+			key,
+			notificationId,
+		}: {
+			key: string;
+			notificationId: number;
+		}) => {
+			pending.push({ key, notificationId });
+		},
+	};
+
+	handleAgentNotificationEvent(input);
+	handleAgentNotificationEvent(input);
+
+	const expectedKey = createAgentNotificationPendingKey({
+		connectionId: 'conn-1',
+		session: 'main',
+		windowId: '@12',
+	});
+	assert.equal(signalCount, 1);
+	assert.deepEqual(pending, [
+		{
+			key: expectedKey,
+			notificationId: createStableNotificationId(expectedKey),
+		},
+	]);
 });

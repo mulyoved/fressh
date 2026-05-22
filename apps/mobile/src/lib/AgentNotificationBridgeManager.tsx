@@ -8,10 +8,10 @@ import {
 import {
 	AgentNotificationDedupe,
 	buildAgentNotificationListenCommand,
-	createAgentNotificationPendingKey,
-	createStableNotificationId,
+	handleAgentNotificationEvent,
 	parseAgentNotificationLine,
 } from './agent-notification-events';
+import { notifyAgentNotificationPending } from './agent-notification-visibility';
 import {
 	cancelAgentAlertNotification,
 	postAgentAlertNotification,
@@ -283,31 +283,32 @@ export function AgentNotificationBridgeManager() {
 
 					bridgeRef.current.recordEventId(parsed.id);
 					lastSeenIdByTargetRef.current.set(activeTarget.resumeKey, parsed.id);
-					const key = createAgentNotificationPendingKey({
+					handleAgentNotificationEvent({
+						event: parsed,
 						connectionId: activeTarget.connection.connectionId,
-						session: parsed.session,
-						windowId: parsed.windowId,
-					});
-					const notificationId = createStableNotificationId(key);
-					if (!dedupeRef.current.markPendingIfNew(key, notificationId)) return;
-
-					void postAgentAlertNotification({
-						notificationId,
-						title: parsed.status === 'waiting' ? 'Agent waiting' : 'Agent done',
-						message: `${parsed.windowName || parsed.target} needs attention`,
-						connectionId: activeTarget.connection.connectionId,
-						session: parsed.session,
-						target: parsed.target,
-						windowId: parsed.windowId,
-					}).then((posted) => {
-						const stillPending = dedupeRef.current.acknowledge(key);
-						if (posted && stillPending.length === 0) {
-							void cancelAgentAlertNotification(notificationId);
-							return;
-						}
-						if (posted) {
-							dedupeRef.current.markPendingIfNew(key, notificationId);
-						}
+						dedupe: dedupeRef.current,
+						notifyPending: notifyAgentNotificationPending,
+						onPending: ({ key, notificationId, event }) => {
+							void postAgentAlertNotification({
+								notificationId,
+								title:
+									event.status === 'waiting' ? 'Agent waiting' : 'Agent done',
+								message: `${event.windowName || event.target} needs attention`,
+								connectionId: activeTarget.connection.connectionId,
+								session: event.session,
+								target: event.target,
+								windowId: event.windowId,
+							}).then((posted) => {
+								const stillPending = dedupeRef.current.acknowledge(key);
+								if (posted && stillPending.length === 0) {
+									void cancelAgentAlertNotification(notificationId);
+									return;
+								}
+								if (posted) {
+									dedupeRef.current.markPendingIfNew(key, notificationId);
+								}
+							});
+						},
 					});
 				},
 				onExit: (error) => {

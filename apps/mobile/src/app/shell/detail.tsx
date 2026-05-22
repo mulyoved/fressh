@@ -7,6 +7,7 @@ import {
 	type XtermWebViewHandle,
 	type TouchScrollConfig,
 } from '@fressh/react-native-xtermjs-webview';
+import { useIsFocused } from '@react-navigation/native';
 
 import * as Clipboard from 'expo-clipboard';
 import * as Linking from 'expo-linking';
@@ -20,6 +21,7 @@ import React, {
 	startTransition,
 	useCallback,
 	useEffect,
+	useLayoutEffect,
 	useMemo,
 	useRef,
 	useState,
@@ -39,6 +41,10 @@ import {
 	View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import {
+	acknowledgeVisibleAgentNotification as acknowledgeVisibleAgentNotificationIfVisible,
+	subscribeAgentNotificationPending,
+} from '@/lib/agent-notification-visibility';
 import { useAutoConnectStore } from '@/lib/auto-connect';
 import { getStoredConnectionId } from '@/lib/connection-utils';
 import {
@@ -461,6 +467,7 @@ function ShellDetail() {
 	const tmuxSessionName = searchParams.tmuxSessionName;
 
 	const router = useRouter();
+	const isFocused = useIsFocused();
 	const theme = useTheme();
 	const insets = useSafeAreaInsets();
 
@@ -758,6 +765,13 @@ function ShellDetail() {
 	const wisprAutoCloseAttemptIdRef = useRef(0);
 	const wisprAutomationRequestIdRef = useRef(0);
 	const hostUrlReadRequestIdRef = useRef(0);
+	const agentNotificationAckRequestIdRef = useRef(0);
+	const acknowledgeVisibleAgentNotificationRef = useRef<() => void>(() => {});
+	const isFocusedRef = useRef(false);
+	const isAppActiveRef = useRef(AppState.currentState === 'active');
+	const visibleConnectionIdRef = useRef<string | null>(null);
+	const visibleChannelIdRef = useRef<number | null>(null);
+	const visibleTmuxTargetRef = useRef('main');
 	const wisprOpeningTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
 		null,
 	);
@@ -1293,8 +1307,7 @@ function ShellDetail() {
 			wisprAutoCloseAttemptIdRef.current = attemptId;
 			const result = await tapWisprControlWithinRetryWindow({
 				retry: options?.retry ?? true,
-				shouldContinue: () =>
-					attemptId === wisprAutoCloseAttemptIdRef.current,
+				shouldContinue: () => attemptId === wisprAutoCloseAttemptIdRef.current,
 				initialError: new Error('Wispr bubble not found'),
 				onLateSuccess: options?.onLateSuccess,
 				onLateFailure: options?.onLateFailure,
@@ -1378,7 +1391,9 @@ function ShellDetail() {
 	const setPendingWisprAutoCloseRequests = useCallback(
 		(pendingRequests: WisprPendingAutoCloseRequest[]) => {
 			for (const requestId of wisprTextEntryCloseAfterStartRequestsRef.current.keys()) {
-				if (!pendingRequests.some((request) => request.requestId === requestId)) {
+				if (
+					!pendingRequests.some((request) => request.requestId === requestId)
+				) {
 					clearPendingWisprAutoCloseTimeout(requestId);
 				}
 			}
@@ -1557,9 +1572,7 @@ function ShellDetail() {
 						) {
 							return;
 						}
-						if (
-							wisprTextEntryTimedOutStartRequestIdRef.current === requestId
-						) {
+						if (wisprTextEntryTimedOutStartRequestIdRef.current === requestId) {
 							wisprTextEntryTimedOutStartRequestIdRef.current = null;
 						}
 						if (wisprAutomationStateRef.current.phase === 'waitingForBubble') {
@@ -1842,8 +1855,7 @@ function ShellDetail() {
 			automationState: wisprAutomationStateRef.current,
 			controlTapStartedRequestId:
 				wisprTextEntryControlTapStartedRequestIdRef.current,
-			timedOutStartRequestId:
-				wisprTextEntryTimedOutStartRequestIdRef.current,
+			timedOutStartRequestId: wisprTextEntryTimedOutStartRequestIdRef.current,
 		});
 		textEntryOpenRef.current = false;
 		wisprDeferredAutoStartRequestIdRef.current = null;
@@ -1859,8 +1871,7 @@ function ShellDetail() {
 				automationState: wisprAutomationStateRef.current,
 				controlTapStartedRequestId:
 					wisprTextEntryControlTapStartedRequestIdRef.current,
-				timedOutStartRequestId:
-					wisprTextEntryTimedOutStartRequestIdRef.current,
+				timedOutStartRequestId: wisprTextEntryTimedOutStartRequestIdRef.current,
 			}),
 			{ retryClose: false },
 		);
@@ -2092,6 +2103,79 @@ fi
 		},
 		[connection],
 	);
+
+	const acknowledgeVisibleAgentNotification = useCallback(async () => {
+		await acknowledgeVisibleAgentNotificationIfVisible({
+			platformOS: Platform.OS,
+			connectionId: connection?.connectionId ?? null,
+			channelId,
+			tmuxEnabled,
+			tmuxTarget,
+			getVisibility: () => ({
+				isFocused: isFocusedRef.current,
+				isAppActive: isAppActiveRef.current,
+				connectionId: visibleConnectionIdRef.current,
+				channelId: visibleChannelIdRef.current,
+				tmuxTarget: visibleTmuxTargetRef.current,
+			}),
+			nextRequestId: () => ++agentNotificationAckRequestIdRef.current,
+			isCurrentRequest: (requestId) =>
+				requestId === agentNotificationAckRequestIdRef.current,
+			runCommand: runHostBrowserCommand,
+			acknowledge: (connectionId, windowId) => {
+				globalThis.__FRESSH_AGENT_NOTIFICATIONS__?.acknowledge(
+					connectionId,
+					windowId,
+				);
+			},
+			warn: (message, error) => {
+				logger.warn(message, error);
+			},
+		});
+	}, [channelId, connection, runHostBrowserCommand, tmuxEnabled, tmuxTarget]);
+
+	useLayoutEffect(() => {
+		acknowledgeVisibleAgentNotificationRef.current = () => {
+			void acknowledgeVisibleAgentNotification();
+		};
+	}, [acknowledgeVisibleAgentNotification]);
+
+	useLayoutEffect(() => {
+		isFocusedRef.current = isFocused;
+		visibleConnectionIdRef.current = isFocused
+			? (connection?.connectionId ?? null)
+			: null;
+		visibleChannelIdRef.current = isFocused ? channelId : null;
+		visibleTmuxTargetRef.current = tmuxTarget.trim() || 'main';
+		agentNotificationAckRequestIdRef.current += 1;
+		if (isFocused) {
+			void acknowledgeVisibleAgentNotification();
+		}
+	}, [
+		acknowledgeVisibleAgentNotification,
+		channelId,
+		connection,
+		isFocused,
+		tmuxTarget,
+	]);
+
+	useLayoutEffect(() => {
+		return () => {
+			agentNotificationAckRequestIdRef.current += 1;
+			isFocusedRef.current = false;
+			isAppActiveRef.current = false;
+			visibleConnectionIdRef.current = null;
+			visibleChannelIdRef.current = null;
+			visibleTmuxTargetRef.current = 'main';
+		};
+	}, []);
+
+	useLayoutEffect(() => {
+		if (Platform.OS !== 'android') return undefined;
+		return subscribeAgentNotificationPending(() => {
+			acknowledgeVisibleAgentNotificationRef.current();
+		});
+	}, []);
 
 	const resolveHostBrowserPanePath = useCallback(async () => {
 		if (!tmuxEnabled) {
@@ -2489,8 +2573,10 @@ fi
 		const subscription = AppState.addEventListener('change', (nextState) => {
 			const previousState = appStateRef.current;
 			appStateRef.current = nextState;
+			isAppActiveRef.current = nextState === 'active';
 			if (nextState === 'active') {
 				xtermRef.current?.setSystemKeyboardEnabled(systemKeyboardEnabled);
+				acknowledgeVisibleAgentNotificationRef.current();
 				// Preserve the previous OS keyboard visibility when returning to the app.
 				if (!systemKeyboardEnabled || !lastKeyboardVisibleRef.current) {
 					dismissKeyboard();
@@ -2507,6 +2593,7 @@ fi
 			}
 			// Capture once when transitioning away from active.
 			if (previousState === 'active') {
+				agentNotificationAckRequestIdRef.current += 1;
 				lastKeyboardVisibleRef.current = systemKeyboardVisibleRef.current;
 			}
 		});
