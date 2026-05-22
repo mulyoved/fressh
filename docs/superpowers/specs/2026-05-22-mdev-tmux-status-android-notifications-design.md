@@ -17,6 +17,12 @@ on the phone. Fressh already has an Android foreground service to keep SSH
 sessions alive in the background, so this design uses that foreground-service
 lifecycle as the notification bridge. It does not introduce cloud push.
 
+This is a best-effort connected-mode design. It optimizes for immediate
+notifications while Fressh's Android foreground service and SSH connection are
+alive. It does not guarantee notification delivery after Android stops the
+service, suspends background network work, kills the app process, or enforces
+foreground-service time limits on long background sessions.
+
 ## Goals
 
 - Notify on remote status transitions to waiting (`💬`) or done (`✅`).
@@ -26,6 +32,8 @@ lifecycle as the notification bridge. It does not introduce cloud push.
   `mdev tmux set status`.
 - Deduplicate notifications per tmux window until the matching window is viewed
   in Fressh.
+- Keep the notification bridge observable with health state, heartbeats, stale
+  detection, and reconnect-on-resume behavior.
 
 ## Non-Goals
 
@@ -36,6 +44,9 @@ lifecycle as the notification bridge. It does not introduce cloud push.
 - Do not support notification delivery after the Fressh foreground service or
   SSH connection is gone.
 - Do not make `working` or `clear` status changes create Android notifications.
+- Do not promise reliable hours-later idle delivery. If that becomes a hard
+  requirement, use an OS-supported push path such as FCM or another wake-capable
+  delivery mechanism.
 
 ## GitHub Tracking
 
@@ -75,6 +86,28 @@ Acknowledgement is app-side. When Fressh opens or selects the matching tmux
 window, it clears the pending dedupe key for that remote/session/window and
 dismisses the notification if it is still visible.
 
+## Power Management Position
+
+The long-lived SSH listener remains the v1 transport because it is simple,
+private, and matches the existing Fressh model where a foreground service keeps
+the terminal connection alive. Fressh should continue using aggressive
+continuity for connected shells: the foreground service stays active and the
+existing partial wake lock remains held while the service is running.
+
+That wake lock and foreground service improve continuity but are not a full
+exemption from Android power policy. Android can delay background network during
+Doze/App Standby, kill the app or service under pressure, and impose
+foreground-service limits on long background work. Therefore the product
+promise is:
+
+> Fressh can notify from remote `mdev` events while its Android foreground SSH
+> service and connection remain alive. If Android stops the service or network,
+> delivery resumes only after reconnect/listener restart.
+
+The future path for reliable hours-later idle delivery is push-style delivery,
+such as FCM, with explicit device identity, remote publishing, and server-side
+auth. That is outside this v1 design.
+
 ## M-Dev Workstream
 
 The M-Dev workstream belongs in the `mulyoved/skills` repository, under the
@@ -92,6 +125,7 @@ M-Dev should:
 - Persist events to a bounded per-user JSONL spool.
 - Expose `mdev tmux notifications listen --session <name>` as a blocking
   JSONL stream of future events.
+- Emit lightweight heartbeat lines while the listener is running.
 - Support `--since-id <id>` so Fressh can resume after listener restarts.
 - Keep status writes resilient if notification event persistence fails.
 
@@ -150,14 +184,30 @@ Required fields:
 that session. By default, it starts at the current end of the spool so opening
 Fressh does not replay stale attention events as fresh Android notifications.
 
-The listener should support `--since-id <id>`. When supplied, it replays events
+The listener must emit heartbeat JSONL lines every 60 seconds so Fressh can
+distinguish an idle stream from a dead stream:
+
+```json
+{
+  "type": "heartbeat",
+  "session": "main",
+  "createdAtMs": 1779434060000
+}
+```
+
+The listener must support `--since-id <id>`. When supplied, it replays events
 after that id and then follows new events. Fressh keeps the last seen event id
 in memory while the foreground-service connection is alive and passes it when
 restarting the listener after an unexpected listener exit.
 
 The spool can be a compact JSONL file under the user's runtime/config state. It
-should be bounded by either last N events or an age limit such as 24 hours so
+must retain at most the last 5,000 events and no events older than 24 hours so
 long-running environments do not grow without limit.
+
+The listener must not use a busy loop. It should block efficiently on the
+remote host using filesystem watch support or a blocking tail-like strategy
+where available. If it must poll as a fallback, it should use a low-frequency
+sleep interval of at least 1 second and document that as a fallback behavior.
 
 ### M-Dev Tests
 
@@ -168,8 +218,10 @@ Remote `mdev` tests:
 - `done` appends a new event after `waiting`.
 - `working` and `clear` do not append notification events.
 - `notifications listen` emits valid JSONL for followed events.
+- `notifications listen` emits heartbeat JSONL lines while idle.
 - `notifications listen --since-id <id>` replays events after that id and then
   follows new events.
+- Listener follow mode does not busy-poll the event spool.
 - Event metadata includes session, target, window id/index/name, status, icon,
   and timestamp.
 - Event spool retention keeps storage bounded.
@@ -191,6 +243,9 @@ Fressh should:
 - Deduplicate pending alerts per `connectionId | session | windowId`.
 - Clear pending state when the matching tmux window is visible or selected.
 - Restart the listener with capped backoff after unexpected exits.
+- Track notification bridge health separately from SSH shell health.
+- Detect stale heartbeats and restart the listener while the SSH connection
+  still exists.
 - Keep the interactive terminal session working even if notification listening
   fails.
 
@@ -213,13 +268,32 @@ lifecycle:
 - Restart the listener with capped backoff if it exits unexpectedly while the
   SSH connection is still alive, passing the in-memory last seen event id when
   available.
+- Restart the listener with capped backoff if heartbeats become stale while the
+  SSH connection is still alive.
+- Re-check bridge state on app resume. If the SSH connection survived, restart
+  the listener with `--since-id <lastSeenId>` when available.
 - Log listener failures without disrupting the interactive shell.
+
+Fressh tracks the notification bridge as a health state:
+
+- `inactive`: no tmux-enabled foreground-service connection
+- `starting`: listener command is being opened
+- `active`: listener is connected and receiving heartbeats/events
+- `degraded`: listener exited or heartbeat is stale, reconnect scheduled
+- `stopped-by-os-or-connection`: SSH/service is gone, no notification delivery
+  expected
+
+The foreground service notification may include bridge state text such as
+`Agent alerts active` or `Agent alerts reconnecting`. Bridge failures should not
+create noisy alert notifications; they should be logged and reflected in
+non-intrusive connection/health UI.
 
 Notifications should use a separate Android notification channel from the
 ongoing SSH foreground-service notification:
 
 - Foreground service: existing low-importance ongoing notification.
-- Agent alerts: a new default-importance channel such as `Fressh Agent Alerts`.
+- Agent alerts: a new default-importance channel named `Fressh Agent Alerts`
+  with channel id `fressh_agent_alerts`.
 
 Fressh deduplicates pending alerts by:
 
@@ -246,12 +320,17 @@ visible.
 Fressh tests:
 
 - JSONL parser accepts valid notification events.
+- JSONL parser accepts heartbeat events.
 - JSONL parser rejects malformed lines without stopping the listener.
 - Dedupe suppresses repeated events for the same
   `connectionId | session | windowId`.
 - Viewing/selecting the matching window clears pending dedupe state.
 - Listener lifecycle follows foreground-service and SSH connection lifecycle.
 - Unexpected listener exit triggers capped restart while connected.
+- Stale heartbeat detection moves the bridge to `degraded` and restarts the
+  listener while connected.
+- App resume re-checks bridge health and restarts the listener when the SSH
+  connection survived.
 - Native Android agent notifications can post and cancel without affecting the
   ongoing SSH foreground notification.
 
@@ -279,6 +358,12 @@ fragile.
 5. Confirm Android posts an agent alert notification.
 6. Open Fressh and view/select the matching tmux window.
 7. Trigger another `waiting` or `done` transition and confirm it notifies again.
+8. Kill the remote listener command and confirm Fressh marks the bridge
+   degraded, restarts it, and resumes delivery without breaking the shell.
+9. Leave Fressh backgrounded long enough to verify the bridge remains active on
+   the target device when Android permits the foreground service to continue.
+10. Resume Fressh after a long background interval and confirm the bridge health
+    is rechecked and the listener restarts if needed.
 
 ## Rollout Notes
 
@@ -289,3 +374,8 @@ produce phone notifications by design.
 This feature depends on the Android foreground service and active SSH
 connection. If Android kills the service or the SSH connection drops, remote
 events are not delivered until Fressh reconnects and restarts the listener.
+
+Implementation and release notes should describe this as best-effort connected
+delivery. If users need reliable notification delivery after hours of phone
+idle, after the app process is killed, or after the foreground service is
+stopped, the design must move to push/FCM or another OS-supported wake path.
