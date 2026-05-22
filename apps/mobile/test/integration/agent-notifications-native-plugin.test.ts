@@ -1,13 +1,17 @@
 import assert from 'node:assert/strict';
+import { createRequire } from 'node:module';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import ConfigPlugins from 'expo/config-plugins';
-import withForegroundService from '../../plugins/with-foreground-service';
 import { createAgentNotificationsNativeWrapper } from '../../src/lib/agent-notifications-native';
 
-const { compileModsAsync } = ConfigPlugins;
+const require = createRequire(import.meta.url);
+const { compileModsAsync } = require(
+	'expo/config-plugins',
+) as typeof import('expo/config-plugins');
+const withForegroundService = require('../../plugins/with-foreground-service')
+	.default as typeof import('../../plugins/with-foreground-service').default;
 
 async function foregroundPluginSource() {
 	return readFile(
@@ -92,6 +96,11 @@ async function agentNotificationsNativeSource() {
 void test('foreground service plugin defines a separate agent alert channel', async () => {
 	const source = await foregroundPluginSource();
 
+	assert.doesNotMatch(source, /import\s+ConfigPlugins\s+from/);
+	assert.match(
+		source,
+		/AndroidConfig,[\s\S]*withAndroidManifest,[\s\S]*withDangerousMod,[\s\S]*from 'expo\/config-plugins'/,
+	);
 	assert.match(source, /AGENT_ALERT_CHANNEL_ID = "fressh_agent_alerts"/);
 	assert.match(source, /AGENT_ALERT_CHANNEL_NAME = "Fressh Agent Alerts"/);
 	assert.match(source, /NotificationManager\.IMPORTANCE_DEFAULT/);

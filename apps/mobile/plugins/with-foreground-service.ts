@@ -1,9 +1,11 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import ConfigPlugins from 'expo/config-plugins';
-
-const { AndroidConfig, withAndroidManifest, withDangerousMod } = ConfigPlugins;
-type ConfigPlugin = ConfigPlugins.ConfigPlugin;
+import {
+	AndroidConfig,
+	type ConfigPlugin,
+	withAndroidManifest,
+	withDangerousMod,
+} from 'expo/config-plugins';
 
 const PERMISSIONS = [
 	'android.permission.FOREGROUND_SERVICE',
