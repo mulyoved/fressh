@@ -66,7 +66,34 @@ Acknowledgement is app-side. When Fressh opens or selects the matching tmux
 window, it clears the pending dedupe key for that remote/session/window and
 dismisses the notification if it is still visible.
 
-## Remote `mdev` Contract
+## M-Dev Workstream
+
+The M-Dev workstream belongs in the `mulyoved/skills` repository, under the
+`dev-env/mdev` package. It owns the remote event source, event persistence, and
+listener CLI.
+
+### M-Dev Scope
+
+M-Dev should:
+
+- Extend `mdev tmux set status waiting|done [target]` so it appends a
+  notification event after a real status change.
+- Keep `working` and `clear` status behavior unchanged and non-notifying.
+- Resolve stable tmux window metadata for each event.
+- Persist events to a bounded per-user JSONL spool.
+- Expose `mdev tmux notifications listen --session <name>` as a blocking
+  JSONL stream of future events.
+- Support `--since-id <id>` so Fressh can resume after listener restarts.
+- Keep status writes resilient if notification event persistence fails.
+
+M-Dev should not:
+
+- Detect manual `tmux set-option @workmux_status ...` writes.
+- Know about Android notification channels, app foreground state, or Fressh
+  dedupe state.
+- Implement cloud push, account identity, or device registration.
+
+### M-Dev Contract
 
 `mdev tmux set status waiting|done [target]` should:
 
@@ -123,7 +150,49 @@ The spool can be a compact JSONL file under the user's runtime/config state. It
 should be bounded by either last N events or an age limit such as 24 hours so
 long-running environments do not grow without limit.
 
-## Android/Fressh Behavior
+### M-Dev Tests
+
+Remote `mdev` tests:
+
+- `mdev tmux set status waiting` writes `💬` and appends exactly one event.
+- Repeating `waiting` for the same target does not append a duplicate event.
+- `done` appends a new event after `waiting`.
+- `working` and `clear` do not append notification events.
+- `notifications listen` emits valid JSONL for followed events.
+- `notifications listen --since-id <id>` replays events after that id and then
+  follows new events.
+- Event metadata includes session, target, window id/index/name, status, icon,
+  and timestamp.
+- Event spool retention keeps storage bounded.
+
+## Fressh Workstream
+
+The Fressh workstream belongs in the `mulyoved/fressh` repository. It owns the
+Android notification bridge, SSH listener lifecycle, app-side parsing, dedupe,
+and acknowledgement behavior.
+
+### Fressh Scope
+
+Fressh should:
+
+- Start a long-lived listener command over the active SSH connection while the
+  Android foreground service is keeping a tmux-enabled shell alive.
+- Parse newline-delimited `mdev` notification events.
+- Post Android local notifications for `waiting` and `done` events.
+- Deduplicate pending alerts per `connectionId | session | windowId`.
+- Clear pending state when the matching tmux window is visible or selected.
+- Restart the listener with capped backoff after unexpected exits.
+- Keep the interactive terminal session working even if notification listening
+  fails.
+
+Fressh should not:
+
+- Poll tmux status.
+- Detect manual remote tmux status writes.
+- Deliver notifications after the foreground service or SSH connection is gone.
+- Implement cloud push or any server-side delivery mechanism.
+
+### Fressh Behavior
 
 Notification listening follows the Android foreground-service connection
 lifecycle:
@@ -163,7 +232,21 @@ For the first implementation, it is acceptable for tapping to open the shell and
 let acknowledgement occur only when the app observes the matching window as
 visible.
 
-## Error Handling
+### Fressh Tests
+
+Fressh tests:
+
+- JSONL parser accepts valid notification events.
+- JSONL parser rejects malformed lines without stopping the listener.
+- Dedupe suppresses repeated events for the same
+  `connectionId | session | windowId`.
+- Viewing/selecting the matching window clears pending dedupe state.
+- Listener lifecycle follows foreground-service and SSH connection lifecycle.
+- Unexpected listener exit triggers capped restart while connected.
+- Native Android agent notifications can post and cancel without affecting the
+  ongoing SSH foreground notification.
+
+## Cross-Workstream Error Handling
 
 If `mdev tmux notifications listen` is missing or exits with a command error,
 Fressh logs the failure and retries with capped backoff while the SSH connection
@@ -178,31 +261,7 @@ non-zero exit only if the existing status command would normally fail for that
 class of error. The notification path should not make agent status updates
 fragile.
 
-## Testing
-
-Remote `mdev` tests:
-
-- `mdev tmux set status waiting` writes `💬` and appends exactly one event.
-- Repeating `waiting` for the same target does not append a duplicate event.
-- `done` appends a new event after `waiting`.
-- `working` and `clear` do not append notification events.
-- `notifications listen` emits valid JSONL for recent or followed events.
-- Event metadata includes session, target, window id/index/name, status, icon,
-  and timestamp.
-
-Fressh tests:
-
-- JSONL parser accepts valid notification events.
-- JSONL parser rejects malformed lines without stopping the listener.
-- Dedupe suppresses repeated events for the same
-  `connectionId | session | windowId`.
-- Viewing/selecting the matching window clears pending dedupe state.
-- Listener lifecycle follows foreground-service and SSH connection lifecycle.
-- Unexpected listener exit triggers capped restart while connected.
-- Native Android agent notifications can post and cancel without affecting the
-  ongoing SSH foreground notification.
-
-Manual verification:
+## Cross-Workstream Manual Verification
 
 1. Build/install an Android preview build.
 2. Connect to a tmux-enabled remote session.
