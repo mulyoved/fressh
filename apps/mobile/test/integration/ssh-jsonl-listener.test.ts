@@ -25,6 +25,7 @@ type TestStartShellOptions = {
 	tmuxSessionName: string;
 	onClosed?: () => void;
 	abortSignal?: AbortSignal;
+	registerInStore?: boolean;
 };
 type TestOperationOptions = { signal?: AbortSignal };
 
@@ -117,6 +118,7 @@ void test('startSshJsonlListener opens non-tmux shell and sends command', async 
 			tmuxSessionName: '',
 			onClosed: fixture.startShellOptions[0]?.onClosed,
 			abortSignal: fixture.startShellOptions[0]?.abortSignal,
+			registerInStore: false,
 		},
 	]);
 	assert.equal(typeof fixture.startShellOptions[0]?.onClosed, 'function');

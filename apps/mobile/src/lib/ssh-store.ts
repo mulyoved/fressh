@@ -31,10 +31,15 @@ export const useSshStore = create<SshRegistryStore>((set) => ({
 		});
 		const originalStartShellFn = connection.startShell;
 		const startShell: typeof connection.startShell = async (args) => {
+			const { registerInStore = true, ...startShellArgs } =
+				args as typeof args & {
+					registerInStore?: boolean;
+				};
 			const shell = await originalStartShellFn({
-				...args,
+				...startShellArgs,
 				onClosed: (channelId) => {
 					args.onClosed?.(channelId);
+					if (!registerInStore) return;
 					const storeKey = `${connection.connectionId}-${channelId}` as const;
 					logger.debug('shell closed', storeKey);
 					set((s) => {
@@ -47,6 +52,7 @@ export const useSshStore = create<SshRegistryStore>((set) => ({
 				},
 			});
 			const storeKey = `${connection.connectionId}-${shell.channelId}`;
+			if (!registerInStore) return shell;
 			set((s) => ({
 				shells: {
 					...s.shells,

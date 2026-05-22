@@ -4,7 +4,11 @@ import React from 'react';
 import { AppState, Platform } from 'react-native';
 import { create } from 'zustand';
 import { useShallow } from 'zustand/react/shallow';
-import { getStoredConnectionId, pickLatestConnection } from './connection-utils';
+import { AgentNotificationBridgeManager } from './AgentNotificationBridgeManager';
+import {
+	getStoredConnectionId,
+	pickLatestConnection,
+} from './connection-utils';
 import {
 	startForegroundService,
 	stopForegroundService,
@@ -167,7 +171,10 @@ export function AutoConnectManager() {
 						tmuxSessionName = entry.value.tmuxSessionName?.trim() || 'main';
 					}
 				} catch (error) {
-					logger.warn('Failed to load tmux settings for active connection', error);
+					logger.warn(
+						'Failed to load tmux settings for active connection',
+						error,
+					);
 				}
 
 				try {
@@ -263,56 +270,64 @@ export function AutoConnectManager() {
 	}, [attemptAutoConnect]);
 
 	// On disconnect, retry with capped backoff for up to RECONNECT_WINDOW_MS.
-	const scheduleReconnect = React.useCallback(async (reason: string) => {
-		if (reconnectLoopRunningRef.current || isReconnecting || isAutoConnecting) {
-			return;
-		}
-		reconnectLoopRunningRef.current = true;
-		reconnectStartedAtMsRef.current = Date.now();
-		reconnectAttemptRef.current = 0;
-		setReconnecting(true);
-		logger.info('Reconnect cycle started', { reason });
-
-		const attemptWithBackoff = async () => {
+	const scheduleReconnect = React.useCallback(
+		async (reason: string) => {
 			if (
-				!isActiveRef.current &&
-				!(Platform.OS === 'android' && allowBackgroundRef.current)
+				reconnectLoopRunningRef.current ||
+				isReconnecting ||
+				isAutoConnecting
 			) {
-				stopReconnectCycle('app-not-active');
 				return;
 			}
+			reconnectLoopRunningRef.current = true;
+			reconnectStartedAtMsRef.current = Date.now();
+			reconnectAttemptRef.current = 0;
+			setReconnecting(true);
+			logger.info('Reconnect cycle started', { reason });
 
-			const startedAt = reconnectStartedAtMsRef.current ?? Date.now();
-			const elapsedMs = Date.now() - startedAt;
-			if (elapsedMs >= RECONNECT_WINDOW_MS) {
-				logger.warn('Reconnect timeout reached', { elapsedMs });
-				stopReconnectCycle('retry-timeout');
-				return;
-			}
-			const success = await attemptAutoConnect();
-			if (success) {
-				logger.info('Reconnected successfully', { elapsedMs });
-				stopReconnectCycle('reconnected');
-				return;
-			}
-			const attempt = reconnectAttemptRef.current;
-			reconnectAttemptRef.current = attempt + 1;
-			const delayMs =
-				RECONNECT_DELAYS_MS[Math.min(attempt, RECONNECT_DELAYS_MS.length - 1)] ??
-				10_000;
-			reconnectTimerRef.current = setTimeout(() => {
-				void attemptWithBackoff();
-			}, delayMs);
-		};
+			const attemptWithBackoff = async () => {
+				if (
+					!isActiveRef.current &&
+					!(Platform.OS === 'android' && allowBackgroundRef.current)
+				) {
+					stopReconnectCycle('app-not-active');
+					return;
+				}
 
-		await attemptWithBackoff();
-	}, [
-		attemptAutoConnect,
-		isAutoConnecting,
-		isReconnecting,
-		setReconnecting,
-		stopReconnectCycle,
-	]);
+				const startedAt = reconnectStartedAtMsRef.current ?? Date.now();
+				const elapsedMs = Date.now() - startedAt;
+				if (elapsedMs >= RECONNECT_WINDOW_MS) {
+					logger.warn('Reconnect timeout reached', { elapsedMs });
+					stopReconnectCycle('retry-timeout');
+					return;
+				}
+				const success = await attemptAutoConnect();
+				if (success) {
+					logger.info('Reconnected successfully', { elapsedMs });
+					stopReconnectCycle('reconnected');
+					return;
+				}
+				const attempt = reconnectAttemptRef.current;
+				reconnectAttemptRef.current = attempt + 1;
+				const delayMs =
+					RECONNECT_DELAYS_MS[
+						Math.min(attempt, RECONNECT_DELAYS_MS.length - 1)
+					] ?? 10_000;
+				reconnectTimerRef.current = setTimeout(() => {
+					void attemptWithBackoff();
+				}, delayMs);
+			};
+
+			await attemptWithBackoff();
+		},
+		[
+			attemptAutoConnect,
+			isAutoConnecting,
+			isReconnecting,
+			setReconnecting,
+			stopReconnectCycle,
+		],
+	);
 
 	React.useEffect(() => {
 		if (Platform.OS !== 'android') return;
@@ -406,5 +421,5 @@ export function AutoConnectManager() {
 		prevShellCountRef.current = shells.length;
 	}, [scheduleReconnect, shells.length]);
 
-	return null;
+	return <AgentNotificationBridgeManager />;
 }

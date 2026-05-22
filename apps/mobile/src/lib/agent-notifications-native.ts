@@ -44,19 +44,19 @@ export function createAgentNotificationsNativeWrapper({
 }: AgentNotificationsNativeDependencies) {
 	return {
 		async postAgentAlertNotification(input: AgentAlertNotificationInput) {
-			if (getPlatformOS() !== 'android') return;
+			if (getPlatformOS() !== 'android') return false;
 			const nativeModule = getNativeModule();
-			if (!nativeModule) return;
+			if (!nativeModule) return false;
 			if (typeof nativeModule.postAgentAlert !== 'function') {
 				logger.warn('agent alert notification post unavailable');
-				return;
+				return false;
 			}
 			const allowed = await ensureNotificationPermission();
 			if (!allowed) {
 				logger.warn(
 					'notification permission not granted; skipping agent alert',
 				);
-				return;
+				return false;
 			}
 			try {
 				await nativeModule.postAgentAlert(
@@ -68,22 +68,26 @@ export function createAgentNotificationsNativeWrapper({
 					input.target,
 					input.windowId,
 				);
+				return true;
 			} catch (error) {
 				logger.warn('agent alert notification post failed', error);
+				return false;
 			}
 		},
 		async cancelAgentAlertNotification(notificationId: number) {
-			if (getPlatformOS() !== 'android') return;
+			if (getPlatformOS() !== 'android') return false;
 			const nativeModule = getNativeModule();
-			if (!nativeModule) return;
+			if (!nativeModule) return false;
 			if (typeof nativeModule.cancelAgentAlert !== 'function') {
 				logger.warn('agent alert notification cancel unavailable');
-				return;
+				return false;
 			}
 			try {
 				await nativeModule.cancelAgentAlert(notificationId);
+				return true;
 			} catch (error) {
 				logger.warn('agent alert notification cancel failed', error);
+				return false;
 			}
 		},
 	};
@@ -91,10 +95,7 @@ export function createAgentNotificationsNativeWrapper({
 
 async function loadDefaultAgentNotificationWrapper() {
 	const [{ NativeModules, Platform }, { ensureNotificationPermission }] =
-		await Promise.all([
-			import('react-native'),
-			import('./foreground-service'),
-		]);
+		await Promise.all([import('react-native'), import('./foreground-service')]);
 	return createAgentNotificationsNativeWrapper({
 		getPlatformOS: () => Platform.OS,
 		getNativeModule: () =>
@@ -109,11 +110,21 @@ async function loadDefaultAgentNotificationWrapper() {
 export async function postAgentAlertNotification(
 	input: AgentAlertNotificationInput,
 ) {
-	const wrapper = await loadDefaultAgentNotificationWrapper();
-	await wrapper.postAgentAlertNotification(input);
+	try {
+		const wrapper = await loadDefaultAgentNotificationWrapper();
+		return await wrapper.postAgentAlertNotification(input);
+	} catch (error) {
+		logger.warn('agent alert notification wrapper load failed', error);
+		return false;
+	}
 }
 
 export async function cancelAgentAlertNotification(notificationId: number) {
-	const wrapper = await loadDefaultAgentNotificationWrapper();
-	await wrapper.cancelAgentAlertNotification(notificationId);
+	try {
+		const wrapper = await loadDefaultAgentNotificationWrapper();
+		return await wrapper.cancelAgentAlertNotification(notificationId);
+	} catch (error) {
+		logger.warn('agent alert notification wrapper load failed', error);
+		return false;
+	}
 }

@@ -1,17 +1,18 @@
 import assert from 'node:assert/strict';
-import { createRequire } from 'node:module';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import type * as ExpoConfigPlugins from 'expo/config-plugins';
+import type withForegroundServiceType from '../../plugins/with-foreground-service';
 import { createAgentNotificationsNativeWrapper } from '../../src/lib/agent-notifications-native';
 
 const require = createRequire(import.meta.url);
-const { compileModsAsync } = require(
-	'expo/config-plugins',
-) as typeof import('expo/config-plugins');
+const { compileModsAsync } =
+	require('expo/config-plugins') as typeof ExpoConfigPlugins;
 const withForegroundService = require('../../plugins/with-foreground-service')
-	.default as typeof import('../../plugins/with-foreground-service').default;
+	.default as typeof withForegroundServiceType;
 
 async function foregroundPluginSource() {
 	return readFile(
@@ -258,8 +259,16 @@ void test('agent notification wrapper ignores non-Android platforms and missing 
 		},
 		logger,
 	});
-	await iosWrapper.postAgentAlertNotification(agentAlertInput);
-	await iosWrapper.cancelAgentAlertNotification(agentAlertInput.notificationId);
+	assert.equal(
+		await iosWrapper.postAgentAlertNotification(agentAlertInput),
+		false,
+	);
+	assert.equal(
+		await iosWrapper.cancelAgentAlertNotification(
+			agentAlertInput.notificationId,
+		),
+		false,
+	);
 
 	const missingModuleWrapper = createAgentNotificationsNativeWrapper({
 		getPlatformOS: () => 'android',
@@ -270,9 +279,15 @@ void test('agent notification wrapper ignores non-Android platforms and missing 
 		},
 		logger,
 	});
-	await missingModuleWrapper.postAgentAlertNotification(agentAlertInput);
-	await missingModuleWrapper.cancelAgentAlertNotification(
-		agentAlertInput.notificationId,
+	assert.equal(
+		await missingModuleWrapper.postAgentAlertNotification(agentAlertInput),
+		false,
+	);
+	assert.equal(
+		await missingModuleWrapper.cancelAgentAlertNotification(
+			agentAlertInput.notificationId,
+		),
+		false,
 	);
 
 	assert.deepEqual(nativeCalls, []);
@@ -324,7 +339,7 @@ void test('agent notification wrapper checks permission before posting native al
 		logger,
 	});
 
-	await wrapper.postAgentAlertNotification(agentAlertInput);
+	assert.equal(await wrapper.postAgentAlertNotification(agentAlertInput), true);
 
 	assert.deepEqual(calls, ['permission', 'native-post']);
 });
@@ -345,7 +360,7 @@ void test('agent notification wrapper passes exact notification id to native can
 		logger,
 	});
 
-	await wrapper.cancelAgentAlertNotification(98765);
+	assert.equal(await wrapper.cancelAgentAlertNotification(98765), true);
 
 	assert.deepEqual(calls, [98765]);
 });
@@ -367,7 +382,10 @@ void test('agent notification wrapper skips native post when notification permis
 		logger,
 	});
 
-	await wrapper.postAgentAlertNotification(agentAlertInput);
+	assert.equal(
+		await wrapper.postAgentAlertNotification(agentAlertInput),
+		false,
+	);
 
 	assert.deepEqual(calls, ['permission']);
 	assert.deepEqual(entries, [
@@ -384,12 +402,24 @@ void test('agent notification wrapper logs and returns cleanly when native metho
 		logger,
 	});
 
-	await assert.doesNotReject(wrapper.postAgentAlertNotification(agentAlertInput));
+	await assert.doesNotReject(
+		wrapper.postAgentAlertNotification(agentAlertInput),
+	);
 	await assert.doesNotReject(
 		wrapper.cancelAgentAlertNotification(agentAlertInput.notificationId),
 	);
+	assert.equal(
+		await wrapper.postAgentAlertNotification(agentAlertInput),
+		false,
+	);
+	assert.equal(
+		await wrapper.cancelAgentAlertNotification(agentAlertInput.notificationId),
+		false,
+	);
 
 	assert.deepEqual(entries, [
+		['agent alert notification post unavailable'],
+		['agent alert notification cancel unavailable'],
 		['agent alert notification post unavailable'],
 		['agent alert notification cancel unavailable'],
 	]);
@@ -413,12 +443,24 @@ void test('agent notification wrapper catches and logs native post and cancel fa
 		logger,
 	});
 
-	await assert.doesNotReject(wrapper.postAgentAlertNotification(agentAlertInput));
+	await assert.doesNotReject(
+		wrapper.postAgentAlertNotification(agentAlertInput),
+	);
 	await assert.doesNotReject(
 		wrapper.cancelAgentAlertNotification(agentAlertInput.notificationId),
 	);
+	assert.equal(
+		await wrapper.postAgentAlertNotification(agentAlertInput),
+		false,
+	);
+	assert.equal(
+		await wrapper.cancelAgentAlertNotification(agentAlertInput.notificationId),
+		false,
+	);
 
 	assert.deepEqual(entries, [
+		['agent alert notification post failed', postError],
+		['agent alert notification cancel failed', cancelError],
 		['agent alert notification post failed', postError],
 		['agent alert notification cancel failed', cancelError],
 	]);

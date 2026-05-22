@@ -74,6 +74,9 @@ export async function startSshJsonlListener(input: {
 		tmuxSessionName: '',
 		onClosed: () => reportExit(),
 		abortSignal: operationAbortSignal(),
+		registerInStore: false,
+	} as Parameters<SshConnection['startShell']>[0] & {
+		registerInStore: false;
 	});
 	if (stopped) {
 		await closeShell();
@@ -147,9 +150,10 @@ function timeoutSignal(timeoutMs: number): AbortSignal {
 		controller.abort();
 	}, timeoutMs);
 
-	if (typeof timer === 'object' && 'unref' in timer) {
-		timer.unref();
-	}
+	const maybeNodeTimer = timer as ReturnType<typeof setTimeout> & {
+		unref?: () => void;
+	};
+	maybeNodeTimer.unref?.();
 
 	return controller.signal;
 }
