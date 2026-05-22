@@ -1,48 +1,85 @@
 import assert from 'node:assert/strict';
 import { mock, test } from 'node:test';
+import { setImmediate as waitImmediate } from 'node:timers/promises';
 import { startSshJsonlListener } from '../../src/lib/ssh-jsonl-listener';
 
 function bytes(text: string): ArrayBuffer {
 	return new TextEncoder().encode(text).buffer as ArrayBuffer;
 }
 
-type TestEvent = { bytes: ArrayBuffer; stream: 'stdout' | 'stderr' };
+function splitBytes(text: string, splitAt: number): [ArrayBuffer, ArrayBuffer] {
+	const encoded = new TextEncoder().encode(text);
+	return [
+		encoded.slice(0, splitAt).buffer as ArrayBuffer,
+		encoded.slice(splitAt).buffer as ArrayBuffer,
+	];
+}
+
+type TestEvent =
+	| { bytes: ArrayBuffer; stream: 'stdout' | 'stderr' }
+	| { fromSeq: bigint; toSeq: bigint };
 type TestListener = (event: TestEvent) => void;
+type TestStartShellOptions = {
+	term: string;
+	useTmux: boolean;
+	tmuxSessionName: string;
+	onClosed?: () => void;
+	abortSignal?: AbortSignal;
+};
+type TestOperationOptions = { signal?: AbortSignal };
 
 function createTestConnection(options?: {
-	sendData?: (data: ArrayBuffer) => Promise<void>;
-	close?: () => Promise<void>;
+	addListener?: (cb: TestListener) => bigint;
+	removeListener?: (id: bigint) => void;
+	sendData?: (data: ArrayBuffer, opts?: TestOperationOptions) => Promise<void>;
+	close?: (opts?: TestOperationOptions) => Promise<void>;
+	startShell?: (input: TestStartShellOptions) => Promise<unknown>;
+	onStartShell?: (input: TestStartShellOptions) => void;
 }) {
 	const sent: string[] = [];
+	const sendOptions: (TestOperationOptions | undefined)[] = [];
+	const closeOptions: (TestOperationOptions | undefined)[] = [];
 	const removed: bigint[] = [];
-	const startShellOptions: unknown[] = [];
+	const startShellOptions: TestStartShellOptions[] = [];
 	let listener: TestListener | null = null;
 	let closed = 0;
 
 	const shell = {
 		channelId: 7,
-		addListener: (cb: TestListener) => {
-			listener = cb;
-			return 99n;
-		},
-		removeListener: (id: bigint) => {
-			removed.push(id);
-		},
-		sendData:
-			options?.sendData ??
-			(async (data: ArrayBuffer) => {
+		addListener:
+			options?.addListener ??
+			((cb: TestListener) => {
+				listener = cb;
+				return 99n;
+			}),
+		removeListener:
+			options?.removeListener ??
+			((id: bigint) => {
+				removed.push(id);
+			}),
+		sendData: async (data: ArrayBuffer, opts?: TestOperationOptions) => {
+			sendOptions.push(opts);
+			if (options?.sendData) {
+				await options.sendData(data, opts);
+			} else {
 				sent.push(new TextDecoder().decode(data));
-			}),
-		close:
-			options?.close ??
-			(async () => {
+			}
+		},
+		close: async (opts?: TestOperationOptions) => {
+			closeOptions.push(opts);
+			if (options?.close) {
+				await options.close(opts);
+			} else {
 				closed += 1;
-			}),
+			}
+		},
 	};
 
 	const connection = {
-		startShell: async (input: unknown) => {
+		startShell: async (input: TestStartShellOptions) => {
 			startShellOptions.push(input);
+			options?.onStartShell?.(input);
+			if (options?.startShell) return options.startShell(input);
 			return shell;
 		},
 	};
@@ -50,7 +87,10 @@ function createTestConnection(options?: {
 	return {
 		connection,
 		emit: (event: TestEvent) => listener?.(event),
+		triggerClosed: () => startShellOptions.at(-1)?.onClosed?.(),
 		sent,
+		sendOptions,
+		closeOptions,
 		removed,
 		get closed() {
 			return closed;
@@ -71,18 +111,32 @@ void test('startSshJsonlListener opens non-tmux shell and sends command', async 
 	});
 
 	assert.deepEqual(fixture.startShellOptions, [
-		{ term: 'Xterm', useTmux: false, tmuxSessionName: '' },
+		{
+			term: 'Xterm',
+			useTmux: false,
+			tmuxSessionName: '',
+			onClosed: fixture.startShellOptions[0]?.onClosed,
+			abortSignal: fixture.startShellOptions[0]?.abortSignal,
+		},
 	]);
+	assert.equal(typeof fixture.startShellOptions[0]?.onClosed, 'function');
+	assert.equal(
+		fixture.startShellOptions[0]?.abortSignal instanceof AbortSignal,
+		true,
+	);
 	assert.deepEqual(fixture.sent, [
 		'mdev tmux notifications listen --session main\n',
 	]);
+	assert.equal(fixture.sendOptions[0]?.signal instanceof AbortSignal, true);
 
 	await handle.stop();
+	assert.equal(fixture.closeOptions[0]?.signal instanceof AbortSignal, true);
 });
 
-void test('startSshJsonlListener splits stdout chunks and ignores blank lines', async () => {
+void test('startSshJsonlListener splits stdout chunks and preserves payload spacing', async () => {
 	const fixture = createTestConnection();
 	const lines: string[] = [];
+	const [utf8Start, utf8End] = splitBytes('{"snow":"☃"}\n', 11);
 
 	const handle = await startSshJsonlListener({
 		connection: fixture.connection as never,
@@ -94,9 +148,12 @@ void test('startSshJsonlListener splits stdout chunks and ignores blank lines', 
 	fixture.emit({ bytes: bytes('{"a":'), stream: 'stdout' });
 	fixture.emit({ bytes: bytes('1}\r\n  \n{"b":2}\n  {"c"'), stream: 'stdout' });
 	fixture.emit({ bytes: bytes(':3}\n'), stream: 'stdout' });
+	fixture.emit({ bytes: utf8Start, stream: 'stdout' });
+	fixture.emit({ bytes: utf8End, stream: 'stdout' });
 	fixture.emit({ bytes: bytes('{"ignored":true}\n'), stream: 'stderr' });
+	fixture.emit({ fromSeq: 1n, toSeq: 2n });
 
-	assert.deepEqual(lines, ['{"a":1}', '{"b":2}', '{"c":3}']);
+	assert.deepEqual(lines, ['{"a":1}', '{"b":2}', '  {"c":3}', '{"snow":"☃"}']);
 
 	await handle.stop();
 });
@@ -139,8 +196,146 @@ void test('startSshJsonlListener reports send failures through onExit', async ()
 
 	assert.deepEqual(exits, [error]);
 	assert.equal(warn.mock.callCount(), 1);
+	assert.deepEqual(fixture.removed, [99n]);
+	assert.equal(fixture.closed, 1);
 
 	await handle.stop();
+	assert.equal(fixture.closed, 1);
+});
+
+void test('startSshJsonlListener cleans up if listener attachment fails', async () => {
+	const error = new Error('add listener failed');
+	const fixture = createTestConnection({
+		addListener: () => {
+			throw error;
+		},
+	});
+
+	await assert.rejects(
+		startSshJsonlListener({
+			connection: fixture.connection as never,
+			command: 'listen',
+			onLine: () => {},
+			onExit: () => {},
+		}),
+		error,
+	);
+
+	assert.equal(fixture.closed, 1);
+});
+
+void test('startSshJsonlListener propagates startShell failures', async () => {
+	const error = new Error('start shell failed');
+	const fixture = createTestConnection({
+		startShell: async () => {
+			throw error;
+		},
+	});
+
+	await assert.rejects(
+		startSshJsonlListener({
+			connection: fixture.connection as never,
+			command: 'listen',
+			onLine: () => {},
+			onExit: () => {},
+		}),
+		error,
+	);
+
+	assert.deepEqual(fixture.sent, []);
+	assert.equal(fixture.closed, 0);
+});
+
+void test('startSshJsonlListener reports line handler failures through onExit', async () => {
+	const error = new Error('parse failed');
+	const fixture = createTestConnection();
+	const exits: unknown[] = [];
+
+	const handle = await startSshJsonlListener({
+		connection: fixture.connection as never,
+		command: 'listen',
+		onLine: () => {
+			throw error;
+		},
+		onExit: (exitError) => exits.push(exitError),
+	});
+
+	fixture.emit({ bytes: bytes('{"bad":true}\n'), stream: 'stdout' });
+	await waitImmediate();
+	fixture.emit({ bytes: bytes('{"after":"failure"}\n'), stream: 'stdout' });
+
+	assert.deepEqual(exits, [error]);
+	assert.deepEqual(fixture.removed, [99n]);
+	assert.equal(fixture.closed, 1);
+
+	await handle.stop();
+	assert.equal(fixture.closed, 1);
+});
+
+void test('startSshJsonlListener continues cleanup if listener removal fails', async () => {
+	const removeError = new Error('remove failed');
+	const warn = mock.method(console, 'warn', () => {});
+	const fixture = createTestConnection({
+		removeListener: () => {
+			throw removeError;
+		},
+	});
+	const exits: unknown[] = [];
+
+	const handle = await startSshJsonlListener({
+		connection: fixture.connection as never,
+		command: 'listen',
+		onLine: () => {},
+		onExit: (exitError) => exits.push(exitError),
+	});
+
+	await handle.stop();
+
+	assert.deepEqual(exits, []);
+	assert.equal(fixture.closed, 1);
+	assert.equal(warn.mock.calls[0]?.arguments[1], removeError);
+});
+
+void test('startSshJsonlListener stops startup if shell closes before command send', async () => {
+	const fixture = createTestConnection({
+		onStartShell: (input) => input.onClosed?.(),
+	});
+	const exits: unknown[] = [];
+
+	const handle = await startSshJsonlListener({
+		connection: fixture.connection as never,
+		command: 'listen',
+		onLine: () => {},
+		onExit: (exitError) => exits.push(exitError),
+	});
+
+	assert.deepEqual(exits, [undefined]);
+	assert.deepEqual(fixture.sent, []);
+	assert.deepEqual(fixture.removed, []);
+	assert.equal(fixture.closed, 1);
+
+	await handle.stop();
+	assert.equal(fixture.closed, 1);
+});
+
+void test('startSshJsonlListener reports shell closure through onExit', async () => {
+	const fixture = createTestConnection();
+	const exits: unknown[] = [];
+
+	const handle = await startSshJsonlListener({
+		connection: fixture.connection as never,
+		command: 'listen',
+		onLine: () => {},
+		onExit: (exitError) => exits.push(exitError),
+	});
+
+	fixture.triggerClosed();
+
+	assert.deepEqual(exits, [undefined]);
+	assert.deepEqual(fixture.removed, [99n]);
+
+	await handle.stop();
+	assert.equal(fixture.closed, 0);
 });
 
 void test('startSshJsonlListener logs and ignores close failures on stop', async () => {

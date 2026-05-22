@@ -5,6 +5,8 @@ import type {
 	TerminalChunk,
 } from '@fressh/react-native-uniffi-russh';
 
+export const DEFAULT_SSH_JSONL_LISTENER_OPERATION_TIMEOUT_MS = 30_000;
+
 export type SshJsonlListenerHandle = {
 	stop: () => Promise<void>;
 };
@@ -12,57 +14,123 @@ export type SshJsonlListenerHandle = {
 export async function startSshJsonlListener(input: {
 	connection: SshConnection;
 	command: string;
+	operationTimeoutMs?: number;
 	onLine: (line: string) => void;
 	onExit: (error?: unknown) => void;
 }): Promise<SshJsonlListenerHandle> {
-	const shell = await input.connection.startShell({
-		term: 'Xterm',
-		useTmux: false,
-		tmuxSessionName: '',
-	});
-	const decoder = new TextDecoder();
-	const encoder = new TextEncoder();
-	let buffer = '';
+	const operationTimeoutMs =
+		input.operationTimeoutMs ?? DEFAULT_SSH_JSONL_LISTENER_OPERATION_TIMEOUT_MS;
 	let stopped = false;
+	let listenerId: bigint | null = null;
+	let shell: Awaited<ReturnType<SshConnection['startShell']>> | null = null;
+	const operationAbortSignal = () => timeoutSignal(operationTimeoutMs);
 
-	const listenerId = shell.addListener(
-		(event) => {
-			if (stopped || !isStdoutTerminalChunk(event)) return;
+	const removeListener = () => {
+		if (!shell || listenerId === null) return;
+		try {
+			shell.removeListener(listenerId);
+		} catch (error) {
+			console.warn('failed to remove JSONL listener', error);
+		} finally {
+			listenerId = null;
+		}
+	};
 
-			buffer += decoder.decode(event.bytes, { stream: true });
-			const lines = buffer.split(/\r?\n/);
-			buffer = lines.pop() ?? '';
+	const closeShell = async () => {
+		if (!shell) return;
+		try {
+			await shell.close({ signal: operationAbortSignal() });
+		} catch (error) {
+			console.warn('failed to close JSONL listener shell', error);
+		}
+	};
 
-			for (const line of lines) {
-				const trimmed = line.trim();
-				if (trimmed) input.onLine(trimmed);
-			}
-		},
-		{ cursor: { mode: 'live' } },
-	);
-
-	try {
-		await shell.sendData(
-			encoder.encode(`${input.command}\n`).buffer as ArrayBuffer,
-		);
-	} catch (error) {
-		console.warn('failed to start JSONL listener command', error);
+	const reportExit = (error?: unknown) => {
+		if (stopped) return;
+		stopped = true;
+		removeListener();
 		input.onExit(error);
-	}
-
-	return {
+	};
+	const failListener = async (error: unknown) => {
+		if (stopped) return;
+		stopped = true;
+		removeListener();
+		await closeShell();
+		input.onExit(error);
+	};
+	const handle: SshJsonlListenerHandle = {
 		stop: async () => {
 			if (stopped) return;
 
 			stopped = true;
-			shell.removeListener(listenerId);
-			try {
-				await shell.close();
-			} catch (error) {
-				console.warn('failed to close JSONL listener shell', error);
-			}
+			removeListener();
+			await closeShell();
 		},
 	};
+
+	shell = await input.connection.startShell({
+		term: 'Xterm',
+		useTmux: false,
+		tmuxSessionName: '',
+		onClosed: () => reportExit(),
+		abortSignal: operationAbortSignal(),
+	});
+	if (stopped) {
+		await closeShell();
+		return handle;
+	}
+	const decoder = new TextDecoder();
+	const encoder = new TextEncoder();
+	let buffer = '';
+
+	try {
+		listenerId = shell.addListener(
+			(event) => {
+				if (stopped || !isStdoutTerminalChunk(event)) return;
+
+				buffer += decoder.decode(event.bytes, { stream: true });
+				const lines = buffer.split(/\r?\n/);
+				buffer = lines.pop() ?? '';
+
+				for (const line of lines) {
+					if (!line.trim()) continue;
+					try {
+						input.onLine(line);
+					} catch (error) {
+						void failListener(error);
+						break;
+					}
+				}
+			},
+			{ cursor: { mode: 'live' } },
+		);
+	} catch (error) {
+		stopped = true;
+		await closeShell();
+		throw error;
+	}
+	if (stopped) {
+		removeListener();
+		await closeShell();
+		return handle;
+	}
+
+	try {
+		await shell.sendData(
+			encoder.encode(`${input.command}\n`).buffer as ArrayBuffer,
+			{ signal: operationAbortSignal() },
+		);
+	} catch (error) {
+		console.warn('failed to start JSONL listener command', error);
+		if (!stopped) {
+			stopped = true;
+			removeListener();
+			await closeShell();
+			input.onExit(error);
+		}
+	}
+
+	return handle;
 }
 
 function isTerminalChunk(event: ListenerEvent): event is TerminalChunk {
@@ -71,4 +139,17 @@ function isTerminalChunk(event: ListenerEvent): event is TerminalChunk {
 
 function isStdoutTerminalChunk(event: ListenerEvent): event is TerminalChunk {
 	return isTerminalChunk(event) && event.stream === 'stdout' && !!event.bytes;
+}
+
+function timeoutSignal(timeoutMs: number): AbortSignal {
+	const controller = new AbortController();
+	const timer = setTimeout(() => {
+		controller.abort();
+	}, timeoutMs);
+
+	if (typeof timer === 'object' && 'unref' in timer) {
+		timer.unref();
+	}
+
+	return controller.signal;
 }
