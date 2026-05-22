@@ -36,11 +36,22 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === 'object' && value !== null;
 }
 
+function hasStringProperties<const TKeys extends readonly string[]>(
+	value: Record<string, unknown>,
+	keys: TKeys,
+): value is Record<string, unknown> & Record<TKeys[number], string> {
+	for (const key of keys) {
+		if (typeof value[key] !== 'string') return false;
+	}
+	return true;
+}
+
 function isValidCreatedAtMs(
 	value: unknown,
 	options: Required<AgentNotificationParseOptions>,
 ): value is number {
 	return (
+		typeof value === 'number' &&
 		Number.isSafeInteger(value) &&
 		value >= 0 &&
 		value <= options.nowMs + options.maxFutureSkewMs
@@ -91,9 +102,7 @@ export function parseAgentNotificationLine(
 		'windowIndex',
 		'windowName',
 	] as const;
-	for (const key of stringKeys) {
-		if (typeof parsed[key] !== 'string') return null;
-	}
+	if (!hasStringProperties(parsed, stringKeys)) return null;
 	if (!isValidCreatedAtMs(parsed.createdAtMs, parseOptions)) return null;
 
 	return {
