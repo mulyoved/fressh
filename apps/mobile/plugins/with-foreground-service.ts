@@ -36,7 +36,7 @@ class SshForegroundService : Service() {
 
   override fun onCreate() {
     super.onCreate()
-    ensureNotificationChannel()
+    ensureNotificationChannels(this)
   }
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -58,18 +58,6 @@ class SshForegroundService : Service() {
   }
 
   override fun onBind(intent: Intent?): IBinder? = null
-
-  private fun ensureNotificationChannel() {
-    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
-    val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-    val channel = NotificationChannel(
-      CHANNEL_ID,
-      CHANNEL_NAME,
-      NotificationManager.IMPORTANCE_LOW
-    )
-    channel.description = CHANNEL_DESCRIPTION
-    manager.createNotificationChannel(channel)
-  }
 
   private fun buildNotification(title: String, message: String): Notification {
     val intent = Intent(this, MainActivity::class.java).apply {
@@ -117,11 +105,71 @@ class SshForegroundService : Service() {
     private const val CHANNEL_ID = "fressh_ssh"
     private const val CHANNEL_NAME = "Fressh SSH"
     private const val CHANNEL_DESCRIPTION = "Keeps SSH sessions alive"
+    private const val AGENT_ALERT_CHANNEL_ID = "fressh_agent_alerts"
+    private const val AGENT_ALERT_CHANNEL_NAME = "Fressh Agent Alerts"
+    private const val AGENT_ALERT_CHANNEL_DESCRIPTION = "Agent status notifications"
     private const val WAKE_LOCK_TAG = "Fressh::SshForegroundService"
     private const val DEFAULT_TITLE = "Fressh Terminal"
     private const val DEFAULT_MESSAGE = "Keeping SSH connection alive"
     const val EXTRA_TITLE = "title"
     const val EXTRA_MESSAGE = "message"
+    const val EXTRA_AGENT_CONNECTION_ID = "agentConnectionId"
+    const val EXTRA_AGENT_SESSION = "agentSession"
+    const val EXTRA_AGENT_TARGET = "agentTarget"
+    const val EXTRA_AGENT_WINDOW_ID = "agentWindowId"
+
+    private fun ensureNotificationChannels(context: Context) {
+      if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+      val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+      val channel = NotificationChannel(
+        CHANNEL_ID,
+        CHANNEL_NAME,
+        NotificationManager.IMPORTANCE_LOW
+      )
+      channel.description = CHANNEL_DESCRIPTION
+      manager.createNotificationChannel(channel)
+
+      val alertChannel = NotificationChannel(
+        AGENT_ALERT_CHANNEL_ID,
+        AGENT_ALERT_CHANNEL_NAME,
+        NotificationManager.IMPORTANCE_DEFAULT
+      )
+      alertChannel.description = AGENT_ALERT_CHANNEL_DESCRIPTION
+      manager.createNotificationChannel(alertChannel)
+    }
+
+    private fun buildAgentAlertNotification(
+      context: Context,
+      title: String,
+      message: String,
+      connectionId: String,
+      session: String,
+      target: String,
+      windowId: String
+    ): Notification {
+      val intent = Intent(context, MainActivity::class.java).apply {
+        flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        putExtra(EXTRA_AGENT_CONNECTION_ID, connectionId)
+        putExtra(EXTRA_AGENT_SESSION, session)
+        putExtra(EXTRA_AGENT_TARGET, target)
+        putExtra(EXTRA_AGENT_WINDOW_ID, windowId)
+      }
+      val pendingIntent = PendingIntent.getActivity(
+        context,
+        connectionId.hashCode() xor windowId.hashCode(),
+        intent,
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+      )
+
+      return NotificationCompat.Builder(context, AGENT_ALERT_CHANNEL_ID)
+        .setContentTitle(title)
+        .setContentText(message)
+        .setSmallIcon(R.mipmap.ic_launcher)
+        .setContentIntent(pendingIntent)
+        .setAutoCancel(true)
+        .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+        .build()
+    }
 
     fun start(context: Context, title: String, message: String) {
       val intent = Intent(context, SshForegroundService::class.java).apply {
@@ -134,6 +182,34 @@ class SshForegroundService : Service() {
     fun stop(context: Context) {
       val intent = Intent(context, SshForegroundService::class.java)
       context.stopService(intent)
+    }
+
+    fun postAgentAlert(
+      context: Context,
+      notificationId: Int,
+      title: String,
+      message: String,
+      connectionId: String,
+      session: String,
+      target: String,
+      windowId: String
+    ) {
+      ensureNotificationChannels(context)
+      val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+      manager.notify(notificationId, buildAgentAlertNotification(
+        context,
+        title,
+        message,
+        connectionId,
+        session,
+        target,
+        windowId
+      ))
+    }
+
+    fun cancelAgentAlert(context: Context, notificationId: Int) {
+      val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+      manager.cancel(notificationId)
     }
   }
 }
@@ -168,6 +244,47 @@ class ForegroundServiceModule(
       promise.resolve(null)
     } catch (e: Exception) {
       promise.reject("FOREGROUND_SERVICE_STOP_FAILED", e)
+    }
+  }
+
+  @ReactMethod
+  fun postAgentAlert(
+    notificationId: Int,
+    title: String,
+    message: String,
+    connectionId: String,
+    session: String,
+    target: String,
+    windowId: String,
+    promise: Promise
+  ) {
+    try {
+      SshForegroundService.postAgentAlert(
+        reactContext.applicationContext,
+        notificationId,
+        title,
+        message,
+        connectionId,
+        session,
+        target,
+        windowId
+      )
+      promise.resolve(null)
+    } catch (e: Exception) {
+      promise.reject("AGENT_ALERT_POST_FAILED", e)
+    }
+  }
+
+  @ReactMethod
+  fun cancelAgentAlert(notificationId: Int, promise: Promise) {
+    try {
+      SshForegroundService.cancelAgentAlert(
+        reactContext.applicationContext,
+        notificationId
+      )
+      promise.resolve(null)
+    } catch (e: Exception) {
+      promise.reject("AGENT_ALERT_CANCEL_FAILED", e)
     }
   }
 }
