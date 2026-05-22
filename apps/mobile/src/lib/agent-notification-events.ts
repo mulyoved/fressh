@@ -29,6 +29,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === 'object' && value !== null;
 }
 
+function isValidCreatedAtMs(value: unknown): value is number {
+	return Number.isSafeInteger(value) && value >= 0;
+}
+
 export function parseAgentNotificationLine(
 	line: string,
 ): AgentNotificationLine | null {
@@ -43,7 +47,7 @@ export function parseAgentNotificationLine(
 	if (parsed.type === 'heartbeat') {
 		if (
 			typeof parsed.session !== 'string' ||
-			typeof parsed.createdAtMs !== 'number'
+			!isValidCreatedAtMs(parsed.createdAtMs)
 		) {
 			return null;
 		}
@@ -69,7 +73,7 @@ export function parseAgentNotificationLine(
 	for (const key of stringKeys) {
 		if (typeof parsed[key] !== 'string') return null;
 	}
-	if (typeof parsed.createdAtMs !== 'number') return null;
+	if (!isValidCreatedAtMs(parsed.createdAtMs)) return null;
 
 	return {
 		id: parsed.id,
@@ -104,7 +108,7 @@ export function createAgentNotificationPendingKey(input: {
 	session: string;
 	windowId: string;
 }): string {
-	return `${input.connectionId}|${input.session}|${input.windowId}`;
+	return JSON.stringify([input.connectionId, input.session, input.windowId]);
 }
 
 export function createStableNotificationId(key: string): number {
@@ -113,7 +117,7 @@ export function createStableNotificationId(key: string): number {
 		hash ^= key.charCodeAt(i);
 		hash = Math.imul(hash, 0x01000193);
 	}
-	return hash >>> 0;
+	return hash & 0x7fffffff;
 }
 
 export class AgentNotificationDedupe {

@@ -87,6 +87,70 @@ void test('parseAgentNotificationLine rejects malformed lines', () => {
 	);
 });
 
+void test('parseAgentNotificationLine rejects invalid heartbeat timestamps', () => {
+	const invalidLines = [
+		'{"type":"heartbeat","session":"main","createdAtMs":1e999}',
+		JSON.stringify({
+			type: 'heartbeat',
+			session: 'main',
+			createdAtMs: 1000.5,
+		}),
+		JSON.stringify({
+			type: 'heartbeat',
+			session: 'main',
+			createdAtMs: -1,
+		}),
+		JSON.stringify({
+			type: 'heartbeat',
+			session: 'main',
+			createdAtMs: '1000',
+		}),
+		JSON.stringify({
+			type: 'heartbeat',
+			session: 'main',
+		}),
+	];
+	for (const line of invalidLines) {
+		assert.equal(parseAgentNotificationLine(line), null);
+	}
+});
+
+void test('parseAgentNotificationLine rejects invalid tmux status timestamps', () => {
+	const buildLine = (createdAtMs: string): string =>
+		[
+			'{"id":"main:@12:1000:waiting"',
+			',"type":"tmux_status"',
+			',"session":"main"',
+			',"target":"main:4"',
+			',"windowId":"@12"',
+			',"windowIndex":"4"',
+			',"windowName":"fressh"',
+			',"status":"waiting"',
+			',"icon":"💬"',
+			`,"createdAtMs":${createdAtMs}}`,
+		].join('');
+	const invalidLines = [
+		buildLine('1e999'),
+		buildLine('1000.5'),
+		buildLine('-1'),
+		buildLine('"1000"'),
+		JSON.stringify({
+			id: 'main:@12:1000:waiting',
+			type: 'tmux_status',
+			session: 'main',
+			target: 'main:4',
+			windowId: '@12',
+			windowIndex: '4',
+			windowName: 'fressh',
+			status: 'waiting',
+			icon: '💬',
+		}),
+	];
+	for (const line of invalidLines) {
+		assert.equal(parseAgentNotificationLine(line), null);
+	}
+});
+
 void test('listen command quotes session and since id', () => {
 	assert.equal(
 		buildAgentNotificationListenCommand("main'quoted"),
@@ -104,20 +168,47 @@ void test('pending keys and notification ids are stable', () => {
 		session: 'main',
 		windowId: '@12',
 	});
-	assert.equal(key, 'conn-1|main|@12');
+	assert.equal(key, '["conn-1","main","@12"]');
 	assert.equal(
 		createStableNotificationId(key),
 		createStableNotificationId(key),
 	);
+	assert.ok(createStableNotificationId(key) >= 0);
+	assert.ok(createStableNotificationId(key) <= 0x7fffffff);
 	assert.notEqual(
 		createStableNotificationId(key),
-		createStableNotificationId('conn-1|main|@13'),
+		createStableNotificationId(
+			createAgentNotificationPendingKey({
+				connectionId: 'conn-1',
+				session: 'main',
+				windowId: '@13',
+			}),
+		),
+	);
+});
+
+void test('pending keys are unambiguous when values contain delimiters', () => {
+	assert.notEqual(
+		createAgentNotificationPendingKey({
+			connectionId: 'a|b',
+			session: 'c',
+			windowId: 'd',
+		}),
+		createAgentNotificationPendingKey({
+			connectionId: 'a',
+			session: 'b|c',
+			windowId: 'd',
+		}),
 	);
 });
 
 void test('dedupe posts once until matching key is acknowledged', () => {
 	const dedupe = new AgentNotificationDedupe();
-	const key = 'conn-1|main|@12';
+	const key = createAgentNotificationPendingKey({
+		connectionId: 'conn-1',
+		session: 'main',
+		windowId: '@12',
+	});
 
 	assert.equal(dedupe.markPendingIfNew(key, 42), true);
 	assert.equal(dedupe.markPendingIfNew(key, 42), false);
@@ -127,15 +218,32 @@ void test('dedupe posts once until matching key is acknowledged', () => {
 
 void test('dedupe acknowledges matching pending keys', () => {
 	const dedupe = new AgentNotificationDedupe();
+	const conn1Main12 = createAgentNotificationPendingKey({
+		connectionId: 'conn-1',
+		session: 'main',
+		windowId: '@12',
+	});
+	const conn1Main13 = createAgentNotificationPendingKey({
+		connectionId: 'conn-1',
+		session: 'main',
+		windowId: '@13',
+	});
+	const conn2Main12 = createAgentNotificationPendingKey({
+		connectionId: 'conn-2',
+		session: 'main',
+		windowId: '@12',
+	});
 
-	assert.equal(dedupe.markPendingIfNew('conn-1|main|@12', 42), true);
-	assert.equal(dedupe.markPendingIfNew('conn-1|main|@13', 43), true);
-	assert.equal(dedupe.markPendingIfNew('conn-2|main|@12', 44), true);
+	assert.equal(dedupe.markPendingIfNew(conn1Main12, 42), true);
+	assert.equal(dedupe.markPendingIfNew(conn1Main13, 43), true);
+	assert.equal(dedupe.markPendingIfNew(conn2Main12, 44), true);
 
 	assert.deepEqual(
-		dedupe.acknowledgeMatching((key) => key.startsWith('conn-1|main|')),
+		dedupe.acknowledgeMatching(
+			(key) => key === conn1Main12 || key === conn1Main13,
+		),
 		[42, 43],
 	);
-	assert.equal(dedupe.markPendingIfNew('conn-1|main|@12', 42), true);
-	assert.equal(dedupe.markPendingIfNew('conn-2|main|@12', 44), false);
+	assert.equal(dedupe.markPendingIfNew(conn1Main12, 42), true);
+	assert.equal(dedupe.markPendingIfNew(conn2Main12, 44), false);
 });
