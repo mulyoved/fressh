@@ -1,7 +1,13 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
+import ConfigPlugins from 'expo/config-plugins';
+import withForegroundService from '../../plugins/with-foreground-service';
 import { createAgentNotificationsNativeWrapper } from '../../src/lib/agent-notifications-native';
+
+const { compileModsAsync } = ConfigPlugins;
 
 async function foregroundPluginSource() {
 	return readFile(
@@ -29,6 +35,50 @@ async function committedSshForegroundServiceSource() {
 		).pathname,
 		'utf8',
 	);
+}
+
+async function generatedSshForegroundServiceSource() {
+	const projectRoot = await mkdtemp(
+		path.join(os.tmpdir(), 'fressh-foreground-service-plugin-'),
+	);
+
+	try {
+		await mkdir(path.join(projectRoot, 'android/app/src/main'), {
+			recursive: true,
+		});
+		await writeFile(
+			path.join(projectRoot, 'android/app/src/main/AndroidManifest.xml'),
+			[
+				'<manifest xmlns:android="http://schemas.android.com/apk/res/android">',
+				'  <application android:name=".MainApplication" />',
+				'</manifest>',
+			].join('\n'),
+			'utf8',
+		);
+
+		const config = withForegroundService({
+			name: 'Fressh Test Fixture',
+			slug: 'fressh-test-fixture',
+			android: {
+				package: 'com.finalapp.vibe2',
+			},
+		});
+
+		await compileModsAsync(config, {
+			projectRoot,
+			platforms: ['android'],
+		});
+
+		return await readFile(
+			path.join(
+				projectRoot,
+				'android/app/src/main/java/com/finalapp/vibe2/SshForegroundService.kt',
+			),
+			'utf8',
+		);
+	} finally {
+		await rm(projectRoot, { force: true, recursive: true });
+	}
 }
 
 async function agentNotificationsNativeSource() {
@@ -100,6 +150,26 @@ void test('foreground service plugin passes agent alert intent extras to MainAct
 	assert.match(source, /putExtra\(EXTRA_AGENT_SESSION, session\)/);
 	assert.match(source, /putExtra\(EXTRA_AGENT_TARGET, target\)/);
 	assert.match(source, /putExtra\(EXTRA_AGENT_WINDOW_ID, windowId\)/);
+});
+
+void test('foreground service plugin generates Kotlin with agent alert routing data', async () => {
+	const source = await generatedSshForegroundServiceSource();
+
+	assert.match(source, /AGENT_ALERT_CHANNEL_ID = "fressh_agent_alerts"/);
+	assert.match(source, /AGENT_ALERT_CHANNEL_NAME = "Fressh Agent Alerts"/);
+	assert.match(source, /NotificationManager\.IMPORTANCE_DEFAULT/);
+	assert.match(source, /EXTRA_AGENT_CONNECTION_ID = "agentConnectionId"/);
+	assert.match(source, /EXTRA_AGENT_SESSION = "agentSession"/);
+	assert.match(source, /EXTRA_AGENT_TARGET = "agentTarget"/);
+	assert.match(source, /EXTRA_AGENT_WINDOW_ID = "agentWindowId"/);
+	assert.match(source, /putExtra\(EXTRA_AGENT_CONNECTION_ID, connectionId\)/);
+	assert.match(source, /putExtra\(EXTRA_AGENT_SESSION, session\)/);
+	assert.match(source, /putExtra\(EXTRA_AGENT_TARGET, target\)/);
+	assert.match(source, /putExtra\(EXTRA_AGENT_WINDOW_ID, windowId\)/);
+	assert.match(
+		source,
+		/buildAgentAlertNotification\([\s\S]*notificationId: Int[\s\S]*PendingIntent\.getActivity\(\s*context,\s*notificationId,/,
+	);
 });
 
 void test('committed Android service uses notificationId for agent alert pending intent identity', async () => {
