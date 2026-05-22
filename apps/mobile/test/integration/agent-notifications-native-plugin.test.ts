@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
+import { createAgentNotificationsNativeWrapper } from '../../src/lib/agent-notifications-native';
 
 async function foregroundPluginSource() {
 	return readFile(
@@ -96,4 +97,190 @@ void test('agent notification native wrapper checks permission and method availa
 	assert.match(source, /typeof nativeModule\.cancelAgentAlert !== 'function'/);
 	assert.match(source, /agent alert notification post unavailable/);
 	assert.match(source, /agent alert notification cancel unavailable/);
+});
+
+const agentAlertInput = {
+	notificationId: 123,
+	title: 'Agent waiting',
+	message: 'main:1 needs attention',
+	connectionId: 'conn-1',
+	session: 'main',
+	target: 'main:1',
+	windowId: '@1',
+};
+
+function createTestLogger() {
+	const entries: unknown[][] = [];
+	return {
+		entries,
+		logger: {
+			warn: (...args: unknown[]) => entries.push(args),
+		},
+	};
+}
+
+void test('agent notification wrapper ignores non-Android platforms and missing native modules', async () => {
+	const nativeCalls: string[] = [];
+	const permissionCalls: string[] = [];
+	const { logger } = createTestLogger();
+
+	const iosWrapper = createAgentNotificationsNativeWrapper({
+		getPlatformOS: () => 'ios',
+		getNativeModule: () => ({
+			postAgentAlert: async () => {
+				nativeCalls.push('ios-post');
+			},
+			cancelAgentAlert: async () => {
+				nativeCalls.push('ios-cancel');
+			},
+		}),
+		ensureNotificationPermission: async () => {
+			permissionCalls.push('ios-permission');
+			return true;
+		},
+		logger,
+	});
+	await iosWrapper.postAgentAlertNotification(agentAlertInput);
+	await iosWrapper.cancelAgentAlertNotification(agentAlertInput.notificationId);
+
+	const missingModuleWrapper = createAgentNotificationsNativeWrapper({
+		getPlatformOS: () => 'android',
+		getNativeModule: () => undefined,
+		ensureNotificationPermission: async () => {
+			permissionCalls.push('missing-module-permission');
+			return true;
+		},
+		logger,
+	});
+	await missingModuleWrapper.postAgentAlertNotification(agentAlertInput);
+	await missingModuleWrapper.cancelAgentAlertNotification(
+		agentAlertInput.notificationId,
+	);
+
+	assert.deepEqual(nativeCalls, []);
+	assert.deepEqual(permissionCalls, []);
+});
+
+void test('agent notification wrapper checks permission before posting native alert', async () => {
+	const calls: string[] = [];
+	const { logger } = createTestLogger();
+	const wrapper = createAgentNotificationsNativeWrapper({
+		getPlatformOS: () => 'android',
+		getNativeModule: () => ({
+			postAgentAlert: async (
+				notificationId,
+				title,
+				message,
+				connectionId,
+				session,
+				target,
+				windowId,
+			) => {
+				calls.push('native-post');
+				assert.deepEqual(
+					[
+						notificationId,
+						title,
+						message,
+						connectionId,
+						session,
+						target,
+						windowId,
+					],
+					[
+						123,
+						'Agent waiting',
+						'main:1 needs attention',
+						'conn-1',
+						'main',
+						'main:1',
+						'@1',
+					],
+				);
+			},
+		}),
+		ensureNotificationPermission: async () => {
+			calls.push('permission');
+			return true;
+		},
+		logger,
+	});
+
+	await wrapper.postAgentAlertNotification(agentAlertInput);
+
+	assert.deepEqual(calls, ['permission', 'native-post']);
+});
+
+void test('agent notification wrapper skips native post when notification permission is denied', async () => {
+	const calls: string[] = [];
+	const { entries, logger } = createTestLogger();
+	const wrapper = createAgentNotificationsNativeWrapper({
+		getPlatformOS: () => 'android',
+		getNativeModule: () => ({
+			postAgentAlert: async () => {
+				calls.push('native-post');
+			},
+		}),
+		ensureNotificationPermission: async () => {
+			calls.push('permission');
+			return false;
+		},
+		logger,
+	});
+
+	await wrapper.postAgentAlertNotification(agentAlertInput);
+
+	assert.deepEqual(calls, ['permission']);
+	assert.deepEqual(entries, [
+		['notification permission not granted; skipping agent alert'],
+	]);
+});
+
+void test('agent notification wrapper logs and returns cleanly when native methods are missing', async () => {
+	const { entries, logger } = createTestLogger();
+	const wrapper = createAgentNotificationsNativeWrapper({
+		getPlatformOS: () => 'android',
+		getNativeModule: () => ({}),
+		ensureNotificationPermission: async () => true,
+		logger,
+	});
+
+	await assert.doesNotReject(wrapper.postAgentAlertNotification(agentAlertInput));
+	await assert.doesNotReject(
+		wrapper.cancelAgentAlertNotification(agentAlertInput.notificationId),
+	);
+
+	assert.deepEqual(entries, [
+		['agent alert notification post unavailable'],
+		['agent alert notification cancel unavailable'],
+	]);
+});
+
+void test('agent notification wrapper catches and logs native post and cancel failures', async () => {
+	const postError = new Error('post failed');
+	const cancelError = new Error('cancel failed');
+	const { entries, logger } = createTestLogger();
+	const wrapper = createAgentNotificationsNativeWrapper({
+		getPlatformOS: () => 'android',
+		getNativeModule: () => ({
+			postAgentAlert: async () => {
+				throw postError;
+			},
+			cancelAgentAlert: async () => {
+				throw cancelError;
+			},
+		}),
+		ensureNotificationPermission: async () => true,
+		logger,
+	});
+
+	await assert.doesNotReject(wrapper.postAgentAlertNotification(agentAlertInput));
+	await assert.doesNotReject(
+		wrapper.cancelAgentAlertNotification(agentAlertInput.notificationId),
+	);
+
+	assert.deepEqual(entries, [
+		['agent alert notification post failed', postError],
+		['agent alert notification cancel failed', cancelError],
+	]);
 });
