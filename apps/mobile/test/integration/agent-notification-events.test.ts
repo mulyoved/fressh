@@ -173,7 +173,7 @@ void test('pending keys and notification ids are stable', () => {
 		createStableNotificationId(key),
 		createStableNotificationId(key),
 	);
-	assert.ok(createStableNotificationId(key) >= 0);
+	assert.ok(createStableNotificationId(key) > 0);
 	assert.ok(createStableNotificationId(key) <= 0x7fffffff);
 	assert.notEqual(
 		createStableNotificationId(key),
@@ -185,6 +185,9 @@ void test('pending keys and notification ids are stable', () => {
 			}),
 		),
 	);
+
+	const oldZeroIdKey = String.fromCharCode(2949, 34496);
+	assert.equal(createStableNotificationId(oldZeroIdKey), 1);
 });
 
 void test('pending keys are unambiguous when values contain delimiters', () => {
