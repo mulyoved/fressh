@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import {
 	canRunAgentNotificationBridge,
 	canRunAndroidBackgroundWork,
+	createForegroundServiceStartCoordinator,
 } from '../../src/lib/agent-notification-runtime';
 
 void test('agent notification bridge runs while the Android app is active', () => {
@@ -55,6 +56,42 @@ void test('Android background work is allowed only after foreground service star
 			platformOS: 'ios',
 			foregroundServiceStarted: true,
 		}),
+		false,
+	);
+});
+
+void test('foreground service start coordinator keeps same-key pending results current', () => {
+	const coordinator = createForegroundServiceStartCoordinator();
+	const request = coordinator.begin('Fressh Terminal|Connected');
+
+	assert.equal(
+		coordinator.isCurrent(request, 'Fressh Terminal|Connected'),
+		true,
+	);
+	assert.equal(
+		coordinator.isCurrent(request, 'Fressh Terminal|Reconnecting'),
+		false,
+	);
+});
+
+void test('foreground service start coordinator invalidates stale starts on stop or replacement', () => {
+	const coordinator = createForegroundServiceStartCoordinator();
+	const first = coordinator.begin('Fressh Terminal|Connected');
+	const second = coordinator.begin('Fressh Terminal|Reconnecting');
+
+	assert.equal(
+		coordinator.isCurrent(first, 'Fressh Terminal|Connected'),
+		false,
+	);
+	assert.equal(
+		coordinator.isCurrent(second, 'Fressh Terminal|Reconnecting'),
+		true,
+	);
+
+	coordinator.invalidate();
+
+	assert.equal(
+		coordinator.isCurrent(second, 'Fressh Terminal|Reconnecting'),
 		false,
 	);
 });

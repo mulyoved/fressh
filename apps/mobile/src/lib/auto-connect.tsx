@@ -6,6 +6,7 @@ import { create } from 'zustand';
 import { useShallow } from 'zustand/react/shallow';
 import {
 	canRunAndroidBackgroundWork,
+	createForegroundServiceStartCoordinator,
 	useForegroundServiceRuntimeStore,
 } from './agent-notification-runtime';
 import { AgentNotificationBridgeManager } from './AgentNotificationBridgeManager';
@@ -100,6 +101,9 @@ export function AutoConnectManager() {
 	const prevShellCountRef = React.useRef(shells.length);
 	const isActiveRef = React.useRef(isActiveState(AppState.currentState));
 	const foregroundKeyRef = React.useRef<string | null>(null);
+	const foregroundStartCoordinatorRef = React.useRef(
+		createForegroundServiceStartCoordinator(),
+	);
 	const allowBackgroundRef = React.useRef(false);
 	const didInitRef = React.useRef(false);
 
@@ -346,6 +350,7 @@ export function AutoConnectManager() {
 		const shouldRunService = shells.length > 0;
 
 		if (!shouldRunService) {
+			foregroundStartCoordinatorRef.current.invalidate();
 			setForegroundServiceStarted(false);
 			if (foregroundKeyRef.current !== null) {
 				foregroundKeyRef.current = null;
@@ -366,9 +371,16 @@ export function AutoConnectManager() {
 		const nextKey = `${title}|${message}`;
 		if (foregroundKeyRef.current === nextKey) return;
 		foregroundKeyRef.current = nextKey;
-		let cancelled = false;
+		const request = foregroundStartCoordinatorRef.current.begin(nextKey);
 		void startForegroundService({ title, message }).then((started) => {
-			if (cancelled || foregroundKeyRef.current !== nextKey) return;
+			if (
+				!foregroundStartCoordinatorRef.current.isCurrent(
+					request,
+					foregroundKeyRef.current,
+				)
+			) {
+				return;
+			}
 			setForegroundServiceStarted(started);
 			if (!started) {
 				foregroundKeyRef.current = null;
@@ -377,9 +389,6 @@ export function AutoConnectManager() {
 				}
 			}
 		});
-		return () => {
-			cancelled = true;
-		};
 	}, [
 		connections,
 		isAutoConnecting,
@@ -391,8 +400,10 @@ export function AutoConnectManager() {
 	]);
 
 	React.useEffect(() => {
+		const foregroundStartCoordinator = foregroundStartCoordinatorRef.current;
 		return () => {
 			if (Platform.OS !== 'android') return;
+			foregroundStartCoordinator.invalidate();
 			setForegroundServiceStarted(false);
 			void stopForegroundService();
 		};

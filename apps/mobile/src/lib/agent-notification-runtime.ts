@@ -32,3 +32,27 @@ export function canRunAgentNotificationBridge(input: {
 			}))
 	);
 }
+
+export type ForegroundServiceStartRequest = {
+	id: number;
+	key: string;
+};
+
+export function createForegroundServiceStartCoordinator() {
+	let currentId = 0;
+	return {
+		begin(key: string): ForegroundServiceStartRequest {
+			currentId += 1;
+			return { id: currentId, key };
+		},
+		invalidate() {
+			currentId += 1;
+		},
+		isCurrent(
+			request: ForegroundServiceStartRequest,
+			currentKey: string | null,
+		) {
+			return request.id === currentId && request.key === currentKey;
+		},
+	};
+}
