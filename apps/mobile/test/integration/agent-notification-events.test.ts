@@ -503,6 +503,37 @@ void test('dedupe ignores duplicate current failure while another current post i
 	assert.deepEqual(dedupe.acknowledge(key), [notificationId]);
 });
 
+void test('dedupe cancels native post that completes after acknowledgement', () => {
+	const dedupe = new AgentNotificationDedupe();
+	const key = createAgentNotificationPendingKey({
+		connectionId: 'conn-1',
+		session: 'main',
+		windowId: '@12',
+	});
+	const notificationId = createStableNotificationId(key);
+	const event = {
+		id: 'main:@12:2000:done',
+		type: 'tmux_status' as const,
+		session: 'main',
+		target: 'main:4',
+		windowId: '@12',
+		windowIndex: '4',
+		windowName: 'fressh',
+		status: 'done' as const,
+		icon: '✅' as const,
+		createdAtMs: 2000,
+	};
+
+	assert.equal(dedupe.markPendingEvent(key, notificationId, event), true);
+	const attemptId = dedupe.beginPost(key, event.id);
+	assert.equal(attemptId, 1);
+	assert.deepEqual(dedupe.acknowledge(key), [notificationId]);
+	assert.deepEqual(dedupe.completePost(key, event.id, attemptId!, true), {
+		type: 'cancel-posted',
+		notificationId,
+	});
+});
+
 void test('dedupe keeps posted status when an older same-event attempt fails', () => {
 	const dedupe = new AgentNotificationDedupe();
 	const key = createAgentNotificationPendingKey({
