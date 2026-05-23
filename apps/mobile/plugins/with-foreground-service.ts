@@ -40,11 +40,15 @@ class SshForegroundService : Service() {
   }
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-    val title = intent?.getStringExtra(EXTRA_TITLE) ?: DEFAULT_TITLE
-    val message = intent?.getStringExtra(EXTRA_MESSAGE) ?: DEFAULT_MESSAGE
+    if (intent == null) {
+      stopSelf(startId)
+      return START_NOT_STICKY
+    }
+    val title = intent.getStringExtra(EXTRA_TITLE) ?: DEFAULT_TITLE
+    val message = intent.getStringExtra(EXTRA_MESSAGE) ?: DEFAULT_MESSAGE
     startForeground(NOTIFICATION_ID, buildNotification(title, message))
     acquireWakeLock()
-    return START_STICKY
+    return START_NOT_STICKY
   }
 
   override fun onDestroy() {
@@ -87,7 +91,7 @@ class SshForegroundService : Service() {
       PowerManager.PARTIAL_WAKE_LOCK,
       WAKE_LOCK_TAG
     ).apply { setReferenceCounted(false) }
-    wakeLock?.acquire()
+    wakeLock?.acquire(WAKE_LOCK_TIMEOUT_MS)
   }
 
   private fun releaseWakeLock() {
@@ -109,6 +113,7 @@ class SshForegroundService : Service() {
     private const val AGENT_ALERT_CHANNEL_NAME = "Fressh Agent Alerts"
     private const val AGENT_ALERT_CHANNEL_DESCRIPTION = "Agent status notifications"
     private const val WAKE_LOCK_TAG = "Fressh::SshForegroundService"
+    private const val WAKE_LOCK_TIMEOUT_MS = 10 * 60 * 1000L
     private const val DEFAULT_TITLE = "Fressh Terminal"
     private const val DEFAULT_MESSAGE = "Keeping SSH connection alive"
     const val EXTRA_TITLE = "title"

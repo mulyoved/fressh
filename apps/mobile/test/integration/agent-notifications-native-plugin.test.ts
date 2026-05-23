@@ -136,6 +136,22 @@ void test('committed Android service defines and creates agent alert channel', a
 	assert.match(source, /cancel\(notificationId\)/);
 });
 
+void test('foreground service restart and wakelock policy is JS-owned and bounded', async () => {
+	for (const source of [
+		await committedSshForegroundServiceSource(),
+		await foregroundPluginSource(),
+		await generatedSshForegroundServiceSource(),
+	]) {
+		assert.match(source, /return START_NOT_STICKY/);
+		assert.doesNotMatch(source, /return START_STICKY/);
+		assert.match(source, /if \(intent == null\)/);
+		assert.match(source, /stopSelf\(startId\)/);
+		assert.match(source, /WAKE_LOCK_TIMEOUT_MS/);
+		assert.match(source, /wakeLock\?\.acquire\(WAKE_LOCK_TIMEOUT_MS\)/);
+		assert.doesNotMatch(source, /wakeLock\?\.acquire\(\)/);
+	}
+});
+
 void test('committed Android service passes agent alert intent extras to MainActivity', async () => {
 	const source = await committedSshForegroundServiceSource();
 

@@ -2122,9 +2122,10 @@ fi
 			isCurrentRequest: (requestId) =>
 				requestId === agentNotificationAckRequestIdRef.current,
 			runCommand: runHostBrowserCommand,
-			acknowledge: (connectionId, windowId) => {
+			acknowledge: (connectionId, session, windowId) => {
 				globalThis.__FRESSH_AGENT_NOTIFICATIONS__?.acknowledge(
 					connectionId,
+					session,
 					windowId,
 				);
 			},

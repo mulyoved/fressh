@@ -6,6 +6,7 @@ import {
 	createAgentNotificationPendingKey,
 	createStableNotificationId,
 	handleAgentNotificationEvent,
+	matchesAgentNotificationPendingKey,
 	parseAgentNotificationLine,
 } from '../../src/lib/agent-notification-events';
 
@@ -292,6 +293,31 @@ void test('dedupe acknowledges matching pending keys', () => {
 	);
 	assert.equal(dedupe.markPendingIfNew(conn1Main12, 42), true);
 	assert.equal(dedupe.markPendingIfNew(conn2Main12, 44), false);
+});
+
+void test('pending key matching includes tmux session identity', () => {
+	const conn1Main12 = createAgentNotificationPendingKey({
+		connectionId: 'conn-1',
+		session: 'main',
+		windowId: '@12',
+	});
+
+	assert.equal(
+		matchesAgentNotificationPendingKey(conn1Main12, {
+			connectionId: 'conn-1',
+			session: 'main',
+			windowId: '@12',
+		}),
+		true,
+	);
+	assert.equal(
+		matchesAgentNotificationPendingKey(conn1Main12, {
+			connectionId: 'conn-1',
+			session: 'other',
+			windowId: '@12',
+		}),
+		false,
+	);
 });
 
 void test('handleAgentNotificationEvent signals and handles new pending events once', () => {

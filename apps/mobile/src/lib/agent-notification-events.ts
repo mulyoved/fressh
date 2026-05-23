@@ -119,6 +119,23 @@ export function createAgentNotificationPendingKey(input: {
 	return JSON.stringify([input.connectionId, input.session, input.windowId]);
 }
 
+export function matchesAgentNotificationPendingKey(
+	key: string,
+	input: { connectionId: string; session: string; windowId: string },
+): boolean {
+	try {
+		const parsed = JSON.parse(key);
+		return (
+			Array.isArray(parsed) &&
+			parsed[0] === input.connectionId &&
+			parsed[1] === input.session &&
+			parsed[2] === input.windowId
+		);
+	} catch {
+		return false;
+	}
+}
+
 export function createStableNotificationId(key: string): number {
 	let hash = 0x811c9dc5;
 	for (let i = 0; i < key.length; i += 1) {

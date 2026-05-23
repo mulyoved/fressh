@@ -34,7 +34,11 @@ function createHarness() {
 		tmuxTarget: 'main',
 	};
 	const commands: { command: string; timeoutMs: number }[] = [];
-	const acknowledgements: { connectionId: string; windowId: string }[] = [];
+	const acknowledgements: {
+		connectionId: string;
+		session: string;
+		windowId: string;
+	}[] = [];
 	const warnings: unknown[] = [];
 
 	return {
@@ -67,8 +71,12 @@ function createHarness() {
 					commands.push({ command, timeoutMs });
 					return runCommand(command, timeoutMs);
 				},
-				acknowledge: (connectionId: string, windowId: string) => {
-					acknowledgements.push({ connectionId, windowId });
+				acknowledge: (
+					connectionId: string,
+					session: string,
+					windowId: string,
+				) => {
+					acknowledgements.push({ connectionId, session, windowId });
 				},
 				warn: (_message: string, error: unknown) => {
 					warnings.push(error);
@@ -92,7 +100,7 @@ void test('acknowledgeVisibleAgentNotification acknowledges current visible wind
 		},
 	]);
 	assert.deepEqual(harness.acknowledgements, [
-		{ connectionId: 'conn-1', windowId: '@12' },
+		{ connectionId: 'conn-1', session: 'main', windowId: '@12' },
 	]);
 });
 
@@ -187,8 +195,8 @@ void test('acknowledgeVisibleAgentNotification coalesces concurrent requests int
 
 	assert.equal(commandCount, 2);
 	assert.deepEqual(harness.acknowledgements, [
-		{ connectionId: 'conn-1', windowId: '@12' },
-		{ connectionId: 'conn-1', windowId: '@12' },
+		{ connectionId: 'conn-1', session: 'main', windowId: '@12' },
+		{ connectionId: 'conn-1', session: 'main', windowId: '@12' },
 	]);
 });
 

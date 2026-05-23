@@ -21,7 +21,11 @@ export type VisibleAgentNotificationAcknowledgeOptions = {
 	nextRequestId: () => number;
 	isCurrentRequest: (requestId: number) => boolean;
 	runCommand: (command: string, timeoutMs: number) => Promise<string>;
-	acknowledge: (connectionId: string, windowId: string) => void;
+	acknowledge: (
+		connectionId: string,
+		session: string,
+		windowId: string,
+	) => void;
 	warn: (message: string, error: unknown) => void;
 };
 
@@ -152,7 +156,7 @@ async function acknowledgeVisibleAgentNotificationOnce({
 		if (visibility.connectionId !== connectionIdSnapshot) return;
 		if (visibility.channelId !== channelIdSnapshot) return;
 		if (visibility.tmuxTarget !== sessionNameSnapshot) return;
-		acknowledge(connectionIdSnapshot, windowId);
+		acknowledge(connectionIdSnapshot, sessionNameSnapshot, windowId);
 	} catch (error) {
 		warn('agent notification acknowledge failed', error);
 	}

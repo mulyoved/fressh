@@ -10,6 +10,7 @@ import {
 	type AgentNotificationEvent,
 	buildAgentNotificationListenCommand,
 	handleAgentNotificationEvent,
+	matchesAgentNotificationPendingKey,
 	parseAgentNotificationLine,
 } from './agent-notification-events';
 import { notifyAgentNotificationPending } from './agent-notification-visibility';
@@ -422,19 +423,18 @@ export function AgentNotificationBridgeManager() {
 	React.useEffect(() => {
 		if (Platform.OS !== 'android') return;
 		globalThis.__FRESSH_AGENT_NOTIFICATIONS__ = {
-			acknowledge: (connectionId: string, windowId: string) => {
-				const ids = dedupeRef.current.acknowledgeMatching((key) => {
-					try {
-						const parsed = JSON.parse(key);
-						return (
-							Array.isArray(parsed) &&
-							parsed[0] === connectionId &&
-							parsed[2] === windowId
-						);
-					} catch {
-						return false;
-					}
-				});
+			acknowledge: (
+				connectionId: string,
+				session: string,
+				windowId: string,
+			) => {
+				const ids = dedupeRef.current.acknowledgeMatching((key) =>
+					matchesAgentNotificationPendingKey(key, {
+						connectionId,
+						session,
+						windowId,
+					}),
+				);
 				for (const id of ids) void cancelAgentAlertNotification(id);
 			},
 		};
@@ -449,6 +449,12 @@ export function AgentNotificationBridgeManager() {
 
 declare global {
 	var __FRESSH_AGENT_NOTIFICATIONS__:
-		| { acknowledge: (connectionId: string, windowId: string) => void }
+		| {
+				acknowledge: (
+					connectionId: string,
+					session: string,
+					windowId: string,
+				) => void;
+		  }
 		| undefined;
 }
