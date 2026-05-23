@@ -4,6 +4,7 @@ import {
 	canRunAgentNotificationBridge,
 	canRunAndroidBackgroundWork,
 	createForegroundServiceStartCoordinator,
+	shouldClearPendingAgentNotifications,
 } from '../../src/lib/agent-notification-runtime';
 
 void test('agent notification bridge runs while the Android app is active', () => {
@@ -92,6 +93,33 @@ void test('foreground service start coordinator invalidates stale starts on stop
 
 	assert.equal(
 		coordinator.isCurrent(second, 'Fressh Terminal|Reconnecting'),
+		false,
+	);
+});
+
+void test('runtime bridge pause does not clear pending agent notifications', () => {
+	assert.equal(
+		shouldClearPendingAgentNotifications({
+			hasListenerTarget: false,
+			hasConfiguredTarget: true,
+		}),
+		false,
+	);
+});
+
+void test('missing configured target clears pending agent notifications', () => {
+	assert.equal(
+		shouldClearPendingAgentNotifications({
+			hasListenerTarget: false,
+			hasConfiguredTarget: false,
+		}),
+		true,
+	);
+	assert.equal(
+		shouldClearPendingAgentNotifications({
+			hasListenerTarget: true,
+			hasConfiguredTarget: true,
+		}),
 		false,
 	);
 });

@@ -15,6 +15,7 @@ import {
 } from './agent-notification-events';
 import {
 	canRunAgentNotificationBridge,
+	shouldClearPendingAgentNotifications,
 	useForegroundServiceRuntimeStore,
 } from './agent-notification-runtime';
 import { notifyAgentNotificationPending } from './agent-notification-visibility';
@@ -80,6 +81,7 @@ export function AgentNotificationBridgeManager() {
 	const startListenerRef = React.useRef<(() => Promise<void>) | null>(null);
 	const lastSeenIdByTargetRef = React.useRef(new Map<string, string>());
 	const previousTargetKeyRef = React.useRef<string | null>(null);
+	const previousConfiguredTargetKeyRef = React.useRef<string | null>(null);
 	const [settingsByConnectionId, setSettingsByConnectionId] = React.useState<
 		Record<string, SessionSettings>
 	>({});
@@ -111,8 +113,7 @@ export function AgentNotificationBridgeManager() {
 		? settingsByConnectionId[connection.connectionId]
 		: undefined;
 	const session = settings?.session ?? 'main';
-	const target = React.useMemo<ListenerTarget | null>(() => {
-		if (!runtimeAllowed) return null;
+	const configuredTarget = React.useMemo<ListenerTarget | null>(() => {
 		if (!connection || !latestShellKey) return null;
 		if (!settings?.loaded || !settings.useTmux) return null;
 		return {
@@ -122,7 +123,8 @@ export function AgentNotificationBridgeManager() {
 			connection,
 			session,
 		};
-	}, [connection, latestShellKey, runtimeAllowed, session, settings]);
+	}, [connection, latestShellKey, session, settings]);
+	const target = runtimeAllowed ? configuredTarget : null;
 
 	React.useEffect(() => {
 		if (Platform.OS !== 'android') return;
@@ -432,14 +434,28 @@ export function AgentNotificationBridgeManager() {
 
 	React.useEffect(() => {
 		targetRef.current = target;
-		if (target?.key !== previousTargetKeyRef.current) {
+		const configuredTargetKey = configuredTarget?.key ?? null;
+		if (configuredTargetKey !== previousConfiguredTargetKeyRef.current) {
+			if (previousConfiguredTargetKeyRef.current !== null) {
+				clearPendingNotifications();
+			}
+			previousConfiguredTargetKeyRef.current = configuredTargetKey;
+		}
+		if (configuredTargetKey !== previousTargetKeyRef.current) {
 			restartAttemptRef.current = 0;
-			previousTargetKeyRef.current = target?.key ?? null;
+			previousTargetKeyRef.current = configuredTargetKey;
 		}
 
 		if (Platform.OS !== 'android') return;
 		if (!target) {
-			clearPendingNotifications();
+			if (
+				shouldClearPendingAgentNotifications({
+					hasListenerTarget: false,
+					hasConfiguredTarget: !!configuredTarget,
+				})
+			) {
+				clearPendingNotifications();
+			}
 			void stopAll();
 			bridgeRef.current.markStoppedByOsOrConnection();
 			return;
@@ -451,11 +467,16 @@ export function AgentNotificationBridgeManager() {
 		});
 		return () => {
 			targetRef.current = null;
-			clearPendingNotifications();
 			bridge.markStoppedByOsOrConnection();
 			void stopAll();
 		};
-	}, [clearPendingNotifications, startListener, stopAll, target]);
+	}, [
+		clearPendingNotifications,
+		configuredTarget,
+		startListener,
+		stopAll,
+		target,
+	]);
 
 	React.useEffect(() => {
 		if (Platform.OS !== 'android') return;

@@ -33,6 +33,13 @@ export function canRunAgentNotificationBridge(input: {
 	);
 }
 
+export function shouldClearPendingAgentNotifications(input: {
+	hasListenerTarget: boolean;
+	hasConfiguredTarget: boolean;
+}) {
+	return !input.hasListenerTarget && !input.hasConfiguredTarget;
+}
+
 export type ForegroundServiceStartRequest = {
 	id: number;
 	key: string;
