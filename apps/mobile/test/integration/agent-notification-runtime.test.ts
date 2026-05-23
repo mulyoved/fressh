@@ -4,6 +4,7 @@ import {
 	canRunAgentNotificationBridge,
 	canRunAndroidBackgroundWork,
 	createForegroundServiceStartCoordinator,
+	shouldPreservePendingWithoutTarget,
 	shouldPreserveForegroundServiceForShellDrop,
 	shouldRunForegroundService,
 	shouldStopReconnectOnBackground,
@@ -234,6 +235,29 @@ void test('missing configured target preserves pending agent notifications while
 			hasListenerTarget: false,
 			hasConfiguredTarget: false,
 			reconnectExpected: true,
+		}),
+		false,
+	);
+});
+
+void test('missing configured target preserves pending agent notifications during reconnect', () => {
+	assert.equal(
+		shouldPreservePendingWithoutTarget({
+			previousShellCount: 0,
+			shellCount: 0,
+			appActive: false,
+			androidBackgroundWorkAllowed: true,
+			isReconnecting: true,
+		}),
+		true,
+	);
+	assert.equal(
+		shouldPreservePendingWithoutTarget({
+			previousShellCount: 0,
+			shellCount: 0,
+			appActive: false,
+			androidBackgroundWorkAllowed: false,
+			isReconnecting: true,
 		}),
 		false,
 	);

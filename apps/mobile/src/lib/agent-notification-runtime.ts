@@ -53,6 +53,18 @@ export function shouldStopReconnectOnBackground(input: {
 	return input.platformOS !== 'android' || !input.backgroundWorkAllowed;
 }
 
+export function shouldPreservePendingWithoutTarget(input: {
+	previousShellCount: number;
+	shellCount: number;
+	appActive: boolean;
+	androidBackgroundWorkAllowed: boolean;
+	isReconnecting: boolean;
+}) {
+	if (input.shellCount !== 0) return false;
+	if (!(input.appActive || input.androidBackgroundWorkAllowed)) return false;
+	return input.previousShellCount > 0 || input.isReconnecting;
+}
+
 export function canRunAgentNotificationBridge(input: {
 	platformOS: string;
 	appActive: boolean;

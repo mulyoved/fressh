@@ -7,6 +7,7 @@ import { useShallow } from 'zustand/react/shallow';
 import {
 	canRunAndroidBackgroundWork,
 	createForegroundServiceStartCoordinator,
+	shouldPreservePendingWithoutTarget,
 	shouldPreserveForegroundServiceForShellDrop,
 	shouldRunForegroundService,
 	shouldStopReconnectOnBackground,
@@ -118,11 +119,14 @@ export function AutoConnectManager() {
 		});
 	}, []);
 
-	const reconnectExpectedFromShellDrop =
-		prevShellCountRef.current > 0 &&
-		shells.length === 0 &&
-		(isActiveRef.current ||
-			(Platform.OS === 'android' && allowBackgroundRef.current));
+	const reconnectExpectedFromShellDrop = shouldPreservePendingWithoutTarget({
+		previousShellCount: prevShellCountRef.current,
+		shellCount: shells.length,
+		appActive: isActiveRef.current,
+		androidBackgroundWorkAllowed:
+			Platform.OS === 'android' && allowBackgroundRef.current,
+		isReconnecting,
+	});
 
 	const clearReconnectTimer = React.useCallback(() => {
 		if (reconnectTimerRef.current) {
