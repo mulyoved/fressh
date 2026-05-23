@@ -9,6 +9,7 @@ import {
 	createForegroundServiceStartCoordinator,
 	shouldPreserveForegroundServiceForShellDrop,
 	shouldRunForegroundService,
+	shouldStopReconnectOnBackground,
 	useForegroundServiceRuntimeStore,
 } from './agent-notification-runtime';
 import { AgentNotificationBridgeManager } from './AgentNotificationBridgeManager';
@@ -442,7 +443,14 @@ export function AutoConnectManager() {
 			isActiveRef.current = isActiveState(nextState);
 
 			if (wasActive && !isActiveRef.current) {
-				stopReconnectCycle('app-backgrounded');
+				if (
+					shouldStopReconnectOnBackground({
+						platformOS: Platform.OS,
+						backgroundWorkAllowed: allowBackgroundRef.current,
+					})
+				) {
+					stopReconnectCycle('app-backgrounded');
+				}
 				return;
 			}
 			if (!wasActive && isActiveRef.current) {

@@ -46,6 +46,13 @@ export function shouldPreserveForegroundServiceForShellDrop(input: {
 	);
 }
 
+export function shouldStopReconnectOnBackground(input: {
+	platformOS: string;
+	backgroundWorkAllowed: boolean;
+}) {
+	return input.platformOS !== 'android' || !input.backgroundWorkAllowed;
+}
+
 export function canRunAgentNotificationBridge(input: {
 	platformOS: string;
 	appActive: boolean;

@@ -6,6 +6,7 @@ import {
 	createForegroundServiceStartCoordinator,
 	shouldPreserveForegroundServiceForShellDrop,
 	shouldRunForegroundService,
+	shouldStopReconnectOnBackground,
 	shouldClearPendingAgentNotifications,
 	shouldClearPendingAgentNotificationsForResumeKeyChange,
 } from '../../src/lib/agent-notification-runtime';
@@ -134,6 +135,33 @@ void test('foreground service is not preserved for unsupported shell drops', () 
 			isReconnecting: false,
 		}),
 		false,
+	);
+});
+
+void test('background transition keeps reconnect running when Android background work is allowed', () => {
+	assert.equal(
+		shouldStopReconnectOnBackground({
+			platformOS: 'android',
+			backgroundWorkAllowed: true,
+		}),
+		false,
+	);
+});
+
+void test('background transition stops reconnect without Android background work', () => {
+	assert.equal(
+		shouldStopReconnectOnBackground({
+			platformOS: 'android',
+			backgroundWorkAllowed: false,
+		}),
+		true,
+	);
+	assert.equal(
+		shouldStopReconnectOnBackground({
+			platformOS: 'ios',
+			backgroundWorkAllowed: true,
+		}),
+		true,
 	);
 });
 
