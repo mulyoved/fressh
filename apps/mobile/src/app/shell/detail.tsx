@@ -43,6 +43,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
 	acknowledgeVisibleAgentNotification as acknowledgeVisibleAgentNotificationIfVisible,
+	handleAgentNotificationRoute,
 	subscribeAgentNotificationPending,
 } from '@/lib/agent-notification-visibility';
 import { useAutoConnectStore } from '@/lib/auto-connect';
@@ -90,7 +91,6 @@ import { useSshStore } from '@/lib/ssh-store';
 import { useTheme } from '@/lib/theme';
 import {
 	buildTmuxScrollbackCopyModeCommand,
-	buildTmuxSelectWindowCommand,
 	getTmuxScrollbackControlFailurePolicy,
 	getTmuxScrollbackLiveInputPolicy,
 	runTmuxControlCommand,
@@ -457,6 +457,7 @@ function ShellDetail() {
 		agentConnectionId?: string;
 		agentSession?: string;
 		agentWindowId?: string;
+		agentEventId?: string;
 		tmuxError?: string;
 		tmuxSessionName?: string;
 		storedConnectionId?: string;
@@ -471,6 +472,7 @@ function ShellDetail() {
 	const agentConnectionId = searchParams.agentConnectionId?.trim() || null;
 	const agentSession = searchParams.agentSession?.trim() || null;
 	const agentWindowId = searchParams.agentWindowId?.trim() || null;
+	const agentEventId = searchParams.agentEventId?.trim() || null;
 	const tmuxSessionName = searchParams.tmuxSessionName;
 
 	const router = useRouter();
@@ -2113,29 +2115,33 @@ fi
 	);
 
 	useEffect(() => {
-		const notificationConnectionId = agentConnectionId || storedConnectionId;
-		if (!agentWindowId || !notificationConnectionId) return;
-		const session = agentSession || tmuxTarget.trim() || 'main';
-		const routeKey = `${notificationConnectionId}:${session}:${agentWindowId}`;
-		if (handledAgentAlertRouteRef.current === routeKey) return;
-
-		void runHostBrowserCommand(
-			buildTmuxSelectWindowCommand(session, agentWindowId),
-			10_000,
-		)
-			.then(() => {
+		void handleAgentNotificationRoute({
+			agentConnectionId,
+			storedConnectionId,
+			agentSession,
+			agentWindowId,
+			agentEventId,
+			tmuxTarget,
+			isRouteHandled: (routeKey) =>
+				handledAgentAlertRouteRef.current === routeKey,
+			markRouteHandled: (routeKey) => {
 				handledAgentAlertRouteRef.current = routeKey;
+			},
+			runCommand: runHostBrowserCommand,
+			acknowledge: (connectionId, session, windowId) => {
 				globalThis.__FRESSH_AGENT_NOTIFICATIONS__?.acknowledge(
-					notificationConnectionId,
+					connectionId,
 					session,
-					agentWindowId,
+					windowId,
 				);
-			})
-			.catch((error: unknown) => {
-				logger.warn('failed to select agent notification window', error);
-			});
+			},
+			warn: (message, error) => {
+				logger.warn(message, error);
+			},
+		});
 	}, [
 		agentConnectionId,
+		agentEventId,
 		agentSession,
 		agentWindowId,
 		runHostBrowserCommand,

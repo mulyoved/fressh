@@ -24,6 +24,20 @@ void test('foreground service starter reports native start success', async () =>
 	assert.deepEqual(calls, [['Terminal', 'Connected']]);
 });
 
+void test('foreground service starter reports native running state', async () => {
+	const starter = createForegroundServiceStarter({
+		getPlatformOS: () => 'android',
+		getNativeModule: () => ({
+			start: async () => {},
+			isRunning: async () => true,
+		}),
+		ensureNotificationPermission: async () => true,
+		logger: { warn: () => {} },
+	});
+
+	assert.equal(await starter.isForegroundServiceRunning(), true);
+});
+
 void test('foreground service starter reports native start failure', async () => {
 	const error = new Error('start rejected');
 	const warnings: unknown[][] = [];

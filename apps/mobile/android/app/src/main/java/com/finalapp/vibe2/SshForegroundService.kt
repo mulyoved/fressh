@@ -9,12 +9,20 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 
 class SshForegroundService : Service() {
+  private val wakeLockHandler = Handler(Looper.getMainLooper())
+  private val renewWakeLockRunnable = Runnable {
+    if (wakeLock?.isHeld == true) {
+      acquireWakeLock()
+    }
+  }
   private var wakeLock: PowerManager.WakeLock? = null
 
   override fun onCreate() {
@@ -30,11 +38,18 @@ class SshForegroundService : Service() {
     val title = intent.getStringExtra(EXTRA_TITLE) ?: DEFAULT_TITLE
     val message = intent.getStringExtra(EXTRA_MESSAGE) ?: DEFAULT_MESSAGE
     startForeground(NOTIFICATION_ID, buildNotification(title, message))
+    isServiceRunning = true
     acquireWakeLock()
     return START_NOT_STICKY
   }
 
+  override fun onTimeout(startId: Int, fgsType: Int) {
+    isServiceRunning = false
+    stopSelf(startId)
+  }
+
   override fun onDestroy() {
+    isServiceRunning = false
     releaseWakeLock()
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
       stopForeground(STOP_FOREGROUND_REMOVE)
@@ -68,16 +83,23 @@ class SshForegroundService : Service() {
   }
 
   private fun acquireWakeLock() {
-    if (wakeLock?.isHeld == true) return
+    releaseWakeLock()
     val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
     wakeLock = powerManager.newWakeLock(
       PowerManager.PARTIAL_WAKE_LOCK,
       WAKE_LOCK_TAG
     ).apply { setReferenceCounted(false) }
-    wakeLock?.acquire()
+    wakeLock?.acquire(WAKE_LOCK_LEASE_MS)
+    scheduleWakeLockRenewal()
+  }
+
+  private fun scheduleWakeLockRenewal() {
+    wakeLockHandler.removeCallbacks(renewWakeLockRunnable)
+    wakeLockHandler.postDelayed(renewWakeLockRunnable, WAKE_LOCK_RENEWAL_MS)
   }
 
   private fun releaseWakeLock() {
+    wakeLockHandler.removeCallbacks(renewWakeLockRunnable)
     try {
       if (wakeLock?.isHeld == true) {
         wakeLock?.release()
@@ -96,6 +118,9 @@ class SshForegroundService : Service() {
     private const val AGENT_ALERT_CHANNEL_NAME = "Fressh Agent Alerts"
     private const val AGENT_ALERT_CHANNEL_DESCRIPTION = "Agent status notifications"
     private const val WAKE_LOCK_TAG = "Fressh::SshForegroundService"
+    private const val WAKE_LOCK_LEASE_MS = 5L * 60L * 60L * 1000L
+    private const val WAKE_LOCK_RENEWAL_MS = 4L * 60L * 60L * 1000L
+    @Volatile private var isServiceRunning = false
     private const val DEFAULT_TITLE = "Fressh Terminal"
     private const val DEFAULT_MESSAGE = "Keeping SSH connection alive"
     const val EXTRA_TITLE = "title"
@@ -105,6 +130,7 @@ class SshForegroundService : Service() {
     const val EXTRA_AGENT_SESSION = "agentSession"
     const val EXTRA_AGENT_TARGET = "agentTarget"
     const val EXTRA_AGENT_WINDOW_ID = "agentWindowId"
+    const val EXTRA_AGENT_EVENT_ID = "agentEventId"
 
     private fun ensureNotificationChannels(context: Context) {
       if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
@@ -136,7 +162,8 @@ class SshForegroundService : Service() {
       notificationConnectionId: String,
       session: String,
       target: String,
-      windowId: String
+      windowId: String,
+      eventId: String
     ): Notification {
       val route = Uri.Builder()
         .scheme("fressh")
@@ -146,6 +173,7 @@ class SshForegroundService : Service() {
         .appendQueryParameter("agentConnectionId", notificationConnectionId)
         .appendQueryParameter("agentSession", session)
         .appendQueryParameter("agentWindowId", windowId)
+        .appendQueryParameter("agentEventId", eventId)
         .build()
       val intent = Intent(Intent.ACTION_VIEW, route, context, MainActivity::class.java).apply {
         flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
@@ -154,6 +182,7 @@ class SshForegroundService : Service() {
         putExtra(EXTRA_AGENT_SESSION, session)
         putExtra(EXTRA_AGENT_TARGET, target)
         putExtra(EXTRA_AGENT_WINDOW_ID, windowId)
+        putExtra(EXTRA_AGENT_EVENT_ID, eventId)
       }
       val pendingIntent = PendingIntent.getActivity(
         context,
@@ -185,6 +214,8 @@ class SshForegroundService : Service() {
       context.stopService(intent)
     }
 
+    fun isRunning(): Boolean = isServiceRunning
+
     fun postAgentAlert(
       context: Context,
       notificationId: Int,
@@ -195,7 +226,8 @@ class SshForegroundService : Service() {
       notificationConnectionId: String,
       session: String,
       target: String,
-      windowId: String
+      windowId: String,
+      eventId: String
     ) {
       ensureNotificationChannels(context)
       val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -209,7 +241,8 @@ class SshForegroundService : Service() {
         notificationConnectionId,
         session,
         target,
-        windowId
+        windowId,
+        eventId
       ))
     }
 

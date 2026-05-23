@@ -5,16 +5,16 @@ import {
 	AgentNotificationBridgeStateMachine,
 	HEARTBEAT_STALE_MS,
 } from './agent-notification-bridge';
+import { handleAgentNotificationListenerLine } from './agent-notification-bridge-runtime';
 import {
-	AgentNotificationDedupe,
 	type AgentNotificationEvent,
+	AgentNotificationDedupe,
 	buildAgentNotificationListenCommand,
-	handleAgentNotificationEvent,
 	matchesAgentNotificationPendingKey,
-	parseAgentNotificationLine,
 } from './agent-notification-events';
 import {
 	canRunAgentNotificationBridge,
+	createAgentNotificationRestartCoordinator,
 	getNextConfiguredResumeKey,
 	shouldClearPendingAgentNotifications,
 	shouldClearPendingAgentNotificationsForResumeKeyChange,
@@ -27,6 +27,7 @@ import {
 	postAgentAlertNotification,
 } from './agent-notifications-native';
 import { getStoredConnectionId } from './connection-utils';
+import { isForegroundServiceRunning } from './foreground-service';
 import { rootLogger } from './logger';
 import { secretsManager } from './secrets-manager';
 import {
@@ -38,6 +39,10 @@ import { queryClient } from './utils';
 
 const logger = rootLogger.extend('AgentNotificationBridge');
 const RESTART_DELAYS_MS = [1_000, 2_000, 5_000, 10_000, 30_000];
+export const AGENT_NOTIFICATION_MAX_RESTART_ATTEMPTS = 6;
+export const AGENT_NOTIFICATION_HEALTHY_RESTART_RESET_MS =
+	HEARTBEAT_STALE_MS * 2;
+const FOREGROUND_SERVICE_HEALTH_CHECK_MS = HEARTBEAT_STALE_MS;
 const isActiveState = (state: string) => state === 'active';
 
 type ListenerTarget = {
@@ -81,7 +86,13 @@ export function AgentNotificationBridgeManager({
 	const heartbeatTimerRef = React.useRef<ReturnType<typeof setInterval> | null>(
 		null,
 	);
-	const restartAttemptRef = React.useRef(0);
+	const restartCoordinatorRef = React.useRef(
+		createAgentNotificationRestartCoordinator({
+			maxAttempts: AGENT_NOTIFICATION_MAX_RESTART_ATTEMPTS,
+			delaysMs: RESTART_DELAYS_MS,
+			healthyResetMs: AGENT_NOTIFICATION_HEALTHY_RESTART_RESET_MS,
+		}),
+	);
 	const listenerStartedAtMsRef = React.useRef<number | null>(null);
 	const listenerStartingRef = React.useRef(false);
 	const startQueuedRef = React.useRef(false);
@@ -150,6 +161,27 @@ export function AgentNotificationBridgeManager({
 			subscription.remove();
 		};
 	}, []);
+
+	React.useEffect(() => {
+		if (Platform.OS !== 'android' || !foregroundServiceStarted) return;
+		let cancelled = false;
+		const checkRunning = () => {
+			void isForegroundServiceRunning().then((running) => {
+				if (cancelled || running) return;
+				logger.warn('foreground service stopped unexpectedly');
+				useForegroundServiceRuntimeStore.getState().setStarted(false);
+			});
+		};
+		checkRunning();
+		const timer = setInterval(
+			checkRunning,
+			FOREGROUND_SERVICE_HEALTH_CHECK_MS,
+		);
+		return () => {
+			cancelled = true;
+			clearInterval(timer);
+		};
+	}, [foregroundServiceStarted]);
 
 	React.useEffect(() => {
 		if (Platform.OS !== 'android') return;
@@ -248,20 +280,23 @@ export function AgentNotificationBridgeManager({
 			if (!targetRef.current) return;
 			if (restartTimerRef.current) return;
 
+			const restart = restartCoordinatorRef.current.consume();
+			if (!restart) {
+				logger.warn('agent notification listener restart budget exhausted', {
+					reason,
+					attempt: restartCoordinatorRef.current.attempts,
+				});
+				return;
+			}
 			clearHeartbeatTimer();
-			const attempt = restartAttemptRef.current;
-			restartAttemptRef.current = attempt + 1;
-			const delayMs =
-				RESTART_DELAYS_MS[Math.min(attempt, RESTART_DELAYS_MS.length - 1)] ??
-				30_000;
 			logger.info('agent notification listener restart scheduled', {
 				reason,
-				delayMs,
+				delayMs: restart.delayMs,
 			});
 			restartTimerRef.current = setTimeout(() => {
 				restartTimerRef.current = null;
 				void stopListener().then(() => startListenerRef.current?.());
-			}, delayMs);
+			}, restart.delayMs);
 		},
 		[clearHeartbeatTimer, stopListener],
 	);
@@ -301,17 +336,21 @@ export function AgentNotificationBridgeManager({
 			key: string;
 			notificationId: number;
 			event: AgentNotificationEvent;
+			targetKey: string;
 			connectionId: string;
 			channelId: number;
 			notificationConnectionId: string;
+			onPosted?: (posted: boolean) => void;
 		}) => {
 			const {
 				key,
 				notificationId,
 				event,
+				targetKey,
 				connectionId,
 				channelId,
 				notificationConnectionId,
+				onPosted,
 			} = input;
 			const attemptId = dedupeRef.current.beginPost(key, event.id);
 			if (attemptId === null) return;
@@ -325,6 +364,7 @@ export function AgentNotificationBridgeManager({
 				session: event.session,
 				target: event.target,
 				windowId: event.windowId,
+				eventId: event.id,
 			}).then((posted) => {
 				const result = dedupeRef.current.completePost(
 					key,
@@ -332,17 +372,44 @@ export function AgentNotificationBridgeManager({
 					attemptId,
 					posted,
 				);
+				const currentPending = dedupeRef.current.getPendingEvent(key);
+				onPosted?.(posted && currentPending?.event.id === event.id);
+				const postWithCurrentTarget = (current: {
+					key: string;
+					notificationId: number;
+					event: AgentNotificationEvent;
+				}) => {
+					const currentTarget = targetRef.current;
+					if (!currentTarget) return;
+					if (
+						!matchesAgentNotificationPendingKey(current.key, {
+							connectionId: currentTarget.notificationConnectionId,
+							session: current.event.session,
+							windowId: current.event.windowId,
+						})
+					) {
+						return;
+					}
+					postPendingNotification({
+						...current,
+						targetKey: currentTarget.key,
+						connectionId: currentTarget.connection.connectionId,
+						channelId: currentTarget.channelId,
+						notificationConnectionId: currentTarget.notificationConnectionId,
+					});
+				};
 				if (result.type === 'cancel-posted') {
 					void cancelAgentAlertNotification(result.notificationId);
 					return;
 				}
-				if (result.type === 'superseded' && posted) {
-					postPendingNotification({
-						...result.current,
-						connectionId,
-						channelId,
-						notificationConnectionId,
-					});
+				const current =
+					result.type === 'superseded' && posted
+						? result.current
+						: posted && targetRef.current?.key !== targetKey
+							? dedupeRef.current.getPendingEvent(key)
+							: null;
+				if (current) {
+					postWithCurrentTarget(current);
 				}
 			});
 		},
@@ -374,35 +441,30 @@ export function AgentNotificationBridgeManager({
 				connection: activeTarget.connection,
 				command,
 				onLine: (line) => {
-					if (targetRef.current?.key !== activeTarget.key) return;
-
-					const parsed = parseAgentNotificationLine(line);
-					if (!parsed) {
-						logger.warn('ignored malformed agent notification line', { line });
-						return;
-					}
-
-					if (parsed.type === 'heartbeat') {
-						bridgeRef.current.recordHeartbeat(Date.now());
-						return;
-					}
-
-					bridgeRef.current.recordEventId(parsed.id);
-					lastSeenIdByTargetRef.current.set(activeTarget.resumeKey, parsed.id);
-					handleAgentNotificationEvent({
-						event: parsed,
-						connectionId: activeTarget.notificationConnectionId,
+					handleAgentNotificationListenerLine({
+						line,
+						activeTarget: {
+							key: activeTarget.key,
+							resumeKey: activeTarget.resumeKey,
+							connectionId: activeTarget.connection.connectionId,
+							channelId: activeTarget.channelId,
+							notificationConnectionId: activeTarget.notificationConnectionId,
+						},
+						currentTargetKey: targetRef.current?.key ?? null,
+						nowMs: Date.now(),
+						bridge: bridgeRef.current,
+						lastSeenIdByTarget: lastSeenIdByTargetRef.current,
 						dedupe: dedupeRef.current,
 						notifyPending: notifyAgentNotificationPending,
-						onPending: ({ key, notificationId, event }) => {
-							postPendingNotification({
-								key,
-								notificationId,
-								event,
-								connectionId: activeTarget.connection.connectionId,
-								channelId: activeTarget.channelId,
-								notificationConnectionId: activeTarget.notificationConnectionId,
+						postPendingNotification,
+						onHeartbeat: () => {
+							restartCoordinatorRef.current.resetIfHealthy({
+								nowMs: Date.now(),
+								startedAtMs: listenerStartedAtMsRef.current,
 							});
+						},
+						warn: (message, context) => {
+							logger.warn(message, context);
 						},
 					});
 				},
@@ -490,13 +552,14 @@ export function AgentNotificationBridgeManager({
 				for (const pending of dedupeRef.current.getPendingEvents()) {
 					postPendingNotification({
 						...pending,
+						targetKey: target.key,
 						connectionId: target.connection.connectionId,
 						channelId: target.channelId,
 						notificationConnectionId: target.notificationConnectionId,
 					});
 				}
 			}
-			restartAttemptRef.current = 0;
+			restartCoordinatorRef.current.reset();
 			previousTargetKeyRef.current = target?.key ?? null;
 		}
 

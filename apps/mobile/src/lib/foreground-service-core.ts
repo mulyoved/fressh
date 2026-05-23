@@ -1,6 +1,7 @@
 export type ForegroundServiceNativeModule = {
 	start: (title: string, message: string) => Promise<void>;
 	stop?: () => Promise<void>;
+	isRunning?: () => Promise<boolean>;
 };
 
 type ForegroundServiceLogger = {
@@ -48,6 +49,17 @@ export function createForegroundServiceStarter({
 				return true;
 			} catch (error) {
 				logger.warn('foreground service stop failed', error);
+				return false;
+			}
+		},
+		async isForegroundServiceRunning() {
+			if (getPlatformOS() !== 'android') return false;
+			const nativeModule = getNativeModule();
+			if (!nativeModule?.isRunning) return false;
+			try {
+				return await nativeModule.isRunning();
+			} catch (error) {
+				logger.warn('foreground service running check failed', error);
 				return false;
 			}
 		},

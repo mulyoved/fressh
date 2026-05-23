@@ -31,6 +31,11 @@ class ForegroundServiceModule(
   }
 
   @ReactMethod
+  fun isRunning(promise: Promise) {
+    promise.resolve(SshForegroundService.isRunning())
+  }
+
+  @ReactMethod
   fun postAgentAlert(
     notificationId: Int,
     title: String,
@@ -41,6 +46,7 @@ class ForegroundServiceModule(
     session: String,
     target: String,
     windowId: String,
+    eventId: String,
     promise: Promise
   ) {
     try {
@@ -54,7 +60,8 @@ class ForegroundServiceModule(
         notificationConnectionId,
         session,
         target,
-        windowId
+        windowId,
+        eventId
       )
       promise.resolve(null)
     } catch (e: Exception) {

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
 	acknowledgeVisibleAgentNotification,
+	handleAgentNotificationRoute,
 	notifyAgentNotificationPending,
 	subscribeAgentNotificationPending,
 	type VisibleAgentNotificationSnapshot,
@@ -221,4 +222,158 @@ void test('pending notification subscribers are notified until unsubscribed', ()
 	notifyAgentNotificationPending();
 
 	assert.equal(calls, 1);
+});
+
+void test('handleAgentNotificationRoute selects and acknowledges routed agent alert', async () => {
+	const commands: { command: string; timeoutMs: number }[] = [];
+	const acknowledgements: {
+		connectionId: string;
+		session: string;
+		windowId: string;
+	}[] = [];
+	const handled = new Set<string>();
+
+	const handledRoute = await handleAgentNotificationRoute({
+		agentConnectionId: 'saved-host',
+		storedConnectionId: 'fallback-host',
+		agentSession: 'work',
+		agentWindowId: '@12',
+		agentEventId: 'main:@12:2000:waiting',
+		tmuxTarget: 'main',
+		isRouteHandled: (key) => handled.has(key),
+		markRouteHandled: (key) => handled.add(key),
+		runCommand: async (command, timeoutMs) => {
+			commands.push({ command, timeoutMs });
+			return '';
+		},
+		acknowledge: (connectionId, session, windowId) => {
+			acknowledgements.push({ connectionId, session, windowId });
+		},
+		warn: () => {},
+	});
+
+	assert.equal(handledRoute, true);
+	assert.deepEqual(commands, [
+		{ command: "tmux select-window -t 'work:@12'", timeoutMs: 10_000 },
+	]);
+	assert.deepEqual(acknowledgements, [
+		{ connectionId: 'saved-host', session: 'work', windowId: '@12' },
+	]);
+	assert.equal(
+		handled.has('saved-host:work:@12:main:@12:2000:waiting'),
+		true,
+	);
+});
+
+void test('handleAgentNotificationRoute falls back to stored connection id', async () => {
+	const acknowledgements: {
+		connectionId: string;
+		session: string;
+		windowId: string;
+	}[] = [];
+
+	await handleAgentNotificationRoute({
+		agentConnectionId: null,
+		storedConnectionId: 'saved-host',
+		agentSession: null,
+		agentWindowId: '@12',
+		agentEventId: 'main:@12:2000:waiting',
+		tmuxTarget: 'main',
+		isRouteHandled: () => false,
+		markRouteHandled: () => {},
+		runCommand: async () => '',
+		acknowledge: (connectionId, session, windowId) => {
+			acknowledgements.push({ connectionId, session, windowId });
+		},
+		warn: () => {},
+	});
+
+	assert.deepEqual(acknowledgements, [
+		{ connectionId: 'saved-host', session: 'main', windowId: '@12' },
+	]);
+});
+
+void test('handleAgentNotificationRoute suppresses duplicate successful routes only', async () => {
+	const handled = new Set<string>(['saved-host:main:@12:main:@12:2000:waiting']);
+	let commands = 0;
+
+	const duplicateHandled = await handleAgentNotificationRoute({
+		agentConnectionId: 'saved-host',
+		storedConnectionId: null,
+		agentSession: 'main',
+		agentWindowId: '@12',
+		agentEventId: 'main:@12:2000:waiting',
+		tmuxTarget: 'main',
+		isRouteHandled: (key) => handled.has(key),
+		markRouteHandled: (key) => handled.add(key),
+		runCommand: async () => {
+			commands += 1;
+			return '';
+		},
+		acknowledge: () => {},
+		warn: () => {},
+	});
+
+	assert.equal(duplicateHandled, false);
+	assert.equal(commands, 0);
+});
+
+void test('handleAgentNotificationRoute allows a later alert for the same window', async () => {
+	const handled = new Set<string>(['saved-host:main:@12:main:@12:2000:waiting']);
+	const commands: string[] = [];
+	const acknowledgements: string[] = [];
+
+	const handledRoute = await handleAgentNotificationRoute({
+		agentConnectionId: 'saved-host',
+		storedConnectionId: null,
+		agentSession: 'main',
+		agentWindowId: '@12',
+		agentEventId: 'main:@12:3000:done',
+		tmuxTarget: 'main',
+		isRouteHandled: (key) => handled.has(key),
+		markRouteHandled: (key) => handled.add(key),
+		runCommand: async (command) => {
+			commands.push(command);
+			return '';
+		},
+		acknowledge: (_connectionId, _session, windowId) => {
+			acknowledgements.push(windowId);
+		},
+		warn: () => {},
+	});
+
+	assert.equal(handledRoute, true);
+	assert.deepEqual(commands, ["tmux select-window -t 'main:@12'"]);
+	assert.deepEqual(acknowledgements, ['@12']);
+	assert.equal(handled.has('saved-host:main:@12:main:@12:3000:done'), true);
+});
+
+void test('handleAgentNotificationRoute does not acknowledge or mark failed selection', async () => {
+	const handled = new Set<string>();
+	const warnings: unknown[] = [];
+	let acknowledgements = 0;
+	const error = new Error('select failed');
+
+	const handledRoute = await handleAgentNotificationRoute({
+		agentConnectionId: 'saved-host',
+		storedConnectionId: null,
+		agentSession: 'main',
+		agentWindowId: '@12',
+		agentEventId: 'main:@12:2000:waiting',
+		tmuxTarget: 'main',
+		isRouteHandled: (key) => handled.has(key),
+		markRouteHandled: (key) => handled.add(key),
+		runCommand: async () => {
+			throw error;
+		},
+		acknowledge: () => {
+			acknowledgements += 1;
+		},
+		warn: (_message, warning) => warnings.push(warning),
+	});
+
+	assert.equal(handledRoute, false);
+	assert.equal(acknowledgements, 0);
+	assert.equal(handled.size, 0);
+	assert.deepEqual(warnings, [error]);
 });

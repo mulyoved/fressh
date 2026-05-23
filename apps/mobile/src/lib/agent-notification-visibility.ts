@@ -1,5 +1,6 @@
 import { buildTmuxCurrentWindowIdCommand } from './host-browser-actions';
 import { rootLogger } from './logger';
+import { buildTmuxSelectWindowCommand } from './tmux-scrollback';
 
 const logger = rootLogger.extend('AgentNotificationVisibility');
 
@@ -20,6 +21,24 @@ export type VisibleAgentNotificationAcknowledgeOptions = {
 	getVisibility: () => VisibleAgentNotificationSnapshot;
 	nextRequestId: () => number;
 	isCurrentRequest: (requestId: number) => boolean;
+	runCommand: (command: string, timeoutMs: number) => Promise<string>;
+	acknowledge: (
+		connectionId: string,
+		session: string,
+		windowId: string,
+	) => void;
+	warn: (message: string, error: unknown) => void;
+};
+
+export type AgentNotificationRouteOptions = {
+	agentConnectionId: string | null;
+	storedConnectionId: string | null | undefined;
+	agentSession: string | null;
+	agentWindowId: string | null;
+	agentEventId: string | null;
+	tmuxTarget: string;
+	isRouteHandled: (routeKey: string) => boolean;
+	markRouteHandled: (routeKey: string) => void;
 	runCommand: (command: string, timeoutMs: number) => Promise<string>;
 	acknowledge: (
 		connectionId: string,
@@ -53,6 +72,41 @@ export function notifyAgentNotificationPending() {
 		} catch (error) {
 			logger.warn('agent notification pending listener failed', error);
 		}
+	}
+}
+
+export async function handleAgentNotificationRoute({
+	agentConnectionId,
+	storedConnectionId,
+	agentSession,
+	agentWindowId,
+	agentEventId,
+	tmuxTarget,
+	isRouteHandled,
+	markRouteHandled,
+	runCommand,
+	acknowledge,
+	warn,
+}: AgentNotificationRouteOptions) {
+	const notificationConnectionId = agentConnectionId || storedConnectionId;
+	if (!agentWindowId || !notificationConnectionId) return false;
+	const session = agentSession || tmuxTarget.trim() || 'main';
+	const routeKey = [
+		notificationConnectionId,
+		session,
+		agentWindowId,
+		agentEventId || 'legacy',
+	].join(':');
+	if (isRouteHandled(routeKey)) return false;
+
+	try {
+		await runCommand(buildTmuxSelectWindowCommand(session, agentWindowId), 10_000);
+		markRouteHandled(routeKey);
+		acknowledge(notificationConnectionId, session, agentWindowId);
+		return true;
+	} catch (error) {
+		warn('failed to select agent notification window', error);
+		return false;
 	}
 }
 

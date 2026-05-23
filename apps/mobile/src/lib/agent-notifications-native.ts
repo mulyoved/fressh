@@ -13,6 +13,7 @@ type AgentNotificationsNativeModule = {
 		session: string,
 		target: string,
 		windowId: string,
+		eventId?: string,
 	) => Promise<void>;
 	cancelAgentAlert?: (notificationId: number) => Promise<void>;
 };
@@ -27,6 +28,7 @@ type AgentAlertNotificationInput = {
 	session: string;
 	target: string;
 	windowId: string;
+	eventId: string;
 };
 
 type AgentNotificationsLogger = {
@@ -39,6 +41,13 @@ type AgentNotificationsNativeDependencies = {
 	ensureNotificationPermission: () => Promise<boolean>;
 	logger: AgentNotificationsLogger;
 };
+
+function isNativeArgumentCountMismatch(error: unknown) {
+	if (!(error instanceof Error)) return false;
+	return /(?:got|received)\s+10\s+arguments?,\s+expected\s+9/i.test(
+		error.message,
+	);
+}
 
 export function createAgentNotificationsNativeWrapper({
 	getPlatformOS,
@@ -73,9 +82,35 @@ export function createAgentNotificationsNativeWrapper({
 					input.session,
 					input.target,
 					input.windowId,
+					input.eventId,
 				);
 				return true;
 			} catch (error) {
+				if (isNativeArgumentCountMismatch(error)) {
+					try {
+						await nativeModule.postAgentAlert(
+							input.notificationId,
+							input.title,
+							input.message,
+							input.connectionId,
+							input.channelId,
+							input.notificationConnectionId,
+							input.session,
+							input.target,
+							input.windowId,
+						);
+						logger.warn(
+							'agent alert notification post used legacy native arity',
+						);
+						return true;
+					} catch (legacyError) {
+						logger.warn(
+							'agent alert notification legacy post failed',
+							legacyError,
+						);
+						return false;
+					}
+				}
 				logger.warn('agent alert notification post failed', error);
 				return false;
 			}

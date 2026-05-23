@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import {
 	canRunAgentNotificationBridge,
 	canRunAndroidBackgroundWork,
+	createAgentNotificationRestartCoordinator,
 	createForegroundServiceStartCoordinator,
 	getNextConfiguredResumeKey,
 	shouldPreservePendingWithoutConfiguredTarget,
@@ -365,4 +366,46 @@ void test('transient reconnect keeps the last non-null resume key for the next c
 		}),
 		null,
 	);
+});
+
+void test('agent notification restart coordinator exhausts delays and resets after healthy work', () => {
+	const coordinator = createAgentNotificationRestartCoordinator({
+		maxAttempts: 2,
+		delaysMs: [100, 200],
+		healthyResetMs: 1_000,
+	});
+
+	assert.equal(coordinator.attempts, 0);
+	assert.deepEqual(coordinator.consume(), { attempt: 0, delayMs: 100 });
+	assert.equal(coordinator.attempts, 1);
+	assert.deepEqual(coordinator.consume(), { attempt: 1, delayMs: 200 });
+	assert.equal(coordinator.attempts, 2);
+	assert.equal(coordinator.consume(), null);
+	assert.equal(coordinator.attempts, 2);
+
+	assert.equal(
+		coordinator.resetIfHealthy({ nowMs: 1_500, startedAtMs: 1_000 }),
+		false,
+	);
+	assert.equal(coordinator.attempts, 2);
+	assert.equal(
+		coordinator.resetIfHealthy({ nowMs: 2_000, startedAtMs: 1_000 }),
+		true,
+	);
+
+	assert.equal(coordinator.attempts, 0);
+	assert.deepEqual(coordinator.consume(), { attempt: 0, delayMs: 100 });
+});
+
+void test('agent notification restart coordinator reuses the last delay after the delay list is exhausted', () => {
+	const coordinator = createAgentNotificationRestartCoordinator({
+		maxAttempts: 4,
+		delaysMs: [100, 200],
+	});
+
+	assert.deepEqual(coordinator.consume(), { attempt: 0, delayMs: 100 });
+	assert.deepEqual(coordinator.consume(), { attempt: 1, delayMs: 200 });
+	assert.deepEqual(coordinator.consume(), { attempt: 2, delayMs: 200 });
+	assert.deepEqual(coordinator.consume(), { attempt: 3, delayMs: 200 });
+	assert.equal(coordinator.consume(), null);
 });

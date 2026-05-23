@@ -137,6 +137,37 @@ export function getNextConfiguredResumeKey(input: {
 	return input.nextResumeKey;
 }
 
+export function createAgentNotificationRestartCoordinator(input: {
+	maxAttempts: number;
+	delaysMs: readonly number[];
+	healthyResetMs?: number;
+}) {
+	let attempts = 0;
+	const healthyResetMs = input.healthyResetMs ?? 0;
+	return {
+		get attempts() {
+			return attempts;
+		},
+		consume() {
+			if (attempts >= input.maxAttempts) return null;
+			const attempt = attempts;
+			attempts += 1;
+			const delayMs =
+				input.delaysMs[Math.min(attempt, input.delaysMs.length - 1)] ?? 0;
+			return { attempt, delayMs };
+		},
+		reset() {
+			attempts = 0;
+		},
+		resetIfHealthy(input: { nowMs: number; startedAtMs: number | null }) {
+			if (input.startedAtMs === null) return false;
+			if (input.nowMs - input.startedAtMs < healthyResetMs) return false;
+			attempts = 0;
+			return true;
+		},
+	};
+}
+
 export type ForegroundServiceStartRequest = {
 	id: number;
 	key: string;

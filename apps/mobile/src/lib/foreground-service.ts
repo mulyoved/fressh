@@ -45,6 +45,10 @@ export async function stopForegroundService() {
 	return await foregroundService.stopForegroundService();
 }
 
+export async function isForegroundServiceRunning() {
+	return await foregroundService.isForegroundServiceRunning();
+}
+
 const foregroundService = createForegroundServiceStarter({
 	getPlatformOS: () => Platform.OS,
 	getNativeModule: () => nativeForegroundService,
