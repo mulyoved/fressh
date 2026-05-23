@@ -191,6 +191,13 @@ export function AgentNotificationBridgeManager() {
 		await stopListener();
 	}, [clearRestartTimer, stopListener]);
 
+	const clearPendingNotifications = React.useCallback(() => {
+		const notificationIds = dedupeRef.current.clear();
+		for (const notificationId of notificationIds) {
+			void cancelAgentAlertNotification(notificationId);
+		}
+	}, []);
+
 	const scheduleRestart = React.useCallback(
 		(reason: string) => {
 			if (Platform.OS !== 'android') return;
@@ -404,6 +411,7 @@ export function AgentNotificationBridgeManager() {
 
 		if (Platform.OS !== 'android') return;
 		if (!target) {
+			clearPendingNotifications();
 			void stopAll();
 			bridgeRef.current.markStoppedByOsOrConnection();
 			return;
@@ -415,10 +423,11 @@ export function AgentNotificationBridgeManager() {
 		});
 		return () => {
 			targetRef.current = null;
+			clearPendingNotifications();
 			bridge.markStoppedByOsOrConnection();
 			void stopAll();
 		};
-	}, [startListener, stopAll, target]);
+	}, [clearPendingNotifications, startListener, stopAll, target]);
 
 	React.useEffect(() => {
 		if (Platform.OS !== 'android') return;

@@ -238,7 +238,7 @@ export class AgentNotificationDedupe {
 			);
 			if (!posted) return { type: 'ignored' };
 			pending.stalePosted = true;
-			return pending.event && !pending.posted && pending.inFlightPostCount === 0
+			return pending.event && pending.inFlightPostCount === 0
 				? {
 						type: 'superseded',
 						posted,
@@ -289,6 +289,16 @@ export class AgentNotificationDedupe {
 			this.pending.delete(key);
 			ids.push(pending.notificationId);
 		}
+		return ids;
+	}
+
+	clear(): number[] {
+		const ids = Array.from(
+			new Set(
+				Array.from(this.pending.values(), (pending) => pending.notificationId),
+			),
+		);
+		this.pending.clear();
 		return ids;
 	}
 }
