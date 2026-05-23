@@ -1,5 +1,5 @@
 import React from 'react';
-import { Platform } from 'react-native';
+import { AppState, Platform } from 'react-native';
 import { useShallow } from 'zustand/react/shallow';
 import {
 	AgentNotificationBridgeStateMachine,
@@ -13,6 +13,10 @@ import {
 	matchesAgentNotificationPendingKey,
 	parseAgentNotificationLine,
 } from './agent-notification-events';
+import {
+	canRunAgentNotificationBridge,
+	useForegroundServiceRuntimeStore,
+} from './agent-notification-runtime';
 import { notifyAgentNotificationPending } from './agent-notification-visibility';
 import {
 	cancelAgentAlertNotification,
@@ -30,6 +34,7 @@ import { queryClient } from './utils';
 
 const logger = rootLogger.extend('AgentNotificationBridge');
 const RESTART_DELAYS_MS = [1_000, 2_000, 5_000, 10_000, 30_000];
+const isActiveState = (state: string) => state === 'active';
 
 type ListenerTarget = {
 	key: string;
@@ -54,6 +59,9 @@ export function AgentNotificationBridgeManager() {
 			connections: s.connections,
 		})),
 	);
+	const foregroundServiceStarted = useForegroundServiceRuntimeStore(
+		(s) => s.started,
+	);
 	const bridgeRef = React.useRef(new AgentNotificationBridgeStateMachine());
 	const dedupeRef = React.useRef(new AgentNotificationDedupe());
 	const listenerRef = React.useRef<SshJsonlListenerHandle | null>(null);
@@ -75,6 +83,14 @@ export function AgentNotificationBridgeManager() {
 	const [settingsByConnectionId, setSettingsByConnectionId] = React.useState<
 		Record<string, SessionSettings>
 	>({});
+	const [appActive, setAppActive] = React.useState(() =>
+		isActiveState(AppState.currentState),
+	);
+	const runtimeAllowed = canRunAgentNotificationBridge({
+		platformOS: Platform.OS,
+		appActive,
+		foregroundServiceStarted,
+	});
 
 	const latestShellEntry = React.useMemo(() => {
 		const entries = Object.entries(shells);
@@ -96,6 +112,7 @@ export function AgentNotificationBridgeManager() {
 		: undefined;
 	const session = settings?.session ?? 'main';
 	const target = React.useMemo<ListenerTarget | null>(() => {
+		if (!runtimeAllowed) return null;
 		if (!connection || !latestShellKey) return null;
 		if (!settings?.loaded || !settings.useTmux) return null;
 		return {
@@ -105,7 +122,18 @@ export function AgentNotificationBridgeManager() {
 			connection,
 			session,
 		};
-	}, [connection, latestShellKey, session, settings]);
+	}, [connection, latestShellKey, runtimeAllowed, session, settings]);
+
+	React.useEffect(() => {
+		if (Platform.OS !== 'android') return;
+		// eslint-disable-next-line @eslint-react/web-api/no-leaked-event-listener -- React Native AppState cleans up via subscription.remove()
+		const subscription = AppState.addEventListener('change', (nextState) => {
+			setAppActive(isActiveState(nextState));
+		});
+		return () => {
+			subscription.remove();
+		};
+	}, []);
 
 	React.useEffect(() => {
 		if (Platform.OS !== 'android') return;

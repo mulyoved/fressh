@@ -298,6 +298,7 @@ void test('startSshJsonlListener times out if startShell never settles', async (
 
 	assert.deepEqual(fixture.sent, []);
 	assert.equal(fixture.closed, 0);
+	assert.equal(fixture.startShellOptions[0]?.abortSignal?.aborted, true);
 });
 
 void test('startSshJsonlListener reports send timeout even when close hangs', async () => {
@@ -321,7 +322,9 @@ void test('startSshJsonlListener reports send timeout even when close hangs', as
 	assert.equal(exits.length, 1);
 	assert.match(String(exits[0]), /listener operation timed out/);
 	assert.deepEqual(fixture.removed, [99n]);
+	assert.equal(fixture.sendOptions[0]?.signal?.aborted, true);
 	assert.equal(fixture.closeOptions[0]?.signal instanceof AbortSignal, true);
+	assert.equal(fixture.closeOptions[0]?.signal?.aborted, true);
 	assert.equal(warn.mock.callCount(), 2);
 
 	await handle.stop();

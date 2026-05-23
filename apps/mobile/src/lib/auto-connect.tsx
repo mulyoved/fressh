@@ -4,6 +4,10 @@ import React from 'react';
 import { AppState, Platform } from 'react-native';
 import { create } from 'zustand';
 import { useShallow } from 'zustand/react/shallow';
+import {
+	canRunAndroidBackgroundWork,
+	useForegroundServiceRuntimeStore,
+} from './agent-notification-runtime';
 import { AgentNotificationBridgeManager } from './AgentNotificationBridgeManager';
 import {
 	getStoredConnectionId,
@@ -98,6 +102,14 @@ export function AutoConnectManager() {
 	const foregroundKeyRef = React.useRef<string | null>(null);
 	const allowBackgroundRef = React.useRef(false);
 	const didInitRef = React.useRef(false);
+
+	const setForegroundServiceStarted = React.useCallback((started: boolean) => {
+		useForegroundServiceRuntimeStore.getState().setStarted(started);
+		allowBackgroundRef.current = canRunAndroidBackgroundWork({
+			platformOS: Platform.OS,
+			foregroundServiceStarted: started,
+		});
+	}, []);
 
 	const clearReconnectTimer = React.useCallback(() => {
 		if (reconnectTimerRef.current) {
@@ -332,9 +344,9 @@ export function AutoConnectManager() {
 	React.useEffect(() => {
 		if (Platform.OS !== 'android') return;
 		const shouldRunService = shells.length > 0;
-		allowBackgroundRef.current = false;
 
 		if (!shouldRunService) {
+			setForegroundServiceStarted(false);
 			if (foregroundKeyRef.current !== null) {
 				foregroundKeyRef.current = null;
 				void stopForegroundService();
@@ -357,7 +369,7 @@ export function AutoConnectManager() {
 		let cancelled = false;
 		void startForegroundService({ title, message }).then((started) => {
 			if (cancelled || foregroundKeyRef.current !== nextKey) return;
-			allowBackgroundRef.current = started;
+			setForegroundServiceStarted(started);
 			if (!started) {
 				foregroundKeyRef.current = null;
 				if (!isActiveRef.current) {
@@ -373,6 +385,7 @@ export function AutoConnectManager() {
 		isAutoConnecting,
 		isReconnecting,
 		latestShell,
+		setForegroundServiceStarted,
 		shells.length,
 		stopReconnectCycle,
 	]);
@@ -380,10 +393,10 @@ export function AutoConnectManager() {
 	React.useEffect(() => {
 		return () => {
 			if (Platform.OS !== 'android') return;
-			allowBackgroundRef.current = false;
+			setForegroundServiceStarted(false);
 			void stopForegroundService();
 		};
-	}, []);
+	}, [setForegroundServiceStarted]);
 
 	React.useEffect(() => {
 		if (didInitRef.current) return;
