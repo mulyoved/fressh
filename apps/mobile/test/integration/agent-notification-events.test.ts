@@ -387,3 +387,153 @@ void test('handleAgentNotificationEvent handles later status updates for the sam
 	assert.equal(signalCount, 2);
 	assert.deepEqual(handledStatuses, ['waiting', 'done']);
 });
+
+void test('dedupe ignores stale post completions without clearing newer status', () => {
+	const dedupe = new AgentNotificationDedupe();
+	const key = createAgentNotificationPendingKey({
+		connectionId: 'conn-1',
+		session: 'main',
+		windowId: '@12',
+	});
+	const notificationId = createStableNotificationId(key);
+	const waitingEvent = {
+		id: 'main:@12:1000:waiting',
+		type: 'tmux_status' as const,
+		session: 'main',
+		target: 'main:4',
+		windowId: '@12',
+		windowIndex: '4',
+		windowName: 'fressh',
+		status: 'waiting' as const,
+		icon: '💬' as const,
+		createdAtMs: 1000,
+	};
+	const doneEvent = {
+		...waitingEvent,
+		id: 'main:@12:2000:done',
+		status: 'done' as const,
+		icon: '✅' as const,
+		createdAtMs: 2000,
+	};
+
+	assert.equal(
+		dedupe.markPendingEvent(key, notificationId, waitingEvent),
+		true,
+	);
+	const waitingAttemptId = dedupe.beginPost(key, waitingEvent.id);
+	assert.equal(waitingAttemptId, 1);
+	assert.equal(dedupe.markPendingEvent(key, notificationId, doneEvent), true);
+	assert.deepEqual(dedupe.completePost(key, waitingEvent.id, 1, false), {
+		type: 'ignored',
+	});
+	assert.deepEqual(dedupe.completePost(key, waitingEvent.id, 1, true), {
+		type: 'superseded',
+		posted: true,
+		current: {
+			key,
+			notificationId,
+			event: doneEvent,
+		},
+	});
+	const doneAttemptId = dedupe.beginPost(key, doneEvent.id);
+	assert.equal(doneAttemptId, 1);
+	assert.deepEqual(
+		dedupe.completePost(key, doneEvent.id, doneAttemptId!, true),
+		{
+			type: 'posted',
+		},
+	);
+	assert.deepEqual(dedupe.acknowledge(key), [notificationId]);
+});
+
+void test('dedupe ignores duplicate current failure while another current post is in flight', () => {
+	const dedupe = new AgentNotificationDedupe();
+	const key = createAgentNotificationPendingKey({
+		connectionId: 'conn-1',
+		session: 'main',
+		windowId: '@12',
+	});
+	const notificationId = createStableNotificationId(key);
+	const waitingEvent = {
+		id: 'main:@12:1000:waiting',
+		type: 'tmux_status' as const,
+		session: 'main',
+		target: 'main:4',
+		windowId: '@12',
+		windowIndex: '4',
+		windowName: 'fressh',
+		status: 'waiting' as const,
+		icon: '💬' as const,
+		createdAtMs: 1000,
+	};
+	const doneEvent = {
+		...waitingEvent,
+		id: 'main:@12:2000:done',
+		status: 'done' as const,
+		icon: '✅' as const,
+		createdAtMs: 2000,
+	};
+
+	assert.equal(
+		dedupe.markPendingEvent(key, notificationId, waitingEvent),
+		true,
+	);
+	const waitingAttemptId = dedupe.beginPost(key, waitingEvent.id);
+	assert.equal(waitingAttemptId, 1);
+	assert.equal(dedupe.markPendingEvent(key, notificationId, doneEvent), true);
+	const doneAttemptId = dedupe.beginPost(key, doneEvent.id);
+	assert.equal(doneAttemptId, 1);
+	assert.deepEqual(dedupe.completePost(key, waitingEvent.id, 1, true), {
+		type: 'ignored',
+	});
+	const duplicateDoneAttemptId = dedupe.beginPost(key, doneEvent.id);
+	assert.equal(duplicateDoneAttemptId, 2);
+	assert.deepEqual(
+		dedupe.completePost(key, doneEvent.id, duplicateDoneAttemptId!, false),
+		{
+			type: 'ignored',
+		},
+	);
+	assert.deepEqual(
+		dedupe.completePost(key, doneEvent.id, doneAttemptId!, true),
+		{
+			type: 'ignored',
+		},
+	);
+	assert.deepEqual(dedupe.acknowledge(key), [notificationId]);
+});
+
+void test('dedupe keeps posted status when an older same-event attempt fails', () => {
+	const dedupe = new AgentNotificationDedupe();
+	const key = createAgentNotificationPendingKey({
+		connectionId: 'conn-1',
+		session: 'main',
+		windowId: '@12',
+	});
+	const notificationId = createStableNotificationId(key);
+	const event = {
+		id: 'main:@12:2000:done',
+		type: 'tmux_status' as const,
+		session: 'main',
+		target: 'main:4',
+		windowId: '@12',
+		windowIndex: '4',
+		windowName: 'fressh',
+		status: 'done' as const,
+		icon: '✅' as const,
+		createdAtMs: 2000,
+	};
+
+	assert.equal(dedupe.markPendingEvent(key, notificationId, event), true);
+	const firstAttemptId = dedupe.beginPost(key, event.id);
+	const secondAttemptId = dedupe.beginPost(key, event.id);
+	assert.equal(firstAttemptId, 1);
+	assert.equal(secondAttemptId, 2);
+	assert.deepEqual(dedupe.completePost(key, event.id, secondAttemptId!, true), {
+		type: 'posted',
+	});
+	assert.deepEqual(dedupe.completePost(key, event.id, firstAttemptId!, false), {
+		type: 'ignored',
+	});
+	assert.deepEqual(dedupe.acknowledge(key), [notificationId]);
+});

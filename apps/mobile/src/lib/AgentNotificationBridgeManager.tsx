@@ -7,6 +7,7 @@ import {
 } from './agent-notification-bridge';
 import {
 	AgentNotificationDedupe,
+	type AgentNotificationEvent,
 	buildAgentNotificationListenCommand,
 	handleAgentNotificationEvent,
 	parseAgentNotificationLine,
@@ -243,6 +244,46 @@ export function AgentNotificationBridgeManager() {
 		[scheduleRestart],
 	);
 
+	const postPendingNotification = React.useCallback(
+		(input: {
+			key: string;
+			notificationId: number;
+			event: AgentNotificationEvent;
+			connectionId: string;
+		}) => {
+			const { key, notificationId, event, connectionId } = input;
+			const attemptId = dedupeRef.current.beginPost(key, event.id);
+			if (attemptId === null) return;
+			void postAgentAlertNotification({
+				notificationId,
+				title: event.status === 'waiting' ? 'Agent waiting' : 'Agent done',
+				message: `${event.windowName || event.target} needs attention`,
+				connectionId,
+				session: event.session,
+				target: event.target,
+				windowId: event.windowId,
+			}).then((posted) => {
+				const result = dedupeRef.current.completePost(
+					key,
+					event.id,
+					attemptId,
+					posted,
+				);
+				if (result.type === 'cancel-posted') {
+					void cancelAgentAlertNotification(result.notificationId);
+					return;
+				}
+				if (result.type === 'superseded' && posted) {
+					postPendingNotification({
+						...result.current,
+						connectionId,
+					});
+				}
+			});
+		},
+		[],
+	);
+
 	const startListener = React.useCallback(async () => {
 		const activeTarget = targetRef.current;
 		if (Platform.OS !== 'android' || !activeTarget) return;
@@ -289,24 +330,11 @@ export function AgentNotificationBridgeManager() {
 						dedupe: dedupeRef.current,
 						notifyPending: notifyAgentNotificationPending,
 						onPending: ({ key, notificationId, event }) => {
-							void postAgentAlertNotification({
+							postPendingNotification({
+								key,
 								notificationId,
-								title:
-									event.status === 'waiting' ? 'Agent waiting' : 'Agent done',
-								message: `${event.windowName || event.target} needs attention`,
+								event,
 								connectionId: activeTarget.connection.connectionId,
-								session: event.session,
-								target: event.target,
-								windowId: event.windowId,
-							}).then((posted) => {
-								const stillPending = dedupeRef.current.acknowledge(key);
-								if (posted && stillPending.length === 0) {
-									void cancelAgentAlertNotification(notificationId);
-									return;
-								}
-								if (posted) {
-									dedupeRef.current.markPendingIfNew(key, notificationId);
-								}
 							});
 						},
 					});
@@ -353,6 +381,7 @@ export function AgentNotificationBridgeManager() {
 		clearHeartbeatTimer,
 		clearRestartTimer,
 		handleStaleHeartbeat,
+		postPendingNotification,
 		scheduleRestart,
 	]);
 

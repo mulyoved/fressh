@@ -132,24 +132,130 @@ export function createStableNotificationId(key: string): number {
 export class AgentNotificationDedupe {
 	private readonly pending = new Map<
 		string,
-		{ eventId: string; notificationId: number }
+		{
+			event: AgentNotificationEvent | null;
+			eventId: string;
+			inFlightAnyPostCount: number;
+			inFlightPostCount: number;
+			notificationId: number;
+			postAttemptId: number;
+			posted: boolean;
+			stalePosted: boolean;
+		}
 	>();
 
 	markPendingIfNew(key: string, notificationId: number): boolean {
 		if (this.pending.has(key)) return false;
-		this.pending.set(key, { eventId: '', notificationId });
+		this.pending.set(key, {
+			event: null,
+			eventId: '',
+			inFlightAnyPostCount: 0,
+			inFlightPostCount: 0,
+			notificationId,
+			postAttemptId: 0,
+			posted: false,
+			stalePosted: false,
+		});
 		return true;
 	}
 
 	markPendingEvent(
 		key: string,
 		notificationId: number,
-		eventId: string,
+		event: AgentNotificationEvent,
 	): boolean {
 		const existing = this.pending.get(key);
-		if (existing?.eventId === eventId) return false;
-		this.pending.set(key, { eventId, notificationId });
+		if (existing?.eventId === event.id) return false;
+		this.pending.set(key, {
+			event,
+			eventId: event.id,
+			inFlightAnyPostCount: existing?.inFlightAnyPostCount ?? 0,
+			inFlightPostCount: 0,
+			notificationId,
+			postAttemptId: 0,
+			posted: false,
+			stalePosted: existing?.posted || existing?.stalePosted || false,
+		});
 		return true;
+	}
+
+	beginPost(key: string, eventId: string): number | null {
+		const pending = this.pending.get(key);
+		if (!pending || pending.eventId !== eventId) return null;
+		pending.inFlightAnyPostCount += 1;
+		pending.inFlightPostCount += 1;
+		pending.postAttemptId += 1;
+		return pending.postAttemptId;
+	}
+
+	completePost(
+		key: string,
+		eventId: string,
+		attemptId: number,
+		posted: boolean,
+	):
+		| { type: 'posted' | 'failed' | 'ignored' }
+		| { type: 'cancel-posted'; notificationId: number }
+		| {
+				type: 'superseded';
+				posted: boolean;
+				current: {
+					key: string;
+					notificationId: number;
+					event: AgentNotificationEvent;
+				};
+		  } {
+		const pending = this.pending.get(key);
+		if (!pending) {
+			return posted
+				? {
+						type: 'cancel-posted',
+						notificationId: createStableNotificationId(key),
+					}
+				: { type: 'ignored' };
+		}
+		if (pending.eventId !== eventId) {
+			pending.inFlightAnyPostCount = Math.max(
+				0,
+				pending.inFlightAnyPostCount - 1,
+			);
+			if (!posted) return { type: 'ignored' };
+			pending.stalePosted = true;
+			return pending.event && !pending.posted && pending.inFlightPostCount === 0
+				? {
+						type: 'superseded',
+						posted,
+						current: {
+							key,
+							notificationId: pending.notificationId,
+							event: pending.event,
+						},
+					}
+				: { type: 'ignored' };
+		}
+		pending.inFlightAnyPostCount = Math.max(
+			0,
+			pending.inFlightAnyPostCount - 1,
+		);
+		pending.inFlightPostCount = Math.max(0, pending.inFlightPostCount - 1);
+		if (pending.postAttemptId !== attemptId) {
+			if (posted) pending.posted = true;
+			return { type: 'ignored' };
+		}
+		if (!posted) {
+			if (
+				pending.posted ||
+				pending.stalePosted ||
+				pending.inFlightAnyPostCount > 0 ||
+				pending.inFlightPostCount > 0
+			) {
+				return { type: 'ignored' };
+			}
+			this.pending.delete(key);
+			return { type: 'failed' };
+		}
+		pending.posted = true;
+		return { type: 'posted' };
 	}
 
 	acknowledge(key: string): number[] {
@@ -195,7 +301,7 @@ export function handleAgentNotificationEvent({
 		windowId: event.windowId,
 	});
 	const notificationId = createStableNotificationId(key);
-	if (!dedupe.markPendingEvent(key, notificationId, event.id)) return;
+	if (!dedupe.markPendingEvent(key, notificationId, event)) return;
 	notifyPending();
 	onPending({ key, notificationId, event });
 }
