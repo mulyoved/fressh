@@ -345,3 +345,45 @@ void test('handleAgentNotificationEvent signals and handles new pending events o
 		},
 	]);
 });
+
+void test('handleAgentNotificationEvent handles later status updates for the same window', () => {
+	const dedupe = new AgentNotificationDedupe();
+	const baseEvent = {
+		id: 'main:@12:1000:waiting',
+		type: 'tmux_status' as const,
+		session: 'main',
+		target: 'main:4',
+		windowId: '@12',
+		windowIndex: '4',
+		windowName: 'fressh',
+		status: 'waiting' as const,
+		icon: '💬' as const,
+		createdAtMs: 1000,
+	};
+	const doneEvent = {
+		...baseEvent,
+		id: 'main:@12:2000:done',
+		status: 'done' as const,
+		icon: '✅' as const,
+		createdAtMs: 2000,
+	};
+	let signalCount = 0;
+	const handledStatuses: string[] = [];
+
+	for (const event of [baseEvent, baseEvent, doneEvent]) {
+		handleAgentNotificationEvent({
+			event,
+			connectionId: 'conn-1',
+			dedupe,
+			notifyPending: () => {
+				signalCount += 1;
+			},
+			onPending: ({ event: pendingEvent }) => {
+				handledStatuses.push(pendingEvent.status);
+			},
+		});
+	}
+
+	assert.equal(signalCount, 2);
+	assert.deepEqual(handledStatuses, ['waiting', 'done']);
+});

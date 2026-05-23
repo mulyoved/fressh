@@ -130,27 +130,41 @@ export function createStableNotificationId(key: string): number {
 }
 
 export class AgentNotificationDedupe {
-	private readonly pending = new Map<string, number>();
+	private readonly pending = new Map<
+		string,
+		{ eventId: string; notificationId: number }
+	>();
 
 	markPendingIfNew(key: string, notificationId: number): boolean {
 		if (this.pending.has(key)) return false;
-		this.pending.set(key, notificationId);
+		this.pending.set(key, { eventId: '', notificationId });
+		return true;
+	}
+
+	markPendingEvent(
+		key: string,
+		notificationId: number,
+		eventId: string,
+	): boolean {
+		const existing = this.pending.get(key);
+		if (existing?.eventId === eventId) return false;
+		this.pending.set(key, { eventId, notificationId });
 		return true;
 	}
 
 	acknowledge(key: string): number[] {
-		const notificationId = this.pending.get(key);
-		if (notificationId === undefined) return [];
+		const pending = this.pending.get(key);
+		if (!pending) return [];
 		this.pending.delete(key);
-		return [notificationId];
+		return [pending.notificationId];
 	}
 
 	acknowledgeMatching(predicate: (key: string) => boolean): number[] {
 		const ids: number[] = [];
-		for (const [key, notificationId] of this.pending) {
+		for (const [key, pending] of this.pending) {
 			if (!predicate(key)) continue;
 			this.pending.delete(key);
-			ids.push(notificationId);
+			ids.push(pending.notificationId);
 		}
 		return ids;
 	}
@@ -181,7 +195,7 @@ export function handleAgentNotificationEvent({
 		windowId: event.windowId,
 	});
 	const notificationId = createStableNotificationId(key);
-	if (!dedupe.markPendingIfNew(key, notificationId)) return;
+	if (!dedupe.markPendingEvent(key, notificationId, event.id)) return;
 	notifyPending();
 	onPending({ key, notificationId, event });
 }
