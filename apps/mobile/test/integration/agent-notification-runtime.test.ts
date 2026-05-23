@@ -228,6 +228,17 @@ void test('missing configured target clears pending agent notifications', () => 
 	);
 });
 
+void test('missing configured target preserves pending agent notifications while reconnect is expected', () => {
+	assert.equal(
+		shouldClearPendingAgentNotifications({
+			hasListenerTarget: false,
+			hasConfiguredTarget: false,
+			reconnectExpected: true,
+		}),
+		false,
+	);
+});
+
 void test('shell-only listener target changes do not clear pending agent notifications', () => {
 	assert.equal(
 		shouldClearPendingAgentNotificationsForResumeKeyChange({
@@ -257,6 +268,17 @@ void test('resume target changes clear pending agent notifications', () => {
 		shouldClearPendingAgentNotificationsForResumeKeyChange({
 			previousResumeKey: null,
 			nextResumeKey: 'conn-1:main',
+		}),
+		false,
+	);
+});
+
+void test('transient missing resume target does not clear pending agent notifications while reconnect is expected', () => {
+	assert.equal(
+		shouldClearPendingAgentNotificationsForResumeKeyChange({
+			previousResumeKey: 'conn-1:main',
+			nextResumeKey: null,
+			reconnectExpected: true,
 		}),
 		false,
 	);

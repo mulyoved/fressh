@@ -71,14 +71,27 @@ export function canRunAgentNotificationBridge(input: {
 export function shouldClearPendingAgentNotifications(input: {
 	hasListenerTarget: boolean;
 	hasConfiguredTarget: boolean;
+	reconnectExpected?: boolean;
 }) {
-	return !input.hasListenerTarget && !input.hasConfiguredTarget;
+	return (
+		!input.hasListenerTarget &&
+		!input.hasConfiguredTarget &&
+		!input.reconnectExpected
+	);
 }
 
 export function shouldClearPendingAgentNotificationsForResumeKeyChange(input: {
 	previousResumeKey: string | null;
 	nextResumeKey: string | null;
+	reconnectExpected?: boolean;
 }) {
+	if (
+		input.reconnectExpected &&
+		input.previousResumeKey !== null &&
+		input.nextResumeKey === null
+	) {
+		return false;
+	}
 	return (
 		input.previousResumeKey !== null &&
 		input.previousResumeKey !== input.nextResumeKey

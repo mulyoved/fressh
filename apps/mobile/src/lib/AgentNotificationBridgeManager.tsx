@@ -54,7 +54,11 @@ type SessionSettings = {
 	session: string;
 };
 
-export function AgentNotificationBridgeManager() {
+export function AgentNotificationBridgeManager({
+	preservePendingWithoutTarget = false,
+}: {
+	preservePendingWithoutTarget?: boolean;
+} = {}) {
 	const { shells, connections } = useSshStore(
 		useShallow((s) => ({
 			shells: s.shells,
@@ -440,6 +444,7 @@ export function AgentNotificationBridgeManager() {
 			shouldClearPendingAgentNotificationsForResumeKeyChange({
 				previousResumeKey: previousConfiguredResumeKeyRef.current,
 				nextResumeKey: configuredResumeKey,
+				reconnectExpected: preservePendingWithoutTarget,
 			})
 		) {
 			clearPendingNotifications();
@@ -456,6 +461,7 @@ export function AgentNotificationBridgeManager() {
 				shouldClearPendingAgentNotifications({
 					hasListenerTarget: false,
 					hasConfiguredTarget: !!configuredTarget,
+					reconnectExpected: preservePendingWithoutTarget,
 				})
 			) {
 				clearPendingNotifications();
@@ -477,6 +483,7 @@ export function AgentNotificationBridgeManager() {
 	}, [
 		clearPendingNotifications,
 		configuredTarget,
+		preservePendingWithoutTarget,
 		startListener,
 		stopAll,
 		target,

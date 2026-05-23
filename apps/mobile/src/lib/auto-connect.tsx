@@ -118,6 +118,12 @@ export function AutoConnectManager() {
 		});
 	}, []);
 
+	const reconnectExpectedFromShellDrop =
+		prevShellCountRef.current > 0 &&
+		shells.length === 0 &&
+		(isActiveRef.current ||
+			(Platform.OS === 'android' && allowBackgroundRef.current));
+
 	const clearReconnectTimer = React.useCallback(() => {
 		if (reconnectTimerRef.current) {
 			clearTimeout(reconnectTimerRef.current);
@@ -487,5 +493,9 @@ export function AutoConnectManager() {
 		prevShellCountRef.current = shells.length;
 	}, [scheduleReconnect, shells.length]);
 
-	return <AgentNotificationBridgeManager />;
+	return (
+		<AgentNotificationBridgeManager
+			preservePendingWithoutTarget={reconnectExpectedFromShellDrop}
+		/>
+	);
 }
