@@ -120,7 +120,7 @@ export async function startSshJsonlListener(input: {
 
 	try {
 		await shell.sendData(
-			encoder.encode(`${input.command}\n`).buffer as ArrayBuffer,
+			encoder.encode(`exec ${input.command}\n`).buffer as ArrayBuffer,
 			{ signal: operationAbortSignal() },
 		);
 	} catch (error) {

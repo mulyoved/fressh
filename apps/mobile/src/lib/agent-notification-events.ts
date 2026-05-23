@@ -25,13 +25,6 @@ export type AgentNotificationLine =
 	| AgentNotificationEvent
 	| AgentNotificationHeartbeat;
 
-export const DEFAULT_AGENT_NOTIFICATION_MAX_FUTURE_SKEW_MS = 5 * 60 * 1000;
-
-export type AgentNotificationParseOptions = {
-	nowMs?: number;
-	maxFutureSkewMs?: number;
-};
-
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === 'object' && value !== null;
 }
@@ -46,27 +39,13 @@ function hasStringProperties<const TKeys extends readonly string[]>(
 	return true;
 }
 
-function isValidCreatedAtMs(
-	value: unknown,
-	options: Required<AgentNotificationParseOptions>,
-): value is number {
-	return (
-		typeof value === 'number' &&
-		Number.isSafeInteger(value) &&
-		value >= 0 &&
-		value <= options.nowMs + options.maxFutureSkewMs
-	);
+function isValidCreatedAtMs(value: unknown): value is number {
+	return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 }
 
 export function parseAgentNotificationLine(
 	line: string,
-	options?: AgentNotificationParseOptions,
 ): AgentNotificationLine | null {
-	const parseOptions = {
-		nowMs: options?.nowMs ?? Date.now(),
-		maxFutureSkewMs:
-			options?.maxFutureSkewMs ?? DEFAULT_AGENT_NOTIFICATION_MAX_FUTURE_SKEW_MS,
-	};
 	let parsed: unknown;
 	try {
 		parsed = JSON.parse(line);
@@ -78,7 +57,7 @@ export function parseAgentNotificationLine(
 	if (parsed.type === 'heartbeat') {
 		if (
 			typeof parsed.session !== 'string' ||
-			!isValidCreatedAtMs(parsed.createdAtMs, parseOptions)
+			!isValidCreatedAtMs(parsed.createdAtMs)
 		) {
 			return null;
 		}
@@ -102,7 +81,7 @@ export function parseAgentNotificationLine(
 		'windowName',
 	] as const;
 	if (!hasStringProperties(parsed, stringKeys)) return null;
-	if (!isValidCreatedAtMs(parsed.createdAtMs, parseOptions)) return null;
+	if (!isValidCreatedAtMs(parsed.createdAtMs)) return null;
 
 	return {
 		id: parsed.id,

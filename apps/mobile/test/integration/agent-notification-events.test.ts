@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
 	AgentNotificationDedupe,
-	DEFAULT_AGENT_NOTIFICATION_MAX_FUTURE_SKEW_MS,
 	buildAgentNotificationListenCommand,
 	createAgentNotificationPendingKey,
 	createStableNotificationId,
@@ -153,26 +152,19 @@ void test('parseAgentNotificationLine rejects invalid tmux status timestamps', (
 	}
 });
 
-void test('parseAgentNotificationLine rejects heartbeat timestamps beyond future skew', () => {
-	const nowMs = 10_000;
-	const maxFutureSkewMs = 300_000;
-	assert.equal(
+void test('parseAgentNotificationLine accepts remote timestamps ahead of device clock', () => {
+	const createdAtMs = 4_102_444_800_000;
+	assert.deepEqual(
 		parseAgentNotificationLine(
 			JSON.stringify({
 				type: 'heartbeat',
 				session: 'main',
-				createdAtMs: nowMs + maxFutureSkewMs + 1,
+				createdAtMs,
 			}),
-			{ nowMs, maxFutureSkewMs },
 		),
-		null,
+		{ type: 'heartbeat', session: 'main', createdAtMs },
 	);
-});
-
-void test('parseAgentNotificationLine rejects tmux status timestamps beyond future skew', () => {
-	const nowMs = 10_000;
-	const maxFutureSkewMs = DEFAULT_AGENT_NOTIFICATION_MAX_FUTURE_SKEW_MS;
-	assert.equal(
+	assert.deepEqual(
 		parseAgentNotificationLine(
 			JSON.stringify({
 				id: 'main:@12:1000:waiting',
@@ -184,27 +176,21 @@ void test('parseAgentNotificationLine rejects tmux status timestamps beyond futu
 				windowName: 'fressh',
 				status: 'waiting',
 				icon: '💬',
-				createdAtMs: nowMs + maxFutureSkewMs + 1,
-			}),
-			{ nowMs, maxFutureSkewMs },
-		),
-		null,
-	);
-});
-
-void test('parseAgentNotificationLine accepts timestamps inside future skew', () => {
-	const nowMs = 10_000;
-	const createdAtMs = nowMs + DEFAULT_AGENT_NOTIFICATION_MAX_FUTURE_SKEW_MS;
-	assert.deepEqual(
-		parseAgentNotificationLine(
-			JSON.stringify({
-				type: 'heartbeat',
-				session: 'main',
 				createdAtMs,
 			}),
-			{ nowMs },
 		),
-		{ type: 'heartbeat', session: 'main', createdAtMs },
+		{
+			id: 'main:@12:1000:waiting',
+			type: 'tmux_status',
+			session: 'main',
+			target: 'main:4',
+			windowId: '@12',
+			windowIndex: '4',
+			windowName: 'fressh',
+			status: 'waiting',
+			icon: '💬',
+			createdAtMs,
+		},
 	);
 });
 

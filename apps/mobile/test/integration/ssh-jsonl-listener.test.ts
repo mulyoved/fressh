@@ -127,12 +127,30 @@ void test('startSshJsonlListener opens non-tmux shell and sends command', async 
 		true,
 	);
 	assert.deepEqual(fixture.sent, [
-		'mdev tmux notifications listen --session main\n',
+		'exec mdev tmux notifications listen --session main\n',
 	]);
 	assert.equal(fixture.sendOptions[0]?.signal instanceof AbortSignal, true);
 
 	await handle.stop();
 	assert.equal(fixture.closeOptions[0]?.signal instanceof AbortSignal, true);
+});
+
+void test('startSshJsonlListener uses exec so command exit closes the hidden shell', async () => {
+	const fixture = createTestConnection();
+
+	const handle = await startSshJsonlListener({
+		connection: fixture.connection as never,
+		command: 'mdev tmux notifications listen --session main',
+		onLine: () => {},
+		onExit: () => {},
+	});
+
+	assert.equal(
+		fixture.sent[0],
+		'exec mdev tmux notifications listen --session main\n',
+	);
+
+	await handle.stop();
 });
 
 void test('startSshJsonlListener splits stdout chunks and preserves payload spacing', async () => {
