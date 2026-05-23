@@ -8,6 +8,8 @@ import {
 	handleAgentNotificationEvent,
 	matchesAgentNotificationPendingKey,
 	parseAgentNotificationLine,
+	shouldAdvanceAgentNotificationCursorAfterPost,
+	shouldRestartAgentNotificationListenerAfterPost,
 } from '../../src/lib/agent-notification-events';
 
 void test('parseAgentNotificationLine accepts tmux status events and heartbeats', () => {
@@ -316,6 +318,38 @@ void test('pending key matching includes tmux session identity', () => {
 			session: 'other',
 			windowId: '@12',
 		}),
+		false,
+	);
+});
+
+void test('post completion advances cursor for visible acknowledgement race', () => {
+	assert.equal(
+		shouldAdvanceAgentNotificationCursorAfterPost({
+			posted: true,
+			completion: { type: 'cancel-posted', notificationId: 42 },
+			currentEventId: null,
+			eventId: 'main:@12:1000:waiting',
+		}),
+		true,
+	);
+	assert.equal(
+		shouldAdvanceAgentNotificationCursorAfterPost({
+			posted: false,
+			completion: { type: 'ignored' },
+			currentEventId: null,
+			eventId: 'main:@12:1000:waiting',
+		}),
+		false,
+	);
+});
+
+void test('failed notification post schedules listener restart', () => {
+	assert.equal(
+		shouldRestartAgentNotificationListenerAfterPost({ type: 'failed' }),
+		true,
+	);
+	assert.equal(
+		shouldRestartAgentNotificationListenerAfterPost({ type: 'posted' }),
 		false,
 	);
 });

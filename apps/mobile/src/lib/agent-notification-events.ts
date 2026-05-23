@@ -338,6 +338,30 @@ export class AgentNotificationDedupe {
 	}
 }
 
+type AgentNotificationPostCompletion = ReturnType<
+	AgentNotificationDedupe['completePost']
+>;
+
+export function shouldAdvanceAgentNotificationCursorAfterPost(input: {
+	posted: boolean;
+	completion: AgentNotificationPostCompletion;
+	currentEventId: string | null;
+	eventId: string;
+}) {
+	return (
+		input.posted &&
+		(input.completion.type === 'posted' ||
+			input.completion.type === 'cancel-posted' ||
+			input.currentEventId === input.eventId)
+	);
+}
+
+export function shouldRestartAgentNotificationListenerAfterPost(
+	completion: AgentNotificationPostCompletion,
+) {
+	return completion.type === 'failed';
+}
+
 export type HandleAgentNotificationEventInput = {
 	event: AgentNotificationEvent;
 	connectionId: string;

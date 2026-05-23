@@ -11,6 +11,8 @@ import {
 	AgentNotificationDedupe,
 	buildAgentNotificationListenCommand,
 	matchesAgentNotificationPendingKey,
+	shouldAdvanceAgentNotificationCursorAfterPost,
+	shouldRestartAgentNotificationListenerAfterPost,
 } from './agent-notification-events';
 import {
 	canRunAgentNotificationBridge,
@@ -172,11 +174,7 @@ export function AgentNotificationBridgeManager({
 				useForegroundServiceRuntimeStore.getState().setStarted(false);
 			});
 		};
-		checkRunning();
-		const timer = setInterval(
-			checkRunning,
-			FOREGROUND_SERVICE_HEALTH_CHECK_MS,
-		);
+		const timer = setInterval(checkRunning, FOREGROUND_SERVICE_HEALTH_CHECK_MS);
 		return () => {
 			cancelled = true;
 			clearInterval(timer);
@@ -373,7 +371,14 @@ export function AgentNotificationBridgeManager({
 					posted,
 				);
 				const currentPending = dedupeRef.current.getPendingEvent(key);
-				onPosted?.(posted && currentPending?.event.id === event.id);
+				onPosted?.(
+					shouldAdvanceAgentNotificationCursorAfterPost({
+						posted,
+						completion: result,
+						currentEventId: currentPending?.event.id ?? null,
+						eventId: event.id,
+					}),
+				);
 				const postWithCurrentTarget = (current: {
 					key: string;
 					notificationId: number;
@@ -402,6 +407,10 @@ export function AgentNotificationBridgeManager({
 					void cancelAgentAlertNotification(result.notificationId);
 					return;
 				}
+				if (shouldRestartAgentNotificationListenerAfterPost(result)) {
+					scheduleRestart('notification-post-failure');
+					return;
+				}
 				const current =
 					result.type === 'superseded' && posted
 						? result.current
@@ -413,7 +422,7 @@ export function AgentNotificationBridgeManager({
 				}
 			});
 		},
-		[],
+		[scheduleRestart],
 	);
 
 	const startListener = React.useCallback(async () => {

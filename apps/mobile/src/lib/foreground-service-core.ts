@@ -55,7 +55,8 @@ export function createForegroundServiceStarter({
 		async isForegroundServiceRunning() {
 			if (getPlatformOS() !== 'android') return false;
 			const nativeModule = getNativeModule();
-			if (!nativeModule?.isRunning) return false;
+			if (!nativeModule) return false;
+			if (!nativeModule.isRunning) return true;
 			try {
 				return await nativeModule.isRunning();
 			} catch (error) {

@@ -26,6 +26,14 @@ export function shouldRunForegroundService(input: {
 	return input.shellCount > 0 || input.isAutoConnecting || input.isReconnecting;
 }
 
+export function shouldStartForegroundService(input: {
+	currentKey: string | null;
+	nextKey: string;
+	foregroundServiceStarted: boolean;
+}) {
+	return input.currentKey !== input.nextKey || !input.foregroundServiceStarted;
+}
+
 export function shouldPreserveForegroundServiceForShellDrop(input: {
 	platformOS: string;
 	appActive: boolean;
@@ -51,6 +59,28 @@ export function shouldStopReconnectOnBackground(input: {
 	backgroundWorkAllowed: boolean;
 }) {
 	return input.platformOS !== 'android' || !input.backgroundWorkAllowed;
+}
+
+export function shouldWaitForForegroundServiceCoverage(input: {
+	platformOS: string;
+	appActive: boolean;
+	backgroundWorkAllowed: boolean;
+	foregroundServiceRequired: boolean;
+}) {
+	return (
+		input.platformOS === 'android' &&
+		!input.appActive &&
+		!input.backgroundWorkAllowed &&
+		input.foregroundServiceRequired
+	);
+}
+
+export function canAttemptBackgroundReconnect(input: {
+	platformOS: string;
+	appActive: boolean;
+	backgroundWorkAllowed: boolean;
+}) {
+	return input.appActive || input.backgroundWorkAllowed;
 }
 
 export function shouldPreservePendingWithoutTarget(input: {

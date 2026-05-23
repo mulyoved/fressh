@@ -575,6 +575,7 @@ function ShellDetail() {
 					term: 'Xterm',
 					useTmux: false,
 					tmuxSessionName: '',
+					registerInStore: false,
 				});
 				if (cancelled) {
 					await controlShell.close();

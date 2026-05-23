@@ -4,11 +4,22 @@ import { create } from 'zustand';
 type NativeRnRussh = typeof import('@fressh/react-native-uniffi-russh').RnRussh;
 type SshConnection = Awaited<ReturnType<NativeRnRussh['connect']>>;
 type SshShell = Awaited<ReturnType<SshConnection['startShell']>>;
+type StartShellOptions = Parameters<SshConnection['startShell']>[0];
+
+export type RegisteredStartShellOptions = StartShellOptions & {
+	registerInStore?: boolean;
+};
+
+export type RegisteredSshConnection = Omit<SshConnection, 'startShell'> & {
+	startShell: (opts: RegisteredStartShellOptions) => Promise<SshShell>;
+};
 
 type SshRegistryStore = {
-	connections: Record<string, SshConnection>;
+	connections: Record<string, RegisteredSshConnection>;
 	shells: Record<`${string}-${number}`, SshShell>;
-	connect: NativeRnRussh['connect'];
+	connect: (
+		args: Parameters<NativeRnRussh['connect']>[0],
+	) => Promise<RegisteredSshConnection>;
 };
 
 type SshRegistryLogger = {
@@ -38,12 +49,11 @@ export function createSshRegistryStore(
 					});
 				},
 			});
-			const originalStartShellFn = connection.startShell;
-			const startShell: typeof connection.startShell = async (args) => {
-				const { registerInStore = true, ...startShellArgs } =
-					args as typeof args & {
-						registerInStore?: boolean;
-					};
+			const originalStartShellFn = connection.startShell.bind(connection);
+			const startShell: RegisteredSshConnection['startShell'] = async (
+				args,
+			) => {
+				const { registerInStore = true, ...startShellArgs } = args;
 				const shell = await originalStartShellFn({
 					...startShellArgs,
 					onClosed: (channelId) => {
@@ -53,9 +63,6 @@ export function createSshRegistryStore(
 						logger.debug('shell closed', storeKey);
 						set((s) => {
 							const { [storeKey]: _omit, ...rest } = s.shells;
-							// if (Object.keys(rest).length === 0) {
-							// 	void connection.disconnect();
-							// }
 							return { shells: rest };
 						});
 					},
@@ -70,14 +77,17 @@ export function createSshRegistryStore(
 				}));
 				return shell;
 			};
-			connection.startShell = startShell;
+			const registeredConnection: RegisteredSshConnection = {
+				...connection,
+				startShell,
+			};
 			set((s) => ({
 				connections: {
 					...s.connections,
-					[connection.connectionId]: connection,
+					[connection.connectionId]: registeredConnection,
 				},
 			}));
-			return connection;
+			return registeredConnection;
 		},
 	}));
 }

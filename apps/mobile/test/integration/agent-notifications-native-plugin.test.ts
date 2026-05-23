@@ -14,6 +14,41 @@ const { compileModsAsync } =
 const withForegroundService = require('../../plugins/with-foreground-service')
 	.default as typeof withForegroundServiceType;
 
+const MAIN_APPLICATION_FIXTURE = [
+	'package com.finalapp.vibe2',
+	'',
+	'import com.facebook.react.PackageList',
+	'',
+	'class MainApplication {',
+	'  fun getPackages() = PackageList(this).packages.apply {',
+	'    // add(MyReactNativePackage())',
+	'  }',
+	'}',
+].join('\n');
+
+async function writeAndroidFixture(
+	projectRoot: string,
+	manifestLines: string[],
+) {
+	await mkdir(
+		path.join(projectRoot, 'android/app/src/main/java/com/finalapp/vibe2'),
+		{ recursive: true },
+	);
+	await writeFile(
+		path.join(projectRoot, 'android/app/src/main/AndroidManifest.xml'),
+		manifestLines.join('\n'),
+		'utf8',
+	);
+	await writeFile(
+		path.join(
+			projectRoot,
+			'android/app/src/main/java/com/finalapp/vibe2/MainApplication.kt',
+		),
+		MAIN_APPLICATION_FIXTURE,
+		'utf8',
+	);
+}
+
 async function foregroundPluginSource() {
 	return readFile(
 		new URL('../../plugins/with-foreground-service.ts', import.meta.url)
@@ -48,18 +83,11 @@ async function generatedSshForegroundServiceSource() {
 	);
 
 	try {
-		await mkdir(path.join(projectRoot, 'android/app/src/main'), {
-			recursive: true,
-		});
-		await writeFile(
-			path.join(projectRoot, 'android/app/src/main/AndroidManifest.xml'),
-			[
-				'<manifest xmlns:android="http://schemas.android.com/apk/res/android">',
-				'  <application android:name=".MainApplication" />',
-				'</manifest>',
-			].join('\n'),
-			'utf8',
-		);
+		await writeAndroidFixture(projectRoot, [
+			'<manifest xmlns:android="http://schemas.android.com/apk/res/android">',
+			'  <application android:name=".MainApplication" />',
+			'</manifest>',
+		]);
 
 		const config = withForegroundService({
 			name: 'Fressh Test Fixture',
@@ -92,18 +120,11 @@ async function generatedForegroundServiceModuleSource() {
 	);
 
 	try {
-		await mkdir(path.join(projectRoot, 'android/app/src/main'), {
-			recursive: true,
-		});
-		await writeFile(
-			path.join(projectRoot, 'android/app/src/main/AndroidManifest.xml'),
-			[
-				'<manifest xmlns:android="http://schemas.android.com/apk/res/android">',
-				'  <application android:name=".MainApplication" />',
-				'</manifest>',
-			].join('\n'),
-			'utf8',
-		);
+		await writeAndroidFixture(projectRoot, [
+			'<manifest xmlns:android="http://schemas.android.com/apk/res/android">',
+			'  <application android:name=".MainApplication" />',
+			'</manifest>',
+		]);
 
 		const config = withForegroundService({
 			name: 'Fressh Test Fixture',
@@ -130,26 +151,93 @@ async function generatedForegroundServiceModuleSource() {
 	}
 }
 
+async function generatedForegroundServicePackageSource() {
+	const projectRoot = await mkdtemp(
+		path.join(os.tmpdir(), 'fressh-foreground-service-plugin-'),
+	);
+
+	try {
+		await writeAndroidFixture(projectRoot, [
+			'<manifest xmlns:android="http://schemas.android.com/apk/res/android">',
+			'  <application android:name=".MainApplication" />',
+			'</manifest>',
+		]);
+
+		const config = withForegroundService({
+			name: 'Fressh Test Fixture',
+			slug: 'fressh-test-fixture',
+			android: {
+				package: 'com.finalapp.vibe2',
+			},
+		});
+
+		await compileModsAsync(config, {
+			projectRoot,
+			platforms: ['android'],
+		});
+
+		return await readFile(
+			path.join(
+				projectRoot,
+				'android/app/src/main/java/com/finalapp/vibe2/ForegroundServicePackage.kt',
+			),
+			'utf8',
+		);
+	} finally {
+		await rm(projectRoot, { force: true, recursive: true });
+	}
+}
+
+async function generatedMainApplicationSource() {
+	const projectRoot = await mkdtemp(
+		path.join(os.tmpdir(), 'fressh-foreground-service-plugin-'),
+	);
+
+	try {
+		await writeAndroidFixture(projectRoot, [
+			'<manifest xmlns:android="http://schemas.android.com/apk/res/android">',
+			'  <application android:name=".MainApplication" />',
+			'</manifest>',
+		]);
+
+		const config = withForegroundService({
+			name: 'Fressh Test Fixture',
+			slug: 'fressh-test-fixture',
+			android: {
+				package: 'com.finalapp.vibe2',
+			},
+		});
+
+		await compileModsAsync(config, {
+			projectRoot,
+			platforms: ['android'],
+		});
+
+		return await readFile(
+			path.join(
+				projectRoot,
+				'android/app/src/main/java/com/finalapp/vibe2/MainApplication.kt',
+			),
+			'utf8',
+		);
+	} finally {
+		await rm(projectRoot, { force: true, recursive: true });
+	}
+}
+
 async function generatedAndroidManifestSource() {
 	const projectRoot = await mkdtemp(
 		path.join(os.tmpdir(), 'fressh-foreground-service-plugin-'),
 	);
 
 	try {
-		await mkdir(path.join(projectRoot, 'android/app/src/main'), {
-			recursive: true,
-		});
-		await writeFile(
-			path.join(projectRoot, 'android/app/src/main/AndroidManifest.xml'),
-			[
-				'<manifest xmlns:android="http://schemas.android.com/apk/res/android">',
-				'  <application android:name=".MainApplication">',
-				'    <service android:name=".SshForegroundService" android:stopWithTask="true" />',
-				'  </application>',
-				'</manifest>',
-			].join('\n'),
-			'utf8',
-		);
+		await writeAndroidFixture(projectRoot, [
+			'<manifest xmlns:android="http://schemas.android.com/apk/res/android">',
+			'  <application android:name=".MainApplication">',
+			'    <service android:name=".SshForegroundService" android:stopWithTask="true" />',
+			'  </application>',
+			'</manifest>',
+		]);
 
 		const config = withForegroundService({
 			name: 'Fressh Test Fixture',
@@ -182,27 +270,34 @@ async function agentNotificationsNativeSource() {
 }
 
 void test('foreground service plugin defines a separate agent alert channel', async () => {
-	const source = await foregroundPluginSource();
+	const pluginSource = await foregroundPluginSource();
+	const source = await generatedSshForegroundServiceSource();
 
-	assert.doesNotMatch(source, /import\s+ConfigPlugins\s+from/);
+	assert.doesNotMatch(pluginSource, /import\s+ConfigPlugins\s+from/);
 	assert.match(
-		source,
-		/AndroidConfig,[\s\S]*withAndroidManifest,[\s\S]*withDangerousMod,[\s\S]*from 'expo\/config-plugins'/,
+		pluginSource,
+		/AndroidConfig,[\s\S]*withAndroidManifest,[\s\S]*withDangerousMod,[\s\S]*withMainApplication,[\s\S]*from 'expo\/config-plugins'/,
 	);
+	assert.doesNotMatch(pluginSource, /const SSH_FOREGROUND_SERVICE_KOTLIN/);
+	assert.doesNotMatch(pluginSource, /const FOREGROUND_SERVICE_MODULE_KOTLIN/);
 	assert.match(source, /AGENT_ALERT_CHANNEL_ID = "fressh_agent_alerts"/);
 	assert.match(source, /AGENT_ALERT_CHANNEL_NAME = "Fressh Agent Alerts"/);
 	assert.match(source, /NotificationManager\.IMPORTANCE_DEFAULT/);
 });
 
 void test('foreground service native module exposes agent alert methods', async () => {
-	const source = await foregroundPluginSource();
+	const moduleSource = await generatedForegroundServiceModuleSource();
+	const serviceSource = await generatedSshForegroundServiceSource();
 
-	assert.match(source, /fun isRunning\(promise: Promise\)/);
-	assert.match(source, /fun postAgentAlert\(/);
-	assert.match(source, /eventId: String/);
-	assert.match(source, /fun cancelAgentAlert\(/);
-	assert.match(source, /notify\(notificationId, buildAgentAlertNotification/);
-	assert.match(source, /cancel\(notificationId\)/);
+	assert.match(moduleSource, /fun isRunning\(promise: Promise\)/);
+	assert.match(moduleSource, /fun postAgentAlert\(/);
+	assert.match(moduleSource, /eventId: String/);
+	assert.match(moduleSource, /fun cancelAgentAlert\(/);
+	assert.match(
+		serviceSource,
+		/notify\(notificationId, buildAgentAlertNotification/,
+	);
+	assert.match(serviceSource, /cancel\(notificationId\)/);
 });
 
 void test('committed Android module exposes agent alert methods', async () => {
@@ -242,10 +337,19 @@ void test('foreground service plugin generates committed Kotlin exactly', async 
 	);
 });
 
+void test('foreground service plugin owns native package registration', async () => {
+	const packageSource = await generatedForegroundServicePackageSource();
+	const mainApplicationSource = await generatedMainApplicationSource();
+
+	assert.match(packageSource, /class ForegroundServicePackage : ReactPackage/);
+	assert.match(packageSource, /ForegroundServiceModule\(reactContext\)/);
+	assert.doesNotMatch(packageSource, /WisprAutomationModule/);
+	assert.match(mainApplicationSource, /add\(ForegroundServicePackage\(\)\)/);
+});
+
 void test('foreground service restart and wakelock policy keeps background work alive while service runs', async () => {
 	for (const source of [
 		await committedSshForegroundServiceSource(),
-		await foregroundPluginSource(),
 		await generatedSshForegroundServiceSource(),
 	]) {
 		assert.match(source, /return START_NOT_STICKY/);
@@ -314,7 +418,7 @@ void test('committed Android service passes agent alert intent extras to MainAct
 });
 
 void test('foreground service plugin passes agent alert intent extras to MainActivity', async () => {
-	const source = await foregroundPluginSource();
+	const source = await generatedSshForegroundServiceSource();
 
 	assert.match(source, /Intent\(Intent\.ACTION_VIEW,/);
 	assert.match(source, /Uri\.Builder\(\)/);
@@ -393,7 +497,7 @@ void test('committed Android service uses notificationId for agent alert pending
 });
 
 void test('foreground service plugin uses notificationId for agent alert pending intent identity', async () => {
-	const source = await foregroundPluginSource();
+	const source = await generatedSshForegroundServiceSource();
 
 	assert.doesNotMatch(
 		source,

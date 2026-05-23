@@ -1,10 +1,12 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
 	AndroidConfig,
 	type ConfigPlugin,
 	withAndroidManifest,
 	withDangerousMod,
+	withMainApplication,
 } from 'expo/config-plugins';
 
 const PERMISSIONS = [
@@ -16,347 +18,98 @@ const PERMISSIONS = [
 
 const SERVICE_NAME = '.SshForegroundService';
 
-const SSH_FOREGROUND_SERVICE_KOTLIN = `package com.finalapp.vibe2
+const JAVA_PACKAGE_RELATIVE_PATH = 'app/src/main/java/com/finalapp/vibe2';
+const PLUGIN_DIR = path.dirname(fileURLToPath(import.meta.url));
+const COMMITTED_ANDROID_SOURCE_PATH = path.join(
+	PLUGIN_DIR,
+	'../android',
+	JAVA_PACKAGE_RELATIVE_PATH,
+);
+const FOREGROUND_SERVICE_PACKAGE_REGISTRATION =
+	'add(ForegroundServicePackage())';
 
-import android.app.Notification
-import android.app.NotificationChannel
-import android.app.NotificationManager
-import android.app.PendingIntent
-import android.app.Service
-import android.content.Context
-import android.content.Intent
-import android.net.Uri
-import android.os.Build
-import android.os.Handler
-import android.os.IBinder
-import android.os.Looper
-import android.os.PowerManager
-import androidx.core.app.NotificationCompat
-import androidx.core.content.ContextCompat
+const FOREGROUND_SERVICE_PACKAGE_KOTLIN = `package com.finalapp.vibe2
 
-class SshForegroundService : Service() {
-  private val wakeLockHandler = Handler(Looper.getMainLooper())
-  private val renewWakeLockRunnable = Runnable {
-    if (wakeLock?.isHeld == true) {
-      acquireWakeLock()
-    }
-  }
-  private var wakeLock: PowerManager.WakeLock? = null
-
-  override fun onCreate() {
-    super.onCreate()
-    ensureNotificationChannels(this)
-  }
-
-  override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-    if (intent == null) {
-      stopSelf(startId)
-      return START_NOT_STICKY
-    }
-    val title = intent.getStringExtra(EXTRA_TITLE) ?: DEFAULT_TITLE
-    val message = intent.getStringExtra(EXTRA_MESSAGE) ?: DEFAULT_MESSAGE
-    startForeground(NOTIFICATION_ID, buildNotification(title, message))
-    isServiceRunning = true
-    acquireWakeLock()
-    return START_NOT_STICKY
-  }
-
-  override fun onTimeout(startId: Int, fgsType: Int) {
-    isServiceRunning = false
-    stopSelf(startId)
-  }
-
-  override fun onDestroy() {
-    isServiceRunning = false
-    releaseWakeLock()
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-      stopForeground(STOP_FOREGROUND_REMOVE)
-    } else {
-      stopForeground(true)
-    }
-    super.onDestroy()
-  }
-
-  override fun onBind(intent: Intent?): IBinder? = null
-
-  private fun buildNotification(title: String, message: String): Notification {
-    val intent = Intent(this, MainActivity::class.java).apply {
-      flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
-    }
-    val pendingIntent = PendingIntent.getActivity(
-      this,
-      0,
-      intent,
-      PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-    )
-
-    return NotificationCompat.Builder(this, CHANNEL_ID)
-      .setContentTitle(title)
-      .setContentText(message)
-      .setSmallIcon(R.mipmap.ic_launcher)
-      .setContentIntent(pendingIntent)
-      .setOngoing(true)
-      .setPriority(NotificationCompat.PRIORITY_LOW)
-      .build()
-  }
-
-  private fun acquireWakeLock() {
-    releaseWakeLock()
-    val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
-    wakeLock = powerManager.newWakeLock(
-      PowerManager.PARTIAL_WAKE_LOCK,
-      WAKE_LOCK_TAG
-    ).apply { setReferenceCounted(false) }
-    wakeLock?.acquire(WAKE_LOCK_LEASE_MS)
-    scheduleWakeLockRenewal()
-  }
-
-  private fun scheduleWakeLockRenewal() {
-    wakeLockHandler.removeCallbacks(renewWakeLockRunnable)
-    wakeLockHandler.postDelayed(renewWakeLockRunnable, WAKE_LOCK_RENEWAL_MS)
-  }
-
-  private fun releaseWakeLock() {
-    wakeLockHandler.removeCallbacks(renewWakeLockRunnable)
-    try {
-      if (wakeLock?.isHeld == true) {
-        wakeLock?.release()
-      }
-    } finally {
-      wakeLock = null
-    }
-  }
-
-  companion object {
-    private const val NOTIFICATION_ID = 4227
-    private const val CHANNEL_ID = "fressh_ssh"
-    private const val CHANNEL_NAME = "Fressh SSH"
-    private const val CHANNEL_DESCRIPTION = "Keeps SSH sessions alive"
-    private const val AGENT_ALERT_CHANNEL_ID = "fressh_agent_alerts"
-    private const val AGENT_ALERT_CHANNEL_NAME = "Fressh Agent Alerts"
-    private const val AGENT_ALERT_CHANNEL_DESCRIPTION = "Agent status notifications"
-    private const val WAKE_LOCK_TAG = "Fressh::SshForegroundService"
-    private const val WAKE_LOCK_LEASE_MS = 5L * 60L * 60L * 1000L
-    private const val WAKE_LOCK_RENEWAL_MS = 4L * 60L * 60L * 1000L
-    @Volatile private var isServiceRunning = false
-    private const val DEFAULT_TITLE = "Fressh Terminal"
-    private const val DEFAULT_MESSAGE = "Keeping SSH connection alive"
-    const val EXTRA_TITLE = "title"
-    const val EXTRA_MESSAGE = "message"
-    const val EXTRA_AGENT_CONNECTION_ID = "agentConnectionId"
-    const val EXTRA_AGENT_NOTIFICATION_CONNECTION_ID = "agentNotificationConnectionId"
-    const val EXTRA_AGENT_SESSION = "agentSession"
-    const val EXTRA_AGENT_TARGET = "agentTarget"
-    const val EXTRA_AGENT_WINDOW_ID = "agentWindowId"
-    const val EXTRA_AGENT_EVENT_ID = "agentEventId"
-
-    private fun ensureNotificationChannels(context: Context) {
-      if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
-      val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-      val channel = NotificationChannel(
-        CHANNEL_ID,
-        CHANNEL_NAME,
-        NotificationManager.IMPORTANCE_LOW
-      )
-      channel.description = CHANNEL_DESCRIPTION
-      manager.createNotificationChannel(channel)
-
-      val alertChannel = NotificationChannel(
-        AGENT_ALERT_CHANNEL_ID,
-        AGENT_ALERT_CHANNEL_NAME,
-        NotificationManager.IMPORTANCE_DEFAULT
-      )
-      alertChannel.description = AGENT_ALERT_CHANNEL_DESCRIPTION
-      manager.createNotificationChannel(alertChannel)
-    }
-
-    private fun buildAgentAlertNotification(
-      context: Context,
-      notificationId: Int,
-      title: String,
-      message: String,
-      connectionId: String,
-      channelId: Int,
-      notificationConnectionId: String,
-      session: String,
-      target: String,
-      windowId: String,
-      eventId: String
-    ): Notification {
-      val route = Uri.Builder()
-        .scheme("fressh")
-        .path("/shell/detail")
-        .appendQueryParameter("connectionId", connectionId)
-        .appendQueryParameter("channelId", channelId.toString())
-        .appendQueryParameter("agentConnectionId", notificationConnectionId)
-        .appendQueryParameter("agentSession", session)
-        .appendQueryParameter("agentWindowId", windowId)
-        .appendQueryParameter("agentEventId", eventId)
-        .build()
-      val intent = Intent(Intent.ACTION_VIEW, route, context, MainActivity::class.java).apply {
-        flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
-        putExtra(EXTRA_AGENT_CONNECTION_ID, connectionId)
-        putExtra(EXTRA_AGENT_NOTIFICATION_CONNECTION_ID, notificationConnectionId)
-        putExtra(EXTRA_AGENT_SESSION, session)
-        putExtra(EXTRA_AGENT_TARGET, target)
-        putExtra(EXTRA_AGENT_WINDOW_ID, windowId)
-        putExtra(EXTRA_AGENT_EVENT_ID, eventId)
-      }
-      val pendingIntent = PendingIntent.getActivity(
-        context,
-        notificationId,
-        intent,
-        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-      )
-
-      return NotificationCompat.Builder(context, AGENT_ALERT_CHANNEL_ID)
-        .setContentTitle(title)
-        .setContentText(message)
-        .setSmallIcon(R.mipmap.ic_launcher)
-        .setContentIntent(pendingIntent)
-        .setAutoCancel(false)
-        .setPriority(NotificationCompat.PRIORITY_DEFAULT)
-        .build()
-    }
-
-    fun start(context: Context, title: String, message: String) {
-      val intent = Intent(context, SshForegroundService::class.java).apply {
-        putExtra(EXTRA_TITLE, title)
-        putExtra(EXTRA_MESSAGE, message)
-      }
-      ContextCompat.startForegroundService(context, intent)
-    }
-
-    fun stop(context: Context) {
-      val intent = Intent(context, SshForegroundService::class.java)
-      context.stopService(intent)
-    }
-
-    fun isRunning(): Boolean = isServiceRunning
-
-    fun postAgentAlert(
-      context: Context,
-      notificationId: Int,
-      title: String,
-      message: String,
-      connectionId: String,
-      channelId: Int,
-      notificationConnectionId: String,
-      session: String,
-      target: String,
-      windowId: String,
-      eventId: String
-    ) {
-      ensureNotificationChannels(context)
-      val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-      manager.notify(notificationId, buildAgentAlertNotification(
-        context,
-        notificationId,
-        title,
-        message,
-        connectionId,
-        channelId,
-        notificationConnectionId,
-        session,
-        target,
-        windowId,
-        eventId
-      ))
-    }
-
-    fun cancelAgentAlert(context: Context, notificationId: Int) {
-      val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-      manager.cancel(notificationId)
-    }
-  }
-}
-`;
-
-const FOREGROUND_SERVICE_MODULE_KOTLIN = `package com.finalapp.vibe2
-
-import com.facebook.react.bridge.Promise
+import com.facebook.react.ReactPackage
 import com.facebook.react.bridge.ReactApplicationContext
-import com.facebook.react.bridge.ReactContextBaseJavaModule
-import com.facebook.react.bridge.ReactMethod
+import com.facebook.react.uimanager.ViewManager
 
-class ForegroundServiceModule(
-  private val reactContext: ReactApplicationContext
-) : ReactContextBaseJavaModule(reactContext) {
-  override fun getName(): String = "FresshForegroundService"
+class ForegroundServicePackage : ReactPackage {
+  override fun createNativeModules(
+    reactContext: ReactApplicationContext
+  ) = listOf(
+    ForegroundServiceModule(reactContext)
+  )
 
-  @ReactMethod
-  fun start(title: String, message: String, promise: Promise) {
-    try {
-      SshForegroundService.start(reactContext, title, message)
-      promise.resolve(null)
-    } catch (e: Exception) {
-      promise.reject("FOREGROUND_SERVICE_START_FAILED", e)
-    }
-  }
-
-  @ReactMethod
-  fun stop(promise: Promise) {
-    try {
-      SshForegroundService.stop(reactContext)
-      promise.resolve(null)
-    } catch (e: Exception) {
-      promise.reject("FOREGROUND_SERVICE_STOP_FAILED", e)
-    }
-  }
-
-  @ReactMethod
-  fun isRunning(promise: Promise) {
-    promise.resolve(SshForegroundService.isRunning())
-  }
-
-  @ReactMethod
-  fun postAgentAlert(
-    notificationId: Int,
-    title: String,
-    message: String,
-    connectionId: String,
-    channelId: Int,
-    notificationConnectionId: String,
-    session: String,
-    target: String,
-    windowId: String,
-    eventId: String,
-    promise: Promise
-  ) {
-    try {
-      SshForegroundService.postAgentAlert(
-        reactContext.applicationContext,
-        notificationId,
-        title,
-        message,
-        connectionId,
-        channelId,
-        notificationConnectionId,
-        session,
-        target,
-        windowId,
-        eventId
-      )
-      promise.resolve(null)
-    } catch (e: Exception) {
-      promise.reject("AGENT_ALERT_POST_FAILED", e)
-    }
-  }
-
-  @ReactMethod
-  fun cancelAgentAlert(notificationId: Int, promise: Promise) {
-    try {
-      SshForegroundService.cancelAgentAlert(
-        reactContext.applicationContext,
-        notificationId
-      )
-      promise.resolve(null)
-    } catch (e: Exception) {
-      promise.reject("AGENT_ALERT_CANCEL_FAILED", e)
-    }
-  }
+  override fun createViewManagers(
+    reactContext: ReactApplicationContext
+  ): List<ViewManager<*, *>> = emptyList()
 }
 `;
+
+async function readCommittedAndroidSource(filename: string) {
+	return fs.readFile(
+		path.join(COMMITTED_ANDROID_SOURCE_PATH, filename),
+		'utf8',
+	);
+}
+
+function findMatchingBrace(contents: string, openBraceIndex: number): number {
+	let depth = 0;
+
+	for (let index = openBraceIndex; index < contents.length; index += 1) {
+		const char = contents[index];
+		if (char === '{') {
+			depth += 1;
+		} else if (char === '}') {
+			depth -= 1;
+			if (depth === 0) {
+				return index;
+			}
+		}
+	}
+
+	return -1;
+}
+
+function addForegroundServicePackageRegistration(contents: string): string {
+	const packageListApply = 'PackageList(this).packages.apply {';
+	const applyIndex = contents.indexOf(packageListApply);
+	if (applyIndex === -1) {
+		throw new Error(
+			`Could not find ${packageListApply} in Android MainApplication.kt`,
+		);
+	}
+
+	const openBraceIndex = contents.indexOf('{', applyIndex);
+	const closeBraceIndex = findMatchingBrace(contents, openBraceIndex);
+	if (closeBraceIndex === -1) {
+		throw new Error(
+			'Could not find PackageList(this).packages.apply block end in Android MainApplication.kt',
+		);
+	}
+
+	const applyBlock = contents.slice(openBraceIndex + 1, closeBraceIndex);
+	if (applyBlock.includes(FOREGROUND_SERVICE_PACKAGE_REGISTRATION)) {
+		return contents;
+	}
+
+	const blockLines = applyBlock.split('\n');
+	const indentedLine = blockLines.find((line) => line.trim().length > 0);
+	const indent = indentedLine?.match(/^\s*/)?.[0] ?? '              ';
+	const closeBraceLineStart = contents.lastIndexOf('\n', closeBraceIndex) + 1;
+
+	return `${contents.slice(0, closeBraceLineStart)}${indent}${FOREGROUND_SERVICE_PACKAGE_REGISTRATION}\n${contents.slice(closeBraceLineStart)}`;
+}
+
+const withForegroundServicePackageRegistration: ConfigPlugin = (config) =>
+	withMainApplication(config, (config) => {
+		config.modResults.contents = addForegroundServicePackageRegistration(
+			config.modResults.contents,
+		);
+
+		return config;
+	});
 
 const withForegroundServiceManifest: ConfigPlugin = (config) =>
 	withAndroidManifest(config, (config) => {
@@ -404,18 +157,24 @@ const withForegroundServiceNativeFiles: ConfigPlugin = (config) =>
 		async (config) => {
 			const javaPackagePath = path.join(
 				config.modRequest.platformProjectRoot,
-				'app/src/main/java/com/finalapp/vibe2',
+				JAVA_PACKAGE_RELATIVE_PATH,
 			);
 			await fs.mkdir(javaPackagePath, { recursive: true });
 
+			for (const filename of [
+				'SshForegroundService.kt',
+				'ForegroundServiceModule.kt',
+			] as const) {
+				await fs.writeFile(
+					path.join(javaPackagePath, filename),
+					await readCommittedAndroidSource(filename),
+					'utf8',
+				);
+			}
+
 			await fs.writeFile(
-				path.join(javaPackagePath, 'SshForegroundService.kt'),
-				SSH_FOREGROUND_SERVICE_KOTLIN,
-				'utf8',
-			);
-			await fs.writeFile(
-				path.join(javaPackagePath, 'ForegroundServiceModule.kt'),
-				FOREGROUND_SERVICE_MODULE_KOTLIN,
+				path.join(javaPackagePath, 'ForegroundServicePackage.kt'),
+				FOREGROUND_SERVICE_PACKAGE_KOTLIN,
 				'utf8',
 			);
 
@@ -425,6 +184,7 @@ const withForegroundServiceNativeFiles: ConfigPlugin = (config) =>
 
 const withForegroundService: ConfigPlugin = (config) => {
 	config = withForegroundServiceManifest(config);
+	config = withForegroundServicePackageRegistration(config);
 	config = withForegroundServiceNativeFiles(config);
 	return config;
 };

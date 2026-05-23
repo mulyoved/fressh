@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
+	canAttemptBackgroundReconnect,
 	canRunAgentNotificationBridge,
 	canRunAndroidBackgroundWork,
 	createAgentNotificationRestartCoordinator,
@@ -11,6 +12,7 @@ import {
 	shouldPreserveForegroundServiceForShellDrop,
 	shouldRunForegroundService,
 	shouldStopReconnectOnBackground,
+	shouldWaitForForegroundServiceCoverage,
 	shouldClearPendingAgentNotifications,
 	shouldClearPendingAgentNotificationsForResumeKeyChange,
 } from '../../src/lib/agent-notification-runtime';
@@ -163,6 +165,63 @@ void test('background transition stops reconnect without Android background work
 	assert.equal(
 		shouldStopReconnectOnBackground({
 			platformOS: 'ios',
+			backgroundWorkAllowed: true,
+		}),
+		true,
+	);
+});
+
+void test('background reconnect waits for foreground service coverage to restart', () => {
+	assert.equal(
+		shouldWaitForForegroundServiceCoverage({
+			platformOS: 'android',
+			appActive: false,
+			backgroundWorkAllowed: false,
+			foregroundServiceRequired: true,
+		}),
+		true,
+	);
+	assert.equal(
+		shouldWaitForForegroundServiceCoverage({
+			platformOS: 'android',
+			appActive: false,
+			backgroundWorkAllowed: false,
+			foregroundServiceRequired: false,
+		}),
+		false,
+	);
+	assert.equal(
+		shouldWaitForForegroundServiceCoverage({
+			platformOS: 'android',
+			appActive: true,
+			backgroundWorkAllowed: false,
+			foregroundServiceRequired: true,
+		}),
+		false,
+	);
+});
+
+void test('scheduled background reconnect waits instead of attempting while service coverage restarts', () => {
+	assert.equal(
+		canAttemptBackgroundReconnect({
+			platformOS: 'android',
+			appActive: false,
+			backgroundWorkAllowed: false,
+		}),
+		false,
+	);
+	assert.equal(
+		canAttemptBackgroundReconnect({
+			platformOS: 'android',
+			appActive: true,
+			backgroundWorkAllowed: false,
+		}),
+		true,
+	);
+	assert.equal(
+		canAttemptBackgroundReconnect({
+			platformOS: 'android',
+			appActive: false,
 			backgroundWorkAllowed: true,
 		}),
 		true,

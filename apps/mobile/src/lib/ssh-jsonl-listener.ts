@@ -1,9 +1,9 @@
 // eslint-disable-next-line import/consistent-type-specifier-style -- keep Node integration tests from loading the native React Native package
 import type {
 	ListenerEvent,
-	SshConnection,
 	TerminalChunk,
 } from '@fressh/react-native-uniffi-russh';
+import { type RegisteredSshConnection } from './ssh-registry-store';
 
 export const DEFAULT_SSH_JSONL_LISTENER_OPERATION_TIMEOUT_MS = 30_000;
 
@@ -11,10 +11,10 @@ export type SshJsonlListenerHandle = {
 	stop: () => Promise<void>;
 };
 
-type ListenerShell = Awaited<ReturnType<SshConnection['startShell']>>;
+type ListenerShell = Awaited<ReturnType<RegisteredSshConnection['startShell']>>;
 
 export async function startSshJsonlListener(input: {
-	connection: SshConnection;
+	connection: RegisteredSshConnection;
 	command: string;
 	operationTimeoutMs?: number;
 	onLine: (line: string) => void;
@@ -84,8 +84,6 @@ export async function startSshJsonlListener(input: {
 		onClosed: () => reportExit(),
 		abortSignal: startShellAbortController.signal,
 		registerInStore: false,
-	} as Parameters<SshConnection['startShell']>[0] & {
-		registerInStore: false;
 	});
 	try {
 		shell = await withOperationTimeout(
