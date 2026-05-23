@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import { mock, test } from 'node:test';
-import { setImmediate as waitImmediate } from 'node:timers/promises';
+import {
+	setImmediate as waitImmediate,
+	setTimeout as waitTimeout,
+} from 'node:timers/promises';
 import { startSshJsonlListener } from '../../src/lib/ssh-jsonl-listener';
 
 function bytes(text: string): ArrayBuffer {
@@ -13,6 +16,15 @@ function splitBytes(text: string, splitAt: number): [ArrayBuffer, ArrayBuffer] {
 		encoded.slice(0, splitAt).buffer as ArrayBuffer,
 		encoded.slice(splitAt).buffer as ArrayBuffer,
 	];
+}
+
+async function withTestTimeout<T>(promise: Promise<T>, timeoutMs = 100) {
+	return await Promise.race([
+		promise,
+		waitTimeout(timeoutMs).then(() => {
+			throw new Error(`test timed out after ${timeoutMs}ms`);
+		}),
+	]);
 }
 
 type TestEvent =
@@ -264,6 +276,55 @@ void test('startSshJsonlListener propagates startShell failures', async () => {
 
 	assert.deepEqual(fixture.sent, []);
 	assert.equal(fixture.closed, 0);
+});
+
+void test('startSshJsonlListener times out if startShell never settles', async () => {
+	const fixture = createTestConnection({
+		startShell: async () => new Promise(() => {}),
+	});
+
+	await assert.rejects(
+		withTestTimeout(
+			startSshJsonlListener({
+				connection: fixture.connection as never,
+				command: 'listen',
+				operationTimeoutMs: 5,
+				onLine: () => {},
+				onExit: () => {},
+			}),
+		),
+		/listener operation timed out/,
+	);
+
+	assert.deepEqual(fixture.sent, []);
+	assert.equal(fixture.closed, 0);
+});
+
+void test('startSshJsonlListener reports send timeout even when close hangs', async () => {
+	const warn = mock.method(console, 'warn', () => {});
+	const fixture = createTestConnection({
+		sendData: async () => new Promise(() => {}),
+		close: async () => new Promise(() => {}),
+	});
+	const exits: unknown[] = [];
+
+	const handle = await withTestTimeout(
+		startSshJsonlListener({
+			connection: fixture.connection as never,
+			command: 'listen',
+			operationTimeoutMs: 5,
+			onLine: () => {},
+			onExit: (exitError) => exits.push(exitError),
+		}),
+	);
+
+	assert.equal(exits.length, 1);
+	assert.match(String(exits[0]), /listener operation timed out/);
+	assert.deepEqual(fixture.removed, [99n]);
+	assert.equal(fixture.closeOptions[0]?.signal instanceof AbortSignal, true);
+	assert.equal(warn.mock.callCount(), 2);
+
+	await handle.stop();
 });
 
 void test('startSshJsonlListener reports line handler failures through onExit', async () => {

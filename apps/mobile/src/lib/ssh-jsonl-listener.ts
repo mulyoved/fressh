@@ -11,6 +11,8 @@ export type SshJsonlListenerHandle = {
 	stop: () => Promise<void>;
 };
 
+type ListenerShell = Awaited<ReturnType<SshConnection['startShell']>>;
+
 export async function startSshJsonlListener(input: {
 	connection: SshConnection;
 	command: string;
@@ -22,8 +24,7 @@ export async function startSshJsonlListener(input: {
 		input.operationTimeoutMs ?? DEFAULT_SSH_JSONL_LISTENER_OPERATION_TIMEOUT_MS;
 	let stopped = false;
 	let listenerId: bigint | null = null;
-	let shell: Awaited<ReturnType<SshConnection['startShell']>> | null = null;
-	const operationAbortSignal = () => timeoutSignal(operationTimeoutMs);
+	let shell: ListenerShell | null = null;
 
 	const removeListener = () => {
 		if (!shell || listenerId === null) return;
@@ -36,13 +37,20 @@ export async function startSshJsonlListener(input: {
 		}
 	};
 
-	const closeShell = async () => {
-		if (!shell) return;
+	const closeShellInstance = async (targetShell: ListenerShell) => {
+		const controller = new AbortController();
+		const closePromise = targetShell.close({ signal: controller.signal });
 		try {
-			await shell.close({ signal: operationAbortSignal() });
+			await withOperationTimeout(closePromise, operationTimeoutMs, () => {
+				controller.abort(listenerOperationTimeoutError());
+			});
 		} catch (error) {
 			console.warn('failed to close JSONL listener shell', error);
 		}
+	};
+	const closeShell = async () => {
+		if (!shell) return;
+		await closeShellInstance(shell);
 	};
 
 	const reportExit = (error?: unknown) => {
@@ -68,16 +76,31 @@ export async function startSshJsonlListener(input: {
 		},
 	};
 
-	shell = await input.connection.startShell({
+	const startShellAbortController = new AbortController();
+	const startShellPromise = input.connection.startShell({
 		term: 'Xterm',
 		useTmux: false,
 		tmuxSessionName: '',
 		onClosed: () => reportExit(),
-		abortSignal: operationAbortSignal(),
+		abortSignal: startShellAbortController.signal,
 		registerInStore: false,
 	} as Parameters<SshConnection['startShell']>[0] & {
 		registerInStore: false;
 	});
+	try {
+		shell = await withOperationTimeout(
+			startShellPromise,
+			operationTimeoutMs,
+			() => {
+				startShellAbortController.abort(listenerOperationTimeoutError());
+			},
+		);
+	} catch (error) {
+		void startShellPromise
+			.then((lateShell) => closeShellInstance(lateShell))
+			.catch(() => {});
+		throw error;
+	}
 	if (stopped) {
 		await closeShell();
 		return handle;
@@ -119,10 +142,14 @@ export async function startSshJsonlListener(input: {
 	}
 
 	try {
-		await shell.sendData(
+		const sendAbortController = new AbortController();
+		const sendPromise = shell.sendData(
 			encoder.encode(`exec ${input.command}\n`).buffer as ArrayBuffer,
-			{ signal: operationAbortSignal() },
+			{ signal: sendAbortController.signal },
 		);
+		await withOperationTimeout(sendPromise, operationTimeoutMs, () => {
+			sendAbortController.abort(listenerOperationTimeoutError());
+		});
 	} catch (error) {
 		console.warn('failed to start JSONL listener command', error);
 		if (!stopped) {
@@ -136,24 +163,39 @@ export async function startSshJsonlListener(input: {
 	return handle;
 }
 
+function listenerOperationTimeoutError() {
+	return new Error('SSH JSONL listener operation timed out');
+}
+
+async function withOperationTimeout<T>(
+	promise: Promise<T>,
+	timeoutMs: number,
+	onTimeout: () => void,
+): Promise<T> {
+	let timeoutId: ReturnType<typeof setTimeout> | null = null;
+	try {
+		return await Promise.race([
+			promise,
+			new Promise<T>((_, reject) => {
+				timeoutId = setTimeout(() => {
+					onTimeout();
+					reject(listenerOperationTimeoutError());
+				}, timeoutMs);
+				const maybeNodeTimer = timeoutId as ReturnType<typeof setTimeout> & {
+					unref?: () => void;
+				};
+				maybeNodeTimer.unref?.();
+			}),
+		]);
+	} finally {
+		if (timeoutId !== null) clearTimeout(timeoutId);
+	}
+}
+
 function isTerminalChunk(event: ListenerEvent): event is TerminalChunk {
 	return 'bytes' in event && 'stream' in event;
 }
 
 function isStdoutTerminalChunk(event: ListenerEvent): event is TerminalChunk {
 	return isTerminalChunk(event) && event.stream === 'stdout' && !!event.bytes;
-}
-
-function timeoutSignal(timeoutMs: number): AbortSignal {
-	const controller = new AbortController();
-	const timer = setTimeout(() => {
-		controller.abort();
-	}, timeoutMs);
-
-	const maybeNodeTimer = timer as ReturnType<typeof setTimeout> & {
-		unref?: () => void;
-	};
-	maybeNodeTimer.unref?.();
-
-	return controller.signal;
 }

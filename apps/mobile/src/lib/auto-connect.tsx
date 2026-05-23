@@ -332,7 +332,7 @@ export function AutoConnectManager() {
 	React.useEffect(() => {
 		if (Platform.OS !== 'android') return;
 		const shouldRunService = shells.length > 0;
-		allowBackgroundRef.current = shouldRunService;
+		allowBackgroundRef.current = false;
 
 		if (!shouldRunService) {
 			if (foregroundKeyRef.current !== null) {
@@ -354,18 +354,33 @@ export function AutoConnectManager() {
 		const nextKey = `${title}|${message}`;
 		if (foregroundKeyRef.current === nextKey) return;
 		foregroundKeyRef.current = nextKey;
-		void startForegroundService({ title, message });
+		let cancelled = false;
+		void startForegroundService({ title, message }).then((started) => {
+			if (cancelled || foregroundKeyRef.current !== nextKey) return;
+			allowBackgroundRef.current = started;
+			if (!started) {
+				foregroundKeyRef.current = null;
+				if (!isActiveRef.current) {
+					stopReconnectCycle('foreground-service-unavailable');
+				}
+			}
+		});
+		return () => {
+			cancelled = true;
+		};
 	}, [
 		connections,
 		isAutoConnecting,
 		isReconnecting,
 		latestShell,
 		shells.length,
+		stopReconnectCycle,
 	]);
 
 	React.useEffect(() => {
 		return () => {
 			if (Platform.OS !== 'android') return;
+			allowBackgroundRef.current = false;
 			void stopForegroundService();
 		};
 	}, []);
