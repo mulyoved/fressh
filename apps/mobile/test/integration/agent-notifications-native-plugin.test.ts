@@ -261,6 +261,40 @@ async function generatedAndroidManifestSource() {
 	}
 }
 
+async function generatedFreshAndroidManifestSource() {
+	const projectRoot = await mkdtemp(
+		path.join(os.tmpdir(), 'fressh-foreground-service-plugin-'),
+	);
+
+	try {
+		await writeAndroidFixture(projectRoot, [
+			'<manifest xmlns:android="http://schemas.android.com/apk/res/android">',
+			'  <application android:name=".MainApplication" />',
+			'</manifest>',
+		]);
+
+		const config = withForegroundService({
+			name: 'Fressh Test Fixture',
+			slug: 'fressh-test-fixture',
+			android: {
+				package: 'com.finalapp.vibe2',
+			},
+		});
+
+		await compileModsAsync(config, {
+			projectRoot,
+			platforms: ['android'],
+		});
+
+		return await readFile(
+			path.join(projectRoot, 'android/app/src/main/AndroidManifest.xml'),
+			'utf8',
+		);
+	} finally {
+		await rm(projectRoot, { force: true, recursive: true });
+	}
+}
+
 async function agentNotificationsNativeSource() {
 	return readFile(
 		new URL('../../src/lib/agent-notifications-native.ts', import.meta.url)
@@ -292,6 +326,7 @@ void test('foreground service native module exposes agent alert methods', async 
 	assert.match(moduleSource, /fun isRunning\(promise: Promise\)/);
 	assert.match(moduleSource, /fun postAgentAlert\(/);
 	assert.match(moduleSource, /eventId: String/);
+	assert.match(moduleSource, /tapToken: String/);
 	assert.match(moduleSource, /fun cancelAgentAlert\(/);
 	assert.match(
 		serviceSource,
@@ -306,11 +341,12 @@ void test('committed Android module exposes agent alert methods', async () => {
 	assert.match(source, /fun isRunning\(promise: Promise\)/);
 	assert.match(source, /fun postAgentAlert\(/);
 	assert.match(source, /eventId: String/);
+	assert.match(source, /tapToken: String/);
 	assert.match(source, /fun cancelAgentAlert\(/);
 	assert.match(source, /SshForegroundService\.postAgentAlert\(/);
 	assert.match(
 		source,
-		/SshForegroundService\.postAgentAlert\([\s\S]*windowId,\s*eventId[\s\S]*\)/,
+		/SshForegroundService\.postAgentAlert\([\s\S]*windowId,\s*eventId,\s*tapToken[\s\S]*\)/,
 	);
 	assert.match(source, /SshForegroundService\.cancelAgentAlert\(/);
 });
@@ -371,9 +407,31 @@ void test('foreground service restart and wakelock policy keeps background work 
 
 void test('foreground service is not stopped just because the task is removed', async () => {
 	const manifest = await generatedAndroidManifestSource();
+	const freshManifest = await generatedFreshAndroidManifestSource();
 
 	assert.match(manifest, /android:stopWithTask="false"/);
-	assert.match(manifest, /android:foregroundServiceType="dataSync"/);
+	assert.match(manifest, /android:foregroundServiceType="specialUse"/);
+	assert.match(
+		manifest,
+		/android:name="android\.permission\.FOREGROUND_SERVICE_SPECIAL_USE"/,
+	);
+	assert.doesNotMatch(
+		manifest,
+		/android:name="android\.permission\.FOREGROUND_SERVICE_DATA_SYNC"/,
+	);
+	assert.match(
+		manifest,
+		/android:name="android\.app\.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"/,
+	);
+	assert.match(
+		manifest,
+		/android:value="Long-running user-visible SSH terminal session and agent status listener"/,
+	);
+	assert.match(freshManifest, /android:foregroundServiceType="specialUse"/);
+	assert.match(
+		freshManifest,
+		/android:name="android\.app\.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"/,
+	);
 	assert.doesNotMatch(manifest, /android:stopWithTask="true"/);
 	assert.match(
 		await foregroundPluginSource(),
@@ -381,7 +439,11 @@ void test('foreground service is not stopped just because the task is removed', 
 	);
 	assert.match(
 		await foregroundPluginSource(),
-		/'android:foregroundServiceType': 'dataSync'/,
+		/'android:foregroundServiceType': 'specialUse'/,
+	);
+	assert.match(
+		await foregroundPluginSource(),
+		/'android.permission.FOREGROUND_SERVICE_SPECIAL_USE'/,
 	);
 });
 
@@ -397,6 +459,7 @@ void test('committed Android service passes agent alert intent extras to MainAct
 	assert.match(source, /EXTRA_AGENT_TARGET = "agentTarget"/);
 	assert.match(source, /EXTRA_AGENT_WINDOW_ID = "agentWindowId"/);
 	assert.match(source, /EXTRA_AGENT_EVENT_ID = "agentEventId"/);
+	assert.match(source, /EXTRA_AGENT_TAP_TOKEN = "agentTapToken"/);
 	assert.match(source, /EXTRA_AGENT_NOTIFICATION_CONNECTION_ID/);
 	assert.match(
 		source,
@@ -409,11 +472,13 @@ void test('committed Android service passes agent alert intent extras to MainAct
 	assert.match(source, /appendQueryParameter\("agentSession", session\)/);
 	assert.match(source, /appendQueryParameter\("agentWindowId", windowId\)/);
 	assert.match(source, /appendQueryParameter\("agentEventId", eventId\)/);
+	assert.match(source, /appendQueryParameter\("agentTapToken", tapToken\)/);
 	assert.match(source, /putExtra\(EXTRA_AGENT_CONNECTION_ID, connectionId\)/);
 	assert.match(source, /putExtra\(EXTRA_AGENT_SESSION, session\)/);
 	assert.match(source, /putExtra\(EXTRA_AGENT_TARGET, target\)/);
 	assert.match(source, /putExtra\(EXTRA_AGENT_WINDOW_ID, windowId\)/);
 	assert.match(source, /putExtra\(EXTRA_AGENT_EVENT_ID, eventId\)/);
+	assert.match(source, /putExtra\(EXTRA_AGENT_TAP_TOKEN, tapToken\)/);
 	assert.match(source, /\.setAutoCancel\(false\)/);
 });
 
@@ -429,6 +494,7 @@ void test('foreground service plugin passes agent alert intent extras to MainAct
 	assert.match(source, /EXTRA_AGENT_TARGET = "agentTarget"/);
 	assert.match(source, /EXTRA_AGENT_WINDOW_ID = "agentWindowId"/);
 	assert.match(source, /EXTRA_AGENT_EVENT_ID = "agentEventId"/);
+	assert.match(source, /EXTRA_AGENT_TAP_TOKEN = "agentTapToken"/);
 	assert.match(source, /EXTRA_AGENT_NOTIFICATION_CONNECTION_ID/);
 	assert.match(
 		source,
@@ -441,11 +507,13 @@ void test('foreground service plugin passes agent alert intent extras to MainAct
 	assert.match(source, /appendQueryParameter\("agentSession", session\)/);
 	assert.match(source, /appendQueryParameter\("agentWindowId", windowId\)/);
 	assert.match(source, /appendQueryParameter\("agentEventId", eventId\)/);
+	assert.match(source, /appendQueryParameter\("agentTapToken", tapToken\)/);
 	assert.match(source, /putExtra\(EXTRA_AGENT_CONNECTION_ID, connectionId\)/);
 	assert.match(source, /putExtra\(EXTRA_AGENT_SESSION, session\)/);
 	assert.match(source, /putExtra\(EXTRA_AGENT_TARGET, target\)/);
 	assert.match(source, /putExtra\(EXTRA_AGENT_WINDOW_ID, windowId\)/);
 	assert.match(source, /putExtra\(EXTRA_AGENT_EVENT_ID, eventId\)/);
+	assert.match(source, /putExtra\(EXTRA_AGENT_TAP_TOKEN, tapToken\)/);
 	assert.match(source, /\.setAutoCancel\(false\)/);
 });
 
@@ -460,6 +528,7 @@ void test('foreground service plugin generates Kotlin with agent alert routing d
 	assert.match(source, /EXTRA_AGENT_TARGET = "agentTarget"/);
 	assert.match(source, /EXTRA_AGENT_WINDOW_ID = "agentWindowId"/);
 	assert.match(source, /EXTRA_AGENT_EVENT_ID = "agentEventId"/);
+	assert.match(source, /EXTRA_AGENT_TAP_TOKEN = "agentTapToken"/);
 	assert.match(source, /EXTRA_AGENT_NOTIFICATION_CONNECTION_ID/);
 	assert.match(
 		source,
@@ -472,11 +541,13 @@ void test('foreground service plugin generates Kotlin with agent alert routing d
 	assert.match(source, /appendQueryParameter\("agentSession", session\)/);
 	assert.match(source, /appendQueryParameter\("agentWindowId", windowId\)/);
 	assert.match(source, /appendQueryParameter\("agentEventId", eventId\)/);
+	assert.match(source, /appendQueryParameter\("agentTapToken", tapToken\)/);
 	assert.match(source, /putExtra\(EXTRA_AGENT_CONNECTION_ID, connectionId\)/);
 	assert.match(source, /putExtra\(EXTRA_AGENT_SESSION, session\)/);
 	assert.match(source, /putExtra\(EXTRA_AGENT_TARGET, target\)/);
 	assert.match(source, /putExtra\(EXTRA_AGENT_WINDOW_ID, windowId\)/);
 	assert.match(source, /putExtra\(EXTRA_AGENT_EVENT_ID, eventId\)/);
+	assert.match(source, /putExtra\(EXTRA_AGENT_TAP_TOKEN, tapToken\)/);
 	assert.match(
 		source,
 		/buildAgentAlertNotification\([\s\S]*notificationId: Int[\s\S]*PendingIntent\.getActivity\(\s*context,\s*notificationId,/,
@@ -530,6 +601,7 @@ const agentAlertInput = {
 	target: 'main:1',
 	windowId: '@1',
 	eventId: 'main:@1:2000:waiting',
+	tapToken: 'tap-token',
 };
 
 function createTestLogger() {
@@ -615,6 +687,7 @@ void test('agent notification wrapper checks permission before posting native al
 				target,
 				windowId,
 				eventId,
+				tapToken,
 			) => {
 				calls.push('native-post');
 				assert.deepEqual(
@@ -629,6 +702,7 @@ void test('agent notification wrapper checks permission before posting native al
 						target,
 						windowId,
 						eventId,
+						tapToken,
 					],
 					[
 						123,
@@ -641,6 +715,7 @@ void test('agent notification wrapper checks permission before posting native al
 						'main:1',
 						'@1',
 						'main:@1:2000:waiting',
+						'tap-token',
 					],
 				);
 			},
@@ -779,7 +854,7 @@ void test('agent notification wrapper catches and logs native post and cancel fa
 	]);
 });
 
-void test('agent notification wrapper falls back for old native postAgentAlert arity', async () => {
+void test('agent notification wrapper does not post route alerts through old native arity', async () => {
 	const calls: unknown[][] = [];
 	const { entries, logger } = createTestLogger();
 	const wrapper = createAgentNotificationsNativeWrapper({
@@ -787,52 +862,11 @@ void test('agent notification wrapper falls back for old native postAgentAlert a
 		getNativeModule: () => ({
 			postAgentAlert: async (...args: unknown[]) => {
 				calls.push(args);
-				if (args.length === 10) {
+				if (args.length === 11) {
 					throw new Error(
-						'FresshForegroundService.postAgentAlert got 10 arguments, expected 9',
+						'FresshForegroundService.postAgentAlert got 11 arguments, expected 10',
 					);
 				}
-			},
-		}),
-		ensureNotificationPermission: async () => true,
-		logger,
-	});
-
-	assert.equal(await wrapper.postAgentAlertNotification(agentAlertInput), true);
-
-	assert.deepEqual(
-		calls.map((args) => args.length),
-		[10, 9],
-	);
-	assert.deepEqual(calls[1], [
-		123,
-		'Agent waiting',
-		'main:1 needs attention',
-		'conn-1',
-		7,
-		'saved-host',
-		'main',
-		'main:1',
-		'@1',
-	]);
-	assert.deepEqual(entries, [
-		['agent alert notification post used legacy native arity'],
-	]);
-});
-
-void test('agent notification wrapper reports legacy native post fallback failures', async () => {
-	const legacyError = new Error('legacy failed');
-	const { entries, logger } = createTestLogger();
-	const wrapper = createAgentNotificationsNativeWrapper({
-		getPlatformOS: () => 'android',
-		getNativeModule: () => ({
-			postAgentAlert: async (...args: unknown[]) => {
-				if (args.length === 10) {
-					throw new Error(
-						'FresshForegroundService.postAgentAlert got 10 arguments, expected 9',
-					);
-				}
-				throw legacyError;
 			},
 		}),
 		ensureNotificationPermission: async () => true,
@@ -844,8 +878,17 @@ void test('agent notification wrapper reports legacy native post fallback failur
 		false,
 	);
 
+	assert.deepEqual(
+		calls.map((args) => args.length),
+		[11],
+	);
 	assert.deepEqual(entries, [
-		['agent alert notification legacy post failed', legacyError],
+		[
+			'agent alert notification post failed',
+			new Error(
+				'FresshForegroundService.postAgentAlert got 11 arguments, expected 10',
+			),
+		],
 	]);
 });
 

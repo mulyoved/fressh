@@ -131,6 +131,7 @@ class SshForegroundService : Service() {
     const val EXTRA_AGENT_TARGET = "agentTarget"
     const val EXTRA_AGENT_WINDOW_ID = "agentWindowId"
     const val EXTRA_AGENT_EVENT_ID = "agentEventId"
+    const val EXTRA_AGENT_TAP_TOKEN = "agentTapToken"
 
     private fun ensureNotificationChannels(context: Context) {
       if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
@@ -163,7 +164,8 @@ class SshForegroundService : Service() {
       session: String,
       target: String,
       windowId: String,
-      eventId: String
+      eventId: String,
+      tapToken: String
     ): Notification {
       val route = Uri.Builder()
         .scheme("fressh")
@@ -174,6 +176,7 @@ class SshForegroundService : Service() {
         .appendQueryParameter("agentSession", session)
         .appendQueryParameter("agentWindowId", windowId)
         .appendQueryParameter("agentEventId", eventId)
+        .appendQueryParameter("agentTapToken", tapToken)
         .build()
       val intent = Intent(Intent.ACTION_VIEW, route, context, MainActivity::class.java).apply {
         flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
@@ -183,6 +186,7 @@ class SshForegroundService : Service() {
         putExtra(EXTRA_AGENT_TARGET, target)
         putExtra(EXTRA_AGENT_WINDOW_ID, windowId)
         putExtra(EXTRA_AGENT_EVENT_ID, eventId)
+        putExtra(EXTRA_AGENT_TAP_TOKEN, tapToken)
       }
       val pendingIntent = PendingIntent.getActivity(
         context,
@@ -227,7 +231,8 @@ class SshForegroundService : Service() {
       session: String,
       target: String,
       windowId: String,
-      eventId: String
+      eventId: String,
+      tapToken: String
     ) {
       ensureNotificationChannels(context)
       val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -242,7 +247,8 @@ class SshForegroundService : Service() {
         session,
         target,
         windowId,
-        eventId
+        eventId,
+        tapToken
       ))
     }
 

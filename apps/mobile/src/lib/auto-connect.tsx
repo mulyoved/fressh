@@ -8,6 +8,7 @@ import {
 	canRunAndroidBackgroundWork,
 	canAttemptBackgroundReconnect,
 	createForegroundServiceStartCoordinator,
+	getForegroundServiceNotificationMessage,
 	shouldPreservePendingWithoutTarget,
 	shouldPreserveForegroundServiceForShellDrop,
 	shouldRunForegroundService,
@@ -460,11 +461,11 @@ export function AutoConnectManager() {
 			? connections[latestShell.connectionId]
 			: undefined;
 		const title = 'Fressh Terminal';
-		const message = connection
-			? `Connected to ${connection.connectionDetails.username}@${connection.connectionDetails.host}`
-			: isReconnecting || isAutoConnecting
-				? 'Reconnecting...'
-				: 'Keeping SSH connection alive';
+		const message = getForegroundServiceNotificationMessage({
+			hasConnection: connection !== undefined,
+			isAutoConnecting,
+			isReconnecting,
+		});
 		const nextKey = `${title}|${message}`;
 		if (
 			!shouldStartForegroundService({

@@ -34,6 +34,16 @@ export function shouldStartForegroundService(input: {
 	return input.currentKey !== input.nextKey || !input.foregroundServiceStarted;
 }
 
+export function getForegroundServiceNotificationMessage(input: {
+	hasConnection: boolean;
+	isAutoConnecting: boolean;
+	isReconnecting: boolean;
+}) {
+	if (input.hasConnection) return 'SSH session active';
+	if (input.isReconnecting || input.isAutoConnecting) return 'Reconnecting...';
+	return 'Keeping SSH connection alive';
+}
+
 export function shouldPreserveForegroundServiceForShellDrop(input: {
 	platformOS: string;
 	appActive: boolean;

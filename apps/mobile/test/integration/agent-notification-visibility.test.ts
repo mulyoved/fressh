@@ -235,11 +235,19 @@ void test('handleAgentNotificationRoute selects and acknowledges routed agent al
 
 	const handledRoute = await handleAgentNotificationRoute({
 		agentConnectionId: 'saved-host',
-		storedConnectionId: 'fallback-host',
+		storedConnectionId: 'saved-host',
 		agentSession: 'work',
 		agentWindowId: '@12',
 		agentEventId: 'main:@12:2000:waiting',
+		agentTapToken: 'tap-token',
 		tmuxTarget: 'main',
+		hasAuthorizedRouteToken: (
+			_connectionId,
+			_session,
+			_windowId,
+			_eventId,
+			token,
+		) => token === 'tap-token',
 		isRouteHandled: (key) => handled.has(key),
 		markRouteHandled: (key) => handled.add(key),
 		runCommand: async (command, timeoutMs) => {
@@ -260,7 +268,7 @@ void test('handleAgentNotificationRoute selects and acknowledges routed agent al
 		{ connectionId: 'saved-host', session: 'work', windowId: '@12' },
 	]);
 	assert.equal(
-		handled.has('saved-host:work:@12:main:@12:2000:waiting'),
+		handled.has('["saved-host","work","@12","main:@12:2000:waiting"]'),
 		true,
 	);
 });
@@ -278,7 +286,9 @@ void test('handleAgentNotificationRoute falls back to stored connection id', asy
 		agentSession: null,
 		agentWindowId: '@12',
 		agentEventId: 'main:@12:2000:waiting',
+		agentTapToken: 'tap-token',
 		tmuxTarget: 'main',
+		hasAuthorizedRouteToken: () => true,
 		isRouteHandled: () => false,
 		markRouteHandled: () => {},
 		runCommand: async () => '',
@@ -294,7 +304,9 @@ void test('handleAgentNotificationRoute falls back to stored connection id', asy
 });
 
 void test('handleAgentNotificationRoute suppresses duplicate successful routes only', async () => {
-	const handled = new Set<string>(['saved-host:main:@12:main:@12:2000:waiting']);
+	const handled = new Set<string>([
+		'["saved-host","main","@12","main:@12:2000:waiting"]',
+	]);
 	let commands = 0;
 
 	const duplicateHandled = await handleAgentNotificationRoute({
@@ -303,7 +315,9 @@ void test('handleAgentNotificationRoute suppresses duplicate successful routes o
 		agentSession: 'main',
 		agentWindowId: '@12',
 		agentEventId: 'main:@12:2000:waiting',
+		agentTapToken: 'tap-token',
 		tmuxTarget: 'main',
+		hasAuthorizedRouteToken: () => true,
 		isRouteHandled: (key) => handled.has(key),
 		markRouteHandled: (key) => handled.add(key),
 		runCommand: async () => {
@@ -319,7 +333,9 @@ void test('handleAgentNotificationRoute suppresses duplicate successful routes o
 });
 
 void test('handleAgentNotificationRoute allows a later alert for the same window', async () => {
-	const handled = new Set<string>(['saved-host:main:@12:main:@12:2000:waiting']);
+	const handled = new Set<string>([
+		'["saved-host","main","@12","main:@12:2000:waiting"]',
+	]);
 	const commands: string[] = [];
 	const acknowledgements: string[] = [];
 
@@ -329,7 +345,9 @@ void test('handleAgentNotificationRoute allows a later alert for the same window
 		agentSession: 'main',
 		agentWindowId: '@12',
 		agentEventId: 'main:@12:3000:done',
+		agentTapToken: 'tap-token',
 		tmuxTarget: 'main',
+		hasAuthorizedRouteToken: () => true,
 		isRouteHandled: (key) => handled.has(key),
 		markRouteHandled: (key) => handled.add(key),
 		runCommand: async (command) => {
@@ -345,7 +363,131 @@ void test('handleAgentNotificationRoute allows a later alert for the same window
 	assert.equal(handledRoute, true);
 	assert.deepEqual(commands, ["tmux select-window -t 'main:@12'"]);
 	assert.deepEqual(acknowledgements, ['@12']);
-	assert.equal(handled.has('saved-host:main:@12:main:@12:3000:done'), true);
+	assert.equal(
+		handled.has('["saved-host","main","@12","main:@12:3000:done"]'),
+		true,
+	);
+});
+
+void test('handleAgentNotificationRoute rejects forged routes without pending notification', async () => {
+	let commands = 0;
+	let acknowledgements = 0;
+	let handledRoutes = 0;
+
+	const handledRoute = await handleAgentNotificationRoute({
+		agentConnectionId: 'saved-host',
+		storedConnectionId: null,
+		agentSession: 'main',
+		agentWindowId: '@12',
+		agentEventId: 'main:@12:2000:waiting',
+		agentTapToken: 'tap-token',
+		tmuxTarget: 'main',
+		hasAuthorizedRouteToken: () => false,
+		isRouteHandled: () => false,
+		markRouteHandled: () => {
+			handledRoutes += 1;
+		},
+		runCommand: async () => {
+			commands += 1;
+			return '';
+		},
+		acknowledge: () => {
+			acknowledgements += 1;
+		},
+		warn: () => {},
+	});
+
+	assert.equal(handledRoute, false);
+	assert.equal(commands, 0);
+	assert.equal(acknowledgements, 0);
+	assert.equal(handledRoutes, 0);
+});
+
+void test('handleAgentNotificationRoute treats pending-token lookup failures as unhandled routes', async () => {
+	const warnings: unknown[] = [];
+	let commands = 0;
+
+	const handledRoute = await handleAgentNotificationRoute({
+		agentConnectionId: 'saved-host',
+		storedConnectionId: null,
+		agentSession: 'main',
+		agentWindowId: '@12',
+		agentEventId: 'main:@12:2000:waiting',
+		agentTapToken: 'tap-token',
+		tmuxTarget: 'main',
+		hasAuthorizedRouteToken: () => {
+			throw new Error('storage unavailable');
+		},
+		isRouteHandled: () => false,
+		markRouteHandled: () => {},
+		runCommand: async () => {
+			commands += 1;
+			return '';
+		},
+		acknowledge: () => {},
+		warn: (_message, error) => warnings.push(error),
+	});
+
+	assert.equal(handledRoute, false);
+	assert.equal(commands, 0);
+	assert.equal(warnings.length, 1);
+});
+
+void test('handleAgentNotificationRoute ignores routes without a tap token', async () => {
+	let commands = 0;
+
+	const handledRoute = await handleAgentNotificationRoute({
+		agentConnectionId: 'saved-host',
+		storedConnectionId: null,
+		agentSession: 'main',
+		agentWindowId: '@12',
+		agentEventId: 'main:@12:2000:waiting',
+		agentTapToken: null,
+		tmuxTarget: 'main',
+		hasAuthorizedRouteToken: () => true,
+		isRouteHandled: () => false,
+		markRouteHandled: () => {},
+		runCommand: async () => {
+			commands += 1;
+			return '';
+		},
+		acknowledge: () => {},
+		warn: () => {},
+	});
+
+	assert.equal(handledRoute, false);
+	assert.equal(commands, 0);
+});
+
+void test('handleAgentNotificationRoute rejects valid tokens for a different shell route', async () => {
+	let commands = 0;
+	let pendingChecks = 0;
+
+	const handledRoute = await handleAgentNotificationRoute({
+		agentConnectionId: 'saved-host',
+		storedConnectionId: 'other-host',
+		agentSession: 'main',
+		agentWindowId: '@12',
+		agentEventId: 'main:@12:2000:waiting',
+		agentTapToken: 'tap-token',
+		tmuxTarget: 'main',
+		hasAuthorizedRouteToken: () => {
+			pendingChecks += 1;
+			return true;
+		},
+		isRouteHandled: () => false,
+		markRouteHandled: () => {},
+		runCommand: async () => {
+			commands += 1;
+			return '';
+		},
+		acknowledge: () => {},
+		warn: () => {},
+	});
+
+	assert.equal(handledRoute, false);
+	assert.equal(pendingChecks, 0);
+	assert.equal(commands, 0);
 });
 
 void test('handleAgentNotificationRoute does not acknowledge or mark failed selection', async () => {
@@ -360,7 +502,9 @@ void test('handleAgentNotificationRoute does not acknowledge or mark failed sele
 		agentSession: 'main',
 		agentWindowId: '@12',
 		agentEventId: 'main:@12:2000:waiting',
+		agentTapToken: 'tap-token',
 		tmuxTarget: 'main',
+		hasAuthorizedRouteToken: () => true,
 		isRouteHandled: (key) => handled.has(key),
 		markRouteHandled: (key) => handled.add(key),
 		runCommand: async () => {

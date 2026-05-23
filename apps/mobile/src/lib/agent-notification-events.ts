@@ -146,6 +146,16 @@ export function createStableNotificationId(key: string): number {
 	return notificationId === 0 ? 1 : notificationId;
 }
 
+export function getAgentAlertNotificationText(event: AgentNotificationEvent): {
+	title: string;
+	message: string;
+} {
+	return {
+		title: event.status === 'waiting' ? 'Agent waiting' : 'Agent done',
+		message: 'Agent status changed',
+	};
+}
+
 export class AgentNotificationDedupe {
 	private readonly pending = new Map<
 		string,
@@ -157,7 +167,8 @@ export class AgentNotificationDedupe {
 			notificationId: number;
 			postAttemptId: number;
 			posted: boolean;
-			stalePosted: boolean;
+			hasVisibleNotification: boolean;
+			needsPostRetry: boolean;
 		}
 	>();
 
@@ -171,7 +182,8 @@ export class AgentNotificationDedupe {
 			notificationId,
 			postAttemptId: 0,
 			posted: false,
-			stalePosted: false,
+			hasVisibleNotification: false,
+			needsPostRetry: false,
 		});
 		return true;
 	}
@@ -182,7 +194,11 @@ export class AgentNotificationDedupe {
 		event: AgentNotificationEvent,
 	): boolean {
 		const existing = this.pending.get(key);
-		if (existing?.eventId === event.id) return false;
+		if (existing?.eventId === event.id) {
+			if (!existing.needsPostRetry) return false;
+			existing.needsPostRetry = false;
+			return true;
+		}
 		this.pending.set(key, {
 			event,
 			eventId: event.id,
@@ -191,7 +207,9 @@ export class AgentNotificationDedupe {
 			notificationId,
 			postAttemptId: 0,
 			posted: false,
-			stalePosted: existing?.posted || existing?.stalePosted || false,
+			hasVisibleNotification:
+				existing?.posted || existing?.hasVisibleNotification || false,
+			needsPostRetry: false,
 		});
 		return true;
 	}
@@ -237,7 +255,7 @@ export class AgentNotificationDedupe {
 				pending.inFlightAnyPostCount - 1,
 			);
 			if (!posted) return { type: 'ignored' };
-			pending.stalePosted = true;
+			pending.hasVisibleNotification = true;
 			return pending.event && pending.inFlightPostCount === 0
 				? {
 						type: 'superseded',
@@ -262,16 +280,17 @@ export class AgentNotificationDedupe {
 		if (!posted) {
 			if (
 				pending.posted ||
-				pending.stalePosted ||
 				pending.inFlightAnyPostCount > 0 ||
 				pending.inFlightPostCount > 0
 			) {
 				return { type: 'ignored' };
 			}
-			this.pending.delete(key);
+			pending.needsPostRetry = true;
 			return { type: 'failed' };
 		}
 		pending.posted = true;
+		pending.hasVisibleNotification = true;
+		pending.needsPostRetry = false;
 		return { type: 'posted' };
 	}
 
@@ -354,12 +373,6 @@ export function shouldAdvanceAgentNotificationCursorAfterPost(input: {
 			input.completion.type === 'cancel-posted' ||
 			input.currentEventId === input.eventId)
 	);
-}
-
-export function shouldRestartAgentNotificationListenerAfterPost(
-	completion: AgentNotificationPostCompletion,
-) {
-	return completion.type === 'failed';
 }
 
 export type HandleAgentNotificationEventInput = {

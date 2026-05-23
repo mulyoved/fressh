@@ -6,6 +6,7 @@ import {
 	canRunAndroidBackgroundWork,
 	createAgentNotificationRestartCoordinator,
 	createForegroundServiceStartCoordinator,
+	getForegroundServiceNotificationMessage,
 	getNextConfiguredResumeKey,
 	shouldPreservePendingWithoutConfiguredTarget,
 	shouldPreservePendingWithoutTarget,
@@ -16,6 +17,25 @@ import {
 	shouldClearPendingAgentNotifications,
 	shouldClearPendingAgentNotificationsForResumeKeyChange,
 } from '../../src/lib/agent-notification-runtime';
+
+void test('foreground service notification message avoids connection identity', () => {
+	assert.equal(
+		getForegroundServiceNotificationMessage({
+			hasConnection: true,
+			isAutoConnecting: false,
+			isReconnecting: false,
+		}),
+		'SSH session active',
+	);
+	assert.equal(
+		getForegroundServiceNotificationMessage({
+			hasConnection: false,
+			isAutoConnecting: false,
+			isReconnecting: true,
+		}),
+		'Reconnecting...',
+	);
+});
 
 void test('agent notification bridge runs while the Android app is active', () => {
 	assert.equal(

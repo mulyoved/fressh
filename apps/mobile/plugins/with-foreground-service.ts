@@ -11,12 +11,16 @@ import {
 
 const PERMISSIONS = [
 	'android.permission.FOREGROUND_SERVICE',
-	'android.permission.FOREGROUND_SERVICE_DATA_SYNC',
+	'android.permission.FOREGROUND_SERVICE_SPECIAL_USE',
 	'android.permission.POST_NOTIFICATIONS',
 	'android.permission.WAKE_LOCK',
 ];
 
 const SERVICE_NAME = '.SshForegroundService';
+const SPECIAL_USE_PROPERTY_NAME =
+	'android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE';
+const SPECIAL_USE_PROPERTY_VALUE =
+	'Long-running user-visible SSH terminal session and agent status listener';
 
 const JAVA_PACKAGE_RELATIVE_PATH = 'app/src/main/java/com/finalapp/vibe2';
 const PLUGIN_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -120,8 +124,32 @@ const withForegroundServiceManifest: ConfigPlugin = (config) =>
 		const app = AndroidConfig.Manifest.getMainApplicationOrThrow(manifest);
 		app.service = app.service ?? [];
 		type SshForegroundServiceAttributes = (typeof app.service)[number]['$'] & {
-			'android:foregroundServiceType'?: 'dataSync';
+			'android:foregroundServiceType'?: 'specialUse';
 			'android:stopWithTask'?: 'true' | 'false';
+		};
+		type SshForegroundService = (typeof app.service)[number] & {
+			property?: {
+				$: {
+					'android:name': typeof SPECIAL_USE_PROPERTY_NAME;
+					'android:value': typeof SPECIAL_USE_PROPERTY_VALUE;
+				};
+			}[];
+		};
+		const ensureSpecialUseProperty = (service: SshForegroundService) => {
+			service.property = service.property ?? [];
+			const existing = service.property.find(
+				(property) => property.$['android:name'] === SPECIAL_USE_PROPERTY_NAME,
+			);
+			if (existing) {
+				existing.$['android:value'] = SPECIAL_USE_PROPERTY_VALUE;
+				return;
+			}
+			service.property.push({
+				$: {
+					'android:name': SPECIAL_USE_PROPERTY_NAME,
+					'android:value': SPECIAL_USE_PROPERTY_VALUE,
+				},
+			});
 		};
 		const alreadyPresent = app.service.some(
 			(service) => service.$['android:name'] === SERVICE_NAME,
@@ -131,21 +159,24 @@ const withForegroundServiceManifest: ConfigPlugin = (config) =>
 				if (service.$['android:name'] === SERVICE_NAME) {
 					(service.$ as SshForegroundServiceAttributes)[
 						'android:foregroundServiceType'
-					] = 'dataSync';
+					] = 'specialUse';
 					(service.$ as SshForegroundServiceAttributes)[
 						'android:stopWithTask'
 					] = 'false';
+					ensureSpecialUseProperty(service as SshForegroundService);
 				}
 			}
 		} else {
-			app.service.push({
+			const service = {
 				$: {
 					'android:name': SERVICE_NAME,
 					'android:exported': 'false',
-					'android:foregroundServiceType': 'dataSync',
+					'android:foregroundServiceType': 'specialUse',
 					'android:stopWithTask': 'false',
 				} as SshForegroundServiceAttributes,
-			});
+			} as SshForegroundService;
+			ensureSpecialUseProperty(service);
+			app.service.push(service);
 		}
 
 		return config;

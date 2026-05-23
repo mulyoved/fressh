@@ -5,15 +5,21 @@ import {
 	AgentNotificationBridgeStateMachine,
 	HEARTBEAT_STALE_MS,
 } from './agent-notification-bridge';
+import { setAgentNotificationBridgeApi } from './agent-notification-bridge-api';
 import { handleAgentNotificationListenerLine } from './agent-notification-bridge-runtime';
+import { clearAgentNotificationRoutesSafely } from './agent-notification-clear';
 import {
 	type AgentNotificationEvent,
 	AgentNotificationDedupe,
 	buildAgentNotificationListenCommand,
 	matchesAgentNotificationPendingKey,
-	shouldAdvanceAgentNotificationCursorAfterPost,
-	shouldRestartAgentNotificationListenerAfterPost,
 } from './agent-notification-events';
+import { postAgentNotificationWithRouteToken } from './agent-notification-posting';
+import {
+	clearRoutedAgentNotificationRouteTokens,
+	createRoutedAgentNotificationRouteToken,
+	deleteRoutedAgentNotificationRouteToken,
+} from './agent-notification-route-api';
 import {
 	canRunAgentNotificationBridge,
 	createAgentNotificationRestartCoordinator,
@@ -41,7 +47,9 @@ import { queryClient } from './utils';
 
 const logger = rootLogger.extend('AgentNotificationBridge');
 const RESTART_DELAYS_MS = [1_000, 2_000, 5_000, 10_000, 30_000];
+const POST_RETRY_DELAYS_MS = [1_000, 5_000, 15_000];
 export const AGENT_NOTIFICATION_MAX_RESTART_ATTEMPTS = 6;
+export const AGENT_NOTIFICATION_MAX_POST_RETRY_ATTEMPTS = 3;
 export const AGENT_NOTIFICATION_HEALTHY_RESTART_RESET_MS =
 	HEARTBEAT_STALE_MS * 2;
 const FOREGROUND_SERVICE_HEALTH_CHECK_MS = HEARTBEAT_STALE_MS;
@@ -50,7 +58,6 @@ const isActiveState = (state: string) => state === 'active';
 type ListenerTarget = {
 	key: string;
 	resumeKey: string;
-	shellKey: string;
 	channelId: number;
 	connection: NonNullable<
 		ReturnType<typeof useSshStore.getState>['connections'][string]
@@ -88,6 +95,10 @@ export function AgentNotificationBridgeManager({
 	const heartbeatTimerRef = React.useRef<ReturnType<typeof setInterval> | null>(
 		null,
 	);
+	const postRetryTimersRef = React.useRef(
+		new Map<string, ReturnType<typeof setTimeout>>(),
+	);
+	const postRetryAttemptsRef = React.useRef(new Map<string, number>());
 	const restartCoordinatorRef = React.useRef(
 		createAgentNotificationRestartCoordinator({
 			maxAttempts: AGENT_NOTIFICATION_MAX_RESTART_ATTEMPTS,
@@ -144,7 +155,6 @@ export function AgentNotificationBridgeManager({
 		return {
 			key: `${connection.connectionId}:${latestShellKey}:${session}`,
 			resumeKey: `${notificationConnectionId}:${session}`,
-			shellKey: latestShellKey,
 			channelId: latestShell.channelId,
 			connection,
 			notificationConnectionId,
@@ -250,6 +260,14 @@ export function AgentNotificationBridgeManager({
 		heartbeatTimerRef.current = null;
 	}, []);
 
+	const clearPostRetryTimers = React.useCallback(() => {
+		for (const timer of postRetryTimersRef.current.values()) {
+			clearTimeout(timer);
+		}
+		postRetryTimersRef.current.clear();
+		postRetryAttemptsRef.current.clear();
+	}, []);
+
 	const stopListener = React.useCallback(async () => {
 		generationRef.current += 1;
 		clearHeartbeatTimer();
@@ -267,10 +285,15 @@ export function AgentNotificationBridgeManager({
 
 	const clearPendingNotifications = React.useCallback(() => {
 		const notificationIds = dedupeRef.current.clear();
+		clearPostRetryTimers();
+		clearAgentNotificationRoutesSafely({
+			clearRouteTokens: clearRoutedAgentNotificationRouteTokens,
+			warn: (message, error) => logger.warn(message, error),
+		});
 		for (const notificationId of notificationIds) {
 			void cancelAgentAlertNotification(notificationId);
 		}
-	}, []);
+	}, [clearPostRetryTimers]);
 
 	const scheduleRestart = React.useCallback(
 		(reason: string) => {
@@ -350,35 +373,32 @@ export function AgentNotificationBridgeManager({
 				notificationConnectionId,
 				onPosted,
 			} = input;
-			const attemptId = dedupeRef.current.beginPost(key, event.id);
-			if (attemptId === null) return;
-			void postAgentAlertNotification({
+			void postAgentNotificationWithRouteToken({
+				key,
 				notificationId,
-				title: event.status === 'waiting' ? 'Agent waiting' : 'Agent done',
-				message: `${event.windowName || event.target} needs attention`,
+				event,
 				connectionId,
 				channelId,
 				notificationConnectionId,
-				session: event.session,
-				target: event.target,
-				windowId: event.windowId,
-				eventId: event.id,
-			}).then((posted) => {
-				const result = dedupeRef.current.completePost(
-					key,
-					event.id,
-					attemptId,
-					posted,
-				);
-				const currentPending = dedupeRef.current.getPendingEvent(key);
-				onPosted?.(
-					shouldAdvanceAgentNotificationCursorAfterPost({
-						posted,
-						completion: result,
-						currentEventId: currentPending?.event.id ?? null,
-						eventId: event.id,
-					}),
-				);
+				dedupe: dedupeRef.current,
+				dependencies: {
+					createRouteToken: createRoutedAgentNotificationRouteToken,
+					deleteRouteToken: deleteRoutedAgentNotificationRouteToken,
+					postAgentAlertNotification,
+					warn: (message, error) => logger.warn(message, error),
+				},
+			}).then((result) => {
+				if (!result) return;
+				onPosted?.(result.shouldAdvanceCursor);
+				const postRetryKey = JSON.stringify([key, event.id]);
+				if (result.posted) {
+					postRetryAttemptsRef.current.delete(postRetryKey);
+					const timer = postRetryTimersRef.current.get(postRetryKey);
+					if (timer) {
+						clearTimeout(timer);
+						postRetryTimersRef.current.delete(postRetryKey);
+					}
+				}
 				const postWithCurrentTarget = (current: {
 					key: string;
 					notificationId: number;
@@ -395,26 +415,46 @@ export function AgentNotificationBridgeManager({
 					) {
 						return;
 					}
-					postPendingNotification({
-						...current,
-						targetKey: currentTarget.key,
-						connectionId: currentTarget.connection.connectionId,
-						channelId: currentTarget.channelId,
-						notificationConnectionId: currentTarget.notificationConnectionId,
-					});
+						postPendingNotification({
+							...current,
+							targetKey: currentTarget.key,
+							connectionId: currentTarget.connection.connectionId,
+							channelId: currentTarget.channelId,
+							notificationConnectionId: currentTarget.notificationConnectionId,
+							onPosted,
+						});
 				};
-				if (result.type === 'cancel-posted') {
-					void cancelAgentAlertNotification(result.notificationId);
+				if (result.completion.type === 'failed') {
+					if (postRetryTimersRef.current.has(postRetryKey)) return;
+					const attempt = postRetryAttemptsRef.current.get(postRetryKey) ?? 0;
+					if (attempt >= AGENT_NOTIFICATION_MAX_POST_RETRY_ATTEMPTS) {
+						logger.warn('agent notification post retry budget exhausted', {
+							eventId: event.id,
+						});
+						return;
+					}
+					const delayMs =
+						POST_RETRY_DELAYS_MS[
+							Math.min(attempt, POST_RETRY_DELAYS_MS.length - 1)
+						] ?? 0;
+					postRetryAttemptsRef.current.set(postRetryKey, attempt + 1);
+					const timer = setTimeout(() => {
+						postRetryTimersRef.current.delete(postRetryKey);
+						const current = dedupeRef.current.getPendingEvent(key);
+						if (!current || current.event.id !== event.id) return;
+						postWithCurrentTarget(current);
+					}, delayMs);
+					postRetryTimersRef.current.set(postRetryKey, timer);
 					return;
 				}
-				if (shouldRestartAgentNotificationListenerAfterPost(result)) {
-					scheduleRestart('notification-post-failure');
+				if (result.completion.type === 'cancel-posted') {
+					void cancelAgentAlertNotification(result.completion.notificationId);
 					return;
 				}
 				const current =
-					result.type === 'superseded' && posted
-						? result.current
-						: posted && targetRef.current?.key !== targetKey
+					result.completion.type === 'superseded' && result.posted
+						? result.completion.current
+						: result.posted && targetRef.current?.key !== targetKey
 							? dedupeRef.current.getPendingEvent(key)
 							: null;
 				if (current) {
@@ -422,7 +462,7 @@ export function AgentNotificationBridgeManager({
 				}
 			});
 		},
-		[scheduleRestart],
+		[],
 	);
 
 	const startListener = React.useCallback(async () => {
@@ -612,39 +652,22 @@ export function AgentNotificationBridgeManager({
 
 	React.useEffect(() => {
 		if (Platform.OS !== 'android') return;
-		globalThis.__FRESSH_AGENT_NOTIFICATIONS__ = {
+		return setAgentNotificationBridgeApi({
 			acknowledge: (
 				connectionId: string,
 				session: string,
 				windowId: string,
 			) => {
-				const ids = dedupeRef.current.acknowledgeMatching((key) =>
+				return dedupeRef.current.acknowledgeMatching((key) =>
 					matchesAgentNotificationPendingKey(key, {
 						connectionId,
 						session,
 						windowId,
 					}),
 				);
-				for (const id of ids) void cancelAgentAlertNotification(id);
 			},
-		};
-
-		return () => {
-			delete globalThis.__FRESSH_AGENT_NOTIFICATIONS__;
-		};
+		});
 	}, []);
 
 	return null;
-}
-
-declare global {
-	var __FRESSH_AGENT_NOTIFICATIONS__:
-		| {
-				acknowledge: (
-					connectionId: string,
-					session: string,
-					windowId: string,
-				) => void;
-		  }
-		| undefined;
 }

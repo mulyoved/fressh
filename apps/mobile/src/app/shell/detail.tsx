@@ -42,6 +42,10 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
+	acknowledgeRoutedAgentNotification,
+	hasAuthorizedAgentNotificationRouteToken,
+} from '@/lib/agent-notification-route-api';
+import {
 	acknowledgeVisibleAgentNotification as acknowledgeVisibleAgentNotificationIfVisible,
 	handleAgentNotificationRoute,
 	subscribeAgentNotificationPending,
@@ -458,6 +462,7 @@ function ShellDetail() {
 		agentSession?: string;
 		agentWindowId?: string;
 		agentEventId?: string;
+		agentTapToken?: string;
 		tmuxError?: string;
 		tmuxSessionName?: string;
 		storedConnectionId?: string;
@@ -473,6 +478,7 @@ function ShellDetail() {
 	const agentSession = searchParams.agentSession?.trim() || null;
 	const agentWindowId = searchParams.agentWindowId?.trim() || null;
 	const agentEventId = searchParams.agentEventId?.trim() || null;
+	const agentTapToken = searchParams.agentTapToken?.trim() || null;
 	const tmuxSessionName = searchParams.tmuxSessionName;
 
 	const router = useRouter();
@@ -484,11 +490,11 @@ function ShellDetail() {
 		(s) => s.shells[`${connectionId}-${channelId}` as const],
 	);
 	const connection = useSshStore((s) => s.connections[connectionId]);
+	const connectionStoredConnectionId = connection
+		? getStoredConnectionId(connection.connectionDetails)
+		: undefined;
 	const storedConnectionId =
-		searchParams.storedConnectionId ??
-		(connection
-			? getStoredConnectionId(connection.connectionDetails)
-			: undefined);
+		searchParams.storedConnectionId ?? connectionStoredConnectionId;
 	const isAutoConnecting = useAutoConnectStore((s) => s.isAutoConnecting);
 	const isReconnecting = useAutoConnectStore((s) => s.isReconnecting);
 	const [tmuxTarget, setTmuxTarget] = useState(
@@ -2118,23 +2124,21 @@ fi
 	useEffect(() => {
 		void handleAgentNotificationRoute({
 			agentConnectionId,
-			storedConnectionId,
+			storedConnectionId: connectionStoredConnectionId,
 			agentSession,
 			agentWindowId,
 			agentEventId,
+			agentTapToken,
 			tmuxTarget,
 			isRouteHandled: (routeKey) =>
 				handledAgentAlertRouteRef.current === routeKey,
 			markRouteHandled: (routeKey) => {
 				handledAgentAlertRouteRef.current = routeKey;
 			},
+			hasAuthorizedRouteToken: hasAuthorizedAgentNotificationRouteToken,
 			runCommand: runHostBrowserCommand,
 			acknowledge: (connectionId, session, windowId) => {
-				globalThis.__FRESSH_AGENT_NOTIFICATIONS__?.acknowledge(
-					connectionId,
-					session,
-					windowId,
-				);
+				acknowledgeRoutedAgentNotification(connectionId, session, windowId);
 			},
 			warn: (message, error) => {
 				logger.warn(message, error);
@@ -2144,16 +2148,17 @@ fi
 		agentConnectionId,
 		agentEventId,
 		agentSession,
+		agentTapToken,
 		agentWindowId,
+		connectionStoredConnectionId,
 		runHostBrowserCommand,
-		storedConnectionId,
 		tmuxTarget,
 	]);
 
 	const acknowledgeVisibleAgentNotification = useCallback(async () => {
 		await acknowledgeVisibleAgentNotificationIfVisible({
 			platformOS: Platform.OS,
-			connectionId: storedConnectionId ?? null,
+			connectionId: connectionStoredConnectionId ?? null,
 			channelId,
 			tmuxEnabled,
 			tmuxTarget,
@@ -2168,21 +2173,15 @@ fi
 			isCurrentRequest: (requestId) =>
 				requestId === agentNotificationAckRequestIdRef.current,
 			runCommand: runHostBrowserCommand,
-			acknowledge: (connectionId, session, windowId) => {
-				globalThis.__FRESSH_AGENT_NOTIFICATIONS__?.acknowledge(
-					connectionId,
-					session,
-					windowId,
-				);
-			},
+			acknowledge: acknowledgeRoutedAgentNotification,
 			warn: (message, error) => {
 				logger.warn(message, error);
 			},
 		});
 	}, [
 		channelId,
+		connectionStoredConnectionId,
 		runHostBrowserCommand,
-		storedConnectionId,
 		tmuxEnabled,
 		tmuxTarget,
 	]);
@@ -2196,7 +2195,7 @@ fi
 	useLayoutEffect(() => {
 		isFocusedRef.current = isFocused;
 		visibleConnectionIdRef.current = isFocused
-			? (storedConnectionId ?? null)
+			? (connectionStoredConnectionId ?? null)
 			: null;
 		visibleChannelIdRef.current = isFocused ? channelId : null;
 		visibleTmuxTargetRef.current = tmuxTarget.trim() || 'main';
@@ -2207,8 +2206,8 @@ fi
 	}, [
 		acknowledgeVisibleAgentNotification,
 		channelId,
+		connectionStoredConnectionId,
 		isFocused,
-		storedConnectionId,
 		tmuxTarget,
 	]);
 

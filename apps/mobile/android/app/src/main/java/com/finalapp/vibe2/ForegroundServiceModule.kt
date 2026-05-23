@@ -47,6 +47,7 @@ class ForegroundServiceModule(
     target: String,
     windowId: String,
     eventId: String,
+    tapToken: String,
     promise: Promise
   ) {
     try {
@@ -61,7 +62,8 @@ class ForegroundServiceModule(
         session,
         target,
         windowId,
-        eventId
+        eventId,
+        tapToken
       )
       promise.resolve(null)
     } catch (e: Exception) {

@@ -1,3 +1,4 @@
+import { createAgentNotificationRouteIdentityKey } from './agent-notification-route-identity';
 import { buildTmuxCurrentWindowIdCommand } from './host-browser-actions';
 import { rootLogger } from './logger';
 import { buildTmuxSelectWindowCommand } from './tmux-scrollback';
@@ -36,9 +37,17 @@ export type AgentNotificationRouteOptions = {
 	agentSession: string | null;
 	agentWindowId: string | null;
 	agentEventId: string | null;
+	agentTapToken: string | null;
 	tmuxTarget: string;
 	isRouteHandled: (routeKey: string) => boolean;
 	markRouteHandled: (routeKey: string) => void;
+	hasAuthorizedRouteToken: (
+		connectionId: string,
+		session: string,
+		windowId: string,
+		eventId: string,
+		tapToken: string,
+	) => boolean;
 	runCommand: (command: string, timeoutMs: number) => Promise<string>;
 	acknowledge: (
 		connectionId: string,
@@ -81,26 +90,59 @@ export async function handleAgentNotificationRoute({
 	agentSession,
 	agentWindowId,
 	agentEventId,
+	agentTapToken,
 	tmuxTarget,
 	isRouteHandled,
 	markRouteHandled,
+	hasAuthorizedRouteToken,
 	runCommand,
 	acknowledge,
 	warn,
 }: AgentNotificationRouteOptions) {
 	const notificationConnectionId = agentConnectionId || storedConnectionId;
-	if (!agentWindowId || !notificationConnectionId) return false;
+	if (!agentWindowId || !notificationConnectionId) {
+		return false;
+	}
+	if (
+		agentConnectionId &&
+		storedConnectionId &&
+		agentConnectionId !== storedConnectionId
+	) {
+		return false;
+	}
 	const session = agentSession || tmuxTarget.trim() || 'main';
-	const routeKey = [
-		notificationConnectionId,
+	if (!agentEventId || !agentTapToken) {
+		return false;
+	}
+	const routeKey = createAgentNotificationRouteIdentityKey({
+		connectionId: notificationConnectionId,
 		session,
-		agentWindowId,
-		agentEventId || 'legacy',
-	].join(':');
+		windowId: agentWindowId,
+		eventId: agentEventId,
+	});
 	if (isRouteHandled(routeKey)) return false;
+	let hasPending = false;
+	try {
+		hasPending = hasAuthorizedRouteToken(
+			notificationConnectionId,
+			session,
+			agentWindowId,
+			agentEventId,
+			agentTapToken,
+		);
+	} catch (error) {
+		warn('failed to check agent notification route token', error);
+		return false;
+	}
+	if (!hasPending) {
+		return false;
+	}
 
 	try {
-		await runCommand(buildTmuxSelectWindowCommand(session, agentWindowId), 10_000);
+		await runCommand(
+			buildTmuxSelectWindowCommand(session, agentWindowId),
+			10_000,
+		);
 		markRouteHandled(routeKey);
 		acknowledge(notificationConnectionId, session, agentWindowId);
 		return true;

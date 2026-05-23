@@ -5,12 +5,33 @@ import {
 	buildAgentNotificationListenCommand,
 	createAgentNotificationPendingKey,
 	createStableNotificationId,
+	getAgentAlertNotificationText,
 	handleAgentNotificationEvent,
 	matchesAgentNotificationPendingKey,
 	parseAgentNotificationLine,
 	shouldAdvanceAgentNotificationCursorAfterPost,
-	shouldRestartAgentNotificationListenerAfterPost,
 } from '../../src/lib/agent-notification-events';
+
+void test('agent alert notification text avoids window identity', () => {
+	assert.deepEqual(
+		getAgentAlertNotificationText({
+			id: 'main:@12:1000:waiting',
+			type: 'tmux_status',
+			session: 'main',
+			target: 'main:4',
+			windowId: '@12',
+			windowIndex: '4',
+			windowName: 'secret-project',
+			status: 'waiting',
+			icon: '💬',
+			createdAtMs: 1000,
+		}),
+		{
+			title: 'Agent waiting',
+			message: 'Agent status changed',
+		},
+	);
+});
 
 void test('parseAgentNotificationLine accepts tmux status events and heartbeats', () => {
 	assert.deepEqual(
@@ -343,17 +364,6 @@ void test('post completion advances cursor for visible acknowledgement race', ()
 	);
 });
 
-void test('failed notification post schedules listener restart', () => {
-	assert.equal(
-		shouldRestartAgentNotificationListenerAfterPost({ type: 'failed' }),
-		true,
-	);
-	assert.equal(
-		shouldRestartAgentNotificationListenerAfterPost({ type: 'posted' }),
-		false,
-	);
-});
-
 void test('handleAgentNotificationEvent signals and handles new pending events once', () => {
 	const dedupe = new AgentNotificationDedupe();
 	const event = {
@@ -561,6 +571,98 @@ void test('dedupe ignores duplicate current failure while another current post i
 		},
 	);
 	assert.deepEqual(dedupe.acknowledge(key), [notificationId]);
+});
+
+void test('dedupe retries unposted current event after stale notification update fails', () => {
+	const dedupe = new AgentNotificationDedupe();
+	const key = createAgentNotificationPendingKey({
+		connectionId: 'conn-1',
+		session: 'main',
+		windowId: '@12',
+	});
+	const notificationId = createStableNotificationId(key);
+	const waitingEvent = {
+		id: 'main:@12:1000:waiting',
+		type: 'tmux_status' as const,
+		session: 'main',
+		target: 'main:4',
+		windowId: '@12',
+		windowIndex: '4',
+		windowName: 'fressh',
+		status: 'waiting' as const,
+		icon: '💬' as const,
+		createdAtMs: 1000,
+	};
+	const doneEvent = {
+		...waitingEvent,
+		id: 'main:@12:2000:done',
+		status: 'done' as const,
+		icon: '✅' as const,
+		createdAtMs: 2000,
+	};
+
+	assert.equal(
+		dedupe.markPendingEvent(key, notificationId, waitingEvent),
+		true,
+	);
+	const waitingAttemptId = dedupe.beginPost(key, waitingEvent.id);
+	assert.equal(waitingAttemptId, 1);
+	assert.deepEqual(
+		dedupe.completePost(key, waitingEvent.id, waitingAttemptId!, true),
+		{
+			type: 'posted',
+		},
+	);
+	assert.equal(dedupe.markPendingEvent(key, notificationId, doneEvent), true);
+	const doneAttemptId = dedupe.beginPost(key, doneEvent.id);
+	assert.equal(doneAttemptId, 1);
+	assert.deepEqual(
+		dedupe.completePost(key, doneEvent.id, doneAttemptId!, false),
+		{
+			type: 'failed',
+		},
+	);
+	assert.deepEqual(dedupe.getPendingEvent(key), {
+		key,
+		notificationId,
+		event: doneEvent,
+	});
+	assert.equal(dedupe.markPendingEvent(key, notificationId, doneEvent), true);
+});
+
+void test('dedupe keeps initially failed events pending for local repost', () => {
+	const dedupe = new AgentNotificationDedupe();
+	const key = createAgentNotificationPendingKey({
+		connectionId: 'conn-1',
+		session: 'main',
+		windowId: '@12',
+	});
+	const notificationId = createStableNotificationId(key);
+	const event = {
+		id: 'main:@12:2000:done',
+		type: 'tmux_status' as const,
+		session: 'main',
+		target: 'main:4',
+		windowId: '@12',
+		windowIndex: '4',
+		windowName: 'fressh',
+		status: 'done' as const,
+		icon: '✅' as const,
+		createdAtMs: 2000,
+	};
+
+	assert.equal(dedupe.markPendingEvent(key, notificationId, event), true);
+	const attemptId = dedupe.beginPost(key, event.id);
+	assert.equal(attemptId, 1);
+	assert.deepEqual(dedupe.completePost(key, event.id, attemptId!, false), {
+		type: 'failed',
+	});
+	assert.deepEqual(dedupe.getPendingEvent(key), {
+		key,
+		notificationId,
+		event,
+	});
+	assert.equal(dedupe.markPendingEvent(key, notificationId, event), true);
 });
 
 void test('dedupe restores current event when stale post completes after current post', () => {
