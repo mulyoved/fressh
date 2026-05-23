@@ -40,6 +40,16 @@ export function shouldClearPendingAgentNotifications(input: {
 	return !input.hasListenerTarget && !input.hasConfiguredTarget;
 }
 
+export function shouldClearPendingAgentNotificationsForResumeKeyChange(input: {
+	previousResumeKey: string | null;
+	nextResumeKey: string | null;
+}) {
+	return (
+		input.previousResumeKey !== null &&
+		input.previousResumeKey !== input.nextResumeKey
+	);
+}
+
 export type ForegroundServiceStartRequest = {
 	id: number;
 	key: string;

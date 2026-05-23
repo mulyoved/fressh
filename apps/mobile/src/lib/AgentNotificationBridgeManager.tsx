@@ -16,6 +16,7 @@ import {
 import {
 	canRunAgentNotificationBridge,
 	shouldClearPendingAgentNotifications,
+	shouldClearPendingAgentNotificationsForResumeKeyChange,
 	useForegroundServiceRuntimeStore,
 } from './agent-notification-runtime';
 import { notifyAgentNotificationPending } from './agent-notification-visibility';
@@ -81,7 +82,7 @@ export function AgentNotificationBridgeManager() {
 	const startListenerRef = React.useRef<(() => Promise<void>) | null>(null);
 	const lastSeenIdByTargetRef = React.useRef(new Map<string, string>());
 	const previousTargetKeyRef = React.useRef<string | null>(null);
-	const previousConfiguredTargetKeyRef = React.useRef<string | null>(null);
+	const previousConfiguredResumeKeyRef = React.useRef<string | null>(null);
 	const [settingsByConnectionId, setSettingsByConnectionId] = React.useState<
 		Record<string, SessionSettings>
 	>({});
@@ -434,16 +435,19 @@ export function AgentNotificationBridgeManager() {
 
 	React.useEffect(() => {
 		targetRef.current = target;
-		const configuredTargetKey = configuredTarget?.key ?? null;
-		if (configuredTargetKey !== previousConfiguredTargetKeyRef.current) {
-			if (previousConfiguredTargetKeyRef.current !== null) {
-				clearPendingNotifications();
-			}
-			previousConfiguredTargetKeyRef.current = configuredTargetKey;
+		const configuredResumeKey = configuredTarget?.resumeKey ?? null;
+		if (
+			shouldClearPendingAgentNotificationsForResumeKeyChange({
+				previousResumeKey: previousConfiguredResumeKeyRef.current,
+				nextResumeKey: configuredResumeKey,
+			})
+		) {
+			clearPendingNotifications();
 		}
-		if (configuredTargetKey !== previousTargetKeyRef.current) {
+		previousConfiguredResumeKeyRef.current = configuredResumeKey;
+		if (target?.key !== previousTargetKeyRef.current) {
 			restartAttemptRef.current = 0;
-			previousTargetKeyRef.current = configuredTargetKey;
+			previousTargetKeyRef.current = target?.key ?? null;
 		}
 
 		if (Platform.OS !== 'android') return;

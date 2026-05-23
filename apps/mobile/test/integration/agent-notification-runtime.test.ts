@@ -5,6 +5,7 @@ import {
 	canRunAndroidBackgroundWork,
 	createForegroundServiceStartCoordinator,
 	shouldClearPendingAgentNotifications,
+	shouldClearPendingAgentNotificationsForResumeKeyChange,
 } from '../../src/lib/agent-notification-runtime';
 
 void test('agent notification bridge runs while the Android app is active', () => {
@@ -119,6 +120,40 @@ void test('missing configured target clears pending agent notifications', () => 
 		shouldClearPendingAgentNotifications({
 			hasListenerTarget: true,
 			hasConfiguredTarget: true,
+		}),
+		false,
+	);
+});
+
+void test('shell-only listener target changes do not clear pending agent notifications', () => {
+	assert.equal(
+		shouldClearPendingAgentNotificationsForResumeKeyChange({
+			previousResumeKey: 'conn-1:main',
+			nextResumeKey: 'conn-1:main',
+		}),
+		false,
+	);
+});
+
+void test('resume target changes clear pending agent notifications', () => {
+	assert.equal(
+		shouldClearPendingAgentNotificationsForResumeKeyChange({
+			previousResumeKey: 'conn-1:main',
+			nextResumeKey: 'conn-2:main',
+		}),
+		true,
+	);
+	assert.equal(
+		shouldClearPendingAgentNotificationsForResumeKeyChange({
+			previousResumeKey: 'conn-1:main',
+			nextResumeKey: null,
+		}),
+		true,
+	);
+	assert.equal(
+		shouldClearPendingAgentNotificationsForResumeKeyChange({
+			previousResumeKey: null,
+			nextResumeKey: 'conn-1:main',
 		}),
 		false,
 	);
