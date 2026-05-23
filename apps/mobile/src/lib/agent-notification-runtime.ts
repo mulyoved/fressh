@@ -18,6 +18,34 @@ export function canRunAndroidBackgroundWork(input: {
 	return input.platformOS === 'android' && input.foregroundServiceStarted;
 }
 
+export function shouldRunForegroundService(input: {
+	shellCount: number;
+	isAutoConnecting: boolean;
+	isReconnecting: boolean;
+}) {
+	return input.shellCount > 0 || input.isAutoConnecting || input.isReconnecting;
+}
+
+export function shouldPreserveForegroundServiceForShellDrop(input: {
+	platformOS: string;
+	appActive: boolean;
+	backgroundWorkAllowed: boolean;
+	previousShellCount: number;
+	nextShellCount: number;
+	isAutoConnecting: boolean;
+	isReconnecting: boolean;
+}) {
+	return (
+		input.platformOS === 'android' &&
+		!input.appActive &&
+		input.backgroundWorkAllowed &&
+		input.previousShellCount > 0 &&
+		input.nextShellCount === 0 &&
+		!input.isAutoConnecting &&
+		!input.isReconnecting
+	);
+}
+
 export function canRunAgentNotificationBridge(input: {
 	platformOS: string;
 	appActive: boolean;

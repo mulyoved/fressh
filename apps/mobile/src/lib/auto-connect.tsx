@@ -7,6 +7,8 @@ import { useShallow } from 'zustand/react/shallow';
 import {
 	canRunAndroidBackgroundWork,
 	createForegroundServiceStartCoordinator,
+	shouldPreserveForegroundServiceForShellDrop,
+	shouldRunForegroundService,
 	useForegroundServiceRuntimeStore,
 } from './agent-notification-runtime';
 import { AgentNotificationBridgeManager } from './AgentNotificationBridgeManager';
@@ -347,9 +349,26 @@ export function AutoConnectManager() {
 
 	React.useEffect(() => {
 		if (Platform.OS !== 'android') return;
-		const shouldRunService = shells.length > 0;
+		const shouldRunService = shouldRunForegroundService({
+			shellCount: shells.length,
+			isAutoConnecting,
+			isReconnecting,
+		});
 
 		if (!shouldRunService) {
+			if (
+				shouldPreserveForegroundServiceForShellDrop({
+					platformOS: Platform.OS,
+					appActive: isActiveRef.current,
+					backgroundWorkAllowed: allowBackgroundRef.current,
+					previousShellCount: prevShellCountRef.current,
+					nextShellCount: shells.length,
+					isAutoConnecting,
+					isReconnecting,
+				})
+			) {
+				return;
+			}
 			foregroundStartCoordinatorRef.current.invalidate();
 			setForegroundServiceStarted(false);
 			if (foregroundKeyRef.current !== null) {

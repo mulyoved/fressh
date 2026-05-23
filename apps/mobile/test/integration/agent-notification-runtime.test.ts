@@ -4,6 +4,8 @@ import {
 	canRunAgentNotificationBridge,
 	canRunAndroidBackgroundWork,
 	createForegroundServiceStartCoordinator,
+	shouldPreserveForegroundServiceForShellDrop,
+	shouldRunForegroundService,
 	shouldClearPendingAgentNotifications,
 	shouldClearPendingAgentNotificationsForResumeKeyChange,
 } from '../../src/lib/agent-notification-runtime';
@@ -57,6 +59,79 @@ void test('Android background work is allowed only after foreground service star
 		canRunAndroidBackgroundWork({
 			platformOS: 'ios',
 			foregroundServiceStarted: true,
+		}),
+		false,
+	);
+});
+
+void test('foreground service keeps running while reconnecting without shells', () => {
+	assert.equal(
+		shouldRunForegroundService({
+			shellCount: 0,
+			isAutoConnecting: false,
+			isReconnecting: true,
+		}),
+		true,
+	);
+	assert.equal(
+		shouldRunForegroundService({
+			shellCount: 0,
+			isAutoConnecting: false,
+			isReconnecting: false,
+		}),
+		false,
+	);
+});
+
+void test('background shell drop preserves foreground service until reconnect scheduling runs', () => {
+	assert.equal(
+		shouldPreserveForegroundServiceForShellDrop({
+			platformOS: 'android',
+			appActive: false,
+			backgroundWorkAllowed: true,
+			previousShellCount: 1,
+			nextShellCount: 0,
+			isAutoConnecting: false,
+			isReconnecting: false,
+		}),
+		true,
+	);
+});
+
+void test('foreground service is not preserved for unsupported shell drops', () => {
+	assert.equal(
+		shouldPreserveForegroundServiceForShellDrop({
+			platformOS: 'android',
+			appActive: false,
+			backgroundWorkAllowed: false,
+			previousShellCount: 1,
+			nextShellCount: 0,
+			isAutoConnecting: false,
+			isReconnecting: false,
+		}),
+		false,
+	);
+	assert.equal(
+		shouldPreserveForegroundServiceForShellDrop({
+			platformOS: 'ios',
+			appActive: false,
+			backgroundWorkAllowed: true,
+			previousShellCount: 1,
+			nextShellCount: 0,
+			isAutoConnecting: false,
+			isReconnecting: false,
+		}),
+		false,
+	);
+	assert.equal(
+		shouldPreserveForegroundServiceForShellDrop({
+			platformOS: 'android',
+			appActive: false,
+			backgroundWorkAllowed: true,
+			previousShellCount: 0,
+			nextShellCount: 0,
+			isAutoConnecting: false,
+			isReconnecting: false,
 		}),
 		false,
 	);
