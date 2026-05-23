@@ -36,6 +36,8 @@ class ForegroundServiceModule(
     title: String,
     message: String,
     connectionId: String,
+    channelId: Int,
+    notificationConnectionId: String,
     session: String,
     target: String,
     windowId: String,
@@ -48,6 +50,8 @@ class ForegroundServiceModule(
         title,
         message,
         connectionId,
+        channelId,
+        notificationConnectionId,
         session,
         target,
         windowId

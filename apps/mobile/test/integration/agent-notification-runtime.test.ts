@@ -4,6 +4,8 @@ import {
 	canRunAgentNotificationBridge,
 	canRunAndroidBackgroundWork,
 	createForegroundServiceStartCoordinator,
+	getNextConfiguredResumeKey,
+	shouldPreservePendingWithoutConfiguredTarget,
 	shouldPreservePendingWithoutTarget,
 	shouldPreserveForegroundServiceForShellDrop,
 	shouldRunForegroundService,
@@ -263,6 +265,36 @@ void test('missing configured target preserves pending agent notifications durin
 	);
 });
 
+void test('missing configured target preserves pending agent notifications while shell settings load', () => {
+	assert.equal(
+		shouldPreservePendingWithoutConfiguredTarget({
+			reconnectExpected: false,
+			hasShell: true,
+			hasConnection: true,
+			settingsLoaded: false,
+		}),
+		true,
+	);
+	assert.equal(
+		shouldPreservePendingWithoutConfiguredTarget({
+			reconnectExpected: false,
+			hasShell: true,
+			hasConnection: true,
+			settingsLoaded: true,
+		}),
+		false,
+	);
+	assert.equal(
+		shouldPreservePendingWithoutConfiguredTarget({
+			reconnectExpected: true,
+			hasShell: false,
+			hasConnection: false,
+			settingsLoaded: false,
+		}),
+		true,
+	);
+});
+
 void test('shell-only listener target changes do not clear pending agent notifications', () => {
 	assert.equal(
 		shouldClearPendingAgentNotificationsForResumeKeyChange({
@@ -305,5 +337,32 @@ void test('transient missing resume target does not clear pending agent notifica
 			reconnectExpected: true,
 		}),
 		false,
+	);
+});
+
+void test('transient reconnect keeps the last non-null resume key for the next comparison', () => {
+	assert.equal(
+		getNextConfiguredResumeKey({
+			previousResumeKey: 'saved-host:main',
+			nextResumeKey: null,
+			reconnectExpected: true,
+		}),
+		'saved-host:main',
+	);
+	assert.equal(
+		getNextConfiguredResumeKey({
+			previousResumeKey: 'saved-host:main',
+			nextResumeKey: 'other-host:main',
+			reconnectExpected: true,
+		}),
+		'other-host:main',
+	);
+	assert.equal(
+		getNextConfiguredResumeKey({
+			previousResumeKey: 'saved-host:main',
+			nextResumeKey: null,
+			reconnectExpected: false,
+		}),
+		null,
 	);
 });

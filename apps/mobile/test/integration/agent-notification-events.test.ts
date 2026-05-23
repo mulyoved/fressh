@@ -614,6 +614,33 @@ void test('dedupe cancels native post that completes after acknowledgement', () 
 	});
 });
 
+void test('dedupe exposes current pending events for route refresh after reconnect', () => {
+	const dedupe = new AgentNotificationDedupe();
+	const key = createAgentNotificationPendingKey({
+		connectionId: 'saved-host',
+		session: 'main',
+		windowId: '@12',
+	});
+	const notificationId = createStableNotificationId(key);
+	const event = {
+		id: 'main:@12:2000:done',
+		type: 'tmux_status' as const,
+		session: 'main',
+		target: 'main:4',
+		windowId: '@12',
+		windowIndex: '4',
+		windowName: 'fressh',
+		status: 'done' as const,
+		icon: '✅' as const,
+		createdAtMs: 2000,
+	};
+
+	assert.equal(dedupe.markPendingEvent(key, notificationId, event), true);
+	assert.deepEqual(dedupe.getPendingEvents(), [{ key, notificationId, event }]);
+	assert.deepEqual(dedupe.acknowledge(key), [notificationId]);
+	assert.deepEqual(dedupe.getPendingEvents(), []);
+});
+
 void test('dedupe cancels native post that completes after pending state is cleared', () => {
 	const dedupe = new AgentNotificationDedupe();
 	const key = createAgentNotificationPendingKey({

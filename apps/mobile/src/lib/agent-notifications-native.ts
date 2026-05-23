@@ -8,6 +8,8 @@ type AgentNotificationsNativeModule = {
 		title: string,
 		message: string,
 		connectionId: string,
+		channelId: number,
+		notificationConnectionId: string,
 		session: string,
 		target: string,
 		windowId: string,
@@ -20,6 +22,8 @@ type AgentAlertNotificationInput = {
 	title: string;
 	message: string;
 	connectionId: string;
+	channelId: number;
+	notificationConnectionId: string;
 	session: string;
 	target: string;
 	windowId: string;
@@ -64,6 +68,8 @@ export function createAgentNotificationsNativeWrapper({
 					input.title,
 					input.message,
 					input.connectionId,
+					input.channelId,
+					input.notificationConnectionId,
 					input.session,
 					input.target,
 					input.windowId,

@@ -301,6 +301,27 @@ export class AgentNotificationDedupe {
 		this.pending.clear();
 		return ids;
 	}
+
+	getPendingEvents(): {
+		key: string;
+		notificationId: number;
+		event: AgentNotificationEvent;
+	}[] {
+		const events: {
+			key: string;
+			notificationId: number;
+			event: AgentNotificationEvent;
+		}[] = [];
+		for (const [key, pending] of this.pending) {
+			if (!pending.event) continue;
+			events.push({
+				key,
+				notificationId: pending.notificationId,
+				event: pending.event,
+			});
+		}
+		return events;
+	}
 }
 
 export type HandleAgentNotificationEventInput = {

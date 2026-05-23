@@ -15,8 +15,10 @@ import {
 } from './agent-notification-events';
 import {
 	canRunAgentNotificationBridge,
+	getNextConfiguredResumeKey,
 	shouldClearPendingAgentNotifications,
 	shouldClearPendingAgentNotificationsForResumeKeyChange,
+	shouldPreservePendingWithoutConfiguredTarget,
 	useForegroundServiceRuntimeStore,
 } from './agent-notification-runtime';
 import { notifyAgentNotificationPending } from './agent-notification-visibility';
@@ -42,9 +44,11 @@ type ListenerTarget = {
 	key: string;
 	resumeKey: string;
 	shellKey: string;
+	channelId: number;
 	connection: NonNullable<
 		ReturnType<typeof useSshStore.getState>['connections'][string]
 	>;
+	notificationConnectionId: string;
 	session: string;
 };
 
@@ -119,16 +123,21 @@ export function AgentNotificationBridgeManager({
 		: undefined;
 	const session = settings?.session ?? 'main';
 	const configuredTarget = React.useMemo<ListenerTarget | null>(() => {
-		if (!connection || !latestShellKey) return null;
+		if (!connection || !latestShell || !latestShellKey) return null;
 		if (!settings?.loaded || !settings.useTmux) return null;
+		const notificationConnectionId = getStoredConnectionId(
+			connection.connectionDetails,
+		);
 		return {
 			key: `${connection.connectionId}:${latestShellKey}:${session}`,
-			resumeKey: `${connection.connectionId}:${session}`,
+			resumeKey: `${notificationConnectionId}:${session}`,
 			shellKey: latestShellKey,
+			channelId: latestShell.channelId,
 			connection,
+			notificationConnectionId,
 			session,
 		};
-	}, [connection, latestShellKey, session, settings]);
+	}, [connection, latestShell, latestShellKey, session, settings]);
 	const target = runtimeAllowed ? configuredTarget : null;
 
 	React.useEffect(() => {
@@ -293,8 +302,17 @@ export function AgentNotificationBridgeManager({
 			notificationId: number;
 			event: AgentNotificationEvent;
 			connectionId: string;
+			channelId: number;
+			notificationConnectionId: string;
 		}) => {
-			const { key, notificationId, event, connectionId } = input;
+			const {
+				key,
+				notificationId,
+				event,
+				connectionId,
+				channelId,
+				notificationConnectionId,
+			} = input;
 			const attemptId = dedupeRef.current.beginPost(key, event.id);
 			if (attemptId === null) return;
 			void postAgentAlertNotification({
@@ -302,6 +320,8 @@ export function AgentNotificationBridgeManager({
 				title: event.status === 'waiting' ? 'Agent waiting' : 'Agent done',
 				message: `${event.windowName || event.target} needs attention`,
 				connectionId,
+				channelId,
+				notificationConnectionId,
 				session: event.session,
 				target: event.target,
 				windowId: event.windowId,
@@ -320,6 +340,8 @@ export function AgentNotificationBridgeManager({
 					postPendingNotification({
 						...result.current,
 						connectionId,
+						channelId,
+						notificationConnectionId,
 					});
 				}
 			});
@@ -369,7 +391,7 @@ export function AgentNotificationBridgeManager({
 					lastSeenIdByTargetRef.current.set(activeTarget.resumeKey, parsed.id);
 					handleAgentNotificationEvent({
 						event: parsed,
-						connectionId: activeTarget.connection.connectionId,
+						connectionId: activeTarget.notificationConnectionId,
 						dedupe: dedupeRef.current,
 						notifyPending: notifyAgentNotificationPending,
 						onPending: ({ key, notificationId, event }) => {
@@ -378,6 +400,8 @@ export function AgentNotificationBridgeManager({
 								notificationId,
 								event,
 								connectionId: activeTarget.connection.connectionId,
+								channelId: activeTarget.channelId,
+								notificationConnectionId: activeTarget.notificationConnectionId,
 							});
 						},
 					});
@@ -440,17 +464,38 @@ export function AgentNotificationBridgeManager({
 	React.useEffect(() => {
 		targetRef.current = target;
 		const configuredResumeKey = configuredTarget?.resumeKey ?? null;
+		const preservePendingWithoutConfiguredTarget =
+			shouldPreservePendingWithoutConfiguredTarget({
+				reconnectExpected: preservePendingWithoutTarget,
+				hasShell: latestShell !== null,
+				hasConnection: connection !== undefined,
+				settingsLoaded: settings?.loaded === true,
+			});
 		if (
 			shouldClearPendingAgentNotificationsForResumeKeyChange({
 				previousResumeKey: previousConfiguredResumeKeyRef.current,
 				nextResumeKey: configuredResumeKey,
-				reconnectExpected: preservePendingWithoutTarget,
+				reconnectExpected: preservePendingWithoutConfiguredTarget,
 			})
 		) {
 			clearPendingNotifications();
 		}
-		previousConfiguredResumeKeyRef.current = configuredResumeKey;
+		previousConfiguredResumeKeyRef.current = getNextConfiguredResumeKey({
+			previousResumeKey: previousConfiguredResumeKeyRef.current,
+			nextResumeKey: configuredResumeKey,
+			reconnectExpected: preservePendingWithoutConfiguredTarget,
+		});
 		if (target?.key !== previousTargetKeyRef.current) {
+			if (target) {
+				for (const pending of dedupeRef.current.getPendingEvents()) {
+					postPendingNotification({
+						...pending,
+						connectionId: target.connection.connectionId,
+						channelId: target.channelId,
+						notificationConnectionId: target.notificationConnectionId,
+					});
+				}
+			}
 			restartAttemptRef.current = 0;
 			previousTargetKeyRef.current = target?.key ?? null;
 		}
@@ -461,7 +506,7 @@ export function AgentNotificationBridgeManager({
 				shouldClearPendingAgentNotifications({
 					hasListenerTarget: false,
 					hasConfiguredTarget: !!configuredTarget,
-					reconnectExpected: preservePendingWithoutTarget,
+					reconnectExpected: preservePendingWithoutConfiguredTarget,
 				})
 			) {
 				clearPendingNotifications();
@@ -482,8 +527,12 @@ export function AgentNotificationBridgeManager({
 		};
 	}, [
 		clearPendingNotifications,
+		connection,
 		configuredTarget,
+		latestShell,
+		postPendingNotification,
 		preservePendingWithoutTarget,
+		settings,
 		startListener,
 		stopAll,
 		target,

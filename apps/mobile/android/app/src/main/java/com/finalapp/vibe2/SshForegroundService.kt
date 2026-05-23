@@ -7,6 +7,7 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
@@ -73,7 +74,7 @@ class SshForegroundService : Service() {
       PowerManager.PARTIAL_WAKE_LOCK,
       WAKE_LOCK_TAG
     ).apply { setReferenceCounted(false) }
-    wakeLock?.acquire(WAKE_LOCK_TIMEOUT_MS)
+    wakeLock?.acquire()
   }
 
   private fun releaseWakeLock() {
@@ -95,12 +96,12 @@ class SshForegroundService : Service() {
     private const val AGENT_ALERT_CHANNEL_NAME = "Fressh Agent Alerts"
     private const val AGENT_ALERT_CHANNEL_DESCRIPTION = "Agent status notifications"
     private const val WAKE_LOCK_TAG = "Fressh::SshForegroundService"
-    private const val WAKE_LOCK_TIMEOUT_MS = 10 * 60 * 1000L
     private const val DEFAULT_TITLE = "Fressh Terminal"
     private const val DEFAULT_MESSAGE = "Keeping SSH connection alive"
     const val EXTRA_TITLE = "title"
     const val EXTRA_MESSAGE = "message"
     const val EXTRA_AGENT_CONNECTION_ID = "agentConnectionId"
+    const val EXTRA_AGENT_NOTIFICATION_CONNECTION_ID = "agentNotificationConnectionId"
     const val EXTRA_AGENT_SESSION = "agentSession"
     const val EXTRA_AGENT_TARGET = "agentTarget"
     const val EXTRA_AGENT_WINDOW_ID = "agentWindowId"
@@ -131,13 +132,25 @@ class SshForegroundService : Service() {
       title: String,
       message: String,
       connectionId: String,
+      channelId: Int,
+      notificationConnectionId: String,
       session: String,
       target: String,
       windowId: String
     ): Notification {
-      val intent = Intent(context, MainActivity::class.java).apply {
+      val route = Uri.Builder()
+        .scheme("fressh")
+        .path("/shell/detail")
+        .appendQueryParameter("connectionId", connectionId)
+        .appendQueryParameter("channelId", channelId.toString())
+        .appendQueryParameter("agentConnectionId", notificationConnectionId)
+        .appendQueryParameter("agentSession", session)
+        .appendQueryParameter("agentWindowId", windowId)
+        .build()
+      val intent = Intent(Intent.ACTION_VIEW, route, context, MainActivity::class.java).apply {
         flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
         putExtra(EXTRA_AGENT_CONNECTION_ID, connectionId)
+        putExtra(EXTRA_AGENT_NOTIFICATION_CONNECTION_ID, notificationConnectionId)
         putExtra(EXTRA_AGENT_SESSION, session)
         putExtra(EXTRA_AGENT_TARGET, target)
         putExtra(EXTRA_AGENT_WINDOW_ID, windowId)
@@ -154,7 +167,7 @@ class SshForegroundService : Service() {
         .setContentText(message)
         .setSmallIcon(R.mipmap.ic_launcher)
         .setContentIntent(pendingIntent)
-        .setAutoCancel(true)
+        .setAutoCancel(false)
         .setPriority(NotificationCompat.PRIORITY_DEFAULT)
         .build()
     }
@@ -178,6 +191,8 @@ class SshForegroundService : Service() {
       title: String,
       message: String,
       connectionId: String,
+      channelId: Int,
+      notificationConnectionId: String,
       session: String,
       target: String,
       windowId: String
@@ -190,6 +205,8 @@ class SshForegroundService : Service() {
         title,
         message,
         connectionId,
+        channelId,
+        notificationConnectionId,
         session,
         target,
         windowId

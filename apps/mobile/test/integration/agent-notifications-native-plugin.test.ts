@@ -86,6 +86,49 @@ async function generatedSshForegroundServiceSource() {
 	}
 }
 
+async function generatedAndroidManifestSource() {
+	const projectRoot = await mkdtemp(
+		path.join(os.tmpdir(), 'fressh-foreground-service-plugin-'),
+	);
+
+	try {
+		await mkdir(path.join(projectRoot, 'android/app/src/main'), {
+			recursive: true,
+		});
+		await writeFile(
+			path.join(projectRoot, 'android/app/src/main/AndroidManifest.xml'),
+			[
+				'<manifest xmlns:android="http://schemas.android.com/apk/res/android">',
+				'  <application android:name=".MainApplication">',
+				'    <service android:name=".SshForegroundService" android:stopWithTask="true" />',
+				'  </application>',
+				'</manifest>',
+			].join('\n'),
+			'utf8',
+		);
+
+		const config = withForegroundService({
+			name: 'Fressh Test Fixture',
+			slug: 'fressh-test-fixture',
+			android: {
+				package: 'com.finalapp.vibe2',
+			},
+		});
+
+		await compileModsAsync(config, {
+			projectRoot,
+			platforms: ['android'],
+		});
+
+		return await readFile(
+			path.join(projectRoot, 'android/app/src/main/AndroidManifest.xml'),
+			'utf8',
+		);
+	} finally {
+		await rm(projectRoot, { force: true, recursive: true });
+	}
+}
+
 async function agentNotificationsNativeSource() {
 	return readFile(
 		new URL('../../src/lib/agent-notifications-native.ts', import.meta.url)
@@ -136,7 +179,7 @@ void test('committed Android service defines and creates agent alert channel', a
 	assert.match(source, /cancel\(notificationId\)/);
 });
 
-void test('foreground service restart and wakelock policy is JS-owned and bounded', async () => {
+void test('foreground service restart and wakelock policy keeps background work alive while service runs', async () => {
 	for (const source of [
 		await committedSshForegroundServiceSource(),
 		await foregroundPluginSource(),
@@ -146,36 +189,78 @@ void test('foreground service restart and wakelock policy is JS-owned and bounde
 		assert.doesNotMatch(source, /return START_STICKY/);
 		assert.match(source, /if \(intent == null\)/);
 		assert.match(source, /stopSelf\(startId\)/);
-		assert.match(source, /WAKE_LOCK_TIMEOUT_MS/);
-		assert.match(source, /wakeLock\?\.acquire\(WAKE_LOCK_TIMEOUT_MS\)/);
-		assert.doesNotMatch(source, /wakeLock\?\.acquire\(\)/);
+		assert.doesNotMatch(source, /WAKE_LOCK_TIMEOUT_MS/);
+		assert.match(source, /wakeLock\?\.acquire\(\)/);
 	}
+});
+
+void test('foreground service is not stopped just because the task is removed', async () => {
+	const manifest = await generatedAndroidManifestSource();
+
+	assert.match(manifest, /android:stopWithTask="false"/);
+	assert.doesNotMatch(manifest, /android:stopWithTask="true"/);
+	assert.match(
+		await foregroundPluginSource(),
+		/'android:stopWithTask': 'false'/,
+	);
 });
 
 void test('committed Android service passes agent alert intent extras to MainActivity', async () => {
 	const source = await committedSshForegroundServiceSource();
 
+	assert.match(source, /Intent\(Intent\.ACTION_VIEW,/);
+	assert.match(source, /Uri\.Builder\(\)/);
+	assert.match(source, /\.scheme\("fressh"\)/);
+	assert.match(source, /\.path\("\/shell\/detail"\)/);
 	assert.match(source, /EXTRA_AGENT_CONNECTION_ID = "agentConnectionId"/);
 	assert.match(source, /EXTRA_AGENT_SESSION = "agentSession"/);
 	assert.match(source, /EXTRA_AGENT_TARGET = "agentTarget"/);
 	assert.match(source, /EXTRA_AGENT_WINDOW_ID = "agentWindowId"/);
+	assert.match(source, /EXTRA_AGENT_NOTIFICATION_CONNECTION_ID/);
+	assert.match(
+		source,
+		/appendQueryParameter\("agentConnectionId", notificationConnectionId\)/,
+	);
+	assert.match(
+		source,
+		/appendQueryParameter\("channelId", channelId\.toString\(\)\)/,
+	);
+	assert.match(source, /appendQueryParameter\("agentSession", session\)/);
+	assert.match(source, /appendQueryParameter\("agentWindowId", windowId\)/);
 	assert.match(source, /putExtra\(EXTRA_AGENT_CONNECTION_ID, connectionId\)/);
 	assert.match(source, /putExtra\(EXTRA_AGENT_SESSION, session\)/);
 	assert.match(source, /putExtra\(EXTRA_AGENT_TARGET, target\)/);
 	assert.match(source, /putExtra\(EXTRA_AGENT_WINDOW_ID, windowId\)/);
+	assert.match(source, /\.setAutoCancel\(false\)/);
 });
 
 void test('foreground service plugin passes agent alert intent extras to MainActivity', async () => {
 	const source = await foregroundPluginSource();
 
+	assert.match(source, /Intent\(Intent\.ACTION_VIEW,/);
+	assert.match(source, /Uri\.Builder\(\)/);
+	assert.match(source, /\.scheme\("fressh"\)/);
+	assert.match(source, /\.path\("\/shell\/detail"\)/);
 	assert.match(source, /EXTRA_AGENT_CONNECTION_ID = "agentConnectionId"/);
 	assert.match(source, /EXTRA_AGENT_SESSION = "agentSession"/);
 	assert.match(source, /EXTRA_AGENT_TARGET = "agentTarget"/);
 	assert.match(source, /EXTRA_AGENT_WINDOW_ID = "agentWindowId"/);
+	assert.match(source, /EXTRA_AGENT_NOTIFICATION_CONNECTION_ID/);
+	assert.match(
+		source,
+		/appendQueryParameter\("agentConnectionId", notificationConnectionId\)/,
+	);
+	assert.match(
+		source,
+		/appendQueryParameter\("channelId", channelId\.toString\(\)\)/,
+	);
+	assert.match(source, /appendQueryParameter\("agentSession", session\)/);
+	assert.match(source, /appendQueryParameter\("agentWindowId", windowId\)/);
 	assert.match(source, /putExtra\(EXTRA_AGENT_CONNECTION_ID, connectionId\)/);
 	assert.match(source, /putExtra\(EXTRA_AGENT_SESSION, session\)/);
 	assert.match(source, /putExtra\(EXTRA_AGENT_TARGET, target\)/);
 	assert.match(source, /putExtra\(EXTRA_AGENT_WINDOW_ID, windowId\)/);
+	assert.match(source, /\.setAutoCancel\(false\)/);
 });
 
 void test('foreground service plugin generates Kotlin with agent alert routing data', async () => {
@@ -188,6 +273,17 @@ void test('foreground service plugin generates Kotlin with agent alert routing d
 	assert.match(source, /EXTRA_AGENT_SESSION = "agentSession"/);
 	assert.match(source, /EXTRA_AGENT_TARGET = "agentTarget"/);
 	assert.match(source, /EXTRA_AGENT_WINDOW_ID = "agentWindowId"/);
+	assert.match(source, /EXTRA_AGENT_NOTIFICATION_CONNECTION_ID/);
+	assert.match(
+		source,
+		/appendQueryParameter\("agentConnectionId", notificationConnectionId\)/,
+	);
+	assert.match(
+		source,
+		/appendQueryParameter\("channelId", channelId\.toString\(\)\)/,
+	);
+	assert.match(source, /appendQueryParameter\("agentSession", session\)/);
+	assert.match(source, /appendQueryParameter\("agentWindowId", windowId\)/);
 	assert.match(source, /putExtra\(EXTRA_AGENT_CONNECTION_ID, connectionId\)/);
 	assert.match(source, /putExtra\(EXTRA_AGENT_SESSION, session\)/);
 	assert.match(source, /putExtra\(EXTRA_AGENT_TARGET, target\)/);
@@ -239,6 +335,8 @@ const agentAlertInput = {
 	title: 'Agent waiting',
 	message: 'main:1 needs attention',
 	connectionId: 'conn-1',
+	channelId: 7,
+	notificationConnectionId: 'saved-host',
 	session: 'main',
 	target: 'main:1',
 	windowId: '@1',
@@ -321,6 +419,8 @@ void test('agent notification wrapper checks permission before posting native al
 				title,
 				message,
 				connectionId,
+				channelId,
+				notificationConnectionId,
 				session,
 				target,
 				windowId,
@@ -332,6 +432,8 @@ void test('agent notification wrapper checks permission before posting native al
 						title,
 						message,
 						connectionId,
+						channelId,
+						notificationConnectionId,
 						session,
 						target,
 						windowId,
@@ -341,6 +443,8 @@ void test('agent notification wrapper checks permission before posting native al
 						'Agent waiting',
 						'main:1 needs attention',
 						'conn-1',
+						7,
+						'saved-host',
 						'main',
 						'main:1',
 						'@1',

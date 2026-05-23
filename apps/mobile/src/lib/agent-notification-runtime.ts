@@ -65,6 +65,18 @@ export function shouldPreservePendingWithoutTarget(input: {
 	return input.previousShellCount > 0 || input.isReconnecting;
 }
 
+export function shouldPreservePendingWithoutConfiguredTarget(input: {
+	reconnectExpected: boolean;
+	hasShell: boolean;
+	hasConnection: boolean;
+	settingsLoaded: boolean;
+}) {
+	return (
+		input.reconnectExpected ||
+		(input.hasShell && input.hasConnection && !input.settingsLoaded)
+	);
+}
+
 export function canRunAgentNotificationBridge(input: {
 	platformOS: string;
 	appActive: boolean;
@@ -108,6 +120,21 @@ export function shouldClearPendingAgentNotificationsForResumeKeyChange(input: {
 		input.previousResumeKey !== null &&
 		input.previousResumeKey !== input.nextResumeKey
 	);
+}
+
+export function getNextConfiguredResumeKey(input: {
+	previousResumeKey: string | null;
+	nextResumeKey: string | null;
+	reconnectExpected?: boolean;
+}) {
+	if (
+		input.reconnectExpected &&
+		input.previousResumeKey !== null &&
+		input.nextResumeKey === null
+	) {
+		return input.previousResumeKey;
+	}
+	return input.nextResumeKey;
 }
 
 export type ForegroundServiceStartRequest = {

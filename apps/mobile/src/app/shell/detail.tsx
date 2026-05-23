@@ -90,6 +90,7 @@ import { useSshStore } from '@/lib/ssh-store';
 import { useTheme } from '@/lib/theme';
 import {
 	buildTmuxScrollbackCopyModeCommand,
+	buildTmuxSelectWindowCommand,
 	getTmuxScrollbackControlFailurePolicy,
 	getTmuxScrollbackLiveInputPolicy,
 	runTmuxControlCommand,
@@ -453,6 +454,9 @@ function ShellDetail() {
 	const searchParams = useLocalSearchParams<{
 		connectionId?: string;
 		channelId?: string;
+		agentConnectionId?: string;
+		agentSession?: string;
+		agentWindowId?: string;
 		tmuxError?: string;
 		tmuxSessionName?: string;
 		storedConnectionId?: string;
@@ -464,6 +468,9 @@ function ShellDetail() {
 	if (!connectionId || isNaN(channelId))
 		throw new Error('Missing or invalid connectionId/channelId');
 	const hasTmuxAttachError = searchParams.tmuxError === 'attach-failed';
+	const agentConnectionId = searchParams.agentConnectionId?.trim() || null;
+	const agentSession = searchParams.agentSession?.trim() || null;
+	const agentWindowId = searchParams.agentWindowId?.trim() || null;
 	const tmuxSessionName = searchParams.tmuxSessionName;
 
 	const router = useRouter();
@@ -766,6 +773,7 @@ function ShellDetail() {
 	const wisprAutomationRequestIdRef = useRef(0);
 	const hostUrlReadRequestIdRef = useRef(0);
 	const agentNotificationAckRequestIdRef = useRef(0);
+	const handledAgentAlertRouteRef = useRef<string | null>(null);
 	const acknowledgeVisibleAgentNotificationRef = useRef<() => void>(() => {});
 	const isFocusedRef = useRef(false);
 	const isAppActiveRef = useRef(AppState.currentState === 'active');
@@ -2104,10 +2112,41 @@ fi
 		[connection],
 	);
 
+	useEffect(() => {
+		const notificationConnectionId = agentConnectionId || storedConnectionId;
+		if (!agentWindowId || !notificationConnectionId) return;
+		const session = agentSession || tmuxTarget.trim() || 'main';
+		const routeKey = `${notificationConnectionId}:${session}:${agentWindowId}`;
+		if (handledAgentAlertRouteRef.current === routeKey) return;
+
+		void runHostBrowserCommand(
+			buildTmuxSelectWindowCommand(session, agentWindowId),
+			10_000,
+		)
+			.then(() => {
+				handledAgentAlertRouteRef.current = routeKey;
+				globalThis.__FRESSH_AGENT_NOTIFICATIONS__?.acknowledge(
+					notificationConnectionId,
+					session,
+					agentWindowId,
+				);
+			})
+			.catch((error: unknown) => {
+				logger.warn('failed to select agent notification window', error);
+			});
+	}, [
+		agentConnectionId,
+		agentSession,
+		agentWindowId,
+		runHostBrowserCommand,
+		storedConnectionId,
+		tmuxTarget,
+	]);
+
 	const acknowledgeVisibleAgentNotification = useCallback(async () => {
 		await acknowledgeVisibleAgentNotificationIfVisible({
 			platformOS: Platform.OS,
-			connectionId: connection?.connectionId ?? null,
+			connectionId: storedConnectionId ?? null,
 			channelId,
 			tmuxEnabled,
 			tmuxTarget,
@@ -2133,7 +2172,13 @@ fi
 				logger.warn(message, error);
 			},
 		});
-	}, [channelId, connection, runHostBrowserCommand, tmuxEnabled, tmuxTarget]);
+	}, [
+		channelId,
+		runHostBrowserCommand,
+		storedConnectionId,
+		tmuxEnabled,
+		tmuxTarget,
+	]);
 
 	useLayoutEffect(() => {
 		acknowledgeVisibleAgentNotificationRef.current = () => {
@@ -2144,7 +2189,7 @@ fi
 	useLayoutEffect(() => {
 		isFocusedRef.current = isFocused;
 		visibleConnectionIdRef.current = isFocused
-			? (connection?.connectionId ?? null)
+			? (storedConnectionId ?? null)
 			: null;
 		visibleChannelIdRef.current = isFocused ? channelId : null;
 		visibleTmuxTargetRef.current = tmuxTarget.trim() || 'main';
@@ -2155,8 +2200,8 @@ fi
 	}, [
 		acknowledgeVisibleAgentNotification,
 		channelId,
-		connection,
 		isFocused,
+		storedConnectionId,
 		tmuxTarget,
 	]);
 
