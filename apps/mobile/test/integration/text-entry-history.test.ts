@@ -348,18 +348,26 @@ void test('history cursor resolves selected entry after entries reorder', () => 
 		id: 'recent-2',
 		nowMs: 200,
 	});
+	state = recordTextEntryPaste(state, 'ls', {
+		id: 'recent-3',
+		nowMs: 250,
+	});
 	state = pinTextEntryHistoryEntry(state, 'recent-1', { nowMs: 300 });
 
 	const cycleEntries = getTextEntryHistoryCycleEntries(state);
 
 	assert.deepEqual(
 		cycleEntries.map((entry) => entry.id),
-		['recent-1', 'recent-2'],
+		['recent-1', 'recent-3', 'recent-2'],
 	);
 	assert.equal(getTextEntryHistoryCursorIndex(cycleEntries, 'recent-1'), 0);
-	assert.equal(getTextEntryHistoryCursorLabel(cycleEntries, 'recent-1'), '1/2');
+	assert.equal(getTextEntryHistoryCursorLabel(cycleEntries, 'recent-1'), '1/3');
 	assert.equal(
 		getTextEntryHistoryCursorEntry(cycleEntries, 'recent-1', 'previous')?.id,
+		'recent-3',
+	);
+	assert.equal(
+		getTextEntryHistoryCursorEntry(cycleEntries, 'recent-1', 'next')?.id,
 		'recent-2',
 	);
 });
@@ -382,6 +390,10 @@ void test('history cursor resets when selected entry disappears', () => {
 	assert.equal(getTextEntryHistoryCursorLabel(cycleEntries, 'recent-2'), '0/1');
 	assert.equal(
 		getTextEntryHistoryCursorEntry(cycleEntries, 'recent-2', 'previous')?.id,
+		'recent-1',
+	);
+	assert.equal(
+		getTextEntryHistoryCursorEntry(cycleEntries, 'recent-2', 'next')?.id,
 		'recent-1',
 	);
 });

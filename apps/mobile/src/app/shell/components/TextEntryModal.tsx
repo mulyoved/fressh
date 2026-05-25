@@ -129,10 +129,13 @@ export function TextEntryModal({
 	const recentEntries =
 		history?.recentEntries ?? EMPTY_TEXT_ENTRY_HISTORY_ENTRIES;
 	const hasHistory = cycleEntries.length > 0;
-	const currentPinnedEntry = useMemo(() => {
+	const currentHistoryEntry = useMemo(() => {
 		if (!value) return undefined;
-		return cycleEntries.find((entry) => entry.pinned && entry.text === value);
+		return cycleEntries.find((entry) => entry.text === value);
 	}, [cycleEntries, value]);
+	const currentPinnedEntry = useMemo(() => {
+		return currentHistoryEntry?.pinned ? currentHistoryEntry : undefined;
+	}, [currentHistoryEntry]);
 	const historyPositionLabel = useMemo(() => {
 		return getTextEntryHistoryCursorLabel(cycleEntries, selectedHistoryEntryId);
 	}, [cycleEntries, selectedHistoryEntryId]);
@@ -364,10 +367,12 @@ export function TextEntryModal({
 
 	const handleInputFocus = useCallback(() => {
 		if (!wisprMode) return;
+		const requestId = focusRequestIdRef.current;
 		inputRef.current?.measureInWindow((x, y, width, height) => {
+			if (!isFocusRequestActive(requestId)) return;
 			onWisprFocus?.(valueRef.current, { x, y, width, height });
 		});
-	}, [onWisprFocus, wisprMode]);
+	}, [isFocusRequestActive, onWisprFocus, wisprMode]);
 
 	const loadHistoryEntry = useCallback(
 		(entry: TextEntryHistoryEntry) => {
@@ -392,13 +397,13 @@ export function TextEntryModal({
 	);
 
 	const handleToggleCurrentPin = useCallback(() => {
-		if (!history || !value) return;
+		if (!history || !currentHistoryEntry) return;
 		if (currentPinnedEntry) {
 			history.onUnpinEntry(currentPinnedEntry.id);
 			return;
 		}
-		history.onPinText(value);
-	}, [currentPinnedEntry, history, value]);
+		history.onPinEntry(currentHistoryEntry.id);
+	}, [currentHistoryEntry, currentPinnedEntry, history]);
 
 	const handleToggleEntryPin = useCallback(
 		(entry: TextEntryHistoryEntry) => {
@@ -563,7 +568,7 @@ export function TextEntryModal({
 										<>
 											<Pressable
 												onPress={handleToggleCurrentPin}
-												disabled={!value}
+												disabled={!currentHistoryEntry}
 												style={{
 													width: 36,
 													height: 36,
@@ -577,7 +582,7 @@ export function TextEntryModal({
 													backgroundColor: currentPinnedEntry
 														? theme.colors.surface
 														: 'transparent',
-													opacity: value ? 1 : 0.45,
+													opacity: currentHistoryEntry ? 1 : 0.45,
 												}}
 											>
 												{currentPinnedEntry ? (

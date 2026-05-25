@@ -125,6 +125,26 @@ void test('send helper returns false when active scrollback blocks input', () =>
 	]);
 });
 
+void test('send helper returns false when no input is queued', () => {
+	let clearCount = 0;
+
+	const accepted = sendShellLiveInputSegments({
+		scrollbackActive: false,
+		cancelKeyBytes: bytes([0x71]),
+		exitKeyBytes: bytes([0x71]),
+		payloadSegments: [bytes([0x70, 0x77, 0x64])],
+		scrollbackExitDelayMs: 10,
+		sendBytesQueued: () => undefined,
+		clearScrollbackState: () => {
+			clearCount += 1;
+		},
+		warn: () => {},
+	});
+
+	assert.equal(accepted, false);
+	assert.equal(clearCount, 0);
+});
+
 void test('send helper returns true after queueing input segments', () => {
 	const queued: {
 		segments: Uint8Array<ArrayBuffer>[];
