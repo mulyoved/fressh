@@ -91,7 +91,7 @@ import {
 	loadRuntimeShellConfigState,
 	reloadRuntimeShellConfigFromRemote,
 } from '@/lib/shell-config-store-native';
-import { buildShellLiveInputSendPlan } from '@/lib/shell-live-input';
+import { sendShellLiveInputSegments } from '@/lib/shell-live-input';
 import {
 	buildSkillDiscoveryCommand,
 	parseSkillDiscoveryOutput,
@@ -957,7 +957,7 @@ function ShellDetail() {
 				dropPayloadAfterExit?: boolean;
 			},
 		) => {
-			const plan = buildShellLiveInputSendPlan({
+			return sendShellLiveInputSegments({
 				scrollbackActive: scrollbackActiveRef.current,
 				cancelKeyBytes,
 				exitKeyBytes,
@@ -965,22 +965,11 @@ function ShellDetail() {
 				interSegmentDelayMs: opts?.interSegmentDelayMs,
 				scrollbackExitDelayMs: touchEnterDelayMs,
 				isCurrentPayloadExitKey: opts?.dropPayloadAfterExit,
-			});
-
-			if (plan.type === 'block') {
-				logger.warn(
-					'cancelKey invalid; blocking input until Jump to live is used',
-				);
-				return;
-			}
-
-			if (plan.clearScrollback) {
-				clearScrollbackState();
-			}
-			if (!plan.segments.length) return;
-
-			void sendBytesQueued(plan.segments, {
-				interSegmentDelayMs: plan.interSegmentDelayMs,
+				sendBytesQueued,
+				clearScrollbackState,
+				warn: (message) => {
+					logger.warn(message);
+				},
 			});
 		},
 		[cancelKeyBytes, clearScrollbackState, exitKeyBytes, sendBytesQueued],
@@ -1000,7 +989,7 @@ function ShellDetail() {
 				interSegmentDelayMs?: number;
 			},
 		) => {
-			sendLiveInputSegments(payloadSegments, {
+			return sendLiveInputSegments(payloadSegments, {
 				interSegmentDelayMs: opts?.interSegmentDelayMs,
 				dropPayloadAfterExit: false,
 			});
@@ -1205,10 +1194,10 @@ function ShellDetail() {
 			if (selectionModeEnabled) {
 				exitSelectionMode();
 			}
-			sendLiteralInputSegments(payload.segments, {
+			const accepted = sendLiteralInputSegments(payload.segments, {
 				interSegmentDelayMs: touchEnterDelayMs,
 			});
-			if (payload.historyText !== null) {
+			if (accepted && payload.historyText !== null) {
 				refreshTextEntryHistory(
 					textEntryHistoryStore.recordPaste(payload.historyText),
 				);

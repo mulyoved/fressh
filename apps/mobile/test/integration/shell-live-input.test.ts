@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildShellLiveInputSendPlan } from '../../src/lib/shell-live-input';
+import {
+	buildShellLiveInputSendPlan,
+	sendShellLiveInputSegments,
+} from '../../src/lib/shell-live-input';
 
 const bytes = (values: number[]) => new Uint8Array(values);
 const segmentValues = (segments: readonly Uint8Array<ArrayBuffer>[]) =>
@@ -89,4 +92,78 @@ void test('passes invalid active cancel key through as a blocked plan', () => {
 		type: 'block',
 		reason: 'invalid-cancel-key',
 	});
+});
+
+void test('send helper returns false when active scrollback blocks input', () => {
+	const queued: Uint8Array<ArrayBuffer>[][] = [];
+	const warnings: string[] = [];
+	let clearCount = 0;
+
+	const accepted = sendShellLiveInputSegments({
+		scrollbackActive: true,
+		cancelKeyBytes: bytes([0x1b]),
+		exitKeyBytes: bytes([0x71]),
+		payloadSegments: [bytes([0x70, 0x77, 0x64])],
+		scrollbackExitDelayMs: 10,
+		sendBytesQueued: (segments) => {
+			queued.push(segments);
+			return Promise.resolve();
+		},
+		clearScrollbackState: () => {
+			clearCount += 1;
+		},
+		warn: (message) => {
+			warnings.push(message);
+		},
+	});
+
+	assert.equal(accepted, false);
+	assert.deepEqual(queued, []);
+	assert.equal(clearCount, 0);
+	assert.deepEqual(warnings, [
+		'cancelKey invalid; blocking input until Jump to live is used',
+	]);
+});
+
+void test('send helper returns true after queueing input segments', () => {
+	const queued: {
+		segments: Uint8Array<ArrayBuffer>[];
+		interSegmentDelayMs?: number;
+	}[] = [];
+	let clearCount = 0;
+
+	const accepted = sendShellLiveInputSegments({
+		scrollbackActive: true,
+		cancelKeyBytes: bytes([0x71]),
+		exitKeyBytes: bytes([0x71]),
+		payloadSegments: [bytes([0x70, 0x77, 0x64]), bytes([0x0d])],
+		interSegmentDelayMs: 3,
+		scrollbackExitDelayMs: 10,
+		sendBytesQueued: (segments, opts) => {
+			queued.push({
+				segments,
+				interSegmentDelayMs: opts?.interSegmentDelayMs,
+			});
+			return Promise.resolve();
+		},
+		clearScrollbackState: () => {
+			clearCount += 1;
+		},
+		warn: () => {},
+	});
+
+	assert.equal(accepted, true);
+	assert.equal(clearCount, 1);
+	assert.deepEqual(
+		queued.map((entry) => ({
+			segments: segmentValues(entry.segments),
+			interSegmentDelayMs: entry.interSegmentDelayMs,
+		})),
+		[
+			{
+				segments: [[0x71], [0x70, 0x77, 0x64], [0x0d]],
+				interSegmentDelayMs: 10,
+			},
+		],
+	);
 });
