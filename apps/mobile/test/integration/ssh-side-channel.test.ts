@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import test from 'node:test';
+import test, { mock } from 'node:test';
 import {
 	executeSideChannelCommandCore,
 	type SideChannelLogger,
@@ -32,6 +32,12 @@ function delay(ms: number) {
 
 function waitForMicrotask() {
 	return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+async function flushMicrotasks(count = 5) {
+	for (let index = 0; index < count; index += 1) {
+		await Promise.resolve();
+	}
 }
 
 function createDeferred<T>(): Deferred<T> {
@@ -197,7 +203,7 @@ void test('executeSideChannelCommand closes a shell that resolves after start ti
 	await waitForMicrotask();
 
 	assert.equal(shell.closed, true);
-	assert.equal(shell.closeSignal?.aborted, true);
+	assert.equal(shell.closeSignal instanceof AbortSignal, true);
 });
 
 void test('executeSideChannelCommand bounds hanging send and close operations', async () => {
@@ -218,7 +224,7 @@ void test('executeSideChannelCommand bounds hanging send and close operations', 
 
 	const closeShell = new FakeSideShell({
 		close: async () => {
-			await delay(1_000);
+			await delay(5_000);
 		},
 	});
 	const startedAt = Date.now();
@@ -231,9 +237,65 @@ void test('executeSideChannelCommand bounds hanging send and close operations', 
 	const elapsedMs = Date.now() - startedAt;
 
 	assert.equal(closeResult.success, true);
-	assert.ok(elapsedMs < 500);
+	assert.ok(elapsedMs < 1_500);
 	assert.equal(closeShell.removedListenerId, 1n);
 	assert.equal(closeShell.closed, true);
+	assert.equal(closeShell.closeSignal?.aborted, true);
+});
+
+void test('executeSideChannelCommand allows normal close above 100ms', async () => {
+	const closeShell = new FakeSideShell({
+		close: async () => {
+			await delay(150);
+		},
+	});
+	const result = await executeSideChannelCommandCore({
+		connection: { startShell: async () => closeShell },
+		command: 'echo hi',
+		timeoutMs: 500,
+		logger: noopLogger,
+	});
+
+	assert.equal(result.success, true);
+	assert.equal(closeShell.closed, true);
+	assert.equal(closeShell.closeSignal?.aborted, false);
+});
+
+void test('executeSideChannelCommand uses cleanup budget after command timeout', async (t) => {
+	mock.timers.enable({ apis: ['setTimeout'], now: 0 });
+	t.after(() => {
+		mock.timers.reset();
+	});
+	const closeShell = new FakeSideShell({
+		send: () => new Promise<never>(() => {}),
+		close: () => new Promise<never>(() => {}),
+	});
+	const resultPromise = executeSideChannelCommandCore({
+		connection: { startShell: async () => closeShell },
+		command: 'echo hi',
+		timeoutMs: 25,
+		logger: noopLogger,
+	});
+
+	await flushMicrotasks();
+	mock.timers.tick(25);
+	await flushMicrotasks();
+
+	assert.equal(closeShell.closed, true);
+	assert.equal(closeShell.closeSignal?.aborted, false);
+
+	mock.timers.tick(999);
+	await flushMicrotasks();
+
+	assert.equal(closeShell.closeSignal?.aborted, false);
+
+	mock.timers.tick(1);
+	const result = await resultPromise;
+
+	assert.equal(result.success, false);
+	assert.equal(result.error, 'Command timed out');
+	assert.equal(closeShell.removedListenerId, 1n);
+	assert.equal(closeShell.sendSignal?.aborted, true);
 	assert.equal(closeShell.closeSignal?.aborted, true);
 });
 

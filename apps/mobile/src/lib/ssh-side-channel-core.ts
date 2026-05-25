@@ -36,6 +36,8 @@ export type SideChannelConnectionLike = {
 	}) => Promise<SideChannelShellLike>;
 };
 
+const SIDE_CHANNEL_CLEANUP_TIMEOUT_MS = 1_000;
+
 type TerminalChunkLike = {
 	bytes: ArrayBuffer;
 	stream: unknown;
@@ -82,42 +84,25 @@ function getRemainingTimeoutMs(deadlineMs: number) {
 
 async function closeSideChannelShell({
 	shell,
-	deadlineMs,
 	logger,
 }: {
 	shell: SideChannelShellLike;
-	deadlineMs: number;
 	logger: SideChannelLogger;
 }) {
-	const remainingMs = deadlineMs - Date.now();
 	const closeAbortController = new AbortController();
 	const closePromise = shell.close({
 		signal: closeAbortController.signal,
 	});
-	if (remainingMs > 0) {
-		try {
-			await withTimeout(closePromise, remainingMs, () => {
-				closeAbortController.abort(commandTimeoutError());
-			});
-			logger.debug('Side-channel shell closed');
-		} catch (closeErr) {
-			logger.warn('Failed to close side-channel shell', {
-				error: closeErr,
-			});
-		}
-		return;
-	}
-
-	closeAbortController.abort(commandTimeoutError());
-	void closePromise
-		.then(() => {
-			logger.debug('Side-channel shell closed');
-		})
-		.catch((closeErr) => {
-			logger.warn('Failed to close side-channel shell', {
-				error: closeErr,
-			});
+	try {
+		await withTimeout(closePromise, SIDE_CHANNEL_CLEANUP_TIMEOUT_MS, () => {
+			closeAbortController.abort(commandTimeoutError());
 		});
+		logger.debug('Side-channel shell closed');
+	} catch (closeErr) {
+		logger.warn('Failed to close side-channel shell', {
+			error: closeErr,
+		});
+	}
 }
 
 /**
@@ -173,7 +158,10 @@ export async function executeSideChannelCommandCore({
 	} catch (error) {
 		void startShellPromise
 			.then((lateShell) =>
-				closeSideChannelShell({ shell: lateShell, deadlineMs, logger }),
+				closeSideChannelShell({
+					shell: lateShell,
+					logger,
+				}),
 			)
 			.catch(() => {});
 		throw error;
@@ -243,7 +231,10 @@ export async function executeSideChannelCommandCore({
 					});
 				}
 			}
-			await closeSideChannelShell({ shell: sideShell, deadlineMs, logger });
+			await closeSideChannelShell({
+				shell: sideShell,
+				logger,
+			});
 		}
 	}
 }

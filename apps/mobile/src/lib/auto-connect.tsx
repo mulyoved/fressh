@@ -8,6 +8,7 @@ import {
 	canRunAndroidBackgroundWork,
 	canAttemptBackgroundReconnect,
 	createForegroundServiceStartCoordinator,
+	getForegroundServiceStartRetryDelay,
 	getForegroundServiceNotificationMessage,
 	shouldPreservePendingWithoutTarget,
 	shouldPreserveForegroundServiceForShellDrop,
@@ -23,7 +24,7 @@ import {
 	pickLatestConnection,
 } from './connection-utils';
 import {
-	startForegroundService,
+	startForegroundServiceAndReport,
 	stopForegroundService,
 } from './foreground-service';
 import { rootLogger } from './logger';
@@ -39,6 +40,8 @@ import { AbortSignalTimeout, queryClient } from './utils';
 const logger = rootLogger.extend('AutoConnect');
 const RECONNECT_DELAYS_MS = [500, 1_000, 2_000, 5_000, 10_000];
 const RECONNECT_WINDOW_MS = 2 * 60 * 1_000;
+const FOREGROUND_SERVICE_START_RETRY_MS = 5_000;
+const FOREGROUND_SERVICE_START_MAX_RETRIES = 5;
 
 type AutoConnectState = {
 	isAutoConnecting: boolean;
@@ -106,6 +109,11 @@ export function AutoConnectManager() {
 	const reconnectTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(
 		null,
 	);
+	const foregroundStartRetryTimerRef =
+		React.useRef<ReturnType<typeof setTimeout> | null>(null);
+	const foregroundStartFailureCountRef = React.useRef(0);
+	const [foregroundStartRetryNonce, setForegroundStartRetryNonce] =
+		React.useState(0);
 	const reconnectStartedAtMsRef = React.useRef<number | null>(null);
 	const reconnectAttemptRef = React.useRef(0);
 	const reconnectLoopRunningRef = React.useRef(false);
@@ -139,6 +147,13 @@ export function AutoConnectManager() {
 		if (reconnectTimerRef.current) {
 			clearTimeout(reconnectTimerRef.current);
 			reconnectTimerRef.current = null;
+		}
+	}, []);
+
+	const clearForegroundStartRetryTimer = React.useCallback(() => {
+		if (foregroundStartRetryTimerRef.current) {
+			clearTimeout(foregroundStartRetryTimerRef.current);
+			foregroundStartRetryTimerRef.current = null;
 		}
 	}, []);
 
@@ -449,6 +464,8 @@ export function AutoConnectManager() {
 				return;
 			}
 			foregroundStartCoordinatorRef.current.invalidate();
+			clearForegroundStartRetryTimer();
+			foregroundStartFailureCountRef.current = 0;
 			setForegroundServiceStarted(false);
 			if (foregroundKeyRef.current !== null) {
 				foregroundKeyRef.current = null;
@@ -467,18 +484,23 @@ export function AutoConnectManager() {
 			isReconnecting,
 		});
 		const nextKey = `${title}|${message}`;
+		const currentForegroundKey = foregroundKeyRef.current;
 		if (
 			!shouldStartForegroundService({
-				currentKey: foregroundKeyRef.current,
+				currentKey: currentForegroundKey,
 				nextKey,
 				foregroundServiceStarted,
 			})
 		) {
 			return;
 		}
+		if (currentForegroundKey !== nextKey) {
+			foregroundStartFailureCountRef.current = 0;
+		}
+		clearForegroundStartRetryTimer();
 		foregroundKeyRef.current = nextKey;
 		const request = foregroundStartCoordinatorRef.current.begin(nextKey);
-		void startForegroundService({ title, message }).then((started) => {
+		void startForegroundServiceAndReport({ title, message }).then((started) => {
 			if (
 				!foregroundStartCoordinatorRef.current.isCurrent(
 					request,
@@ -488,8 +510,32 @@ export function AutoConnectManager() {
 				return;
 			}
 			setForegroundServiceStarted(started);
+			if (started) {
+				foregroundStartFailureCountRef.current = 0;
+				return;
+			}
 			if (!started) {
 				foregroundKeyRef.current = null;
+				const retryDelayMs = getForegroundServiceStartRetryDelay({
+					shouldRunService: shouldRunForegroundService({
+						shellCount: useSshStore.getState().shells
+							? Object.keys(useSshStore.getState().shells).length
+							: 0,
+						isAutoConnecting:
+							useAutoConnectStore.getState().isAutoConnecting,
+						isReconnecting: useAutoConnectStore.getState().isReconnecting,
+					}),
+					failedAttempts: foregroundStartFailureCountRef.current,
+					maxAttempts: FOREGROUND_SERVICE_START_MAX_RETRIES,
+					retryDelayMs: FOREGROUND_SERVICE_START_RETRY_MS,
+				});
+				foregroundStartFailureCountRef.current += 1;
+				if (retryDelayMs !== null) {
+					foregroundStartRetryTimerRef.current = setTimeout(() => {
+						foregroundStartRetryTimerRef.current = null;
+						setForegroundStartRetryNonce((value) => value + 1);
+					}, retryDelayMs);
+				}
 				if (!isActiveRef.current) {
 					stopReconnectCycle('foreground-service-unavailable');
 				}
@@ -498,9 +544,11 @@ export function AutoConnectManager() {
 	}, [
 		connections,
 		foregroundServiceStarted,
+		foregroundStartRetryNonce,
 		isAutoConnecting,
 		isReconnecting,
 		latestShell,
+		clearForegroundStartRetryTimer,
 		setForegroundServiceStarted,
 		shells.length,
 		stopReconnectCycle,
@@ -511,10 +559,11 @@ export function AutoConnectManager() {
 		return () => {
 			if (Platform.OS !== 'android') return;
 			foregroundStartCoordinator.invalidate();
+			clearForegroundStartRetryTimer();
 			setForegroundServiceStarted(false);
 			void stopForegroundService();
 		};
-	}, [setForegroundServiceStarted]);
+	}, [clearForegroundStartRetryTimer, setForegroundServiceStarted]);
 
 	React.useEffect(() => {
 		if (didInitRef.current) return;

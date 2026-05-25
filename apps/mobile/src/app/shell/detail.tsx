@@ -43,7 +43,8 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
 	acknowledgeRoutedAgentNotification,
-	hasAuthorizedAgentNotificationRouteToken,
+	consumeAuthorizedAgentNotificationRouteToken,
+	restoreAuthorizedAgentNotificationRouteToken,
 } from '@/lib/agent-notification-route-api';
 import {
 	acknowledgeVisibleAgentNotification as acknowledgeVisibleAgentNotificationIfVisible,
@@ -2135,7 +2136,8 @@ fi
 			markRouteHandled: (routeKey) => {
 				handledAgentAlertRouteRef.current = routeKey;
 			},
-			hasAuthorizedRouteToken: hasAuthorizedAgentNotificationRouteToken,
+			consumeAuthorizedRouteToken: consumeAuthorizedAgentNotificationRouteToken,
+			restoreAuthorizedRouteToken: restoreAuthorizedAgentNotificationRouteToken,
 			runCommand: runHostBrowserCommand,
 			acknowledge: (connectionId, session, windowId) => {
 				acknowledgeRoutedAgentNotification(connectionId, session, windowId);

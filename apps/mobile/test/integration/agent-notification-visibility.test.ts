@@ -231,6 +231,7 @@ void test('handleAgentNotificationRoute selects and acknowledges routed agent al
 		session: string;
 		windowId: string;
 	}[] = [];
+	const consumedTokens: string[] = [];
 	const handled = new Set<string>();
 
 	const handledRoute = await handleAgentNotificationRoute({
@@ -241,13 +242,16 @@ void test('handleAgentNotificationRoute selects and acknowledges routed agent al
 		agentEventId: 'main:@12:2000:waiting',
 		agentTapToken: 'tap-token',
 		tmuxTarget: 'main',
-		hasAuthorizedRouteToken: (
+		consumeAuthorizedRouteToken: (
 			_connectionId,
 			_session,
 			_windowId,
 			_eventId,
 			token,
-		) => token === 'tap-token',
+		) => {
+			consumedTokens.push(token);
+			return token === 'tap-token';
+		},
 		isRouteHandled: (key) => handled.has(key),
 		markRouteHandled: (key) => handled.add(key),
 		runCommand: async (command, timeoutMs) => {
@@ -261,6 +265,7 @@ void test('handleAgentNotificationRoute selects and acknowledges routed agent al
 	});
 
 	assert.equal(handledRoute, true);
+	assert.deepEqual(consumedTokens, ['tap-token']);
 	assert.deepEqual(commands, [
 		{ command: "tmux select-window -t 'work:@12'", timeoutMs: 10_000 },
 	]);
@@ -271,6 +276,114 @@ void test('handleAgentNotificationRoute selects and acknowledges routed agent al
 		handled.has('["saved-host","work","@12","main:@12:2000:waiting"]'),
 		true,
 	);
+});
+
+void test('handleAgentNotificationRoute consumes tap tokens before async routing', async () => {
+	const commands: string[] = [];
+	const acknowledgements: string[] = [];
+	let tokenAvailable = true;
+	let resolveCommand: () => void = () => {
+		throw new Error('route command was not started');
+	};
+	const handled = new Set<string>();
+	const routeOptions = {
+		agentConnectionId: 'saved-host',
+		storedConnectionId: null,
+		agentSession: 'main',
+		agentWindowId: '@12',
+		agentEventId: 'main:@12:2000:waiting',
+		agentTapToken: 'tap-token',
+		tmuxTarget: 'main',
+		consumeAuthorizedRouteToken: () => {
+			if (!tokenAvailable) return false;
+			tokenAvailable = false;
+			return true;
+		},
+		isRouteHandled: (key: string) => handled.has(key),
+		markRouteHandled: (key: string) => handled.add(key),
+		runCommand: (command: string) => {
+			commands.push(command);
+			return new Promise<string>((resolve) => {
+				resolveCommand = () => resolve('');
+			});
+		},
+		acknowledge: (_connectionId: string, _session: string, windowId: string) => {
+			acknowledgements.push(windowId);
+		},
+		warn: () => {},
+	};
+
+	const firstRoute = handleAgentNotificationRoute(routeOptions);
+	const secondRoute = handleAgentNotificationRoute(routeOptions);
+
+	assert.equal(await secondRoute, false);
+	assert.equal(commands.length, 1);
+	resolveCommand();
+
+	assert.equal(await firstRoute, true);
+	assert.deepEqual(commands, ["tmux select-window -t 'main:@12'"]);
+	assert.deepEqual(acknowledgements, ['@12']);
+});
+
+void test('handleAgentNotificationRoute restores consumed token after failed routing', async () => {
+	const error = new Error('select failed');
+	let tokenAvailable = true;
+	let commands = 0;
+
+	const firstRoute = await handleAgentNotificationRoute({
+		agentConnectionId: 'saved-host',
+		storedConnectionId: null,
+		agentSession: 'main',
+		agentWindowId: '@12',
+		agentEventId: 'main:@12:2000:waiting',
+		agentTapToken: 'tap-token',
+		tmuxTarget: 'main',
+		consumeAuthorizedRouteToken: () => {
+			if (!tokenAvailable) return false;
+			tokenAvailable = false;
+			return true;
+		},
+		restoreAuthorizedRouteToken: () => {
+			tokenAvailable = true;
+			return true;
+		},
+		isRouteHandled: () => false,
+		markRouteHandled: () => {},
+		runCommand: async () => {
+			commands += 1;
+			throw error;
+		},
+		acknowledge: () => {},
+		warn: () => {},
+	});
+
+	const secondRoute = await handleAgentNotificationRoute({
+		agentConnectionId: 'saved-host',
+		storedConnectionId: null,
+		agentSession: 'main',
+		agentWindowId: '@12',
+		agentEventId: 'main:@12:2000:waiting',
+		agentTapToken: 'tap-token',
+		tmuxTarget: 'main',
+		consumeAuthorizedRouteToken: () => {
+			if (!tokenAvailable) return false;
+			tokenAvailable = false;
+			return true;
+		},
+		restoreAuthorizedRouteToken: () => false,
+		isRouteHandled: () => false,
+		markRouteHandled: () => {},
+		runCommand: async () => {
+			commands += 1;
+			return '';
+		},
+		acknowledge: () => {},
+		warn: () => {},
+	});
+
+	assert.equal(firstRoute, false);
+	assert.equal(secondRoute, true);
+	assert.equal(commands, 2);
 });
 
 void test('handleAgentNotificationRoute falls back to stored connection id', async () => {
@@ -288,7 +401,7 @@ void test('handleAgentNotificationRoute falls back to stored connection id', asy
 		agentEventId: 'main:@12:2000:waiting',
 		agentTapToken: 'tap-token',
 		tmuxTarget: 'main',
-		hasAuthorizedRouteToken: () => true,
+		consumeAuthorizedRouteToken: () => true,
 		isRouteHandled: () => false,
 		markRouteHandled: () => {},
 		runCommand: async () => '',
@@ -317,7 +430,7 @@ void test('handleAgentNotificationRoute suppresses duplicate successful routes o
 		agentEventId: 'main:@12:2000:waiting',
 		agentTapToken: 'tap-token',
 		tmuxTarget: 'main',
-		hasAuthorizedRouteToken: () => true,
+		consumeAuthorizedRouteToken: () => true,
 		isRouteHandled: (key) => handled.has(key),
 		markRouteHandled: (key) => handled.add(key),
 		runCommand: async () => {
@@ -347,7 +460,7 @@ void test('handleAgentNotificationRoute allows a later alert for the same window
 		agentEventId: 'main:@12:3000:done',
 		agentTapToken: 'tap-token',
 		tmuxTarget: 'main',
-		hasAuthorizedRouteToken: () => true,
+		consumeAuthorizedRouteToken: () => true,
 		isRouteHandled: (key) => handled.has(key),
 		markRouteHandled: (key) => handled.add(key),
 		runCommand: async (command) => {
@@ -382,7 +495,7 @@ void test('handleAgentNotificationRoute rejects forged routes without pending no
 		agentEventId: 'main:@12:2000:waiting',
 		agentTapToken: 'tap-token',
 		tmuxTarget: 'main',
-		hasAuthorizedRouteToken: () => false,
+		consumeAuthorizedRouteToken: () => false,
 		isRouteHandled: () => false,
 		markRouteHandled: () => {
 			handledRoutes += 1;
@@ -415,7 +528,7 @@ void test('handleAgentNotificationRoute treats pending-token lookup failures as 
 		agentEventId: 'main:@12:2000:waiting',
 		agentTapToken: 'tap-token',
 		tmuxTarget: 'main',
-		hasAuthorizedRouteToken: () => {
+		consumeAuthorizedRouteToken: () => {
 			throw new Error('storage unavailable');
 		},
 		isRouteHandled: () => false,
@@ -444,7 +557,7 @@ void test('handleAgentNotificationRoute ignores routes without a tap token', asy
 		agentEventId: 'main:@12:2000:waiting',
 		agentTapToken: null,
 		tmuxTarget: 'main',
-		hasAuthorizedRouteToken: () => true,
+		consumeAuthorizedRouteToken: () => true,
 		isRouteHandled: () => false,
 		markRouteHandled: () => {},
 		runCommand: async () => {
@@ -471,7 +584,7 @@ void test('handleAgentNotificationRoute rejects valid tokens for a different she
 		agentEventId: 'main:@12:2000:waiting',
 		agentTapToken: 'tap-token',
 		tmuxTarget: 'main',
-		hasAuthorizedRouteToken: () => {
+		consumeAuthorizedRouteToken: () => {
 			pendingChecks += 1;
 			return true;
 		},
@@ -504,7 +617,7 @@ void test('handleAgentNotificationRoute does not acknowledge or mark failed sele
 		agentEventId: 'main:@12:2000:waiting',
 		agentTapToken: 'tap-token',
 		tmuxTarget: 'main',
-		hasAuthorizedRouteToken: () => true,
+		consumeAuthorizedRouteToken: () => true,
 		isRouteHandled: (key) => handled.has(key),
 		markRouteHandled: (key) => handled.add(key),
 		runCommand: async () => {

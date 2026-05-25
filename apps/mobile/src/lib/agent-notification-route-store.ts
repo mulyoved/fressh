@@ -23,6 +23,18 @@ export function hasStoredAgentNotificationRouteToken(
 	return store.has(input);
 }
 
+export function consumeStoredAgentNotificationRouteToken(
+	input: AgentNotificationRouteToken,
+) {
+	return store.consume(input);
+}
+
+export function restoreStoredAgentNotificationRouteToken(
+	input: AgentNotificationRouteToken,
+) {
+	return store.restore(input);
+}
+
 export function deleteStoredAgentNotificationRouteToken(
 	input: AgentNotificationRouteIdentity & { tapToken?: string },
 ) {

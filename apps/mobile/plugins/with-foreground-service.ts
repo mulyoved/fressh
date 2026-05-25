@@ -24,10 +24,9 @@ const SPECIAL_USE_PROPERTY_VALUE =
 
 const JAVA_PACKAGE_RELATIVE_PATH = 'app/src/main/java/com/finalapp/vibe2';
 const PLUGIN_DIR = path.dirname(fileURLToPath(import.meta.url));
-const COMMITTED_ANDROID_SOURCE_PATH = path.join(
+const ANDROID_TEMPLATE_SOURCE_PATH = path.join(
 	PLUGIN_DIR,
-	'../android',
-	JAVA_PACKAGE_RELATIVE_PATH,
+	'foreground-service-android',
 );
 const FOREGROUND_SERVICE_PACKAGE_REGISTRATION =
 	'add(ForegroundServicePackage())';
@@ -51,11 +50,8 @@ class ForegroundServicePackage : ReactPackage {
 }
 `;
 
-async function readCommittedAndroidSource(filename: string) {
-	return fs.readFile(
-		path.join(COMMITTED_ANDROID_SOURCE_PATH, filename),
-		'utf8',
-	);
+async function readAndroidTemplateSource(filename: string) {
+	return fs.readFile(path.join(ANDROID_TEMPLATE_SOURCE_PATH, filename), 'utf8');
 }
 
 function findMatchingBrace(contents: string, openBraceIndex: number): number {
@@ -198,7 +194,7 @@ const withForegroundServiceNativeFiles: ConfigPlugin = (config) =>
 			] as const) {
 				await fs.writeFile(
 					path.join(javaPackagePath, filename),
-					await readCommittedAndroidSource(filename),
+					await readAndroidTemplateSource(filename),
 					'utf8',
 				);
 			}

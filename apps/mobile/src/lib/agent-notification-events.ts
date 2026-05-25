@@ -166,6 +166,7 @@ export class AgentNotificationDedupe {
 			inFlightPostCount: number;
 			notificationId: number;
 			postAttemptId: number;
+			resumeKey: string | null;
 			posted: boolean;
 			hasVisibleNotification: boolean;
 			needsPostRetry: boolean;
@@ -181,6 +182,7 @@ export class AgentNotificationDedupe {
 			inFlightPostCount: 0,
 			notificationId,
 			postAttemptId: 0,
+			resumeKey: null,
 			posted: false,
 			hasVisibleNotification: false,
 			needsPostRetry: false,
@@ -192,9 +194,11 @@ export class AgentNotificationDedupe {
 		key: string,
 		notificationId: number,
 		event: AgentNotificationEvent,
+		resumeKey?: string | null,
 	): boolean {
 		const existing = this.pending.get(key);
 		if (existing?.eventId === event.id) {
+			if (resumeKey !== undefined) existing.resumeKey = resumeKey;
 			if (!existing.needsPostRetry) return false;
 			existing.needsPostRetry = false;
 			return true;
@@ -206,6 +210,7 @@ export class AgentNotificationDedupe {
 			inFlightPostCount: 0,
 			notificationId,
 			postAttemptId: 0,
+			resumeKey: resumeKey ?? existing?.resumeKey ?? null,
 			posted: false,
 			hasVisibleNotification:
 				existing?.posted || existing?.hasVisibleNotification || false,
@@ -238,6 +243,7 @@ export class AgentNotificationDedupe {
 					key: string;
 					notificationId: number;
 					event: AgentNotificationEvent;
+					resumeKey: string | null;
 				};
 		  } {
 		const pending = this.pending.get(key);
@@ -264,6 +270,7 @@ export class AgentNotificationDedupe {
 							key,
 							notificationId: pending.notificationId,
 							event: pending.event,
+							resumeKey: pending.resumeKey,
 						},
 					}
 				: { type: 'ignored' };
@@ -274,15 +281,24 @@ export class AgentNotificationDedupe {
 		);
 		pending.inFlightPostCount = Math.max(0, pending.inFlightPostCount - 1);
 		if (pending.postAttemptId !== attemptId) {
-			if (posted) pending.posted = true;
+			if (posted) {
+				pending.posted = true;
+				pending.needsPostRetry = false;
+			} else if (
+				pending.needsPostRetry &&
+				pending.inFlightPostCount === 0 &&
+				!pending.posted
+			) {
+				return { type: 'failed' };
+			}
 			return { type: 'ignored' };
 		}
 		if (!posted) {
 			if (
 				pending.posted ||
-				pending.inFlightAnyPostCount > 0 ||
 				pending.inFlightPostCount > 0
 			) {
+				pending.needsPostRetry = true;
 				return { type: 'ignored' };
 			}
 			pending.needsPostRetry = true;
@@ -325,11 +341,13 @@ export class AgentNotificationDedupe {
 		key: string;
 		notificationId: number;
 		event: AgentNotificationEvent;
+		resumeKey: string | null;
 	}[] {
 		const events: {
 			key: string;
 			notificationId: number;
 			event: AgentNotificationEvent;
+			resumeKey: string | null;
 		}[] = [];
 		for (const [key, pending] of this.pending) {
 			if (!pending.event) continue;
@@ -337,6 +355,7 @@ export class AgentNotificationDedupe {
 				key,
 				notificationId: pending.notificationId,
 				event: pending.event,
+				resumeKey: pending.resumeKey,
 			});
 		}
 		return events;
@@ -346,6 +365,7 @@ export class AgentNotificationDedupe {
 		key: string;
 		notificationId: number;
 		event: AgentNotificationEvent;
+		resumeKey: string | null;
 	} | null {
 		const pending = this.pending.get(key);
 		if (!pending?.event) return null;
@@ -353,6 +373,7 @@ export class AgentNotificationDedupe {
 			key,
 			notificationId: pending.notificationId,
 			event: pending.event,
+			resumeKey: pending.resumeKey,
 		};
 	}
 }
@@ -382,9 +403,11 @@ export type HandleAgentNotificationEventInput = {
 		key: string;
 		notificationId: number;
 		event: AgentNotificationEvent;
+		resumeKey?: string | null;
 	}) => void;
 	notifyPending: () => void;
 	dedupe: AgentNotificationDedupe;
+	resumeKey?: string | null;
 };
 
 export function handleAgentNotificationEvent({
@@ -393,6 +416,7 @@ export function handleAgentNotificationEvent({
 	onPending,
 	notifyPending,
 	dedupe,
+	resumeKey,
 }: HandleAgentNotificationEventInput) {
 	const key = createAgentNotificationPendingKey({
 		connectionId,
@@ -400,7 +424,7 @@ export function handleAgentNotificationEvent({
 		windowId: event.windowId,
 	});
 	const notificationId = createStableNotificationId(key);
-	if (!dedupe.markPendingEvent(key, notificationId, event)) return;
+	if (!dedupe.markPendingEvent(key, notificationId, event, resumeKey)) return;
 	notifyPending();
-	onPending({ key, notificationId, event });
+	onPending({ key, notificationId, event, resumeKey });
 }

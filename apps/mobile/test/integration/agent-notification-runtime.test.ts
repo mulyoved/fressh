@@ -4,8 +4,11 @@ import {
 	canAttemptBackgroundReconnect,
 	canRunAgentNotificationBridge,
 	canRunAndroidBackgroundWork,
+	createAgentNotificationCursorAdvanceOnPost,
+	createAgentNotificationPostRetryCoordinator,
 	createAgentNotificationRestartCoordinator,
 	createForegroundServiceStartCoordinator,
+	getForegroundServiceStartRetryDelay,
 	getForegroundServiceNotificationMessage,
 	getNextConfiguredResumeKey,
 	shouldPreservePendingWithoutConfiguredTarget,
@@ -17,6 +20,13 @@ import {
 	shouldClearPendingAgentNotifications,
 	shouldClearPendingAgentNotificationsForResumeKeyChange,
 } from '../../src/lib/agent-notification-runtime';
+import {
+	AGENT_NOTIFICATION_RESTART_EXHAUSTED_PROBE_MS,
+	createAgentNotificationPostRetryKey,
+	createAgentNotificationPostRetryRepostInput,
+	createAgentNotificationRepostInput,
+	getAgentNotificationRestartDelay,
+} from '../../src/lib/agent-notification-bridge-manager-core';
 
 void test('foreground service notification message avoids connection identity', () => {
 	assert.equal(
@@ -284,6 +294,32 @@ void test('foreground service start coordinator invalidates stale starts on stop
 	);
 });
 
+void test('foreground service start retry delay is bounded while service is still needed', () => {
+	assert.equal(
+		getForegroundServiceStartRetryDelay({
+			shouldRunService: false,
+			failedAttempts: 0,
+		}),
+		null,
+	);
+	assert.equal(
+		getForegroundServiceStartRetryDelay({
+			shouldRunService: true,
+			failedAttempts: 0,
+			retryDelayMs: 123,
+		}),
+		123,
+	);
+	assert.equal(
+		getForegroundServiceStartRetryDelay({
+			shouldRunService: true,
+			failedAttempts: 5,
+			maxAttempts: 5,
+		}),
+		null,
+	);
+});
+
 void test('runtime bridge pause does not clear pending agent notifications', () => {
 	assert.equal(
 		shouldClearPendingAgentNotifications({
@@ -487,4 +523,349 @@ void test('agent notification restart coordinator reuses the last delay after th
 	assert.deepEqual(coordinator.consume(), { attempt: 2, delayMs: 200 });
 	assert.deepEqual(coordinator.consume(), { attempt: 3, delayMs: 200 });
 	assert.equal(coordinator.consume(), null);
+});
+
+void test('agent notification restart delay schedules a probe after budget exhaustion', () => {
+	assert.deepEqual(
+		getAgentNotificationRestartDelay({
+			restart: { delayMs: 2_000 },
+		}),
+		{ delayMs: 2_000, exhausted: false },
+	);
+	assert.deepEqual(
+		getAgentNotificationRestartDelay({
+			restart: null,
+		}),
+		{
+			delayMs: AGENT_NOTIFICATION_RESTART_EXHAUSTED_PROBE_MS,
+			exhausted: true,
+		},
+	);
+	assert.deepEqual(
+		getAgentNotificationRestartDelay({
+			restart: null,
+			exhaustedProbeMs: 123,
+		}),
+		{ delayMs: 123, exhausted: true },
+	);
+});
+
+void test('agent notification post retry coordinator tracks attempts per event key', () => {
+	const coordinator = createAgentNotificationPostRetryCoordinator({
+		maxAttempts: 3,
+		delaysMs: [100, 500],
+	});
+
+	assert.deepEqual(coordinator.consume('conn:main:@12:waiting'), {
+		attempt: 0,
+		delayMs: 100,
+	});
+	assert.deepEqual(coordinator.consume('conn:main:@13:waiting'), {
+		attempt: 0,
+		delayMs: 100,
+	});
+	assert.deepEqual(coordinator.consume('conn:main:@12:waiting'), {
+		attempt: 1,
+		delayMs: 500,
+	});
+	assert.deepEqual(coordinator.consume('conn:main:@12:waiting'), {
+		attempt: 2,
+		delayMs: 500,
+	});
+	assert.equal(coordinator.consume('conn:main:@12:waiting'), null);
+	assert.equal(coordinator.getAttemptCount('conn:main:@12:waiting'), 3);
+	assert.equal(coordinator.getAttemptCount('conn:main:@13:waiting'), 1);
+});
+
+void test('agent notification post retry key is stable per pending key and event id', () => {
+	const key = JSON.stringify(['saved-host', 'main', '@12']);
+
+	assert.equal(
+		createAgentNotificationPostRetryKey({
+			key,
+			eventId: 'main:@12:2000:waiting',
+		}),
+		createAgentNotificationPostRetryKey({
+			key,
+			eventId: 'main:@12:2000:waiting',
+		}),
+	);
+	assert.notEqual(
+		createAgentNotificationPostRetryKey({
+			key,
+			eventId: 'main:@12:2000:waiting',
+		}),
+		createAgentNotificationPostRetryKey({
+			key,
+			eventId: 'main:@12:3000:done',
+		}),
+	);
+	assert.notEqual(
+		createAgentNotificationPostRetryKey({
+			key,
+			eventId: 'main:@12:2000:waiting',
+		}),
+		createAgentNotificationPostRetryKey({
+			key: JSON.stringify(['saved-host', 'main', '@13']),
+			eventId: 'main:@12:2000:waiting',
+		}),
+	);
+});
+
+void test('agent notification post retry coordinator clears finished and reset retries', () => {
+	const coordinator = createAgentNotificationPostRetryCoordinator({
+		maxAttempts: 2,
+		delaysMs: [100],
+	});
+
+	assert.deepEqual(coordinator.consume('event-a'), {
+		attempt: 0,
+		delayMs: 100,
+	});
+	assert.deepEqual(coordinator.consume('event-b'), {
+		attempt: 0,
+		delayMs: 100,
+	});
+	coordinator.clear('event-a');
+	assert.deepEqual(coordinator.consume('event-a'), {
+		attempt: 0,
+		delayMs: 100,
+	});
+	coordinator.clearAll();
+	assert.equal(coordinator.getAttemptCount('event-a'), 0);
+	assert.equal(coordinator.getAttemptCount('event-b'), 0);
+});
+
+void test('agent notification cursor advance callback records only successful reposts', () => {
+	const recordedEventIds: string[] = [];
+	const lastSeenByTarget = new Map<string, string>();
+	const onPosted = createAgentNotificationCursorAdvanceOnPost({
+		resumeKey: 'saved-host:main',
+		eventId: 'main:@12:2000:done',
+		recordEventId: (eventId) => recordedEventIds.push(eventId),
+		setLastSeenId: (resumeKey, eventId) => {
+			lastSeenByTarget.set(resumeKey, eventId);
+		},
+	});
+
+	assert.equal(typeof onPosted, 'function');
+	onPosted?.(false);
+	assert.deepEqual(recordedEventIds, []);
+	assert.deepEqual(Array.from(lastSeenByTarget.entries()), []);
+
+	onPosted?.(true);
+	assert.deepEqual(recordedEventIds, ['main:@12:2000:done']);
+	assert.deepEqual(Array.from(lastSeenByTarget.entries()), [
+		['saved-host:main', 'main:@12:2000:done'],
+	]);
+	assert.equal(
+		createAgentNotificationCursorAdvanceOnPost({
+			resumeKey: null,
+			eventId: 'main:@12:2000:done',
+			recordEventId: () => {},
+			setLastSeenId: () => {},
+		}),
+		undefined,
+	);
+});
+
+void test('agent notification cursor advance callback uses pending resume key', () => {
+	const lastSeenByTarget = new Map<string, string>();
+	const onPosted = createAgentNotificationCursorAdvanceOnPost({
+		resumeKey: 'saved-host:main',
+		eventId: 'main:@12:2000:done',
+		recordEventId: () => {},
+		setLastSeenId: (resumeKey, eventId) => {
+			lastSeenByTarget.set(resumeKey, eventId);
+		},
+	});
+
+	onPosted(true);
+
+	assert.deepEqual(Array.from(lastSeenByTarget.entries()), [
+		['saved-host:main', 'main:@12:2000:done'],
+	]);
+	assert.equal(lastSeenByTarget.has('other-host:main'), false);
+});
+
+void test('agent notification repost input uses pending resume key', () => {
+	const recordedEventIds: string[] = [];
+	const lastSeenByTarget = new Map<string, string>();
+	const repostInput = createAgentNotificationRepostInput({
+		current: {
+			key: JSON.stringify(['saved-host', 'main', '@12']),
+			notificationId: 42,
+			resumeKey: 'saved-host:main',
+			event: {
+				id: 'main:@12:2000:done',
+				type: 'tmux_status',
+				session: 'main',
+				target: 'saved-host',
+				windowId: '@12',
+				windowIndex: '1',
+				windowName: 'agent',
+				status: 'done',
+				icon: '✅',
+				createdAtMs: 2_000,
+			},
+		},
+		target: {
+			key: 'other-host:main',
+			connectionId: 'connection-record-id',
+			channelId: 7,
+			notificationConnectionId: 'saved-host',
+		},
+		recordEventId: (eventId) => recordedEventIds.push(eventId),
+		setLastSeenId: (resumeKey, eventId) => {
+			lastSeenByTarget.set(resumeKey, eventId);
+		},
+	});
+
+	assert.equal(repostInput?.targetKey, 'other-host:main');
+	assert.equal(repostInput?.connectionId, 'connection-record-id');
+	assert.equal(repostInput?.key, JSON.stringify(['saved-host', 'main', '@12']));
+	assert.equal(repostInput?.notificationId, 42);
+	assert.deepEqual(repostInput?.event, {
+		id: 'main:@12:2000:done',
+		type: 'tmux_status',
+		session: 'main',
+		target: 'saved-host',
+		windowId: '@12',
+		windowIndex: '1',
+		windowName: 'agent',
+		status: 'done',
+		icon: '✅',
+		createdAtMs: 2_000,
+	});
+	assert.equal(repostInput?.channelId, 7);
+	assert.equal(repostInput?.notificationConnectionId, 'saved-host');
+	repostInput?.onPosted?.(true);
+
+	assert.deepEqual(recordedEventIds, ['main:@12:2000:done']);
+	assert.deepEqual(Array.from(lastSeenByTarget.entries()), [
+		['saved-host:main', 'main:@12:2000:done'],
+	]);
+	assert.equal(lastSeenByTarget.has('other-host:main'), false);
+});
+
+void test('agent notification repost input rejects mismatched current target', () => {
+	const repostInput = createAgentNotificationRepostInput({
+		current: {
+			key: JSON.stringify(['saved-host', 'main', '@12']),
+			notificationId: 42,
+			resumeKey: 'saved-host:main',
+			event: {
+				id: 'main:@12:2000:done',
+				type: 'tmux_status',
+				session: 'main',
+				target: 'saved-host',
+				windowId: '@12',
+				windowIndex: '1',
+				windowName: 'agent',
+				status: 'done',
+				icon: '✅',
+				createdAtMs: 2_000,
+			},
+		},
+		target: {
+			key: 'other-host:main',
+			connectionId: 'connection-record-id',
+			channelId: 7,
+			notificationConnectionId: 'other-host',
+		},
+		recordEventId: () => {},
+		setLastSeenId: () => {},
+	});
+
+	assert.equal(repostInput, null);
+});
+
+void test('agent notification post retry repost input rejects stale events', () => {
+	const repostInput = createAgentNotificationPostRetryRepostInput({
+		eventId: 'main:@12:2000:waiting',
+		current: {
+			key: JSON.stringify(['saved-host', 'main', '@12']),
+			notificationId: 42,
+			resumeKey: 'saved-host:main',
+			event: {
+				id: 'main:@12:3000:done',
+				type: 'tmux_status',
+				session: 'main',
+				target: 'saved-host',
+				windowId: '@12',
+				windowIndex: '1',
+				windowName: 'agent',
+				status: 'done',
+				icon: '✅',
+				createdAtMs: 3_000,
+			},
+		},
+		target: {
+			key: 'saved-host:main',
+			connectionId: 'connection-record-id',
+			channelId: 7,
+			notificationConnectionId: 'saved-host',
+		},
+		recordEventId: () => {},
+		setLastSeenId: () => {},
+	});
+
+	assert.equal(repostInput, null);
+});
+
+void test('agent notification post retry repost input ignores cleared pending events', () => {
+	const repostInput = createAgentNotificationPostRetryRepostInput({
+		eventId: 'main:@12:2000:waiting',
+		current: null,
+		target: {
+			key: 'saved-host:main',
+			connectionId: 'connection-record-id',
+			channelId: 7,
+			notificationConnectionId: 'saved-host',
+		},
+		recordEventId: () => {},
+		setLastSeenId: () => {},
+	});
+
+	assert.equal(repostInput, null);
+});
+
+void test('agent notification post retry repost input returns current repost', () => {
+	const lastSeenByTarget = new Map<string, string>();
+	const repostInput = createAgentNotificationPostRetryRepostInput({
+		eventId: 'main:@12:2000:waiting',
+		current: {
+			key: JSON.stringify(['saved-host', 'main', '@12']),
+			notificationId: 42,
+			resumeKey: 'saved-host:main',
+			event: {
+				id: 'main:@12:2000:waiting',
+				type: 'tmux_status',
+				session: 'main',
+				target: 'saved-host',
+				windowId: '@12',
+				windowIndex: '1',
+				windowName: 'agent',
+				status: 'waiting',
+				icon: '💬',
+				createdAtMs: 2_000,
+			},
+		},
+		target: {
+			key: 'saved-host:main',
+			connectionId: 'connection-record-id',
+			channelId: 7,
+			notificationConnectionId: 'saved-host',
+		},
+		recordEventId: () => {},
+		setLastSeenId: (resumeKey, eventId) => {
+			lastSeenByTarget.set(resumeKey, eventId);
+		},
+	});
+
+	assert.equal(repostInput?.notificationId, 42);
+	repostInput?.onPosted?.(true);
+	assert.deepEqual(Array.from(lastSeenByTarget.entries()), [
+		['saved-host:main', 'main:@12:2000:waiting'],
+	]);
 });

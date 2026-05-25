@@ -8,10 +8,12 @@ import {
 } from './agent-notification-route-identity';
 import {
 	clearStoredAgentNotificationRouteTokens,
+	consumeStoredAgentNotificationRouteToken,
 	createStoredAgentNotificationRouteToken,
 	deleteStoredAgentNotificationRouteTokens,
 	deleteStoredAgentNotificationRouteToken,
 	hasStoredAgentNotificationRouteToken,
+	restoreStoredAgentNotificationRouteToken,
 } from './agent-notification-route-store';
 import { cancelAgentAlertNotification } from './agent-notifications-native';
 import { rootLogger } from './logger';
@@ -41,6 +43,48 @@ export function hasAuthorizedAgentNotificationRouteToken(
 		});
 	} catch (error) {
 		logger.warn('agent notification route token lookup failed', error);
+		return false;
+	}
+}
+
+export function consumeAuthorizedAgentNotificationRouteToken(
+	connectionId: string,
+	session: string,
+	windowId: string,
+	eventId: string,
+	tapToken: string,
+) {
+	try {
+		return consumeStoredAgentNotificationRouteToken({
+			connectionId,
+			session,
+			windowId,
+			eventId,
+			tapToken,
+		});
+	} catch (error) {
+		logger.warn('agent notification route token consume failed', error);
+		return false;
+	}
+}
+
+export function restoreAuthorizedAgentNotificationRouteToken(
+	connectionId: string,
+	session: string,
+	windowId: string,
+	eventId: string,
+	tapToken: string,
+) {
+	try {
+		return restoreStoredAgentNotificationRouteToken({
+			connectionId,
+			session,
+			windowId,
+			eventId,
+			tapToken,
+		});
+	} catch (error) {
+		logger.warn('agent notification route token restore failed', error);
 		return false;
 	}
 }

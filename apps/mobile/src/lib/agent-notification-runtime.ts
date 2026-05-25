@@ -34,6 +34,18 @@ export function shouldStartForegroundService(input: {
 	return input.currentKey !== input.nextKey || !input.foregroundServiceStarted;
 }
 
+export function getForegroundServiceStartRetryDelay(input: {
+	shouldRunService: boolean;
+	failedAttempts: number;
+	maxAttempts?: number;
+	retryDelayMs?: number;
+}) {
+	if (!input.shouldRunService) return null;
+	const maxAttempts = input.maxAttempts ?? 5;
+	if (input.failedAttempts >= maxAttempts) return null;
+	return input.retryDelayMs ?? 5_000;
+}
+
 export function getForegroundServiceNotificationMessage(input: {
 	hasConnection: boolean;
 	isAutoConnecting: boolean;
@@ -205,6 +217,60 @@ export function createAgentNotificationRestartCoordinator(input: {
 			attempts = 0;
 			return true;
 		},
+	};
+}
+
+export function createAgentNotificationPostRetryCoordinator(input: {
+	maxAttempts: number;
+	delaysMs: readonly number[];
+}) {
+	const attemptsByKey = new Map<string, number>();
+	return {
+		consume(key: string) {
+			const attempt = attemptsByKey.get(key) ?? 0;
+			if (attempt >= input.maxAttempts) return null;
+			attemptsByKey.set(key, attempt + 1);
+			const delayMs =
+				input.delaysMs[Math.min(attempt, input.delaysMs.length - 1)] ?? 0;
+			return { attempt, delayMs };
+		},
+		clear(key: string) {
+			attemptsByKey.delete(key);
+		},
+		clearAll() {
+			attemptsByKey.clear();
+		},
+		getAttemptCount(key: string) {
+			return attemptsByKey.get(key) ?? 0;
+		},
+	};
+}
+
+type AgentNotificationCursorAdvanceInput = {
+	resumeKey: string | null;
+	eventId: string;
+	recordEventId: (eventId: string) => void;
+	setLastSeenId: (resumeKey: string, eventId: string) => void;
+};
+
+export function createAgentNotificationCursorAdvanceOnPost(
+	input: AgentNotificationCursorAdvanceInput & { resumeKey: string },
+): (posted: boolean) => void;
+export function createAgentNotificationCursorAdvanceOnPost(
+	input: AgentNotificationCursorAdvanceInput & { resumeKey: null },
+): undefined;
+export function createAgentNotificationCursorAdvanceOnPost(
+	input: AgentNotificationCursorAdvanceInput,
+): ((posted: boolean) => void) | undefined;
+export function createAgentNotificationCursorAdvanceOnPost(
+	input: AgentNotificationCursorAdvanceInput,
+) {
+	if (input.resumeKey === null) return undefined;
+	const resumeKey = input.resumeKey;
+	return (posted: boolean) => {
+		if (!posted) return;
+		input.recordEventId(input.eventId);
+		input.setLastSeenId(resumeKey, input.eventId);
 	};
 }
 

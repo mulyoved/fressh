@@ -5,6 +5,7 @@ import {
 	parseAgentNotificationLine,
 	type AgentNotificationDedupe,
 } from './agent-notification-events';
+import { createAgentNotificationCursorAdvanceOnPost } from './agent-notification-runtime';
 
 export type AgentNotificationRuntimeTarget = {
 	key: string;
@@ -68,6 +69,7 @@ export function handleAgentNotificationListenerLine({
 		event: parsed,
 		connectionId: activeTarget.notificationConnectionId,
 		dedupe,
+		resumeKey: activeTarget.resumeKey,
 		notifyPending,
 		onPending: ({ key, notificationId, event }) => {
 			postPendingNotification({
@@ -78,11 +80,16 @@ export function handleAgentNotificationListenerLine({
 				connectionId: activeTarget.connectionId,
 				channelId: activeTarget.channelId,
 				notificationConnectionId: activeTarget.notificationConnectionId,
-				onPosted: (posted) => {
-					if (!posted) return;
-					bridge.recordEventId(event.id);
-					lastSeenIdByTarget.set(activeTarget.resumeKey, event.id);
-				},
+				onPosted: createAgentNotificationCursorAdvanceOnPost({
+					resumeKey: activeTarget.resumeKey,
+					eventId: event.id,
+					recordEventId: (eventId) => {
+						bridge.recordEventId(eventId);
+					},
+					setLastSeenId: (resumeKey, eventId) => {
+						lastSeenIdByTarget.set(resumeKey, eventId);
+					},
+				}),
 			});
 		},
 	});

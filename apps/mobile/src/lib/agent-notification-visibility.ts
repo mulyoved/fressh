@@ -41,7 +41,14 @@ export type AgentNotificationRouteOptions = {
 	tmuxTarget: string;
 	isRouteHandled: (routeKey: string) => boolean;
 	markRouteHandled: (routeKey: string) => void;
-	hasAuthorizedRouteToken: (
+	consumeAuthorizedRouteToken: (
+		connectionId: string,
+		session: string,
+		windowId: string,
+		eventId: string,
+		tapToken: string,
+	) => boolean;
+	restoreAuthorizedRouteToken?: (
 		connectionId: string,
 		session: string,
 		windowId: string,
@@ -94,7 +101,8 @@ export async function handleAgentNotificationRoute({
 	tmuxTarget,
 	isRouteHandled,
 	markRouteHandled,
-	hasAuthorizedRouteToken,
+	consumeAuthorizedRouteToken,
+	restoreAuthorizedRouteToken,
 	runCommand,
 	acknowledge,
 	warn,
@@ -121,9 +129,9 @@ export async function handleAgentNotificationRoute({
 		eventId: agentEventId,
 	});
 	if (isRouteHandled(routeKey)) return false;
-	let hasPending = false;
+	let consumedRouteToken = false;
 	try {
-		hasPending = hasAuthorizedRouteToken(
+		consumedRouteToken = consumeAuthorizedRouteToken(
 			notificationConnectionId,
 			session,
 			agentWindowId,
@@ -131,10 +139,10 @@ export async function handleAgentNotificationRoute({
 			agentTapToken,
 		);
 	} catch (error) {
-		warn('failed to check agent notification route token', error);
+		warn('failed to consume agent notification route token', error);
 		return false;
 	}
-	if (!hasPending) {
+	if (!consumedRouteToken) {
 		return false;
 	}
 
@@ -147,6 +155,19 @@ export async function handleAgentNotificationRoute({
 		acknowledge(notificationConnectionId, session, agentWindowId);
 		return true;
 	} catch (error) {
+		if (restoreAuthorizedRouteToken) {
+			try {
+				restoreAuthorizedRouteToken(
+					notificationConnectionId,
+					session,
+					agentWindowId,
+					agentEventId,
+					agentTapToken,
+				);
+			} catch (restoreError) {
+				warn('failed to restore agent notification route token', restoreError);
+			}
+		}
 		warn('failed to select agent notification window', error);
 		return false;
 	}

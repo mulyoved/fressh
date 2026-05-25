@@ -6,6 +6,12 @@ import {
 	HEARTBEAT_STALE_MS,
 } from './agent-notification-bridge';
 import { setAgentNotificationBridgeApi } from './agent-notification-bridge-api';
+import {
+	createAgentNotificationPostRetryKey,
+	createAgentNotificationPostRetryRepostInput,
+	createAgentNotificationRepostInput,
+	getAgentNotificationRestartDelay,
+} from './agent-notification-bridge-manager-core';
 import { handleAgentNotificationListenerLine } from './agent-notification-bridge-runtime';
 import { clearAgentNotificationRoutesSafely } from './agent-notification-clear';
 import {
@@ -22,6 +28,7 @@ import {
 } from './agent-notification-route-api';
 import {
 	canRunAgentNotificationBridge,
+	createAgentNotificationPostRetryCoordinator,
 	createAgentNotificationRestartCoordinator,
 	getNextConfiguredResumeKey,
 	shouldClearPendingAgentNotifications,
@@ -73,6 +80,15 @@ type SessionSettings = {
 	session: string;
 };
 
+function createRepostTarget(target: ListenerTarget) {
+	return {
+		key: target.key,
+		connectionId: target.connection.connectionId,
+		channelId: target.channelId,
+		notificationConnectionId: target.notificationConnectionId,
+	};
+}
+
 export function AgentNotificationBridgeManager({
 	preservePendingWithoutTarget = false,
 }: {
@@ -99,7 +115,12 @@ export function AgentNotificationBridgeManager({
 	const postRetryTimersRef = React.useRef(
 		new Map<string, ReturnType<typeof setTimeout>>(),
 	);
-	const postRetryAttemptsRef = React.useRef(new Map<string, number>());
+	const postRetryCoordinatorRef = React.useRef(
+		createAgentNotificationPostRetryCoordinator({
+			maxAttempts: AGENT_NOTIFICATION_MAX_POST_RETRY_ATTEMPTS,
+			delaysMs: POST_RETRY_DELAYS_MS,
+		}),
+	);
 	const restartCoordinatorRef = React.useRef(
 		createAgentNotificationRestartCoordinator({
 			maxAttempts: AGENT_NOTIFICATION_MAX_RESTART_ATTEMPTS,
@@ -266,7 +287,7 @@ export function AgentNotificationBridgeManager({
 			clearTimeout(timer);
 		}
 		postRetryTimersRef.current.clear();
-		postRetryAttemptsRef.current.clear();
+		postRetryCoordinatorRef.current.clearAll();
 	}, []);
 
 	const stopListener = React.useCallback(async () => {
@@ -302,23 +323,26 @@ export function AgentNotificationBridgeManager({
 			if (!targetRef.current) return;
 			if (restartTimerRef.current) return;
 
-			const restart = restartCoordinatorRef.current.consume();
-			if (!restart) {
+			const { delayMs, exhausted } = getAgentNotificationRestartDelay({
+				restart: restartCoordinatorRef.current.consume(),
+			});
+			if (exhausted) {
 				logger.warn('agent notification listener restart budget exhausted', {
 					reason,
 					attempt: restartCoordinatorRef.current.attempts,
+					delayMs,
 				});
-				return;
+			} else {
+				logger.info('agent notification listener restart scheduled', {
+					reason,
+					delayMs,
+				});
 			}
 			clearHeartbeatTimer();
-			logger.info('agent notification listener restart scheduled', {
-				reason,
-				delayMs: restart.delayMs,
-			});
 			restartTimerRef.current = setTimeout(() => {
 				restartTimerRef.current = null;
 				void stopListener().then(() => startListenerRef.current?.());
-			}, restart.delayMs);
+			}, delayMs);
 		},
 		[clearHeartbeatTimer, stopListener],
 	);
@@ -351,6 +375,29 @@ export function AgentNotificationBridgeManager({
 			scheduleRestart('heartbeat-stale');
 		},
 		[scheduleRestart],
+	);
+
+	const createRepostInputForTarget = React.useCallback(
+		(
+			current: {
+				key: string;
+				notificationId: number;
+				event: AgentNotificationEvent;
+				resumeKey: string | null;
+			},
+			currentTarget: ListenerTarget,
+		) =>
+			createAgentNotificationRepostInput({
+				current,
+				target: createRepostTarget(currentTarget),
+				recordEventId: (eventId) => {
+					bridgeRef.current.recordEventId(eventId);
+				},
+				setLastSeenId: (resumeKey, eventId) => {
+					lastSeenIdByTargetRef.current.set(resumeKey, eventId);
+				},
+			}),
+		[],
 	);
 
 	const postPendingNotification = React.useCallback(
@@ -392,9 +439,12 @@ export function AgentNotificationBridgeManager({
 			}).then((result) => {
 				if (!result) return;
 				onPosted?.(result.shouldAdvanceCursor);
-				const postRetryKey = JSON.stringify([key, event.id]);
+				const postRetryKey = createAgentNotificationPostRetryKey({
+					key,
+					eventId: event.id,
+				});
 				if (result.posted) {
-					postRetryAttemptsRef.current.delete(postRetryKey);
+					postRetryCoordinatorRef.current.clear(postRetryKey);
 					const timer = postRetryTimersRef.current.get(postRetryKey);
 					if (timer) {
 						clearTimeout(timer);
@@ -405,47 +455,42 @@ export function AgentNotificationBridgeManager({
 					key: string;
 					notificationId: number;
 					event: AgentNotificationEvent;
+					resumeKey: string | null;
 				}) => {
 					const currentTarget = targetRef.current;
 					if (!currentTarget) return;
-					if (
-						!matchesAgentNotificationPendingKey(current.key, {
-							connectionId: currentTarget.notificationConnectionId,
-							session: current.event.session,
-							windowId: current.event.windowId,
-						})
-					) {
-						return;
-					}
-						postPendingNotification({
-							...current,
-							targetKey: currentTarget.key,
-							connectionId: currentTarget.connection.connectionId,
-							channelId: currentTarget.channelId,
-							notificationConnectionId: currentTarget.notificationConnectionId,
-							onPosted,
-						});
+					const repostInput = createRepostInputForTarget(current, currentTarget);
+					if (!repostInput) return;
+					postPendingNotification(repostInput);
 				};
 				if (result.completion.type === 'failed') {
 					if (postRetryTimersRef.current.has(postRetryKey)) return;
-					const attempt = postRetryAttemptsRef.current.get(postRetryKey) ?? 0;
-					if (attempt >= AGENT_NOTIFICATION_MAX_POST_RETRY_ATTEMPTS) {
+					const retry = postRetryCoordinatorRef.current.consume(postRetryKey);
+					if (!retry) {
 						logger.warn('agent notification post retry budget exhausted', {
 							eventId: event.id,
 						});
 						return;
 					}
-					const delayMs =
-						POST_RETRY_DELAYS_MS[
-							Math.min(attempt, POST_RETRY_DELAYS_MS.length - 1)
-						] ?? 0;
-					postRetryAttemptsRef.current.set(postRetryKey, attempt + 1);
 					const timer = setTimeout(() => {
 						postRetryTimersRef.current.delete(postRetryKey);
 						const current = dedupeRef.current.getPendingEvent(key);
-						if (!current || current.event.id !== event.id) return;
-						postWithCurrentTarget(current);
-					}, delayMs);
+						const currentTarget = targetRef.current;
+						if (!currentTarget) return;
+						const repostInput = createAgentNotificationPostRetryRepostInput({
+							current,
+							eventId: event.id,
+							target: createRepostTarget(currentTarget),
+							recordEventId: (eventId) => {
+								bridgeRef.current.recordEventId(eventId);
+							},
+							setLastSeenId: (resumeKey, eventId) => {
+								lastSeenIdByTargetRef.current.set(resumeKey, eventId);
+							},
+						});
+						if (!repostInput) return;
+						postPendingNotification(repostInput);
+					}, retry.delayMs);
 					postRetryTimersRef.current.set(postRetryKey, timer);
 					return;
 				}
@@ -464,7 +509,7 @@ export function AgentNotificationBridgeManager({
 				}
 			});
 		},
-		[],
+		[createRepostInputForTarget],
 	);
 
 	const startListener = React.useCallback(async () => {
@@ -601,13 +646,8 @@ export function AgentNotificationBridgeManager({
 		if (target?.key !== previousTargetKeyRef.current) {
 			if (target) {
 				for (const pending of dedupeRef.current.getPendingEvents()) {
-					postPendingNotification({
-						...pending,
-						targetKey: target.key,
-						connectionId: target.connection.connectionId,
-						channelId: target.channelId,
-						notificationConnectionId: target.notificationConnectionId,
-					});
+					const repostInput = createRepostInputForTarget(pending, target);
+					if (repostInput) postPendingNotification(repostInput);
 				}
 			}
 			restartCoordinatorRef.current.reset();
@@ -643,6 +683,7 @@ export function AgentNotificationBridgeManager({
 		clearPendingNotifications,
 		connection,
 		configuredTarget,
+		createRepostInputForTarget,
 		latestShell,
 		postPendingNotification,
 		preservePendingWithoutTarget,
