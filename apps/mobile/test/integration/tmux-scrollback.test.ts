@@ -9,7 +9,7 @@ import {
 } from '../../src/lib/tmux-scrollback';
 
 const bytes = (values: number[]) => new Uint8Array(values);
-const segmentValues = (segments: ReadonlyArray<Uint8Array<ArrayBuffer>>) =>
+const segmentValues = (segments: readonly Uint8Array<ArrayBuffer>[]) =>
 	segments.map((segment) => Array.from(segment));
 
 void test('buildTmuxScrollbackCopyModeCommand enters copy mode through tmux control shell', () => {

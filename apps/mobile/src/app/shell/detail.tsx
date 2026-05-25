@@ -91,6 +91,7 @@ import {
 	loadRuntimeShellConfigState,
 	reloadRuntimeShellConfigFromRemote,
 } from '@/lib/shell-config-store-native';
+import { buildShellLiveInputSendPlan } from '@/lib/shell-live-input';
 import {
 	buildSkillDiscoveryCommand,
 	parseSkillDiscoveryOutput,
@@ -98,6 +99,11 @@ import {
 } from '@/lib/skill-discovery';
 import { executeSideChannelCommand } from '@/lib/ssh-side-channel';
 import { useSshStore } from '@/lib/ssh-store';
+import {
+	buildClipboardPasteSegments,
+	buildCommanderExecuteSegments,
+	buildTextEntryPasteSegments,
+} from '@/lib/terminal-input-payloads';
 import { useTheme } from '@/lib/theme';
 import {
 	buildTmuxScrollbackCopyModeCommand,
@@ -105,12 +111,6 @@ import {
 	isValidTmuxCancelKey,
 	runTmuxControlCommand,
 } from '@/lib/tmux-scrollback';
-import { buildShellLiveInputSendPlan } from '@/lib/shell-live-input';
-import {
-	buildClipboardPasteSegments,
-	buildCommanderExecuteSegments,
-	buildTextEntryPasteSegments,
-} from '@/lib/terminal-input-payloads';
 import { queryClient } from '@/lib/utils';
 import { wisprAutomationNative } from '@/lib/wispr-automation-native';
 import {

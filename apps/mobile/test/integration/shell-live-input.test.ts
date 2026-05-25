@@ -3,7 +3,7 @@ import test from 'node:test';
 import { buildShellLiveInputSendPlan } from '../../src/lib/shell-live-input';
 
 const bytes = (values: number[]) => new Uint8Array(values);
-const segmentValues = (segments: ReadonlyArray<Uint8Array<ArrayBuffer>>) =>
+const segmentValues = (segments: readonly Uint8Array<ArrayBuffer>[]) =>
 	segments.map((segment) => Array.from(segment));
 
 void test('maps active multi-segment input to cancel key, payload, and exit delay', () => {
