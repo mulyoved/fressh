@@ -639,6 +639,7 @@ const agentAlertInput = {
 	windowId: '@1',
 	eventId: 'main:@1:2000:waiting',
 	tapToken: 'tap-token',
+	vibrate: true,
 };
 
 function createTestLogger() {
@@ -725,6 +726,7 @@ void test('agent notification wrapper checks permission before posting native al
 				windowId,
 				eventId,
 				tapToken,
+				vibrate,
 			) => {
 				calls.push('native-post');
 				assert.deepEqual(
@@ -740,6 +742,7 @@ void test('agent notification wrapper checks permission before posting native al
 						windowId,
 						eventId,
 						tapToken,
+						vibrate,
 					],
 					[
 						123,
@@ -753,6 +756,7 @@ void test('agent notification wrapper checks permission before posting native al
 						'@1',
 						'main:@1:2000:waiting',
 						'tap-token',
+						true,
 					],
 				);
 			},
@@ -899,9 +903,9 @@ void test('agent notification wrapper does not post route alerts through old nat
 		getNativeModule: () => ({
 			postAgentAlert: async (...args: unknown[]) => {
 				calls.push(args);
-				if (args.length === 11) {
+				if (args.length === 12) {
 					throw new Error(
-						'FresshForegroundService.postAgentAlert got 11 arguments, expected 10',
+						'FresshForegroundService.postAgentAlert got 12 arguments, expected 11',
 					);
 				}
 			},
@@ -917,13 +921,13 @@ void test('agent notification wrapper does not post route alerts through old nat
 
 	assert.deepEqual(
 		calls.map((args) => args.length),
-		[11],
+		[12],
 	);
 	assert.deepEqual(entries, [
 		[
 			'agent alert notification post failed',
 			new Error(
-				'FresshForegroundService.postAgentAlert got 11 arguments, expected 10',
+				'FresshForegroundService.postAgentAlert got 12 arguments, expected 11',
 			),
 		],
 	]);

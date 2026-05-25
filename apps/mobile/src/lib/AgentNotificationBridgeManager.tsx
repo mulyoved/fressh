@@ -37,6 +37,7 @@ import {
 import { getStoredConnectionId } from './connection-utils';
 import { isForegroundServiceRunning } from './foreground-service';
 import { rootLogger } from './logger';
+import { preferences } from './preferences';
 import { secretsManager } from './secrets-manager';
 import {
 	type SshJsonlListenerHandle,
@@ -380,6 +381,7 @@ export function AgentNotificationBridgeManager({
 				connectionId,
 				channelId,
 				notificationConnectionId,
+				vibrate: preferences.agentAlerts.vibration.get(),
 				dedupe: dedupeRef.current,
 				dependencies: {
 					createRouteToken: createRoutedAgentNotificationRouteToken,

@@ -29,6 +29,7 @@ type PostAgentNotificationWithRouteTokenInput = {
 	connectionId: string;
 	channelId: number;
 	notificationConnectionId: string;
+	vibrate?: boolean;
 	dedupe: AgentNotificationDedupe;
 	dependencies: AgentNotificationPostingDependencies;
 };
@@ -40,6 +41,7 @@ export async function postAgentNotificationWithRouteToken({
 	connectionId,
 	channelId,
 	notificationConnectionId,
+	vibrate = true,
 	dedupe,
 	dependencies,
 }: PostAgentNotificationWithRouteTokenInput) {
@@ -71,6 +73,7 @@ export async function postAgentNotificationWithRouteToken({
 				windowId: event.windowId,
 				eventId: event.id,
 				tapToken,
+				vibrate,
 			}),
 			dependencies.postTimeoutMs ?? AGENT_NOTIFICATION_POST_TIMEOUT_MS,
 		);

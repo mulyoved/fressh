@@ -75,6 +75,31 @@ void test('postAgentNotificationWithRouteToken passes generated tap token to nat
 	assert.deepEqual(deletedTokens, []);
 });
 
+void test('postAgentNotificationWithRouteToken forwards vibration preference to native post', async () => {
+	const harness = createPendingPostHarness();
+	const nativePosts: AgentAlertNotificationInput[] = [];
+
+	const result = await postAgentNotificationWithRouteToken({
+		...harness,
+		connectionId: 'runtime-connection',
+		channelId: 7,
+		notificationConnectionId: 'saved-host',
+		vibrate: false,
+		dependencies: {
+			createRouteToken: () => 'tap-token',
+			deleteRouteToken: () => {},
+			postAgentAlertNotification: async (input) => {
+				nativePosts.push(input);
+				return true;
+			},
+		},
+	});
+
+	assert.equal(result?.posted, true);
+	assert.equal(nativePosts.length, 1);
+	assert.equal(nativePosts[0]?.vibrate, false);
+});
+
 void test('postAgentNotificationWithRouteToken deletes tap token when native post fails', async () => {
 	const harness = createPendingPostHarness();
 	const deletedTokens: unknown[] = [];

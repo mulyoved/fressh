@@ -15,6 +15,7 @@ type AgentNotificationsNativeModule = {
 		windowId: string,
 		eventId: string,
 		tapToken: string,
+		vibrate: boolean,
 	) => Promise<void>;
 	cancelAgentAlert?: (notificationId: number) => Promise<void>;
 };
@@ -31,6 +32,7 @@ export type AgentAlertNotificationInput = {
 	windowId: string;
 	eventId: string;
 	tapToken: string;
+	vibrate: boolean;
 };
 
 type AgentNotificationsLogger = {
@@ -79,6 +81,7 @@ export function createAgentNotificationsNativeWrapper({
 					input.windowId,
 					input.eventId,
 					input.tapToken,
+					input.vibrate,
 				);
 				return true;
 			} catch (error) {
