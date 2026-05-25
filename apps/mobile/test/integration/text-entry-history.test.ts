@@ -674,6 +674,44 @@ void test('createTextEntryHistoryStore deletes storage when deleting the last en
 	assert.equal(memory.entries.get(TEXT_ENTRY_HISTORY_STORAGE_KEY), undefined);
 });
 
+void test('createTextEntryHistoryStore handles delete failures when persisting empty state', () => {
+	const warnings: unknown[][] = [];
+	const store = createTextEntryHistoryStore({
+		storage: {
+			getString: () =>
+				JSON.stringify({
+					version: 1,
+					entries: [
+						{
+							id: 'entry-1',
+							text: 'echo hi',
+							createdAtMs: 100,
+							lastUsedAtMs: 100,
+							pinned: false,
+						},
+					],
+				}),
+			set: () => {},
+			delete: () => {
+				throw new Error('delete failed');
+			},
+		},
+		logger: {
+			warn: (...args: unknown[]) => {
+				warnings.push(args);
+			},
+		},
+		now: () => 100,
+		random: () => 0.5,
+	});
+
+	const state = store.deleteEntry('entry-1');
+
+	assert.deepEqual(state, createEmptyTextEntryHistoryState());
+	assert.equal(warnings.length, 1);
+	assert.equal(JSON.stringify(warnings).includes('echo hi'), false);
+});
+
 void test('createTextEntryHistoryStore avoids generated id collisions', () => {
 	const existingId = createTextEntryHistoryId(100, () => 0.5);
 	const memory = createMemoryStorage({
