@@ -310,6 +310,14 @@ async function preferencesSource() {
 	);
 }
 
+async function settingsScreenSource() {
+	return readFile(
+		new URL('../../src/app/(tabs)/settings/index.tsx', import.meta.url)
+			.pathname,
+		'utf8',
+	);
+}
+
 void test('agent alert vibration preference defaults to enabled', async () => {
 	const source = await preferencesSource();
 
@@ -321,6 +329,15 @@ void test('agent alert vibration preference defaults to enabled', async () => {
 		/_resolve: \(rawValue: boolean \| undefined\): boolean => rawValue !== false/,
 	);
 	assert.match(source, /useAgentAlertVibrationPref/);
+});
+
+void test('settings screen exposes agent alert vibration toggle', async () => {
+	const source = await settingsScreenSource();
+
+	assert.match(source, /Agent alert vibration/);
+	assert.match(source, /useAgentAlertVibrationPref\(\)/);
+	assert.match(source, /accessibilityRole="switch"/);
+	assert.match(source, /onValueChange=\{setAgentAlertVibration\}/);
 });
 
 void test('foreground service plugin defines a separate agent alert channel', async () => {
