@@ -1,3 +1,11 @@
+import {
+	ChevronDown,
+	ChevronUp,
+	History,
+	Pin,
+	PinOff,
+	Trash2,
+} from 'lucide-react-native';
 import React, {
 	useCallback,
 	useEffect,
@@ -21,14 +29,6 @@ import {
 	TextInput,
 	View,
 } from 'react-native';
-import {
-	ChevronDown,
-	ChevronUp,
-	History,
-	Pin,
-	PinOff,
-	Trash2,
-} from 'lucide-react-native';
 import { closeThenDismissKeyboard } from '@/lib/deferred-keyboard-dismiss';
 import { type TextEntryHistoryEntry } from '@/lib/text-entry-history';
 import { useTheme } from '@/lib/theme';
@@ -55,6 +55,8 @@ export type TextEntryHistoryModalProps = {
 	onDeleteEntry: (id: string) => void;
 	onClearRecent: () => void;
 };
+
+const EMPTY_TEXT_ENTRY_HISTORY_ENTRIES: readonly TextEntryHistoryEntry[] = [];
 
 export function TextEntryModal({
 	open,
@@ -104,9 +106,12 @@ export function TextEntryModal({
 	const [historyIndex, setHistoryIndex] = useState(-1);
 	const valueRef = useRef('');
 	const focusTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-	const cycleEntries = history?.cycleEntries ?? [];
-	const pinnedEntries = history?.pinnedEntries ?? [];
-	const recentEntries = history?.recentEntries ?? [];
+	const cycleEntries =
+		history?.cycleEntries ?? EMPTY_TEXT_ENTRY_HISTORY_ENTRIES;
+	const pinnedEntries =
+		history?.pinnedEntries ?? EMPTY_TEXT_ENTRY_HISTORY_ENTRIES;
+	const recentEntries =
+		history?.recentEntries ?? EMPTY_TEXT_ENTRY_HISTORY_ENTRIES;
 	const hasHistory = cycleEntries.length > 0;
 	const currentPinnedEntry = useMemo(() => {
 		if (!value) return undefined;
@@ -118,7 +123,9 @@ export function TextEntryModal({
 	}, [cycleEntries.length, hasHistory, historyIndex]);
 
 	const resetHistoryState = useCallback(() => {
+		// eslint-disable-next-line @eslint-react/hooks-extra/no-direct-set-state-in-use-effect -- Called from the close effect to reset transient history controls.
 		setHistoryPanelOpen(false);
+		// eslint-disable-next-line @eslint-react/hooks-extra/no-direct-set-state-in-use-effect -- Called from the close effect to reset transient history controls.
 		setHistoryIndex(-1);
 	}, []);
 
@@ -434,66 +441,66 @@ export function TextEntryModal({
 									}}
 								>
 									{wisprControl?.type === 'switch' ? (
-									<View
-										style={{
-											flexDirection: 'row',
-											alignItems: 'center',
-											gap: 8,
-											borderRadius: 999,
-											paddingVertical: 4,
-											paddingLeft: 12,
-											paddingRight: 6,
-											borderWidth: 1,
-											borderColor: wisprControl.enabled
-												? theme.colors.primary
-												: theme.colors.border,
-											backgroundColor: wisprControl.enabled
-												? theme.colors.surface
-												: 'transparent',
-										}}
-									>
-										<Text
+										<View
 											style={{
-												color: theme.colors.textPrimary,
-												fontSize: 12,
-												fontWeight: '700',
+												flexDirection: 'row',
+												alignItems: 'center',
+												gap: 8,
+												borderRadius: 999,
+												paddingVertical: 4,
+												paddingLeft: 12,
+												paddingRight: 6,
+												borderWidth: 1,
+												borderColor: wisprControl.enabled
+													? theme.colors.primary
+													: theme.colors.border,
+												backgroundColor: wisprControl.enabled
+													? theme.colors.surface
+													: 'transparent',
 											}}
 										>
-											{wisprControl.label}
-										</Text>
-										<Switch
-											value={wisprControl.enabled}
-											onValueChange={onWisprAutoStartChange}
-											trackColor={{
-												false: theme.colors.border,
-												true: theme.colors.primary,
-											}}
-											thumbColor={theme.colors.textPrimary}
-										/>
-									</View>
+											<Text
+												style={{
+													color: theme.colors.textPrimary,
+													fontSize: 12,
+													fontWeight: '700',
+												}}
+											>
+												{wisprControl.label}
+											</Text>
+											<Switch
+												value={wisprControl.enabled}
+												onValueChange={onWisprAutoStartChange}
+												trackColor={{
+													false: theme.colors.border,
+													true: theme.colors.primary,
+												}}
+												thumbColor={theme.colors.textPrimary}
+											/>
+										</View>
 									) : null}
 									{wisprControl?.type === 'setup-pill' ? (
-									<Pressable
-										onPress={onWisprSetup}
-										style={{
-											borderRadius: 999,
-											paddingVertical: 8,
-											paddingHorizontal: 12,
-											borderWidth: 1,
-											borderColor: theme.colors.border,
-											backgroundColor: theme.colors.surface,
-										}}
-									>
-										<Text
+										<Pressable
+											onPress={onWisprSetup}
 											style={{
-												color: theme.colors.textSecondary,
-												fontSize: 12,
-												fontWeight: '700',
+												borderRadius: 999,
+												paddingVertical: 8,
+												paddingHorizontal: 12,
+												borderWidth: 1,
+												borderColor: theme.colors.border,
+												backgroundColor: theme.colors.surface,
 											}}
 										>
-											{wisprControl.label}
-										</Text>
-									</Pressable>
+											<Text
+												style={{
+													color: theme.colors.textSecondary,
+													fontSize: 12,
+													fontWeight: '700',
+												}}
+											>
+												{wisprControl.label}
+											</Text>
+										</Pressable>
 									) : null}
 									{history ? (
 										<>
@@ -517,10 +524,7 @@ export function TextEntryModal({
 												}}
 											>
 												{currentPinnedEntry ? (
-													<PinOff
-														color={theme.colors.textPrimary}
-														size={17}
-													/>
+													<PinOff color={theme.colors.textPrimary} size={17} />
 												) : (
 													<Pin color={theme.colors.textSecondary} size={17} />
 												)}
@@ -617,10 +621,7 @@ export function TextEntryModal({
 											opacity: hasHistory ? 1 : 0.45,
 										}}
 									>
-										<ChevronUp
-											color={theme.colors.textSecondary}
-											size={18}
-										/>
+										<ChevronUp color={theme.colors.textSecondary} size={18} />
 									</Pressable>
 									<Text
 										style={{
@@ -648,10 +649,7 @@ export function TextEntryModal({
 											opacity: hasHistory ? 1 : 0.45,
 										}}
 									>
-										<ChevronDown
-											color={theme.colors.textSecondary}
-											size={18}
-										/>
+										<ChevronDown color={theme.colors.textSecondary} size={18} />
 									</Pressable>
 								</View>
 							) : null}
