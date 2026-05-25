@@ -37,3 +37,7 @@ void test('commander execute appends Enter', () => {
 		'\r',
 	]);
 });
+
+void test('commander execute returns no payload for trim-empty text', () => {
+	assert.deepEqual(buildCommanderExecuteSegments('   \n\t'), []);
+});
