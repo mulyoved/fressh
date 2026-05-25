@@ -303,6 +303,26 @@ async function agentNotificationsNativeSource() {
 	);
 }
 
+async function preferencesSource() {
+	return readFile(
+		new URL('../../src/lib/preferences.tsx', import.meta.url).pathname,
+		'utf8',
+	);
+}
+
+void test('agent alert vibration preference defaults to enabled', async () => {
+	const source = await preferencesSource();
+
+	assert.match(source, /agentAlerts:/);
+	assert.match(source, /vibration:/);
+	assert.match(source, /_key: 'agentAlerts\.vibration'/);
+	assert.match(
+		source,
+		/_resolve: \(rawValue: boolean \| undefined\): boolean => rawValue !== false/,
+	);
+	assert.match(source, /useAgentAlertVibrationPref/);
+});
+
 void test('foreground service plugin defines a separate agent alert channel', async () => {
 	const pluginSource = await foregroundPluginSource();
 	const source = await generatedSshForegroundServiceSource();
