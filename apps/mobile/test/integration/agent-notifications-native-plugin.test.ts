@@ -57,7 +57,41 @@ async function foregroundPluginSource() {
 	);
 }
 
-async function committedForegroundServiceModuleSource() {
+async function mobilePackageJson() {
+	return JSON.parse(
+		await readFile(new URL('../../package.json', import.meta.url).pathname, 'utf8'),
+	) as { scripts?: Record<string, string> };
+}
+
+async function checkWorkflowSource() {
+	return readFile(
+		new URL('../../../../.github/workflows/check.yml', import.meta.url)
+			.pathname,
+		'utf8',
+	);
+}
+
+async function foregroundServiceModuleTemplateSource() {
+	return readFile(
+		new URL(
+			'../../plugins/foreground-service-android/ForegroundServiceModule.kt',
+			import.meta.url,
+		).pathname,
+		'utf8',
+	);
+}
+
+async function sshForegroundServiceTemplateSource() {
+	return readFile(
+		new URL(
+			'../../plugins/foreground-service-android/SshForegroundService.kt',
+			import.meta.url,
+		).pathname,
+		'utf8',
+	);
+}
+
+async function foregroundServiceModuleAndroidSource() {
 	return readFile(
 		new URL(
 			'../../android/app/src/main/java/com/finalapp/vibe2/ForegroundServiceModule.kt',
@@ -67,7 +101,7 @@ async function committedForegroundServiceModuleSource() {
 	);
 }
 
-async function committedSshForegroundServiceSource() {
+async function sshForegroundServiceAndroidSource() {
 	return readFile(
 		new URL(
 			'../../android/app/src/main/java/com/finalapp/vibe2/SshForegroundService.kt',
@@ -372,8 +406,8 @@ void test('foreground service native module exposes agent alert methods', async 
 	assert.match(serviceSource, /cancel\(notificationId\)/);
 });
 
-void test('committed Android module exposes agent alert methods', async () => {
-	const source = await committedForegroundServiceModuleSource();
+void test('foreground service module template exposes agent alert methods', async () => {
+	const source = await foregroundServiceModuleTemplateSource();
 
 	assert.match(source, /fun isRunning\(promise: Promise\)/);
 	assert.match(source, /fun postAgentAlert\(/);
@@ -388,25 +422,94 @@ void test('committed Android module exposes agent alert methods', async () => {
 	assert.match(source, /SshForegroundService\.cancelAgentAlert\(/);
 });
 
-void test('committed Android service defines and creates agent alert channel', async () => {
-	const source = await committedSshForegroundServiceSource();
+void test('foreground service template defines and creates agent alert channel', async () => {
+	const source = await sshForegroundServiceTemplateSource();
 
 	assert.match(source, /AGENT_ALERT_CHANNEL_ID = "fressh_agent_alerts"/);
 	assert.match(source, /AGENT_ALERT_CHANNEL_NAME = "Fressh Agent Alerts"/);
 	assert.match(source, /NotificationManager\.IMPORTANCE_DEFAULT/);
 	assert.match(source, /ensureNotificationChannels\(context\)/);
 	assert.match(source, /notify\(notificationId, buildAgentAlertNotification/);
+	assert.match(source, /lockscreenVisibility = Notification\.VISIBILITY_PRIVATE/);
+	assert.match(source, /\.setVisibility\(NotificationCompat\.VISIBILITY_PRIVATE\)/);
+	assert.match(
+		source,
+		/\.setPublicVersion\(buildAgentAlertPublicNotification\(context, vibrate\)\)/,
+	);
 	assert.match(source, /cancel\(notificationId\)/);
 });
 
-void test('foreground service plugin generates committed Kotlin exactly', async () => {
+void test('foreground service defines vibrating agent alert channel', async () => {
+	const source = await sshForegroundServiceTemplateSource();
+
+	assert.match(
+		source,
+		/AGENT_ALERT_VIBRATE_CHANNEL_ID = "fressh_agent_alerts_vibrate"/,
+	);
+	assert.match(
+		source,
+		/AGENT_ALERT_VIBRATE_PATTERN = longArrayOf\(0L, 180L, 80L, 180L\)/,
+	);
+	assert.match(source, /vibrateChannel\.enableVibration\(true\)/);
+	assert.match(
+		source,
+		/vibrateChannel\.vibrationPattern = AGENT_ALERT_VIBRATE_PATTERN/,
+	);
+	assert.match(source, /alertChannel\.enableVibration\(false\)/);
+});
+
+void test('foreground service postAgentAlert accepts vibration flag', async () => {
+	const moduleSource = await foregroundServiceModuleTemplateSource();
+	const serviceSource = await sshForegroundServiceTemplateSource();
+
+	assert.match(
+		moduleSource,
+		/tapToken: String,\s*vibrate: Boolean,\s*promise: Promise/,
+	);
+	assert.match(moduleSource, /tapToken,\s*vibrate\s*\)/);
+	assert.match(
+		serviceSource,
+		/fun postAgentAlert\([\s\S]*tapToken: String,\s*vibrate: Boolean/,
+	);
+	assert.match(
+		serviceSource,
+		/buildAgentAlertNotification\([\s\S]*tapToken,\s*vibrate[\s\S]*\)/,
+	);
+});
+
+void test('foreground service public lock-screen notification is sanitized', async () => {
+	const source = await sshForegroundServiceTemplateSource();
+	const publicNotification =
+		source.match(
+			/private fun buildAgentAlertPublicNotification[\s\S]*?\.build\(\)/,
+		)?.[0] ?? '';
+
+	assert.match(publicNotification, /\.setContentTitle\("Fressh"\)/);
+	assert.match(publicNotification, /\.setContentText\("Agent notification"\)/);
+	assert.doesNotMatch(publicNotification, /\btitle\b/);
+	assert.doesNotMatch(publicNotification, /\bmessage\b/);
+	assert.doesNotMatch(publicNotification, /tapToken|route|Intent\.ACTION_VIEW/);
+});
+
+void test('foreground service plugin generates Kotlin templates exactly', async () => {
 	assert.equal(
 		await generatedSshForegroundServiceSource(),
-		await committedSshForegroundServiceSource(),
+		await sshForegroundServiceTemplateSource(),
 	);
 	assert.equal(
 		await generatedForegroundServiceModuleSource(),
-		await committedForegroundServiceModuleSource(),
+		await foregroundServiceModuleTemplateSource(),
+	);
+});
+
+void test('foreground service templates stay in sync with checked-in Android sources', async () => {
+	assert.equal(
+		await sshForegroundServiceAndroidSource(),
+		await sshForegroundServiceTemplateSource(),
+	);
+	assert.equal(
+		await foregroundServiceModuleAndroidSource(),
+		await foregroundServiceModuleTemplateSource(),
 	);
 });
 
@@ -420,15 +523,21 @@ void test('foreground service plugin owns native package registration', async ()
 	assert.match(mainApplicationSource, /add\(ForegroundServicePackage\(\)\)/);
 });
 
-void test('foreground service restart and wakelock policy keeps background work alive while service runs', async () => {
+void test('foreground service wakelock policy avoids native-only redelivery', async () => {
 	for (const source of [
-		await committedSshForegroundServiceSource(),
+		await sshForegroundServiceTemplateSource(),
+		await sshForegroundServiceAndroidSource(),
 		await generatedSshForegroundServiceSource(),
 	]) {
-		assert.match(source, /return START_NOT_STICKY/);
-		assert.doesNotMatch(source, /return START_STICKY/);
+		assert.match(
+			source,
+			/override fun onStartCommand[\s\S]*if \(intent == null\) \{[\s\S]*return START_NOT_STICKY[\s\S]*startForeground\([\s\S]*return START_NOT_STICKY/,
+		);
+		assert.doesNotMatch(source, /START_REDELIVER_INTENT/);
 		assert.match(source, /if \(intent == null\)/);
+		assert.match(source, /return START_NOT_STICKY/);
 		assert.match(source, /stopSelf\(startId\)/);
+		assert.match(source, /intent\.getStringExtra\(EXTRA_TITLE\)/);
 		assert.match(source, /WAKE_LOCK_LEASE_MS/);
 		assert.match(source, /WAKE_LOCK_RENEWAL_MS/);
 		assert.match(source, /wakeLock\?\.acquire\(WAKE_LOCK_LEASE_MS\)/);
@@ -440,6 +549,23 @@ void test('foreground service restart and wakelock policy keeps background work 
 		assert.match(source, /stopSelf\(startId\)/);
 		assert.doesNotMatch(source, /postDelayed\([\s\S]*stopSelf/);
 	}
+});
+
+void test('foreground service prebuild compile workflow uses explicit script contract', async () => {
+	const packageJson = await mobilePackageJson();
+	const prebuildCompile =
+		packageJson.scripts?.['android:prebuild-compile-debug-kotlin'] ?? '';
+
+	assert.equal(
+		packageJson.scripts?.['android:compile-debug-kotlin'],
+		'cd android && ./gradlew :app:compileDebugKotlin',
+	);
+	assert.match(prebuildCompile, /^expo prebuild --platform android/);
+	assert.match(prebuildCompile, /pnpm run android:compile-debug-kotlin$/);
+	assert.match(
+		await checkWorkflowSource(),
+		/pnpm --filter @fressh\/mobile android:prebuild-compile-debug-kotlin/,
+	);
 });
 
 void test('foreground service is not stopped just because the task is removed', async () => {
@@ -484,8 +610,8 @@ void test('foreground service is not stopped just because the task is removed', 
 	);
 });
 
-void test('committed Android service passes agent alert intent extras to MainActivity', async () => {
-	const source = await committedSshForegroundServiceSource();
+void test('foreground service template passes agent alert intent extras to MainActivity', async () => {
+	const source = await sshForegroundServiceTemplateSource();
 
 	assert.match(source, /Intent\(Intent\.ACTION_VIEW,/);
 	assert.match(source, /Uri\.Builder\(\)/);
@@ -510,7 +636,10 @@ void test('committed Android service passes agent alert intent extras to MainAct
 	assert.match(source, /appendQueryParameter\("agentWindowId", windowId\)/);
 	assert.match(source, /appendQueryParameter\("agentEventId", eventId\)/);
 	assert.match(source, /appendQueryParameter\("agentTapToken", tapToken\)/);
-	assert.match(source, /putExtra\(EXTRA_AGENT_CONNECTION_ID, connectionId\)/);
+	assert.match(
+		source,
+		/putExtra\(EXTRA_AGENT_CONNECTION_ID, notificationConnectionId\)/,
+	);
 	assert.match(source, /putExtra\(EXTRA_AGENT_SESSION, session\)/);
 	assert.match(source, /putExtra\(EXTRA_AGENT_TARGET, target\)/);
 	assert.match(source, /putExtra\(EXTRA_AGENT_WINDOW_ID, windowId\)/);
@@ -545,7 +674,10 @@ void test('foreground service plugin passes agent alert intent extras to MainAct
 	assert.match(source, /appendQueryParameter\("agentWindowId", windowId\)/);
 	assert.match(source, /appendQueryParameter\("agentEventId", eventId\)/);
 	assert.match(source, /appendQueryParameter\("agentTapToken", tapToken\)/);
-	assert.match(source, /putExtra\(EXTRA_AGENT_CONNECTION_ID, connectionId\)/);
+	assert.match(
+		source,
+		/putExtra\(EXTRA_AGENT_CONNECTION_ID, notificationConnectionId\)/,
+	);
 	assert.match(source, /putExtra\(EXTRA_AGENT_SESSION, session\)/);
 	assert.match(source, /putExtra\(EXTRA_AGENT_TARGET, target\)/);
 	assert.match(source, /putExtra\(EXTRA_AGENT_WINDOW_ID, windowId\)/);
@@ -579,7 +711,10 @@ void test('foreground service plugin generates Kotlin with agent alert routing d
 	assert.match(source, /appendQueryParameter\("agentWindowId", windowId\)/);
 	assert.match(source, /appendQueryParameter\("agentEventId", eventId\)/);
 	assert.match(source, /appendQueryParameter\("agentTapToken", tapToken\)/);
-	assert.match(source, /putExtra\(EXTRA_AGENT_CONNECTION_ID, connectionId\)/);
+	assert.match(
+		source,
+		/putExtra\(EXTRA_AGENT_CONNECTION_ID, notificationConnectionId\)/,
+	);
 	assert.match(source, /putExtra\(EXTRA_AGENT_SESSION, session\)/);
 	assert.match(source, /putExtra\(EXTRA_AGENT_TARGET, target\)/);
 	assert.match(source, /putExtra\(EXTRA_AGENT_WINDOW_ID, windowId\)/);
@@ -591,8 +726,8 @@ void test('foreground service plugin generates Kotlin with agent alert routing d
 	);
 });
 
-void test('committed Android service uses notificationId for agent alert pending intent identity', async () => {
-	const source = await committedSshForegroundServiceSource();
+void test('foreground service template uses notificationId for agent alert pending intent identity', async () => {
+	const source = await sshForegroundServiceTemplateSource();
 
 	assert.doesNotMatch(
 		source,
