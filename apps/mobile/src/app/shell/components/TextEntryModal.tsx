@@ -334,6 +334,7 @@ export function TextEntryModal({
 	const handlePaste = useCallback(() => {
 		if (!value) return;
 		const pasteValue = value;
+		cancelPendingFocusWork();
 		resetHistoryState();
 		closeThenDismissKeyboard({
 			close: onClose,
@@ -343,7 +344,15 @@ export function TextEntryModal({
 		// Clear local text after handing the paste off to the shell.
 		updateValue('');
 		setTextAreaContentHeight(minHeight);
-	}, [minHeight, onClose, onPaste, resetHistoryState, updateValue, value]);
+	}, [
+		cancelPendingFocusWork,
+		minHeight,
+		onClose,
+		onPaste,
+		resetHistoryState,
+		updateValue,
+		value,
+	]);
 
 	const handleChangeText = useCallback(
 		(nextValue: string) => {
