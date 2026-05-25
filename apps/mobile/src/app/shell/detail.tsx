@@ -104,6 +104,12 @@ import {
 	buildCommanderExecuteSegments,
 	buildTextEntryPasteSegments,
 } from '@/lib/terminal-input-payloads';
+import {
+	getTextEntryHistoryCycleEntries,
+	getTextEntryHistorySections,
+	type TextEntryHistoryState,
+} from '@/lib/text-entry-history';
+import { textEntryHistoryStore } from '@/lib/text-entry-history-store-native';
 import { useTheme } from '@/lib/theme';
 import {
 	buildTmuxScrollbackCopyModeCommand,
@@ -705,6 +711,8 @@ function ShellDetail() {
 	const [commandPresetsOpen, setCommandPresetsOpen] = useState(false);
 	const [commanderOpen, setCommanderOpen] = useState(false);
 	const [textEntryOpen, setTextEntryOpen] = useState(false);
+	const [textEntryHistoryState, setTextEntryHistoryState] =
+		useState<TextEntryHistoryState>(() => textEntryHistoryStore.load());
 	const [skillSelectorOpen, setSkillSelectorOpen] = useState(false);
 	const [skillSelectorSkills, setSkillSelectorSkills] = useState<
 		DiscoveredSkill[]
@@ -1000,6 +1008,54 @@ function ShellDetail() {
 		[sendLiveInputSegments],
 	);
 
+	const refreshTextEntryHistory = useCallback(
+		(nextState: TextEntryHistoryState) => {
+			setTextEntryHistoryState(nextState);
+		},
+		[],
+	);
+
+	const handlePinTextEntryHistoryText = useCallback(
+		(text: string) => {
+			refreshTextEntryHistory(textEntryHistoryStore.pinText(text));
+		},
+		[refreshTextEntryHistory],
+	);
+
+	const handlePinTextEntryHistoryEntry = useCallback(
+		(id: string) => {
+			refreshTextEntryHistory(textEntryHistoryStore.pinEntry(id));
+		},
+		[refreshTextEntryHistory],
+	);
+
+	const handleUnpinTextEntryHistoryEntry = useCallback(
+		(id: string) => {
+			refreshTextEntryHistory(textEntryHistoryStore.unpinEntry(id));
+		},
+		[refreshTextEntryHistory],
+	);
+
+	const handleDeleteTextEntryHistoryEntry = useCallback(
+		(id: string) => {
+			refreshTextEntryHistory(textEntryHistoryStore.deleteEntry(id));
+		},
+		[refreshTextEntryHistory],
+	);
+
+	const handleClearRecentTextEntryHistory = useCallback(() => {
+		refreshTextEntryHistory(textEntryHistoryStore.clearRecent());
+	}, [refreshTextEntryHistory]);
+
+	const textEntryHistorySections = useMemo(
+		() => getTextEntryHistorySections(textEntryHistoryState),
+		[textEntryHistoryState],
+	);
+	const textEntryHistoryCycleEntries = useMemo(
+		() => getTextEntryHistoryCycleEntries(textEntryHistoryState),
+		[textEntryHistoryState],
+	);
+
 	const sendBytesWithModifiers = useCallback(
 		(bytes: Uint8Array<ArrayBuffer>) => {
 			if (!shell) return;
@@ -1152,8 +1208,14 @@ function ShellDetail() {
 			sendLiteralInputSegments(segments, {
 				interSegmentDelayMs: touchEnterDelayMs,
 			});
+			refreshTextEntryHistory(textEntryHistoryStore.recordPaste(value));
 		},
-		[exitSelectionMode, selectionModeEnabled, sendLiteralInputSegments],
+		[
+			exitSelectionMode,
+			refreshTextEntryHistory,
+			selectionModeEnabled,
+			sendLiteralInputSegments,
+		],
 	);
 
 	const clearWisprOpeningTimeout = useCallback(() => {
@@ -3241,6 +3303,16 @@ fi
 					onPaste={handlePasteTextEntry}
 					onWisprFocus={handleWisprTextEntryFocus}
 					onValueChange={handleWisprTextEntryValueChange}
+					history={{
+						cycleEntries: textEntryHistoryCycleEntries,
+						pinnedEntries: textEntryHistorySections.pinned,
+						recentEntries: textEntryHistorySections.recent,
+						onPinText: handlePinTextEntryHistoryText,
+						onPinEntry: handlePinTextEntryHistoryEntry,
+						onUnpinEntry: handleUnpinTextEntryHistoryEntry,
+						onDeleteEntry: handleDeleteTextEntryHistoryEntry,
+						onClearRecent: handleClearRecentTextEntryHistory,
+					}}
 				/>
 				<HostUrlModal
 					open={hostUrlModalState != null}
