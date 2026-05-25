@@ -113,6 +113,15 @@ export function TextEntryModal({
 	>(null);
 	const valueRef = useRef('');
 	const focusTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const focusInteractionTaskRef = useRef<ReturnType<
+		typeof InteractionManager.runAfterInteractions
+	> | null>(null);
+	const focusRafRef = useRef<ReturnType<typeof requestAnimationFrame> | null>(
+		null,
+	);
+	const focusRequestIdRef = useRef(0);
+	const modalOpenRef = useRef(open);
+	modalOpenRef.current = open;
 	const cycleEntries =
 		history?.cycleEntries ?? EMPTY_TEXT_ENTRY_HISTORY_ENTRIES;
 	const pinnedEntries =
@@ -208,58 +217,103 @@ export function TextEntryModal({
 		}
 	}, [open, resetDrag, resetHistoryState]);
 
-	const focusInput = useCallback((delayMs = 0) => {
+	const clearFocusTimeout = useCallback(() => {
 		if (focusTimeoutRef.current) {
 			clearTimeout(focusTimeoutRef.current);
 			focusTimeoutRef.current = null;
 		}
-		if (delayMs > 0) {
-			focusTimeoutRef.current = setTimeout(() => {
-				inputRef.current?.blur();
-				inputRef.current?.focus();
-			}, delayMs);
-			return;
-		}
-		inputRef.current?.blur();
-		inputRef.current?.focus();
 	}, []);
 
+	const cancelScheduledFocusWork = useCallback(() => {
+		if (focusInteractionTaskRef.current) {
+			focusInteractionTaskRef.current.cancel();
+			focusInteractionTaskRef.current = null;
+		}
+		if (focusRafRef.current != null) {
+			cancelAnimationFrame(focusRafRef.current);
+			focusRafRef.current = null;
+		}
+		clearFocusTimeout();
+	}, [clearFocusTimeout]);
+
+	const cancelPendingFocusWork = useCallback(() => {
+		focusRequestIdRef.current += 1;
+		cancelScheduledFocusWork();
+	}, [cancelScheduledFocusWork]);
+
+	const isFocusRequestActive = useCallback((requestId: number) => {
+		return modalOpenRef.current && focusRequestIdRef.current === requestId;
+	}, []);
+
+	const focusInput = useCallback(
+		(delayMs = 0, requestId = focusRequestIdRef.current) => {
+			if (!isFocusRequestActive(requestId)) return;
+			clearFocusTimeout();
+			if (delayMs > 0) {
+				focusTimeoutRef.current = setTimeout(() => {
+					focusTimeoutRef.current = null;
+					if (!isFocusRequestActive(requestId)) return;
+					inputRef.current?.blur();
+					inputRef.current?.focus();
+				}, delayMs);
+				return;
+			}
+			inputRef.current?.blur();
+			inputRef.current?.focus();
+		},
+		[clearFocusTimeout, isFocusRequestActive],
+	);
+
+	const startFocusRequest = useCallback(() => {
+		cancelScheduledFocusWork();
+		focusRequestIdRef.current += 1;
+		return focusRequestIdRef.current;
+	}, [cancelScheduledFocusWork]);
+
+	useEffect(() => {
+		if (!open) {
+			cancelPendingFocusWork();
+		}
+	}, [cancelPendingFocusWork, open]);
+
 	const handleModalShow = useCallback(() => {
+		const requestId = startFocusRequest();
+		if (!isFocusRequestActive(requestId)) return;
 		// Modal is now fully visible - safe to focus
 		if (Platform.OS === 'android') {
-			InteractionManager.runAfterInteractions(() => {
-				requestAnimationFrame(() => {
-					focusInput();
-					focusInput(120);
-				});
-			});
+			focusInteractionTaskRef.current = InteractionManager.runAfterInteractions(
+				() => {
+					focusInteractionTaskRef.current = null;
+					if (!isFocusRequestActive(requestId)) return;
+					focusRafRef.current = requestAnimationFrame(() => {
+						focusRafRef.current = null;
+						if (!isFocusRequestActive(requestId)) return;
+						focusInput(0, requestId);
+						focusInput(120, requestId);
+					});
+				},
+			);
 			return;
 		}
-		focusInput();
-	}, [focusInput]);
+		focusInput(0, requestId);
+	}, [focusInput, isFocusRequestActive, startFocusRequest]);
 
 	useEffect(
 		() => () => {
-			if (focusTimeoutRef.current) {
-				clearTimeout(focusTimeoutRef.current);
-				focusTimeoutRef.current = null;
-			}
+			cancelPendingFocusWork();
 		},
-		[],
+		[cancelPendingFocusWork],
 	);
 
 	const handleClose = useCallback(() => {
-		if (focusTimeoutRef.current) {
-			clearTimeout(focusTimeoutRef.current);
-			focusTimeoutRef.current = null;
-		}
+		cancelPendingFocusWork();
 		resetHistoryState();
 		// Preserve text when closing - user can reopen and continue editing
 		closeThenDismissKeyboard({
 			close: onClose,
 			dismissKeyboard: () => Keyboard.dismiss(),
 		});
-	}, [onClose, resetHistoryState]);
+	}, [cancelPendingFocusWork, onClose, resetHistoryState]);
 
 	const updateValue = useCallback(
 		(nextValue: string) => {
