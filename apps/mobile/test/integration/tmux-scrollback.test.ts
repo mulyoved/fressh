@@ -90,6 +90,28 @@ void test('live input plan ignores invalid cancel key when scrollback is inactiv
 	});
 });
 
+void test('live input plan drops empty payload segments while inactive', () => {
+	const plan = buildTmuxScrollbackLiveInputSendPlan({
+		scrollbackActive: false,
+		cancelKey: bytes([0x71]),
+		payloadSegments: [
+			bytes([]),
+			bytes([0x68]),
+			bytes([]),
+			bytes([0x69, 0x21]),
+		],
+		interSegmentDelayMs: 3,
+		scrollbackExitDelayMs: 10,
+	});
+
+	assert.deepEqual(plan, {
+		type: 'send',
+		segments: [bytes([0x68]), bytes([0x69, 0x21])],
+		interSegmentDelayMs: 3,
+		clearScrollback: false,
+	});
+});
+
 void test('live input plan exits active scrollback before payload', () => {
 	const plan = buildTmuxScrollbackLiveInputSendPlan({
 		scrollbackActive: true,
