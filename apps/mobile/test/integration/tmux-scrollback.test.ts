@@ -73,6 +73,23 @@ void test('live input plan passes payload through when scrollback is inactive', 
 	});
 });
 
+void test('live input plan ignores invalid cancel key when scrollback is inactive', () => {
+	const plan = buildTmuxScrollbackLiveInputSendPlan({
+		scrollbackActive: false,
+		cancelKey: bytes([0x1b]),
+		payloadSegments: [bytes([0x61, 0x62])],
+		interSegmentDelayMs: 7,
+		scrollbackExitDelayMs: 10,
+	});
+
+	assert.deepEqual(plan, {
+		type: 'send',
+		segments: [bytes([0x61, 0x62])],
+		interSegmentDelayMs: 7,
+		clearScrollback: false,
+	});
+});
+
 void test('live input plan exits active scrollback before payload', () => {
 	const plan = buildTmuxScrollbackLiveInputSendPlan({
 		scrollbackActive: true,
@@ -106,6 +123,29 @@ void test('live input plan preserves multi-segment payload order after scrollbac
 		[0x71],
 		[0x68, 0x69],
 		[0x0d],
+	]);
+});
+
+void test('live input plan drops empty payload segments while preserving order', () => {
+	const plan = buildTmuxScrollbackLiveInputSendPlan({
+		scrollbackActive: true,
+		cancelKey: bytes([0x71]),
+		payloadSegments: [
+			bytes([]),
+			bytes([0x68]),
+			bytes([]),
+			bytes([0x69, 0x21]),
+		],
+		interSegmentDelayMs: 3,
+		scrollbackExitDelayMs: 10,
+	});
+
+	assert.equal(plan.type, 'send');
+	if (plan.type !== 'send') throw new Error('expected send plan');
+	assert.deepEqual(segmentValues(plan.segments), [
+		[0x71],
+		[0x68],
+		[0x69, 0x21],
 	]);
 });
 
