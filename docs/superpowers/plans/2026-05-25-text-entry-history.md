@@ -32,8 +32,8 @@ The approved spec is one cohesive subsystem: Text dialog history. It touches sto
   - Add compact cycle controls, current-text pin toggle, and inline history panel.
   - Keep existing Wispr controls and Paste/Clear/Close behavior.
 - Existing tests to run:
-  - `pnpm --filter @fressh/mobile test:integration -- text-entry-history.test.ts`
-  - `pnpm --filter @fressh/mobile test:integration -- terminal-input-payloads.test.ts`
+  - `pnpm --dir apps/mobile exec tsx --test test/integration/text-entry-history.test.ts`
+  - `pnpm --dir apps/mobile exec tsx --test test/integration/terminal-input-payloads.test.ts`
   - `pnpm --filter @fressh/mobile typecheck`
 
 ---
@@ -325,7 +325,7 @@ void test('createTextEntryHistoryStore returns updated in-memory state when pers
 Run:
 
 ```bash
-pnpm --filter @fressh/mobile test:integration -- text-entry-history.test.ts
+pnpm --dir apps/mobile exec tsx --test test/integration/text-entry-history.test.ts
 ```
 
 Expected: FAIL with this module-resolution class of error:
@@ -723,7 +723,7 @@ export function createTextEntryHistoryStore({
 Run:
 
 ```bash
-pnpm --filter @fressh/mobile test:integration -- text-entry-history.test.ts
+pnpm --dir apps/mobile exec tsx --test test/integration/text-entry-history.test.ts
 ```
 
 Expected: PASS for all tests in `text-entry-history.test.ts`.
@@ -927,7 +927,7 @@ Update the `TextEntryModal` JSX in `detail.tsx` to pass:
 Run:
 
 ```bash
-pnpm --filter @fressh/mobile test:integration -- text-entry-history.test.ts terminal-input-payloads.test.ts
+pnpm --dir apps/mobile exec tsx --test test/integration/text-entry-history.test.ts test/integration/terminal-input-payloads.test.ts
 pnpm --filter @fressh/mobile typecheck
 ```
 
@@ -1467,7 +1467,7 @@ Expected: PASS. If TypeScript reports a missing dependency in a hook dependency 
 Run:
 
 ```bash
-pnpm --filter @fressh/mobile test:integration -- text-entry-history.test.ts terminal-input-payloads.test.ts wispr-text-editor-flow.test.ts
+pnpm --dir apps/mobile exec tsx --test test/integration/text-entry-history.test.ts test/integration/terminal-input-payloads.test.ts test/integration/wispr-text-editor-flow.test.ts
 ```
 
 Expected: PASS.
@@ -1523,7 +1523,7 @@ void test('clipboard-style text is not recorded unless recordPaste is called', (
 Run:
 
 ```bash
-pnpm --filter @fressh/mobile test:integration -- text-entry-history.test.ts
+pnpm --dir apps/mobile exec tsx --test test/integration/text-entry-history.test.ts
 ```
 
 Expected: PASS.
@@ -1547,7 +1547,7 @@ git commit -m "test(mobile): guard text history capture source"
 Run:
 
 ```bash
-pnpm --filter @fressh/mobile test:integration -- text-entry-history.test.ts terminal-input-payloads.test.ts wispr-text-editor-flow.test.ts
+pnpm --dir apps/mobile exec tsx --test test/integration/text-entry-history.test.ts test/integration/terminal-input-payloads.test.ts test/integration/wispr-text-editor-flow.test.ts
 pnpm --filter @fressh/mobile typecheck
 pnpm --filter @fressh/mobile lint:check
 ```
