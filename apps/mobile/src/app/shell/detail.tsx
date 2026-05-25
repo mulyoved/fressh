@@ -101,10 +101,16 @@ import { useSshStore } from '@/lib/ssh-store';
 import { useTheme } from '@/lib/theme';
 import {
 	buildTmuxScrollbackCopyModeCommand,
+	buildTmuxScrollbackLiveInputSendPlan,
 	getTmuxScrollbackControlFailurePolicy,
-	getTmuxScrollbackLiveInputPolicy,
+	isValidTmuxCancelKey,
 	runTmuxControlCommand,
 } from '@/lib/tmux-scrollback';
+import {
+	buildClipboardPasteSegments,
+	buildCommanderExecuteSegments,
+	buildTextEntryPasteSegments,
+} from '@/lib/terminal-input-payloads';
 import { queryClient } from '@/lib/utils';
 import { wisprAutomationNative } from '@/lib/wispr-automation-native';
 import {
@@ -211,41 +217,6 @@ class OrderedWriter {
 		return next;
 	}
 }
-
-const isValidCancelKey = (cancelKey: Uint8Array) =>
-	cancelKey.length === 1 && cancelKey[0] !== 0x1b;
-
-const concatBytes = (a: Uint8Array, b: Uint8Array) => {
-	const merged = new Uint8Array(a.length + b.length);
-	merged.set(a, 0);
-	merged.set(b, a.length);
-	return merged;
-};
-
-const containsMarker = (bytes: Uint8Array, marker: number[]) => {
-	if (bytes.length < marker.length) return false;
-	for (let i = 0; i <= bytes.length - marker.length; i += 1) {
-		let matched = true;
-		for (let j = 0; j < marker.length; j += 1) {
-			if (bytes[i + j] !== marker[j]) {
-				matched = false;
-				break;
-			}
-		}
-		if (matched) return true;
-	}
-	return false;
-};
-
-const isLargePayload = (bytes: Uint8Array) => {
-	if (bytes.length > 32) return true;
-	for (let i = 0; i < bytes.length; i += 1) {
-		if (bytes[i] === 10 || bytes[i] === 13) return true;
-	}
-	const pasteStart = [0x1b, 0x5b, 0x32, 0x30, 0x30, 0x7e];
-	const pasteEnd = [0x1b, 0x5b, 0x32, 0x30, 0x31, 0x7e];
-	return containsMarker(bytes, pasteStart) || containsMarker(bytes, pasteEnd);
-};
 
 const GITHUB_ISSUES_URL = 'https://github.com/mulyoved/fressh/issues';
 const SHELL_CONFIG_DOC_URL =
@@ -929,7 +900,7 @@ function ShellDetail() {
 			tmuxControlWriterRef.current = null;
 			setTmuxControlReady(false);
 			if (failurePolicy === 'exit-scrollback-and-restart-control') {
-				if (isValidCancelKey(cancelKeyBytes)) {
+				if (isValidTmuxCancelKey(cancelKeyBytes)) {
 					void sendBytesOrdered(cancelKeyBytes);
 				} else {
 					logger.warn(
@@ -965,58 +936,53 @@ function ShellDetail() {
 		[handleTmuxControlUnavailable],
 	);
 
-	const sendInputEnsuringLive = useCallback(
-		(bytes: Uint8Array<ArrayBuffer>) => {
-			const inputPolicy = getTmuxScrollbackLiveInputPolicy({
+	const sendLiveInputSegments = useCallback(
+		(
+			payloadSegments: Uint8Array<ArrayBuffer>[],
+			opts?: {
+				interSegmentDelayMs?: number;
+				dropPayloadAfterExit?: boolean;
+			},
+		) => {
+			const plan = buildTmuxScrollbackLiveInputSendPlan({
 				scrollbackActive: scrollbackActiveRef.current,
+				cancelKey: cancelKeyBytes,
+				payloadSegments,
+				interSegmentDelayMs: opts?.interSegmentDelayMs,
+				scrollbackExitDelayMs: touchEnterDelayMs,
+				dropPayloadAfterExit: opts?.dropPayloadAfterExit ?? false,
 			});
-			if (inputPolicy === 'pass-through') {
-				void sendBytesOrdered(bytes);
-				return;
-			}
 
-			if (!isValidCancelKey(cancelKeyBytes)) {
+			if (plan.type === 'block') {
 				logger.warn(
 					'cancelKey invalid; blocking input until Jump to live is used',
 				);
 				return;
 			}
 
-			const isExitKey =
-				bytes.length === exitKeyBytes.length &&
-				bytes.length === 1 &&
-				bytes[0] === exitKeyBytes[0];
-
-			if (isExitKey) {
-				void sendBytesOrdered(cancelKeyBytes);
+			if (plan.clearScrollback) {
 				clearScrollbackState();
-				return;
 			}
+			if (!plan.segments.length) return;
 
-			const largePayload = isLargePayload(bytes);
-			if (!largePayload) {
-				void sendBytesOrdered(concatBytes(cancelKeyBytes, bytes));
-			} else {
-				void sendBytesQueued([cancelKeyBytes, bytes], {
-					interSegmentDelayMs: touchEnterDelayMs,
-				});
-			}
-			clearScrollbackState();
+			void sendBytesQueued(plan.segments, {
+				interSegmentDelayMs: plan.interSegmentDelayMs,
+			});
 		},
-		[
-			cancelKeyBytes,
-			exitKeyBytes,
-			sendBytesOrdered,
-			sendBytesQueued,
-			clearScrollbackState,
-		],
+		[cancelKeyBytes, clearScrollbackState, sendBytesQueued],
 	);
 
 	const sendBytesRaw = useCallback(
 		(bytes: Uint8Array<ArrayBuffer>) => {
-			sendInputEnsuringLive(bytes);
+			const isScrollbackExitKey =
+				bytes.length === exitKeyBytes.length &&
+				bytes.length === 1 &&
+				bytes[0] === exitKeyBytes[0];
+			sendLiveInputSegments([bytes], {
+				dropPayloadAfterExit: isScrollbackExitKey,
+			});
 		},
-		[sendInputEnsuringLive],
+		[exitKeyBytes, sendLiveInputSegments],
 	);
 
 	const sendBytesWithModifiers = useCallback(
@@ -1145,53 +1111,30 @@ function ShellDetail() {
 	const handlePasteClipboard = useCallback(async () => {
 		try {
 			const text = await Clipboard.getStringAsync();
-			if (text) sendTextRaw(text);
+			const segments = buildClipboardPasteSegments(text);
+			if (segments.length) {
+				sendLiveInputSegments(segments);
+			}
 			if (selectionModeEnabled) {
 				exitSelectionMode();
 			}
 		} catch (error) {
 			logger.warn('clipboard read failed', error);
 		}
-	}, [exitSelectionMode, sendTextRaw, selectionModeEnabled]);
+	}, [exitSelectionMode, selectionModeEnabled, sendLiveInputSegments]);
 
 	const handlePasteTextEntry = useCallback(
 		async (value: string) => {
-			if (!value) return;
+			const segments = buildTextEntryPasteSegments(value);
+			if (!segments.length) return;
 			if (selectionModeEnabled) {
 				exitSelectionMode();
 			}
-
-			const textBytes = encoder.encode(value);
-			const enterBytes = encoder.encode('\r');
-
-			const inputPolicy = getTmuxScrollbackLiveInputPolicy({
-				scrollbackActive: scrollbackActiveRef.current,
+			sendLiveInputSegments(segments, {
+				interSegmentDelayMs: touchEnterDelayMs,
 			});
-			if (inputPolicy === 'exit-before-send') {
-				if (!isValidCancelKey(cancelKeyBytes)) {
-					logger.warn('cancelKey invalid; cannot auto-exit scrollback');
-					return;
-				}
-				clearScrollbackState();
-				try {
-					await sendBytesQueued([cancelKeyBytes, textBytes, enterBytes], {
-						interSegmentDelayMs: touchEnterDelayMs,
-					});
-				} catch (error) {
-					logger.warn('paste text entry failed', error);
-				}
-				return;
-			}
-
-			void sendBytesQueued([textBytes, enterBytes]);
 		},
-		[
-			cancelKeyBytes,
-			clearScrollbackState,
-			exitSelectionMode,
-			selectionModeEnabled,
-			sendBytesQueued,
-		],
+		[exitSelectionMode, selectionModeEnabled, sendLiveInputSegments],
 	);
 
 	const clearWisprOpeningTimeout = useCallback(() => {
@@ -2958,12 +2901,12 @@ fi
 				return;
 			}
 			if (selectionModeEnabled) exitSelectionMode();
-			sendInputEnsuringLive(bytes);
+			sendBytesRaw(bytes);
 		},
 		[
 			shell,
 			sendBytesOrdered,
-			sendInputEnsuringLive,
+			sendBytesRaw,
 			selectionModeEnabled,
 			exitSelectionMode,
 		],
@@ -2975,7 +2918,7 @@ fi
 	}, [router]);
 
 	const handleJumpToLive = useCallback(() => {
-		if (!isValidCancelKey(cancelKeyBytes)) {
+		if (!isValidTmuxCancelKey(cancelKeyBytes)) {
 			logger.warn('cancelKey invalid; cannot auto-exit scrollback');
 			return;
 		}
@@ -3244,9 +3187,11 @@ fi
 						setCommanderOpen(false);
 					}}
 					onExecuteCommand={(value) => {
-						if (!value.trim()) return;
-						sendTextRaw(value);
-						sendBytesRaw(encoder.encode('\r'));
+						const segments = buildCommanderExecuteSegments(value);
+						if (!segments.length) return;
+						sendLiveInputSegments(segments, {
+							interSegmentDelayMs: touchEnterDelayMs,
+						});
 					}}
 					onPasteText={(value) => {
 						if (!value.trim()) return;
