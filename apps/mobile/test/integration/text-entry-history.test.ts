@@ -2,8 +2,10 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+	TEXT_ENTRY_HISTORY_STORAGE_KEY,
 	clearRecentTextEntryHistory,
 	createEmptyTextEntryHistoryState,
+	createTextEntryHistoryId,
 	createTextEntryHistoryStore,
 	deleteTextEntryHistoryEntry,
 	getTextEntryHistoryCycleEntries,
@@ -105,6 +107,32 @@ void test('recordTextEntryPaste dedupes exact text and moves it to the top', () 
 	);
 });
 
+void test('recordTextEntryPaste derives a unique id when requested id collides', () => {
+	const state = recordTextEntryPaste(
+		createEmptyTextEntryHistoryState(),
+		'echo hi',
+		{
+			id: 'entry-1',
+			nowMs: 100,
+		},
+	);
+
+	const updated = recordTextEntryPaste(state, 'pwd', {
+		id: 'entry-1',
+		nowMs: 200,
+	});
+	const ids = entryIds(updated);
+
+	assert.equal(new Set(ids).size, ids.length);
+	assert.deepEqual(
+		parseTextEntryHistoryState(serializeTextEntryHistoryState(updated)),
+		{
+			state: updated,
+			resetRequired: false,
+		},
+	);
+});
+
 void test('recordTextEntryPaste keeps only 50 unpinned recent entries', () => {
 	let state = createEmptyTextEntryHistoryState();
 	for (let i = 0; i < 55; i += 1) {
@@ -171,6 +199,42 @@ void test('pinTextEntryHistoryText pins existing recent text without duplicating
 			},
 		],
 	);
+});
+
+void test('pinTextEntryHistoryText derives a unique id when requested id collides', () => {
+	const state = recordTextEntryPaste(
+		createEmptyTextEntryHistoryState(),
+		'echo hi',
+		{
+			id: 'entry-1',
+			nowMs: 100,
+		},
+	);
+
+	const updated = pinTextEntryHistoryText(state, 'deploy', {
+		id: 'entry-1',
+		nowMs: 200,
+	});
+	const ids = entryIds(updated);
+
+	assert.equal(new Set(ids).size, ids.length);
+	assert.deepEqual(
+		parseTextEntryHistoryState(serializeTextEntryHistoryState(updated)),
+		{
+			state: updated,
+			resetRequired: false,
+		},
+	);
+});
+
+void test('pinTextEntryHistoryText ignores empty text', () => {
+	const state = createEmptyTextEntryHistoryState();
+	const unchanged = pinTextEntryHistoryText(state, '', {
+		id: 'pin-1',
+		nowMs: 100,
+	});
+
+	assert.deepEqual(unchanged, state);
 });
 
 void test('multiple pinned entries sort newest first', () => {
@@ -284,8 +348,60 @@ void test('parseTextEntryHistoryState returns empty state for missing or invalid
 	});
 	for (const invalidState of [
 		{ version: 1 },
+		{ version: 1, entries: [], unexpected: true },
 		{ version: 1, entries: {} },
 		{ version: 1, entries: [{ id: 'bad', text: 'missing fields' }] },
+		{
+			version: 1,
+			entries: [
+				{
+					id: 'entry-1',
+					text: 'echo hi',
+					createdAtMs: 1,
+					lastUsedAtMs: 1,
+					pinned: false,
+					unexpected: true,
+				},
+			],
+		},
+		{
+			version: 1,
+			entries: [
+				{
+					id: 'entry-1',
+					text: 'echo hi',
+					createdAtMs: 1,
+					lastUsedAtMs: 1,
+					pinned: false,
+				},
+				{
+					id: 'entry-1',
+					text: 'pwd',
+					createdAtMs: 2,
+					lastUsedAtMs: 2,
+					pinned: false,
+				},
+			],
+		},
+		{
+			version: 1,
+			entries: [
+				{
+					id: 'entry-1',
+					text: 'echo hi',
+					createdAtMs: 1,
+					lastUsedAtMs: 1,
+					pinned: false,
+				},
+				{
+					id: 'entry-2',
+					text: 'echo hi',
+					createdAtMs: 2,
+					lastUsedAtMs: 2,
+					pinned: false,
+				},
+			],
+		},
 		{
 			version: 1,
 			entries: [
@@ -373,6 +489,56 @@ void test('serializeTextEntryHistoryState round-trips through parseTextEntryHist
 	);
 });
 
+void test('serializeTextEntryHistoryState projects to exact persisted shape', () => {
+	const state = {
+		...createEmptyTextEntryHistoryState(),
+		unexpected: true,
+		entries: [
+			{
+				id: 'entry-1',
+				text: 'echo hi',
+				createdAtMs: 100,
+				lastUsedAtMs: 100,
+				pinned: false,
+				unexpected: true,
+			},
+		],
+	} as unknown as TextEntryHistoryState;
+
+	const serialized = serializeTextEntryHistoryState(state);
+	const parsedJson = JSON.parse(serialized) as Record<string, unknown>;
+
+	assert.deepEqual(Object.keys(parsedJson).sort(), ['entries', 'version']);
+	assert.deepEqual(
+		Object.keys(
+			(parsedJson.entries as Record<string, unknown>[])[0] ?? {},
+		).sort(),
+		['createdAtMs', 'id', 'lastUsedAtMs', 'pinned', 'text'],
+	);
+	assert.deepEqual(parseTextEntryHistoryState(serialized), {
+		state: {
+			version: 1,
+			entries: [
+				{
+					id: 'entry-1',
+					text: 'echo hi',
+					createdAtMs: 100,
+					lastUsedAtMs: 100,
+					pinned: false,
+				},
+			],
+		},
+		resetRequired: false,
+	});
+});
+
+void test('createTextEntryHistoryId uses timestamp and injected random source', () => {
+	assert.equal(
+		createTextEntryHistoryId(1_000, () => 0.5),
+		'teh_rs_4zsov',
+	);
+});
+
 void test('createTextEntryHistoryStore persists changes and resets invalid storage', () => {
 	const memory = createMemoryStorage({
 		'textEntryHistory.state.v1': '{not json',
@@ -400,6 +566,29 @@ void test('createTextEntryHistoryStore persists changes and resets invalid stora
 	const persisted = memory.entries.get('textEntryHistory.state.v1');
 	assert.equal(typeof persisted, 'string');
 	assert.deepEqual(JSON.parse(persisted ?? ''), state);
+});
+
+void test('createTextEntryHistoryStore warns when invalid storage reset delete fails', () => {
+	const warnings: unknown[][] = [];
+	const store = createTextEntryHistoryStore({
+		storage: {
+			getString: () => '{not json',
+			set: () => {},
+			delete: () => {
+				throw new Error('delete failed');
+			},
+		},
+		logger: {
+			warn: (...args: unknown[]) => {
+				warnings.push(args);
+			},
+		},
+		now: () => 100,
+		random: () => 0.5,
+	});
+
+	assert.deepEqual(store.load(), createEmptyTextEntryHistoryState());
+	assert.equal(warnings.length >= 2, true);
 });
 
 void test('createTextEntryHistoryStore persists all store mutation methods', () => {
@@ -464,6 +653,57 @@ void test('createTextEntryHistoryStore persists all store mutation methods', () 
 	assertPersisted(state);
 });
 
+void test('createTextEntryHistoryStore deletes storage when deleting the last entry', () => {
+	const memory = createMemoryStorage();
+	const store = createTextEntryHistoryStore({
+		storage: memory.storage,
+		logger: noopLogger,
+		now: () => 100,
+		random: () => 0.5,
+	});
+
+	const state = store.recordPaste('echo hi');
+	const entryId = state.entries[0]?.id ?? '';
+	assert.equal(
+		typeof memory.entries.get(TEXT_ENTRY_HISTORY_STORAGE_KEY),
+		'string',
+	);
+
+	store.deleteEntry(entryId);
+
+	assert.equal(memory.entries.get(TEXT_ENTRY_HISTORY_STORAGE_KEY), undefined);
+});
+
+void test('createTextEntryHistoryStore avoids generated id collisions', () => {
+	const existingId = createTextEntryHistoryId(100, () => 0.5);
+	const memory = createMemoryStorage({
+		[TEXT_ENTRY_HISTORY_STORAGE_KEY]: JSON.stringify({
+			version: 1,
+			entries: [
+				{
+					id: existingId,
+					text: 'echo hi',
+					createdAtMs: 100,
+					lastUsedAtMs: 100,
+					pinned: false,
+				},
+			],
+		}),
+	});
+	const store = createTextEntryHistoryStore({
+		storage: memory.storage,
+		logger: noopLogger,
+		now: () => 100,
+		random: () => 0.5,
+	});
+
+	const state = store.recordPaste('pwd');
+	const newEntry = state.entries.find((entry) => entry.text === 'pwd');
+
+	assert.notEqual(newEntry?.id, existingId);
+	assert.equal(new Set(state.entries.map((entry) => entry.id)).size, 2);
+});
+
 void test('createTextEntryHistoryStore returns updated in-memory state when persistence fails', () => {
 	const warnings: unknown[][] = [];
 	const store = createTextEntryHistoryStore({
@@ -486,4 +726,37 @@ void test('createTextEntryHistoryStore returns updated in-memory state when pers
 	const state = store.recordPaste('echo hi');
 	assert.equal(state.entries[0]?.text, 'echo hi');
 	assert.equal(warnings.length > 0, true);
+});
+
+void test('createTextEntryHistoryStore recovers from storage read failures', () => {
+	const warnings: unknown[][] = [];
+	let setCalls = 0;
+	let deleteCalls = 0;
+	const store = createTextEntryHistoryStore({
+		storage: {
+			getString: () => {
+				throw new Error('read failed');
+			},
+			set: () => {
+				setCalls += 1;
+			},
+			delete: () => {
+				deleteCalls += 1;
+			},
+		},
+		logger: {
+			warn: (...args: unknown[]) => {
+				warnings.push(args);
+			},
+		},
+		now: () => 100,
+		random: () => 0.5,
+	});
+
+	assert.deepEqual(store.load(), createEmptyTextEntryHistoryState());
+	const state = store.recordPaste('echo hi');
+	assert.equal(state.entries[0]?.text, 'echo hi');
+	assert.equal(warnings.length >= 2, true);
+	assert.equal(setCalls, 0);
+	assert.equal(deleteCalls, 0);
 });
