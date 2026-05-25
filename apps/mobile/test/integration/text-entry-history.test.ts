@@ -19,6 +19,11 @@ import {
 	type TextEntryHistoryState,
 	type TextEntryHistoryStorage,
 } from '../../src/lib/text-entry-history';
+import {
+	getTextEntryHistoryCursorEntry,
+	getTextEntryHistoryCursorIndex,
+	getTextEntryHistoryCursorLabel,
+} from '../../src/lib/text-entry-history-cursor';
 
 const noopLogger = {
 	warn: () => {},
@@ -330,6 +335,54 @@ void test('display helpers split sections and cycle through all entries in displ
 	assert.deepEqual(
 		getTextEntryHistoryCycleEntries(state).map((entry) => entry.text),
 		['deploy preview', 'pnpm test', 'git status'],
+	);
+});
+
+void test('history cursor resolves selected entry after entries reorder', () => {
+	let state = createEmptyTextEntryHistoryState();
+	state = recordTextEntryPaste(state, 'git status', {
+		id: 'recent-1',
+		nowMs: 100,
+	});
+	state = recordTextEntryPaste(state, 'pnpm test', {
+		id: 'recent-2',
+		nowMs: 200,
+	});
+	state = pinTextEntryHistoryEntry(state, 'recent-1', { nowMs: 300 });
+
+	const cycleEntries = getTextEntryHistoryCycleEntries(state);
+
+	assert.deepEqual(
+		cycleEntries.map((entry) => entry.id),
+		['recent-1', 'recent-2'],
+	);
+	assert.equal(getTextEntryHistoryCursorIndex(cycleEntries, 'recent-1'), 0);
+	assert.equal(getTextEntryHistoryCursorLabel(cycleEntries, 'recent-1'), '1/2');
+	assert.equal(
+		getTextEntryHistoryCursorEntry(cycleEntries, 'recent-1', 'previous')?.id,
+		'recent-2',
+	);
+});
+
+void test('history cursor resets when selected entry disappears', () => {
+	let state = createEmptyTextEntryHistoryState();
+	state = recordTextEntryPaste(state, 'git status', {
+		id: 'recent-1',
+		nowMs: 100,
+	});
+	state = recordTextEntryPaste(state, 'pnpm test', {
+		id: 'recent-2',
+		nowMs: 200,
+	});
+	state = deleteTextEntryHistoryEntry(state, 'recent-2');
+
+	const cycleEntries = getTextEntryHistoryCycleEntries(state);
+
+	assert.equal(getTextEntryHistoryCursorIndex(cycleEntries, 'recent-2'), -1);
+	assert.equal(getTextEntryHistoryCursorLabel(cycleEntries, 'recent-2'), '0/1');
+	assert.equal(
+		getTextEntryHistoryCursorEntry(cycleEntries, 'recent-2', 'previous')?.id,
+		'recent-1',
 	);
 });
 

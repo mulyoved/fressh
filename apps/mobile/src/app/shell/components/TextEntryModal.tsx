@@ -31,6 +31,11 @@ import {
 } from 'react-native';
 import { closeThenDismissKeyboard } from '@/lib/deferred-keyboard-dismiss';
 import { type TextEntryHistoryEntry } from '@/lib/text-entry-history';
+import {
+	getTextEntryHistoryCursorEntry,
+	getTextEntryHistoryCursorLabel,
+	type TextEntryHistoryCursorDirection,
+} from '@/lib/text-entry-history-cursor';
 import { useTheme } from '@/lib/theme';
 import { type TextEntryWisprControl } from '@/lib/wispr-text-editor-flow';
 
@@ -103,7 +108,9 @@ export function TextEntryModal({
 	const [value, setValue] = useState('');
 	const [textAreaContentHeight, setTextAreaContentHeight] = useState(minHeight);
 	const [historyPanelOpen, setHistoryPanelOpen] = useState(false);
-	const [historyIndex, setHistoryIndex] = useState(-1);
+	const [selectedHistoryEntryId, setSelectedHistoryEntryId] = useState<
+		string | null
+	>(null);
 	const valueRef = useRef('');
 	const focusTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const cycleEntries =
@@ -118,15 +125,14 @@ export function TextEntryModal({
 		return cycleEntries.find((entry) => entry.pinned && entry.text === value);
 	}, [cycleEntries, value]);
 	const historyPositionLabel = useMemo(() => {
-		if (!hasHistory) return '0/0';
-		return `${historyIndex >= 0 ? historyIndex + 1 : 0}/${cycleEntries.length}`;
-	}, [cycleEntries.length, hasHistory, historyIndex]);
+		return getTextEntryHistoryCursorLabel(cycleEntries, selectedHistoryEntryId);
+	}, [cycleEntries, selectedHistoryEntryId]);
 
 	const resetHistoryState = useCallback(() => {
 		// eslint-disable-next-line @eslint-react/hooks-extra/no-direct-set-state-in-use-effect -- Called from the close effect to reset transient history controls.
 		setHistoryPanelOpen(false);
 		// eslint-disable-next-line @eslint-react/hooks-extra/no-direct-set-state-in-use-effect -- Called from the close effect to reset transient history controls.
-		setHistoryIndex(-1);
+		setSelectedHistoryEntryId(null);
 	}, []);
 
 	// Keep the dialog within `maxHeight: '85%'` without allowing extra controls to
@@ -303,28 +309,23 @@ export function TextEntryModal({
 	const loadHistoryEntry = useCallback(
 		(entry: TextEntryHistoryEntry) => {
 			updateValue(entry.text);
-			const nextIndex = cycleEntries.findIndex((item) => item.id === entry.id);
-			setHistoryIndex(nextIndex);
+			setSelectedHistoryEntryId(entry.id);
+			setHistoryPanelOpen(false);
 			inputRef.current?.focus();
 		},
-		[cycleEntries, updateValue],
+		[updateValue],
 	);
 
 	const handleCycleHistory = useCallback(
-		(direction: 'previous' | 'next') => {
-			if (!cycleEntries.length) return;
-			const nextIndex =
-				historyIndex < 0
-					? direction === 'previous'
-						? 0
-						: cycleEntries.length - 1
-					: direction === 'previous'
-						? (historyIndex + 1) % cycleEntries.length
-						: (historyIndex - 1 + cycleEntries.length) % cycleEntries.length;
-			const entry = cycleEntries[nextIndex];
+		(direction: TextEntryHistoryCursorDirection) => {
+			const entry = getTextEntryHistoryCursorEntry(
+				cycleEntries,
+				selectedHistoryEntryId,
+				direction,
+			);
 			if (entry) loadHistoryEntry(entry);
 		},
-		[cycleEntries, historyIndex, loadHistoryEntry],
+		[cycleEntries, loadHistoryEntry, selectedHistoryEntryId],
 	);
 
 	const handleToggleCurrentPin = useCallback(() => {
@@ -352,18 +353,11 @@ export function TextEntryModal({
 		(entry: TextEntryHistoryEntry) => {
 			if (!history) return;
 			history.onDeleteEntry(entry.id);
-			setHistoryIndex((current) => {
-				if (current < 0) return current;
-				const deletedIndex = cycleEntries.findIndex(
-					(item) => item.id === entry.id,
-				);
-				if (deletedIndex < 0) return current;
-				if (cycleEntries.length <= 1) return -1;
-				if (current > deletedIndex) return current - 1;
-				return Math.min(current, cycleEntries.length - 2);
-			});
+			if (selectedHistoryEntryId === entry.id) {
+				setSelectedHistoryEntryId(null);
+			}
 		},
-		[cycleEntries, history],
+		[history, selectedHistoryEntryId],
 	);
 
 	return (
@@ -691,6 +685,8 @@ export function TextEntryModal({
 											resetHistoryState();
 										}}
 										disabled={!recentEntries.length}
+										accessibilityRole="button"
+										accessibilityLabel="Clear Recent"
 										style={{
 											marginTop: 8,
 											borderRadius: 10,
@@ -707,7 +703,7 @@ export function TextEntryModal({
 												fontWeight: '700',
 											}}
 										>
-											Clear History
+											Clear Recent
 										</Text>
 									</Pressable>
 								</View>
