@@ -853,6 +853,7 @@ function ShellDetail() {
 			} catch (e: unknown) {
 				logger.warn('sendData failed', e);
 				router.back();
+				throw e;
 			}
 		},
 		[shell, router],
@@ -867,7 +868,9 @@ function ShellDetail() {
 	}, [shell, writeToShell]);
 
 	const sendBytesOrdered = useCallback((bytes: Uint8Array<ArrayBuffer>) => {
-		return writerRef.current?.send(bytes);
+		const send = writerRef.current?.send(bytes);
+		void send?.catch(() => {});
+		return send;
 	}, []);
 
 	const sendBytesQueued = useCallback(
@@ -875,7 +878,9 @@ function ShellDetail() {
 			segments: Uint8Array<ArrayBuffer>[],
 			opts?: { interSegmentDelayMs?: number },
 		) => {
-			return writerRef.current?.sendBatch(segments, opts);
+			const send = writerRef.current?.sendBatch(segments, opts);
+			void send?.catch(() => {});
+			return send;
 		},
 		[],
 	);
