@@ -621,6 +621,30 @@ void test('createTextEntryHistoryStore persists changes and resets invalid stora
 	assert.deepEqual(JSON.parse(persisted ?? ''), state);
 });
 
+void test('clipboard-style text is not recorded unless recordPaste is called', () => {
+	const memory = createMemoryStorage();
+	const store = createTextEntryHistoryStore({
+		storage: memory.storage,
+		logger: noopLogger,
+		now: () => 100,
+		random: () => 0.5,
+	});
+
+	const clipboardText = 'clipboard only';
+	assert.equal(clipboardText.length > 0, true);
+	assert.deepEqual(store.load(), createEmptyTextEntryHistoryState());
+
+	const textDialogState = store.recordPaste('text dialog paste');
+	assert.deepEqual(
+		textDialogState.entries.map((entry) => entry.text),
+		['text dialog paste'],
+	);
+	assert.equal(
+		textDialogState.entries.some((entry) => entry.text === clipboardText),
+		false,
+	);
+});
+
 void test('createTextEntryHistoryStore warns when invalid storage reset delete fails', () => {
 	const warnings: unknown[][] = [];
 	const store = createTextEntryHistoryStore({
