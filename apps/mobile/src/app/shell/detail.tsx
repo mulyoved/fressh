@@ -101,11 +101,11 @@ import { useSshStore } from '@/lib/ssh-store';
 import { useTheme } from '@/lib/theme';
 import {
 	buildTmuxScrollbackCopyModeCommand,
-	buildTmuxScrollbackLiveInputSendPlan,
 	getTmuxScrollbackControlFailurePolicy,
 	isValidTmuxCancelKey,
 	runTmuxControlCommand,
 } from '@/lib/tmux-scrollback';
+import { buildShellLiveInputSendPlan } from '@/lib/shell-live-input';
 import {
 	buildClipboardPasteSegments,
 	buildCommanderExecuteSegments,
@@ -944,13 +944,14 @@ function ShellDetail() {
 				dropPayloadAfterExit?: boolean;
 			},
 		) => {
-			const plan = buildTmuxScrollbackLiveInputSendPlan({
+			const plan = buildShellLiveInputSendPlan({
 				scrollbackActive: scrollbackActiveRef.current,
-				cancelKey: cancelKeyBytes,
+				cancelKeyBytes,
+				exitKeyBytes,
 				payloadSegments,
 				interSegmentDelayMs: opts?.interSegmentDelayMs,
 				scrollbackExitDelayMs: touchEnterDelayMs,
-				dropPayloadAfterExit: opts?.dropPayloadAfterExit ?? false,
+				isCurrentPayloadExitKey: opts?.dropPayloadAfterExit ?? false,
 			});
 
 			if (plan.type === 'block') {
@@ -969,7 +970,7 @@ function ShellDetail() {
 				interSegmentDelayMs: plan.interSegmentDelayMs,
 			});
 		},
-		[cancelKeyBytes, clearScrollbackState, sendBytesQueued],
+		[cancelKeyBytes, clearScrollbackState, exitKeyBytes, sendBytesQueued],
 	);
 
 	const sendBytesRaw = useCallback(

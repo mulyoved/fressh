@@ -34,15 +34,6 @@ export async function runTmuxControlCommand(
 	}
 }
 
-export function getTmuxScrollbackLiveInputPolicy({
-	scrollbackActive,
-}: {
-	scrollbackActive: boolean;
-}): 'exit-before-send' | 'pass-through' {
-	if (scrollbackActive) return 'exit-before-send';
-	return 'pass-through';
-}
-
 export function getTmuxScrollbackControlFailurePolicy({
 	scrollbackActive,
 }: {

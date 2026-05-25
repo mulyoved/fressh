@@ -5,7 +5,6 @@ import {
 	buildTmuxScrollbackLiveInputSendPlan,
 	buildTmuxSelectWindowCommand,
 	getTmuxScrollbackControlFailurePolicy,
-	getTmuxScrollbackLiveInputPolicy,
 	isValidTmuxCancelKey,
 } from '../../src/lib/tmux-scrollback';
 
@@ -24,17 +23,6 @@ void test('buildTmuxSelectWindowCommand targets an agent alert tmux window id', 
 	assert.equal(
 		buildTmuxSelectWindowCommand("main's", '@12'),
 		"tmux select-window -t 'main'\\''s:@12'",
-	);
-});
-
-void test('tmux scrollback live input policy only exits active scrollback', () => {
-	assert.equal(
-		getTmuxScrollbackLiveInputPolicy({ scrollbackActive: false }),
-		'pass-through',
-	);
-	assert.equal(
-		getTmuxScrollbackLiveInputPolicy({ scrollbackActive: true }),
-		'exit-before-send',
 	);
 });
 
