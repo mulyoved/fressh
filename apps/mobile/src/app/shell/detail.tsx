@@ -975,15 +975,9 @@ function ShellDetail() {
 
 	const sendBytesRaw = useCallback(
 		(bytes: Uint8Array<ArrayBuffer>) => {
-			const isScrollbackExitKey =
-				bytes.length === exitKeyBytes.length &&
-				bytes.length === 1 &&
-				bytes[0] === exitKeyBytes[0];
-			sendLiveInputSegments([bytes], {
-				dropPayloadAfterExit: isScrollbackExitKey,
-			});
+			sendLiveInputSegments([bytes]);
 		},
-		[exitKeyBytes, sendLiveInputSegments],
+		[sendLiveInputSegments],
 	);
 
 	const sendLiteralInputSegments = useCallback(

@@ -43,6 +43,22 @@ void test('implicitly detects exit-key payload when override is omitted', () => 
 	assert.deepEqual(segmentValues(plan.segments), [[0x71]]);
 });
 
+void test('omitted override keeps a single non-exit payload', () => {
+	const plan = buildShellLiveInputSendPlan({
+		scrollbackActive: true,
+		cancelKeyBytes: bytes([0x71]),
+		exitKeyBytes: bytes([0x71]),
+		payloadSegments: [bytes([0x70])],
+		scrollbackExitDelayMs: 10,
+	});
+
+	assert.equal(plan.type, 'send');
+	if (plan.type !== 'send') throw new Error('expected send plan');
+	assert.equal(plan.clearScrollback, true);
+	assert.equal(plan.interSegmentDelayMs, 10);
+	assert.deepEqual(segmentValues(plan.segments), [[0x71], [0x70]]);
+});
+
 void test('explicit false override preserves literal text equal to the exit key', () => {
 	const plan = buildShellLiveInputSendPlan({
 		scrollbackActive: true,
