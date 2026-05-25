@@ -951,7 +951,7 @@ function ShellDetail() {
 				payloadSegments,
 				interSegmentDelayMs: opts?.interSegmentDelayMs,
 				scrollbackExitDelayMs: touchEnterDelayMs,
-				isCurrentPayloadExitKey: opts?.dropPayloadAfterExit ?? false,
+				isCurrentPayloadExitKey: opts?.dropPayloadAfterExit,
 			});
 
 			if (plan.type === 'block') {
