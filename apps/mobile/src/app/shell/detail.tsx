@@ -100,9 +100,9 @@ import {
 import { executeSideChannelCommand } from '@/lib/ssh-side-channel';
 import { useSshStore } from '@/lib/ssh-store';
 import {
-	buildClipboardPasteSegments,
+	buildClipboardPastePayload,
 	buildCommanderExecuteSegments,
-	buildTextEntryPasteSegments,
+	buildTextEntryPastePayload,
 } from '@/lib/terminal-input-payloads';
 import {
 	getTextEntryHistoryCycleEntries,
@@ -1186,9 +1186,9 @@ function ShellDetail() {
 	const handlePasteClipboard = useCallback(async () => {
 		try {
 			const text = await Clipboard.getStringAsync();
-			const segments = buildClipboardPasteSegments(text);
-			if (segments.length) {
-				sendLiteralInputSegments(segments);
+			const payload = buildClipboardPastePayload(text);
+			if (payload.segments.length) {
+				sendLiteralInputSegments(payload.segments);
 			}
 			if (selectionModeEnabled) {
 				exitSelectionMode();
@@ -1200,15 +1200,19 @@ function ShellDetail() {
 
 	const handlePasteTextEntry = useCallback(
 		(value: string) => {
-			const segments = buildTextEntryPasteSegments(value);
-			if (!segments.length) return;
+			const payload = buildTextEntryPastePayload(value);
+			if (!payload.segments.length) return;
 			if (selectionModeEnabled) {
 				exitSelectionMode();
 			}
-			sendLiteralInputSegments(segments, {
+			sendLiteralInputSegments(payload.segments, {
 				interSegmentDelayMs: touchEnterDelayMs,
 			});
-			refreshTextEntryHistory(textEntryHistoryStore.recordPaste(value));
+			if (payload.historyText !== null) {
+				refreshTextEntryHistory(
+					textEntryHistoryStore.recordPaste(payload.historyText),
+				);
+			}
 		},
 		[
 			exitSelectionMode,
