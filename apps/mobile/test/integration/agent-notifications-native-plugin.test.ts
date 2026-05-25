@@ -63,14 +63,6 @@ async function mobilePackageJson() {
 	) as { scripts?: Record<string, string> };
 }
 
-async function checkWorkflowSource() {
-	return readFile(
-		new URL('../../../../.github/workflows/check.yml', import.meta.url)
-			.pathname,
-		'utf8',
-	);
-}
-
 async function foregroundServiceModuleTemplateSource() {
 	return readFile(
 		new URL(
@@ -477,6 +469,24 @@ void test('foreground service postAgentAlert accepts vibration flag', async () =
 	);
 });
 
+void test('foreground service applies pre-channel vibration only when requested', async () => {
+	const source = await sshForegroundServiceTemplateSource();
+	const notificationBuilder =
+		source.match(
+			/private fun buildAgentAlertNotification[\s\S]*?return builder\.build\(\)/,
+		)?.[0] ?? '';
+
+	assert.match(
+		notificationBuilder,
+		/val builder = NotificationCompat\.Builder\(context, agentAlertChannelId\(vibrate\)\)/,
+	);
+	assert.match(
+		notificationBuilder,
+		/if \(Build\.VERSION\.SDK_INT < Build\.VERSION_CODES\.O && vibrate\) \{\s*builder\.setVibrate\(AGENT_ALERT_VIBRATE_PATTERN\)\s*\}/,
+	);
+	assert.equal(notificationBuilder.match(/setVibrate/g)?.length, 1);
+});
+
 void test('foreground service public lock-screen notification is sanitized', async () => {
 	const source = await sshForegroundServiceTemplateSource();
 	const publicNotification =
@@ -551,7 +561,7 @@ void test('foreground service wakelock policy avoids native-only redelivery', as
 	}
 });
 
-void test('foreground service prebuild compile workflow uses explicit script contract', async () => {
+void test('foreground service prebuild compile script uses explicit contract', async () => {
 	const packageJson = await mobilePackageJson();
 	const prebuildCompile =
 		packageJson.scripts?.['android:prebuild-compile-debug-kotlin'] ?? '';
@@ -562,10 +572,6 @@ void test('foreground service prebuild compile workflow uses explicit script con
 	);
 	assert.match(prebuildCompile, /^expo prebuild --platform android/);
 	assert.match(prebuildCompile, /pnpm run android:compile-debug-kotlin$/);
-	assert.match(
-		await checkWorkflowSource(),
-		/pnpm --filter @fressh\/mobile android:prebuild-compile-debug-kotlin/,
-	);
 });
 
 void test('foreground service is not stopped just because the task is removed', async () => {

@@ -232,7 +232,7 @@ class SshForegroundService : Service() {
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
       )
 
-      return NotificationCompat.Builder(context, agentAlertChannelId(vibrate))
+      val builder = NotificationCompat.Builder(context, agentAlertChannelId(vibrate))
         .setContentTitle(title)
         .setContentText(message)
         .setSmallIcon(R.mipmap.ic_launcher)
@@ -241,7 +241,12 @@ class SshForegroundService : Service() {
         .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
         .setPublicVersion(buildAgentAlertPublicNotification(context, vibrate))
         .setPriority(NotificationCompat.PRIORITY_DEFAULT)
-        .build()
+
+      if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O && vibrate) {
+        builder.setVibrate(AGENT_ALERT_VIBRATE_PATTERN)
+      }
+
+      return builder.build()
     }
 
     fun start(context: Context, title: String, message: String) {
