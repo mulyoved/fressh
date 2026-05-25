@@ -986,6 +986,21 @@ function ShellDetail() {
 		[exitKeyBytes, sendLiveInputSegments],
 	);
 
+	const sendLiteralInputSegments = useCallback(
+		(
+			payloadSegments: Uint8Array<ArrayBuffer>[],
+			opts?: {
+				interSegmentDelayMs?: number;
+			},
+		) => {
+			sendLiveInputSegments(payloadSegments, {
+				interSegmentDelayMs: opts?.interSegmentDelayMs,
+				dropPayloadAfterExit: false,
+			});
+		},
+		[sendLiveInputSegments],
+	);
+
 	const sendBytesWithModifiers = useCallback(
 		(bytes: Uint8Array<ArrayBuffer>) => {
 			if (!shell) return;
@@ -1004,16 +1019,20 @@ function ShellDetail() {
 
 	const sendTextRaw = useCallback(
 		(value: string) => {
-			sendBytesRaw(encoder.encode(value));
+			sendLiteralInputSegments([encoder.encode(value)]);
 		},
-		[sendBytesRaw],
+		[sendLiteralInputSegments],
 	);
 
 	const sendTextWithModifiers = useCallback(
 		(value: string) => {
+			if (!modifierKeysActive.length) {
+				sendTextRaw(value);
+				return;
+			}
 			sendBytesWithModifiers(encoder.encode(value));
 		},
-		[sendBytesWithModifiers],
+		[modifierKeysActive, sendBytesWithModifiers, sendTextRaw],
 	);
 
 	const clearCommandTimeouts = useCallback(() => {
@@ -1114,7 +1133,7 @@ function ShellDetail() {
 			const text = await Clipboard.getStringAsync();
 			const segments = buildClipboardPasteSegments(text);
 			if (segments.length) {
-				sendLiveInputSegments(segments);
+				sendLiteralInputSegments(segments);
 			}
 			if (selectionModeEnabled) {
 				exitSelectionMode();
@@ -1122,20 +1141,20 @@ function ShellDetail() {
 		} catch (error) {
 			logger.warn('clipboard read failed', error);
 		}
-	}, [exitSelectionMode, selectionModeEnabled, sendLiveInputSegments]);
+	}, [exitSelectionMode, selectionModeEnabled, sendLiteralInputSegments]);
 
 	const handlePasteTextEntry = useCallback(
-		async (value: string) => {
+		(value: string) => {
 			const segments = buildTextEntryPasteSegments(value);
 			if (!segments.length) return;
 			if (selectionModeEnabled) {
 				exitSelectionMode();
 			}
-			sendLiveInputSegments(segments, {
+			sendLiteralInputSegments(segments, {
 				interSegmentDelayMs: touchEnterDelayMs,
 			});
 		},
-		[exitSelectionMode, selectionModeEnabled, sendLiveInputSegments],
+		[exitSelectionMode, selectionModeEnabled, sendLiteralInputSegments],
 	);
 
 	const clearWisprOpeningTimeout = useCallback(() => {
@@ -3190,7 +3209,7 @@ fi
 					onExecuteCommand={(value) => {
 						const segments = buildCommanderExecuteSegments(value);
 						if (!segments.length) return;
-						sendLiveInputSegments(segments, {
+						sendLiteralInputSegments(segments, {
 							interSegmentDelayMs: touchEnterDelayMs,
 						});
 					}}
