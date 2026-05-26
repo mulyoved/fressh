@@ -7,6 +7,8 @@ import {
 	type DiscoveredSkill,
 } from '../../src/lib/skill-discovery';
 import {
+	SKILL_DISCOVERY_CACHE_VERSION,
+	buildSkillDiscoveryCacheKey,
 	createSkillDiscoveryCache,
 	type SkillDiscoveryCacheStorage,
 } from '../../src/lib/skill-discovery-cache';
@@ -15,10 +17,13 @@ import { loadSkillSelectorProject } from '../../src/lib/skill-selector-loader';
 const stableConnectionId = 'connection-1';
 const tmuxTarget = 'session:1.2';
 const panePath = '/repo/apps/mobile';
+const resolvedPanePath = '/repo/apps/mobile-from-resolver';
 const projectRoot = '/repo';
 const projectName = 'repo';
 const projectCommand = buildSkillProjectCommand(panePath);
+const resolvedProjectCommand = buildSkillProjectCommand(resolvedPanePath);
 const discoveryCommand = buildSkillDiscoveryCommand(panePath);
+const resolvedDiscoveryCommand = buildSkillDiscoveryCommand(resolvedPanePath);
 
 const cachedSkills: DiscoveredSkill[] = [
 	{
@@ -86,7 +91,7 @@ function createDiscoveryOutput(skills: DiscoveredSkill[]) {
 	});
 }
 
-void test('loadSkillSelectorProject returns cached skills without running discovery when cache exists and forceRefresh is false', async () => {
+void test('loadSkillSelectorProject returns cached skills without running remote commands when cache exists and forceRefresh is false', async () => {
 	const { storage } = createMemoryStorage();
 	const cache = createSkillDiscoveryCache({
 		storage,
@@ -99,6 +104,76 @@ void test('loadSkillSelectorProject returns cached skills without running discov
 		projectName,
 		skills: cachedSkills,
 	});
+	const { commands, runCommand } = createCommandRunner({});
+
+	const result = await loadSkillSelectorProject({
+		cache,
+		stableConnectionId,
+		tmuxTarget,
+		runCommand,
+		forceRefresh: false,
+		resolvePanePath: async () => {
+			throw new Error('pane path should not be resolved on cache hit');
+		},
+	});
+
+	assert.deepEqual(commands, []);
+	assert.deepEqual(result, {
+		source: 'cache',
+		projectRoot,
+		projectName,
+		skills: cachedSkills,
+		updatedAt: cachedRecord.updatedAt,
+		cacheRecord: cachedRecord,
+	});
+});
+
+void test('loadSkillSelectorProject resolves pane path only after indexed cache miss', async () => {
+	const { storage } = createMemoryStorage();
+	const cache = createSkillDiscoveryCache({
+		storage,
+		now: () => '2026-05-26T12:30:00.000Z',
+	});
+	const { commands, runCommand } = createCommandRunner({
+		[resolvedProjectCommand]: JSON.stringify({ projectRoot }),
+		[resolvedDiscoveryCommand]: createDiscoveryOutput(discoveredSkills),
+	});
+
+	const result = await loadSkillSelectorProject({
+		cache,
+		stableConnectionId,
+		tmuxTarget,
+		runCommand,
+		forceRefresh: false,
+		resolvePanePath: async () => resolvedPanePath,
+	});
+
+	assert.deepEqual(commands, [
+		resolvedProjectCommand,
+		resolvedDiscoveryCommand,
+	]);
+	assert.equal(result.source, 'remote');
+	assert.deepEqual(result.skills, discoveredSkills);
+});
+
+void test('loadSkillSelectorProject remembers project index when legacy cache record is hit after project resolution', async () => {
+	const updatedAt = '2026-05-26T12:45:00.000Z';
+	const { storage } = createMemoryStorage({
+		[buildSkillDiscoveryCacheKey({
+			stableConnectionId,
+			tmuxTarget,
+			projectRoot,
+		})]: JSON.stringify({
+			version: SKILL_DISCOVERY_CACHE_VERSION,
+			stableConnectionId,
+			tmuxTarget,
+			projectRoot,
+			projectName,
+			skills: cachedSkills,
+			updatedAt,
+		}),
+	});
+	const cache = createSkillDiscoveryCache({ storage });
 	const { commands, runCommand } = createCommandRunner({
 		[projectCommand]: JSON.stringify({ projectRoot }),
 	});
@@ -112,15 +187,15 @@ void test('loadSkillSelectorProject returns cached skills without running discov
 		forceRefresh: false,
 	});
 
-	assert.equal(commands.length, 1);
 	assert.deepEqual(commands, [projectCommand]);
-	assert.deepEqual(result, {
-		source: 'cache',
+	assert.equal(result.source, 'cache');
+	assert.deepEqual(cache.readLastProject({ stableConnectionId, tmuxTarget }), {
+		version: SKILL_DISCOVERY_CACHE_VERSION,
+		stableConnectionId,
+		tmuxTarget,
 		projectRoot,
 		projectName,
-		skills: cachedSkills,
-		updatedAt: cachedRecord.updatedAt,
-		cacheRecord: cachedRecord,
+		updatedAt,
 	});
 });
 

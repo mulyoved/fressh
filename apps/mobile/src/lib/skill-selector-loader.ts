@@ -11,6 +11,7 @@ import {
 } from '@/lib/skill-discovery-cache';
 
 export type SkillSelectorCommandRunner = (command: string) => Promise<string>;
+export type SkillSelectorPanePathResolver = () => Promise<string>;
 
 export type SkillSelectorProjectLoadResult = {
 	source: 'cache' | 'remote';
@@ -26,31 +27,65 @@ export async function loadSkillSelectorProject({
 	stableConnectionId,
 	tmuxTarget,
 	panePath,
+	resolvePanePath,
 	runCommand,
 	forceRefresh,
 }: {
 	cache: SkillDiscoveryCache;
 	stableConnectionId: string;
 	tmuxTarget: string;
-	panePath: string;
+	panePath?: string;
+	resolvePanePath?: SkillSelectorPanePathResolver;
 	runCommand: SkillSelectorCommandRunner;
 	forceRefresh: boolean;
 }): Promise<SkillSelectorProjectLoadResult> {
-	const projectOutput = await runCommand(buildSkillProjectCommand(panePath));
+	const sourceParts = {
+		stableConnectionId,
+		tmuxTarget,
+	};
+
+	if (!forceRefresh) {
+		const lastProject = cache.readLastProject(sourceParts);
+		const lastProjectCacheRecord = lastProject
+			? cache.read({
+					...sourceParts,
+					projectRoot: lastProject.projectRoot,
+				})
+			: null;
+		if (lastProjectCacheRecord) {
+			return {
+				source: 'cache',
+				projectRoot: lastProjectCacheRecord.projectRoot,
+				projectName: lastProjectCacheRecord.projectName,
+				skills: lastProjectCacheRecord.skills,
+				updatedAt: lastProjectCacheRecord.updatedAt,
+				cacheRecord: lastProjectCacheRecord,
+			};
+		}
+	}
+
+	const resolvedPanePath = panePath ?? (await resolvePanePath?.());
+	if (!resolvedPanePath) {
+		throw new Error('Could not resolve pane path for skill selector.');
+	}
+
+	const projectOutput = await runCommand(
+		buildSkillProjectCommand(resolvedPanePath),
+	);
 	const project = parseSkillProjectOutput(projectOutput);
 	if (!project) {
 		throw new Error('Could not resolve skill project for current pane.');
 	}
 
 	const cacheKeyParts = {
-		stableConnectionId,
-		tmuxTarget,
+		...sourceParts,
 		projectRoot: project.projectRoot,
 	};
 
 	if (!forceRefresh) {
 		const cacheRecord = cache.read(cacheKeyParts);
 		if (cacheRecord) {
+			cache.writeLastProject(cacheRecord);
 			return {
 				source: 'cache',
 				projectRoot: cacheRecord.projectRoot,
@@ -63,7 +98,7 @@ export async function loadSkillSelectorProject({
 	}
 
 	const discoveryOutput = await runCommand(
-		buildSkillDiscoveryCommand(panePath),
+		buildSkillDiscoveryCommand(resolvedPanePath),
 	);
 	const discoveryResult = parseSkillDiscoveryResult(discoveryOutput);
 	if (!discoveryResult) {

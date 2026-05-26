@@ -2359,15 +2359,17 @@ fi
 				if (!tmuxEnabled) {
 					throw new Error('Skill selector requires a tmux-enabled connection.');
 				}
-				const panePath = await resolveHostBrowserPanePath();
-				if (skillSelectorCurrentSourceKeyRef.current !== requestSourceKey) {
-					return;
-				}
 				const result = await loadSkillSelectorProject({
 					cache: skillDiscoveryCache,
 					stableConnectionId: connectionStoredConnectionId || connectionId,
 					tmuxTarget: tmuxTarget.trim() || 'main',
-					panePath,
+					resolvePanePath: async () => {
+						const panePath = await resolveHostBrowserPanePath();
+						if (skillSelectorCurrentSourceKeyRef.current !== requestSourceKey) {
+							throw new Error('Skill selector source changed.');
+						}
+						return panePath;
+					},
 					runCommand: runHostBrowserCommand,
 					forceRefresh,
 				});
