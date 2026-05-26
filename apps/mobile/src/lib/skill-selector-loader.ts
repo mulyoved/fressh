@@ -5,9 +5,9 @@ import {
 	parseSkillProjectOutput,
 	type DiscoveredSkill,
 } from '@/lib/skill-discovery';
-import type {
-	SkillDiscoveryCache,
-	SkillDiscoveryCacheRecord,
+import {
+	type SkillDiscoveryCache,
+	type SkillDiscoveryCacheRecord,
 } from '@/lib/skill-discovery-cache';
 
 export type SkillSelectorCommandRunner = (command: string) => Promise<string>;
@@ -62,7 +62,9 @@ export async function loadSkillSelectorProject({
 		}
 	}
 
-	const discoveryOutput = await runCommand(buildSkillDiscoveryCommand(panePath));
+	const discoveryOutput = await runCommand(
+		buildSkillDiscoveryCommand(panePath),
+	);
 	const discoveryResult = parseSkillDiscoveryResult(discoveryOutput);
 	if (!discoveryResult) {
 		throw new Error('Skill discovery returned invalid output.');

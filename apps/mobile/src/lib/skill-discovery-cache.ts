@@ -1,4 +1,4 @@
-import type { DiscoveredSkill } from '@/lib/skill-discovery';
+import { type DiscoveredSkill } from '@/lib/skill-discovery';
 
 export const SKILL_DISCOVERY_CACHE_VERSION = 1;
 
@@ -77,10 +77,7 @@ export function createSkillDiscoveryCache({
 				skills: input.skills.map((skill) => ({ ...skill })),
 				updatedAt: now(),
 			};
-			storage.set(
-				buildSkillDiscoveryCacheKey(input),
-				JSON.stringify(record),
-			);
+			storage.set(buildSkillDiscoveryCacheKey(input), JSON.stringify(record));
 			return record;
 		},
 		delete: (parts) => {
