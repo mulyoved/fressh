@@ -199,6 +199,7 @@ export async function executeSideChannelCommandCore({
 			waitForMarker(
 				outputChunks,
 				endMarker,
+				fullCommand.trimEnd(),
 				decoder,
 				() => completed,
 				(cleanup) => {
@@ -242,6 +243,7 @@ export async function executeSideChannelCommandCore({
 async function waitForMarker(
 	chunks: ArrayBuffer[],
 	marker: string,
+	echoedCommand: string,
 	decoder: TextDecoder,
 	isCompleted: () => boolean,
 	onCleanup: (cleanup: () => void) => void,
@@ -274,11 +276,22 @@ async function waitForMarker(
 			const output = decoder.decode(combined);
 			const markerLineRegex = new RegExp(`^${marker}\\s*$`, 'm');
 			if (markerLineRegex.test(output)) {
-				const lines = output.split('\n');
+				const lines = output.split(/\r\n|\n|\r/);
 				const markerLineIndex = lines.findIndex(
 					(line) => line.trim() === marker,
 				);
-				const relevantLines = lines.slice(1, markerLineIndex);
+				let echoedCommandLineIndex = -1;
+				for (let index = markerLineIndex - 1; index >= 0; index -= 1) {
+					const line = lines[index]?.trim();
+					if (line === echoedCommand || line?.includes(echoedCommand)) {
+						echoedCommandLineIndex = index;
+						break;
+					}
+				}
+				const relevantLines = lines.slice(
+					echoedCommandLineIndex >= 0 ? echoedCommandLineIndex + 1 : 1,
+					markerLineIndex,
+				);
 				const cleanOutput = relevantLines.join('\n').trim();
 				const exitCodeMatch = output.match(/EXIT_CODE:(\d+)/);
 				const exitCode =

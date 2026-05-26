@@ -20,6 +20,10 @@ const hostBrowserUrlSlotLabels: Record<HostBrowserUrlSlot, string> = {
 };
 
 const hostBrowserUrlSlotSet = new Set<string>(HOST_BROWSER_URL_SLOTS);
+const ansiEscapePattern = new RegExp(
+	`${String.fromCharCode(27)}\\[[0-?]*[ -/]*[@-~]`,
+	'g',
+);
 
 export function isHostBrowserUrlSlot(
 	value: string,
@@ -38,6 +42,17 @@ export function quoteShell(value: string): string {
 export function extractLastHttpsUrl(output: string): string | null {
 	const matches = output.match(/https:\/\/[^\s"'<>]+/g);
 	return matches?.at(-1) ?? null;
+}
+
+export function parseHostBrowserPanePathOutput(output: string): string | null {
+	const withoutAnsi = output.replace(ansiEscapePattern, '');
+	return (
+		withoutAnsi
+			.split(/[\r\n]+/)
+			.map((line) => line.trim())
+			.filter((line) => line.startsWith('/'))
+			.at(-1) ?? null
+	);
 }
 
 export function parseHostBrowserUrlInput(

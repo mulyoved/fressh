@@ -10,6 +10,7 @@ import {
 	extractLastHttpsUrl,
 	getHostBrowserUrlSlotLabel,
 	isHostBrowserUrlSlot,
+	parseHostBrowserPanePathOutput,
 	parseHostBrowserUrlInput,
 } from '../../src/lib/host-browser-actions';
 
@@ -68,6 +69,20 @@ void test('current window id command shell-quotes tmux session', () => {
 		buildTmuxCurrentWindowIdCommand("main'quoted"),
 		"tmux display-message -p -t 'main'\\''quoted:' '#{window_id}'",
 	);
+});
+
+void test('parseHostBrowserPanePathOutput extracts paths from side-channel noise', () => {
+	assert.equal(
+		parseHostBrowserPanePathOutput(
+			"tmux display-message -p -t 'main:' '#{pane_current_path}'\n\x1b[?2004l\r/home/muly/fressh\n",
+		),
+		'/home/muly/fressh',
+	);
+	assert.equal(
+		parseHostBrowserPanePathOutput('prompt text\n/home/muly/work tree\n'),
+		'/home/muly/work tree',
+	);
+	assert.equal(parseHostBrowserPanePathOutput('no absolute path'), null);
 });
 
 void test('host browser URL slots have user-facing labels', () => {

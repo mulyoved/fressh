@@ -61,6 +61,7 @@ import {
 	buildTmuxWindowConfigSetCommand,
 	extractLastHttpsUrl,
 	getHostBrowserUrlSlotLabel,
+	parseHostBrowserPanePathOutput,
 	parseHostBrowserUrlInput,
 	type HostBrowserUrlSlot,
 } from '@/lib/host-browser-actions';
@@ -2298,11 +2299,7 @@ fi
 			buildHostBrowserPanePathCommand(sessionName),
 			10_000,
 		);
-		const panePath = output
-			.split(/\r?\n/)
-			.map((line) => line.trim())
-			.filter(Boolean)
-			.at(-1);
+		const panePath = parseHostBrowserPanePathOutput(output);
 		if (!panePath) {
 			throw new Error(
 				`Could not resolve pane path for tmux session ${sessionName}.`,

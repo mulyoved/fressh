@@ -69,6 +69,13 @@ class FakeSideShell {
 		return 1n;
 	}
 
+	emit(bytes: Uint8Array) {
+		this.listener?.({
+			stream: 'stdout',
+			bytes: bytes.buffer as ArrayBuffer,
+		});
+	}
+
 	removeListener(listenerId: bigint) {
 		this.removedListenerId = listenerId;
 		this.options.remove?.();
@@ -137,6 +144,72 @@ void test('executeSideChannelCommand captures output and closes the side shell',
 	assert.equal(shell.closed, true);
 	assert.equal(shell.sendSignal instanceof AbortSignal, true);
 	assert.equal(shell.closeSignal instanceof AbortSignal, true);
+});
+
+void test('executeSideChannelCommand strips command echo separated by carriage returns', async () => {
+	const shell = new FakeSideShell({
+		send: async (bytes) => {
+			const command = decoder.decode(bytes);
+			const marker = command.match(/__SIDE_CHANNEL_DONE_\d+__/)?.[0];
+			if (!marker) throw new Error('missing marker');
+			const echoedCommand = command.replace(/\n$/, '');
+			shell.emit(
+				encoder.encode(
+					`prompt\n${echoedCommand}\rpayload\n${marker}\nEXIT_CODE:0\n`,
+				),
+			);
+		},
+	});
+	const connection = {
+		startShell: async () => shell,
+	};
+
+	const result = await executeSideChannelCommandCore({
+		connection,
+		command: 'printf payload',
+		timeoutMs: 500,
+		logger: noopLogger,
+	});
+
+	assert.deepEqual(result, {
+		success: true,
+		output: 'payload',
+		error: undefined,
+		issueUrl: undefined,
+	});
+});
+
+void test('executeSideChannelCommand strips prompt-prefixed command echo', async () => {
+	const shell = new FakeSideShell({
+		send: async (bytes) => {
+			const command = decoder.decode(bytes);
+			const marker = command.match(/__SIDE_CHANNEL_DONE_\d+__/)?.[0];
+			if (!marker) throw new Error('missing marker');
+			const echoedCommand = command.replace(/\n$/, '');
+			shell.emit(
+				encoder.encode(
+					`Last login: Tue May 26 10:41:39 2026\r\n\u001b[?2004h(base) host:~$ ${echoedCommand}\rpayload\n${marker}\nEXIT_CODE:0\n`,
+				),
+			);
+		},
+	});
+	const connection = {
+		startShell: async () => shell,
+	};
+
+	const result = await executeSideChannelCommandCore({
+		connection,
+		command: 'printf payload',
+		timeoutMs: 500,
+		logger: noopLogger,
+	});
+
+	assert.deepEqual(result, {
+		success: true,
+		output: 'payload',
+		error: undefined,
+		issueUrl: undefined,
+	});
 });
 
 void test('executeSideChannelCommand rejects a hanging shell start', async () => {
