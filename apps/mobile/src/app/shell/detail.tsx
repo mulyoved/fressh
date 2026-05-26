@@ -93,11 +93,9 @@ import {
 	reloadRuntimeShellConfigFromRemote,
 } from '@/lib/shell-config-store-native';
 import { sendShellLiveInputSegments } from '@/lib/shell-live-input';
-import {
-	buildSkillDiscoveryCommand,
-	parseSkillDiscoveryOutput,
-	type DiscoveredSkill,
-} from '@/lib/skill-discovery';
+import { type DiscoveredSkill } from '@/lib/skill-discovery';
+import { skillDiscoveryCache } from '@/lib/skill-discovery-cache-native';
+import { loadSkillSelectorProject } from '@/lib/skill-selector-loader';
 import { executeSideChannelCommand } from '@/lib/ssh-side-channel';
 import { useSshStore } from '@/lib/ssh-store';
 import {
@@ -719,10 +717,23 @@ function ShellDetail() {
 	const [skillSelectorSkills, setSkillSelectorSkills] = useState<
 		DiscoveredSkill[]
 	>([]);
+	const [skillSelectorProjectName, setSkillSelectorProjectName] = useState<
+		string | null
+	>(null);
+	const [skillSelectorProjectRoot, setSkillSelectorProjectRoot] = useState<
+		string | null
+	>(null);
+	const [skillSelectorUpdatedAt, setSkillSelectorUpdatedAt] = useState<
+		string | null
+	>(null);
 	const [skillSelectorLoading, setSkillSelectorLoading] = useState(false);
+	const [skillSelectorRefreshing, setSkillSelectorRefreshing] = useState(false);
 	const [skillSelectorError, setSkillSelectorError] = useState<string | null>(
 		null,
 	);
+	const [skillSelectorRefreshError, setSkillSelectorRefreshError] = useState<
+		string | null
+	>(null);
 	const skillSelectorRequestIdRef = useRef(0);
 	const skillSelectorActiveSourceKeyRef = useRef<string | null>(null);
 	const closeSkillSelector = useCallback(() => {
@@ -730,8 +741,13 @@ function ShellDetail() {
 		skillSelectorActiveSourceKeyRef.current = null;
 		setSkillSelectorOpen(false);
 		setSkillSelectorLoading(false);
+		setSkillSelectorRefreshing(false);
 		setSkillSelectorError(null);
+		setSkillSelectorRefreshError(null);
 		setSkillSelectorSkills([]);
+		setSkillSelectorProjectName(null);
+		setSkillSelectorProjectRoot(null);
+		setSkillSelectorUpdatedAt(null);
 	}, []);
 	const [autoWisprEnabled, setAutoWisprEnabled] = useState(false);
 	const [wisprTextEditorAvailability, setWisprTextEditorAvailability] =
@@ -2316,61 +2332,95 @@ fi
 		skillSelectorOpen &&
 		skillSelectorActiveSourceKeyRef.current === skillSelectorSourceKey;
 
-	const loadSkillSelectorSkills = useCallback(async () => {
-		const requestSourceKey = skillSelectorCurrentSourceKeyRef.current;
-		const requestId = skillSelectorRequestIdRef.current + 1;
-		skillSelectorRequestIdRef.current = requestId;
-		skillSelectorActiveSourceKeyRef.current = requestSourceKey;
-		setSkillSelectorLoading(true);
-		setSkillSelectorError(null);
-		setSkillSelectorSkills([]);
+	const loadSkillSelectorSkills = useCallback(
+		async ({ forceRefresh = false }: { forceRefresh?: boolean } = {}) => {
+			const requestSourceKey = skillSelectorCurrentSourceKeyRef.current;
+			const requestId = skillSelectorRequestIdRef.current + 1;
+			const hasVisibleSkills = skillSelectorSkills.length > 0;
+			const refreshVisibleSkills = forceRefresh && hasVisibleSkills;
+			skillSelectorRequestIdRef.current = requestId;
+			skillSelectorActiveSourceKeyRef.current = requestSourceKey;
+			setSkillSelectorError(null);
+			setSkillSelectorRefreshError(null);
+			if (refreshVisibleSkills) {
+				setSkillSelectorRefreshing(true);
+			} else {
+				setSkillSelectorLoading(true);
+				setSkillSelectorSkills([]);
+				setSkillSelectorProjectName(null);
+				setSkillSelectorProjectRoot(null);
+				setSkillSelectorUpdatedAt(null);
+			}
 
-		try {
-			if (!connection) {
-				throw new Error('No SSH connection available.');
+			try {
+				if (!connection) {
+					throw new Error('No SSH connection available.');
+				}
+				if (!tmuxEnabled) {
+					throw new Error('Skill selector requires a tmux-enabled connection.');
+				}
+				const panePath = await resolveHostBrowserPanePath();
+				if (skillSelectorCurrentSourceKeyRef.current !== requestSourceKey) {
+					return;
+				}
+				const result = await loadSkillSelectorProject({
+					cache: skillDiscoveryCache,
+					stableConnectionId: connectionStoredConnectionId || connectionId,
+					tmuxTarget: tmuxTarget.trim() || 'main',
+					panePath,
+					runCommand: runHostBrowserCommand,
+					forceRefresh,
+				});
+				if (
+					skillSelectorRequestIdRef.current === requestId &&
+					skillSelectorActiveSourceKeyRef.current === requestSourceKey &&
+					skillSelectorCurrentSourceKeyRef.current === requestSourceKey
+				) {
+					setSkillSelectorProjectName(result.projectName);
+					setSkillSelectorProjectRoot(result.projectRoot);
+					setSkillSelectorUpdatedAt(result.updatedAt);
+					setSkillSelectorSkills(result.skills);
+					setSkillSelectorError(null);
+					setSkillSelectorRefreshError(null);
+				}
+			} catch (error) {
+				if (
+					skillSelectorRequestIdRef.current === requestId &&
+					skillSelectorActiveSourceKeyRef.current === requestSourceKey &&
+					skillSelectorCurrentSourceKeyRef.current === requestSourceKey
+				) {
+					if (refreshVisibleSkills) {
+						setSkillSelectorRefreshError(getErrorMessage(error));
+					} else {
+						setSkillSelectorError(getErrorMessage(error));
+					}
+				}
+			} finally {
+				if (
+					skillSelectorRequestIdRef.current === requestId &&
+					skillSelectorActiveSourceKeyRef.current === requestSourceKey &&
+					skillSelectorCurrentSourceKeyRef.current === requestSourceKey
+				) {
+					setSkillSelectorLoading(false);
+					setSkillSelectorRefreshing(false);
+				}
 			}
-			if (!tmuxEnabled) {
-				throw new Error('Skill selector requires a tmux-enabled connection.');
-			}
-			const panePath = await resolveHostBrowserPanePath();
-			if (skillSelectorCurrentSourceKeyRef.current !== requestSourceKey) {
-				return;
-			}
-			const output = await runHostBrowserCommand(
-				buildSkillDiscoveryCommand(panePath),
-				10_000,
-			);
-			const skills = parseSkillDiscoveryOutput(output);
-			if (
-				skillSelectorRequestIdRef.current === requestId &&
-				skillSelectorActiveSourceKeyRef.current === requestSourceKey &&
-				skillSelectorCurrentSourceKeyRef.current === requestSourceKey
-			) {
-				setSkillSelectorSkills(skills);
-			}
-		} catch (error) {
-			if (
-				skillSelectorRequestIdRef.current === requestId &&
-				skillSelectorActiveSourceKeyRef.current === requestSourceKey &&
-				skillSelectorCurrentSourceKeyRef.current === requestSourceKey
-			) {
-				setSkillSelectorError(getErrorMessage(error));
-			}
-		} finally {
-			if (
-				skillSelectorRequestIdRef.current === requestId &&
-				skillSelectorActiveSourceKeyRef.current === requestSourceKey &&
-				skillSelectorCurrentSourceKeyRef.current === requestSourceKey
-			) {
-				setSkillSelectorLoading(false);
-			}
-		}
-	}, [
-		connection,
-		resolveHostBrowserPanePath,
-		runHostBrowserCommand,
-		tmuxEnabled,
-	]);
+		},
+		[
+			connection,
+			connectionId,
+			connectionStoredConnectionId,
+			resolveHostBrowserPanePath,
+			runHostBrowserCommand,
+			skillSelectorSkills.length,
+			tmuxEnabled,
+			tmuxTarget,
+		],
+	);
+
+	const handleRefreshSkillSelector = useCallback(() => {
+		void loadSkillSelectorSkills({ forceRefresh: true });
+	}, [loadSkillSelectorSkills]);
 
 	const handleOpenSkillSelector = useCallback(() => {
 		invalidateHostUrlReads();
@@ -3280,10 +3330,16 @@ fi
 					open={skillSelectorVisible}
 					bottomOffset={Platform.OS === 'android' ? insets.bottom + 24 : 24}
 					skills={skillSelectorSkills}
+					projectName={skillSelectorProjectName}
+					projectRoot={skillSelectorProjectRoot}
+					updatedAt={skillSelectorUpdatedAt}
 					isLoading={skillSelectorLoading}
+					isRefreshing={skillSelectorRefreshing}
 					error={skillSelectorError}
+					refreshError={skillSelectorRefreshError}
 					onClose={handleCloseSkillSelector}
-					onRetry={loadSkillSelectorSkills}
+					onRetry={handleRefreshSkillSelector}
+					onRefresh={handleRefreshSkillSelector}
 					onSelect={handleSelectSkill}
 				/>
 				<TextEntryModal

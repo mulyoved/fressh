@@ -202,3 +202,39 @@ void test('loadSkillSelectorProject ignores existing cache and replaces it when 
 	);
 	assert.notDeepEqual(result.cacheRecord?.skills, cachedSkills);
 });
+
+void test('loadSkillSelectorProject preserves existing cache when forced refresh discovery fails', async () => {
+	const { storage } = createMemoryStorage();
+	const cache = createSkillDiscoveryCache({
+		storage,
+		now: () => '2026-05-26T15:00:00.000Z',
+	});
+	const cachedRecord = cache.write({
+		stableConnectionId,
+		tmuxTarget,
+		projectRoot,
+		projectName,
+		skills: cachedSkills,
+	});
+	const { commands, runCommand } = createCommandRunner({
+		[projectCommand]: JSON.stringify({ projectRoot }),
+	});
+
+	await assert.rejects(
+		loadSkillSelectorProject({
+			cache,
+			stableConnectionId,
+			tmuxTarget,
+			panePath,
+			runCommand,
+			forceRefresh: true,
+		}),
+		/Unexpected command/,
+	);
+
+	assert.deepEqual(commands, [projectCommand, discoveryCommand]);
+	assert.deepEqual(
+		cache.read({ stableConnectionId, tmuxTarget, projectRoot }),
+		cachedRecord,
+	);
+});
