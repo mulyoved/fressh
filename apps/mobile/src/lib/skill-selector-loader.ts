@@ -39,31 +39,6 @@ export async function loadSkillSelectorProject({
 	runCommand: SkillSelectorCommandRunner;
 	forceRefresh: boolean;
 }): Promise<SkillSelectorProjectLoadResult> {
-	const sourceParts = {
-		stableConnectionId,
-		tmuxTarget,
-	};
-
-	if (!forceRefresh) {
-		const lastProject = cache.readLastProject(sourceParts);
-		const lastProjectCacheRecord = lastProject
-			? cache.read({
-					...sourceParts,
-					projectRoot: lastProject.projectRoot,
-				})
-			: null;
-		if (lastProjectCacheRecord) {
-			return {
-				source: 'cache',
-				projectRoot: lastProjectCacheRecord.projectRoot,
-				projectName: lastProjectCacheRecord.projectName,
-				skills: lastProjectCacheRecord.skills,
-				updatedAt: lastProjectCacheRecord.updatedAt,
-				cacheRecord: lastProjectCacheRecord,
-			};
-		}
-	}
-
 	const resolvedPanePath = panePath ?? (await resolvePanePath?.());
 	if (!resolvedPanePath) {
 		throw new Error('Could not resolve pane path for skill selector.');
@@ -78,14 +53,14 @@ export async function loadSkillSelectorProject({
 	}
 
 	const cacheKeyParts = {
-		...sourceParts,
+		stableConnectionId,
+		tmuxTarget,
 		projectRoot: project.projectRoot,
 	};
 
 	if (!forceRefresh) {
 		const cacheRecord = cache.read(cacheKeyParts);
 		if (cacheRecord) {
-			cache.writeLastProject(cacheRecord);
 			return {
 				source: 'cache',
 				projectRoot: cacheRecord.projectRoot,

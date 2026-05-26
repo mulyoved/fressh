@@ -4,7 +4,6 @@ import test from 'node:test';
 import {
 	SKILL_DISCOVERY_CACHE_VERSION,
 	buildSkillDiscoveryCacheKey,
-	buildSkillDiscoveryLastProjectCacheKey,
 	createSkillDiscoveryCache,
 	type SkillDiscoveryCacheStorage,
 } from '../../src/lib/skill-discovery-cache';
@@ -98,20 +97,6 @@ void test('write and read preserve version, key parts, project name, skills, and
 		updatedAt: '2026-05-26T12:00:00.000Z',
 	});
 	assert.deepEqual(cache.read(keyParts), written);
-	assert.deepEqual(
-		cache.readLastProject({
-			stableConnectionId: keyParts.stableConnectionId,
-			tmuxTarget: keyParts.tmuxTarget,
-		}),
-		{
-			version: SKILL_DISCOVERY_CACHE_VERSION,
-			stableConnectionId: keyParts.stableConnectionId,
-			tmuxTarget: keyParts.tmuxTarget,
-			projectRoot: keyParts.projectRoot,
-			projectName: 'fressh app',
-			updatedAt: '2026-05-26T12:00:00.000Z',
-		},
-	);
 });
 
 void test('malformed records return null and are deleted from storage', () => {
@@ -130,28 +115,6 @@ void test('malformed records return null and are deleted from storage', () => {
 	const cache = createSkillDiscoveryCache({ storage });
 
 	assert.equal(cache.read(keyParts), null);
-	assert.equal(entries.has(key), false);
-});
-
-void test('malformed last project records return null and are deleted from storage', () => {
-	const sourceParts = {
-		stableConnectionId: keyParts.stableConnectionId,
-		tmuxTarget: keyParts.tmuxTarget,
-	};
-	const key = buildSkillDiscoveryLastProjectCacheKey(sourceParts);
-	const { entries, storage } = createMemoryStorage({
-		[key]: JSON.stringify({
-			version: SKILL_DISCOVERY_CACHE_VERSION,
-			stableConnectionId: sourceParts.stableConnectionId,
-			tmuxTarget: sourceParts.tmuxTarget,
-			projectRoot: 42,
-			projectName: 'fressh',
-			updatedAt: '2026-05-26T12:00:00.000Z',
-		}),
-	});
-	const cache = createSkillDiscoveryCache({ storage });
-
-	assert.equal(cache.readLastProject(sourceParts), null);
 	assert.equal(entries.has(key), false);
 });
 
