@@ -24,6 +24,12 @@ import {
 	getTextEntryHistoryCursorIndex,
 	getTextEntryHistoryCursorLabel,
 } from '../../src/lib/text-entry-history-cursor';
+import {
+	getCurrentTextPinAction,
+	recordAcceptedTextEntryHistoryPaste,
+	shouldStartTextEntryModalPanResponder,
+	shouldTextEntryModalClaimDragMove,
+} from '../../src/lib/text-entry-history-interactions';
 
 const noopLogger = {
 	warn: () => {},
@@ -862,4 +868,85 @@ void test('createTextEntryHistoryStore recovers from storage read failures', () 
 	assert.equal(warnings.length >= 2, true);
 	assert.equal(setCalls, 0);
 	assert.equal(deleteCalls, 0);
+});
+
+void test('current text pin action pins unmatched draft text', () => {
+	assert.deepEqual(
+		getCurrentTextPinAction({
+			value: 'draft command',
+			currentHistoryEntry: undefined,
+		}),
+		{ type: 'pin-text', text: 'draft command' },
+	);
+});
+
+void test('current text pin action toggles existing history entries', () => {
+	const recentEntry = {
+		id: 'entry-1',
+		text: 'git status',
+		createdAtMs: 100,
+		lastUsedAtMs: 100,
+		pinned: false,
+	};
+	const pinnedEntry = {
+		...recentEntry,
+		pinned: true,
+	};
+
+	assert.deepEqual(
+		getCurrentTextPinAction({
+			value: 'git status',
+			currentHistoryEntry: recentEntry,
+		}),
+		{ type: 'pin-entry', id: 'entry-1' },
+	);
+	assert.deepEqual(
+		getCurrentTextPinAction({
+			value: 'git status',
+			currentHistoryEntry: pinnedEntry,
+		}),
+		{ type: 'unpin-entry', id: 'entry-1' },
+	);
+	assert.deepEqual(
+		getCurrentTextPinAction({
+			value: '',
+			currentHistoryEntry: undefined,
+		}),
+		{ type: 'none' },
+	);
+});
+
+void test('accepted text entry history paste records only accepted sends', () => {
+	const recorded: string[] = [];
+	const recordPaste = (text: string) => {
+		recorded.push(text);
+		return createEmptyTextEntryHistoryState();
+	};
+
+	assert.equal(
+		recordAcceptedTextEntryHistoryPaste({
+			accepted: false,
+			historyText: 'blocked command',
+			recordPaste,
+		}),
+		undefined,
+	);
+	assert.deepEqual(recorded, []);
+
+	assert.deepEqual(
+		recordAcceptedTextEntryHistoryPaste({
+			accepted: true,
+			historyText: 'sent command',
+			recordPaste,
+		}),
+		createEmptyTextEntryHistoryState(),
+	);
+	assert.deepEqual(recorded, ['sent command']);
+});
+
+void test('text entry modal drag responder yields initial taps to controls', () => {
+	assert.equal(shouldStartTextEntryModalPanResponder(), false);
+	assert.equal(shouldTextEntryModalClaimDragMove({ dx: 1, dy: 1 }), false);
+	assert.equal(shouldTextEntryModalClaimDragMove({ dx: 3, dy: 0 }), true);
+	assert.equal(shouldTextEntryModalClaimDragMove({ dx: 0, dy: -3 }), true);
 });

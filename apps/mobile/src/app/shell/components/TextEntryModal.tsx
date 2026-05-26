@@ -36,6 +36,11 @@ import {
 	getTextEntryHistoryCursorLabel,
 	type TextEntryHistoryCursorDirection,
 } from '@/lib/text-entry-history-cursor';
+import {
+	getCurrentTextPinAction,
+	shouldStartTextEntryModalPanResponder,
+	shouldTextEntryModalClaimDragMove,
+} from '@/lib/text-entry-history-interactions';
 import { useTheme } from '@/lib/theme';
 import { type TextEntryWisprControl } from '@/lib/wispr-text-editor-flow';
 
@@ -178,11 +183,11 @@ export function TextEntryModal({
 	const panResponder = useMemo(
 		() =>
 			PanResponder.create({
-				onStartShouldSetPanResponder: () => true,
+				onStartShouldSetPanResponder: shouldStartTextEntryModalPanResponder,
 				onMoveShouldSetPanResponder: (_, gesture) =>
-					Math.abs(gesture.dx) > 2 || Math.abs(gesture.dy) > 2,
+					shouldTextEntryModalClaimDragMove(gesture),
 				onMoveShouldSetPanResponderCapture: (_, gesture) =>
-					Math.abs(gesture.dx) > 2 || Math.abs(gesture.dy) > 2,
+					shouldTextEntryModalClaimDragMove(gesture),
 				onPanResponderGrant: () => {
 					drag.stopAnimation((val) => {
 						dragStartRef.current = { x: val.x, y: val.y };
@@ -397,13 +402,23 @@ export function TextEntryModal({
 	);
 
 	const handleToggleCurrentPin = useCallback(() => {
-		if (!history || !currentHistoryEntry) return;
-		if (currentPinnedEntry) {
-			history.onUnpinEntry(currentPinnedEntry.id);
+		if (!history) return;
+		const action = getCurrentTextPinAction({
+			value,
+			currentHistoryEntry,
+		});
+		if (action.type === 'pin-text') {
+			history.onPinText(action.text);
 			return;
 		}
-		history.onPinEntry(currentHistoryEntry.id);
-	}, [currentHistoryEntry, currentPinnedEntry, history]);
+		if (action.type === 'pin-entry') {
+			history.onPinEntry(action.id);
+			return;
+		}
+		if (action.type === 'unpin-entry') {
+			history.onUnpinEntry(action.id);
+		}
+	}, [currentHistoryEntry, history, value]);
 
 	const handleToggleEntryPin = useCallback(
 		(entry: TextEntryHistoryEntry) => {
@@ -568,7 +583,7 @@ export function TextEntryModal({
 										<>
 											<Pressable
 												onPress={handleToggleCurrentPin}
-												disabled={!currentHistoryEntry}
+												disabled={!value}
 												style={{
 													width: 36,
 													height: 36,
@@ -582,7 +597,7 @@ export function TextEntryModal({
 													backgroundColor: currentPinnedEntry
 														? theme.colors.surface
 														: 'transparent',
-													opacity: currentHistoryEntry ? 1 : 0.45,
+													opacity: value ? 1 : 0.45,
 												}}
 											>
 												{currentPinnedEntry ? (

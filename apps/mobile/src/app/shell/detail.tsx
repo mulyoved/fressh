@@ -109,6 +109,7 @@ import {
 	getTextEntryHistorySections,
 	type TextEntryHistoryState,
 } from '@/lib/text-entry-history';
+import { recordAcceptedTextEntryHistoryPaste } from '@/lib/text-entry-history-interactions';
 import { textEntryHistoryStore } from '@/lib/text-entry-history-store-native';
 import { useTheme } from '@/lib/theme';
 import {
@@ -1197,10 +1198,13 @@ function ShellDetail() {
 			const accepted = sendLiteralInputSegments(payload.segments, {
 				interSegmentDelayMs: touchEnterDelayMs,
 			});
-			if (accepted && payload.historyText !== null) {
-				refreshTextEntryHistory(
-					textEntryHistoryStore.recordPaste(payload.historyText),
-				);
+			const historyState = recordAcceptedTextEntryHistoryPaste({
+				accepted,
+				historyText: payload.historyText,
+				recordPaste: (text) => textEntryHistoryStore.recordPaste(text),
+			});
+			if (historyState) {
+				refreshTextEntryHistory(historyState);
 			}
 		},
 		[
