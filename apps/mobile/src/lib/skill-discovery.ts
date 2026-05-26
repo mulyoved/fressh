@@ -6,25 +6,115 @@ export type DiscoveredSkill = {
 	description: string | null;
 };
 
+export type SkillProject = {
+	projectRoot: string;
+	projectName: string;
+};
+
+export type SkillDiscoveryResult = SkillProject & {
+	skills: DiscoveredSkill[];
+};
+
 type SkillDiscoveryRecord = {
 	path: string;
 	content: string;
 };
 
-const skillPathPattern = /\/\.codex\/skills\/([^/]+)\/SKILL\.md$/;
+type SkillDiscoveryEnvelope = {
+	projectRoot: string;
+	records: SkillDiscoveryRecord[];
+};
+
+const skillPathPattern =
+	/\/\.(?:agents|claude|codex)\/skills\/([^/]+)\/SKILL\.md$/;
 
 export function parseSkillDiscoveryOutput(output: string): DiscoveredSkill[] {
-	if (!output.trim()) return [];
+	const result = parseSkillDiscoveryResult(output);
+	return result ? result.skills : [];
+}
+
+function normalizeSkillDiscoveryOutput(output: string): string {
+	const trimmed = output.trim();
+	if (trimmed.startsWith('[') || trimmed.startsWith('{')) return trimmed;
+
+	const envelopeStartIndex = trimmed.indexOf('{"projectRoot"');
+	if (envelopeStartIndex >= 0) return trimmed.slice(envelopeStartIndex);
+
+	const recordStartIndex = trimmed.indexOf('[{"path"');
+	if (recordStartIndex < 0) return trimmed;
+	return trimmed.slice(recordStartIndex);
+}
+
+export function getSkillProjectName(projectRoot: string): string {
+	const normalized = projectRoot.replace(/\/+$/, '');
+	if (!normalized) return '/';
+	return normalized.split('/').at(-1) || normalized || '/';
+}
+
+export function parseSkillProjectOutput(output: string): SkillProject | null {
+	if (!output.trim()) return null;
 
 	let parsed: unknown;
 	try {
-		parsed = JSON.parse(output);
+		parsed = JSON.parse(normalizeSkillDiscoveryOutput(output));
 	} catch {
-		return [];
+		return null;
 	}
-	if (!Array.isArray(parsed)) return [];
 
-	return parsed
+	if (
+		typeof parsed !== 'object' ||
+		parsed === null ||
+		typeof (parsed as SkillProject).projectRoot !== 'string'
+	) {
+		return null;
+	}
+
+	const projectRoot = (parsed as SkillProject).projectRoot;
+	return {
+		projectRoot,
+		projectName: getSkillProjectName(projectRoot),
+	};
+}
+
+export function parseSkillDiscoveryResult(
+	output: string,
+): SkillDiscoveryResult | null {
+	if (!output.trim()) return null;
+
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(normalizeSkillDiscoveryOutput(output));
+	} catch {
+		return null;
+	}
+
+	if (Array.isArray(parsed)) {
+		return {
+			projectRoot: '',
+			projectName: '',
+			skills: parseSkillDiscoveryRecords(parsed),
+		};
+	}
+
+	if (
+		typeof parsed !== 'object' ||
+		parsed === null ||
+		typeof (parsed as SkillDiscoveryEnvelope).projectRoot !== 'string' ||
+		!Array.isArray((parsed as SkillDiscoveryEnvelope).records)
+	) {
+		return null;
+	}
+
+	const envelope = parsed as SkillDiscoveryEnvelope;
+	return {
+		projectRoot: envelope.projectRoot,
+		projectName: getSkillProjectName(envelope.projectRoot),
+		skills: parseSkillDiscoveryRecords(envelope.records),
+	};
+}
+
+function parseSkillDiscoveryRecords(records: unknown[]): DiscoveredSkill[] {
+	return records
 		.flatMap((record): DiscoveredSkill[] => {
 			if (!isSkillDiscoveryRecord(record)) return [];
 
@@ -89,13 +179,45 @@ export function buildSkillDiscoveryCommand(panePath: string): string {
 		'except OSError:',
 		'    git=None',
 		'base=pathlib.Path(git.stdout.strip()) if git and git.returncode == 0 and git.stdout.strip() else start',
-		"root=base/'.codex'/'skills'",
+		"skill_dirs=('.agents','.claude','.codex')",
+		'bases=[base]',
+		'home=pathlib.Path.home()',
+		'if base == home:',
+		'    try: children=sorted(child for child in home.iterdir() if child.is_dir())',
+		'    except OSError: children=[]',
+		'    for child in children:',
+		"        if any((child/name/'skills').is_dir() for name in skill_dirs): bases.append(child)",
+		'roots=[]',
+		'seen=set()',
+		'for current_base in bases:',
+		'    for name in skill_dirs:',
+		"        root=current_base/name/'skills'",
+		'        root_key=str(root)',
+		'        if root_key not in seen:',
+		'            seen.add(root_key)',
+		'            roots.append(root)',
 		'records=[]',
-		"for skill_file in sorted(root.glob('*/SKILL.md')):",
-		"    try: content=skill_file.read_text(encoding='utf-8', errors='replace')",
-		'    except OSError: continue',
-		"    records.append({'path': str(skill_file), 'content': content})",
-		'print(json.dumps(records))',
+		'for root in roots:',
+		"    for skill_file in sorted(root.glob('*/SKILL.md')):",
+		"        try: content=skill_file.read_text(encoding='utf-8', errors='replace')",
+		'        except OSError: continue',
+		"        records.append({'path': str(skill_file), 'content': content})",
+		"print(json.dumps({'projectRoot': str(base), 'records': records}))",
+	].join('\n');
+	const script = `exec(${JSON.stringify(scriptBody)})`;
+	return `python3 -c ${quoteShell(script)} ${quoteShell(panePath)}`;
+}
+
+export function buildSkillProjectCommand(panePath: string): string {
+	const scriptBody = [
+		'import json,pathlib,subprocess,sys',
+		'start=pathlib.Path(sys.argv[1])',
+		'try:',
+		"    git=subprocess.run(['git','-C',str(start),'rev-parse','--show-toplevel'], text=True, capture_output=True)",
+		'except OSError:',
+		'    git=None',
+		'base=pathlib.Path(git.stdout.strip()) if git and git.returncode == 0 and git.stdout.strip() else start',
+		"print(json.dumps({'projectRoot': str(base)}))",
 	].join('\n');
 	const script = `exec(${JSON.stringify(scriptBody)})`;
 	return `python3 -c ${quoteShell(script)} ${quoteShell(panePath)}`;

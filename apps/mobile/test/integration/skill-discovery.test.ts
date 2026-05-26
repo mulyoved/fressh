@@ -7,8 +7,12 @@ import test from 'node:test';
 import { promisify } from 'node:util';
 import {
 	buildSkillDiscoveryCommand,
+	buildSkillProjectCommand,
 	filterDiscoveredSkills,
+	getSkillProjectName,
 	parseSkillDiscoveryOutput,
+	parseSkillDiscoveryResult,
+	parseSkillProjectOutput,
 } from '../../src/lib/skill-discovery';
 
 const execFileAsync = promisify(execFile);
@@ -57,6 +61,11 @@ void test('parseSkillDiscoveryOutput reads skill frontmatter and falls back to d
 			description: 'Deploy Expo apps to stores and web.',
 		},
 		{
+			name: 'ignored',
+			path: '/repo/.agents/skills/ignored/SKILL.md',
+			description: null,
+		},
+		{
 			name: 'quoted-skill',
 			path: '/repo/.codex/skills/quoted/SKILL.md',
 			description: 'Quoted description',
@@ -73,6 +82,77 @@ void test('parseSkillDiscoveryOutput treats empty and malformed command output a
 	);
 });
 
+void test('parseSkillDiscoveryOutput tolerates leading terminal control output', () => {
+	const output = `\u001b[?2004h${discoveryPayload}`;
+
+	assert.deepEqual(parseSkillDiscoveryOutput(output), [
+		{
+			name: 'brainstorming',
+			path: '/repo/.codex/skills/brainstorming/SKILL.md',
+			description: 'Explore requirements before implementation.',
+		},
+		{
+			name: 'broken',
+			path: '/repo/.codex/skills/broken/SKILL.md',
+			description: null,
+		},
+		{
+			name: 'expo-deployment',
+			path: '/repo/.codex/skills/expo-deployment/SKILL.md',
+			description: 'Deploy Expo apps to stores and web.',
+		},
+		{
+			name: 'ignored',
+			path: '/repo/.agents/skills/ignored/SKILL.md',
+			description: null,
+		},
+		{
+			name: 'quoted-skill',
+			path: '/repo/.codex/skills/quoted/SKILL.md',
+			description: 'Quoted description',
+		},
+	]);
+});
+
+void test('parseSkillDiscoveryResult reads project metadata and skills', () => {
+	const output = JSON.stringify({
+		projectRoot: '/repo',
+		records: [
+			{
+				path: '/repo/.codex/skills/cache/SKILL.md',
+				content:
+					'---\nname: cache-skill\ndescription: Cached skill.\n---\n\n# Cache\n',
+			},
+		],
+	});
+
+	assert.deepEqual(parseSkillDiscoveryResult(output), {
+		projectRoot: '/repo',
+		projectName: 'repo',
+		skills: [
+			{
+				name: 'cache-skill',
+				path: '/repo/.codex/skills/cache/SKILL.md',
+				description: 'Cached skill.',
+			},
+		],
+	});
+});
+
+void test('parseSkillProjectOutput tolerates leading terminal control output', () => {
+	const output = `\u001b[?2004h${JSON.stringify({ projectRoot: '/repo' })}`;
+
+	assert.deepEqual(parseSkillProjectOutput(output), {
+		projectRoot: '/repo',
+		projectName: 'repo',
+	});
+});
+
+void test('getSkillProjectName handles root and normal paths', () => {
+	assert.equal(getSkillProjectName('/home/muly/fressh'), 'fressh');
+	assert.equal(getSkillProjectName('/'), '/');
+});
+
 void test('filterDiscoveredSkills matches names and descriptions', () => {
 	const skills = parseSkillDiscoveryOutput(discoveryPayload);
 
@@ -86,7 +166,7 @@ void test('filterDiscoveredSkills matches names and descriptions', () => {
 	);
 	assert.deepEqual(
 		filterDiscoveredSkills(skills, '').map((skill) => skill.name),
-		['brainstorming', 'broken', 'expo-deployment', 'quoted-skill'],
+		['brainstorming', 'broken', 'expo-deployment', 'ignored', 'quoted-skill'],
 	);
 });
 
@@ -143,30 +223,54 @@ void test('filterDiscoveredSkills ranks skill name matches before description ma
 	);
 });
 
-void test('buildSkillDiscoveryCommand scopes discovery to repo-local codex skills', () => {
+void test('buildSkillDiscoveryCommand scopes discovery to repo-local skill roots', () => {
 	const command = buildSkillDiscoveryCommand("/tmp/repo with ' quote");
 
 	assert.match(command, /python3 -c/);
 	assert.match(command, /\.codex/);
+	assert.match(command, /\.agents/);
+	assert.match(command, /\.claude/);
 	assert.match(command, /skills/);
 	assert.match(command, /SKILL\.md/);
 	assert.match(command, /errors='\\''replace'\\''/);
-	assert.doesNotMatch(command, /\.agents/);
 	assert.doesNotMatch(command, /plugins/);
 	assert.doesNotMatch(command, /<<'PY'/);
 	assert.doesNotMatch(command, /\r?\n/);
 	assert.match(command, /'\/tmp\/repo with '\\'' quote'/);
 });
 
-void test('buildSkillDiscoveryCommand executes and discovers only repo-local codex skills', async () => {
+void test('buildSkillProjectCommand resolves the git root and project name', async () => {
+	const tempRepo = await mkdtemp(join(tmpdir(), 'skill-project-'));
+	try {
+		await execFileAsync('git', ['init'], { cwd: tempRepo });
+		const nestedCwd = join(tempRepo, 'apps', 'mobile');
+		await mkdir(nestedCwd, { recursive: true });
+
+		const { stdout } = await execFileAsync('sh', [
+			'-lc',
+			buildSkillProjectCommand(nestedCwd),
+		]);
+		const expectedProjectName = tempRepo.split('/').at(-1) || tempRepo;
+
+		assert.deepEqual(parseSkillProjectOutput(stdout), {
+			projectRoot: tempRepo,
+			projectName: expectedProjectName,
+		});
+	} finally {
+		await rm(tempRepo, { recursive: true, force: true });
+	}
+});
+
+void test('buildSkillDiscoveryCommand executes and discovers repo-local skill roots', async () => {
 	const tempRepo = await mkdtemp(join(tmpdir(), 'skill-discovery-'));
 	try {
-		const demoSkill = join(tempRepo, '.codex', 'skills', 'demo', 'SKILL.md');
-		const ignoredAgentSkill = join(
+		const codexSkill = join(tempRepo, '.codex', 'skills', 'codex', 'SKILL.md');
+		const agentSkill = join(tempRepo, '.agents', 'skills', 'agent', 'SKILL.md');
+		const claudeSkill = join(
 			tempRepo,
-			'.agents',
+			'.claude',
 			'skills',
-			'ignored',
+			'claude',
 			'SKILL.md',
 		);
 		const ignoredNestedSkill = join(
@@ -178,26 +282,33 @@ void test('buildSkillDiscoveryCommand executes and discovers only repo-local cod
 			'SKILL.md',
 		);
 
-		await mkdir(join(tempRepo, '.codex', 'skills', 'demo'), {
+		await mkdir(join(tempRepo, '.codex', 'skills', 'codex'), {
 			recursive: true,
 		});
-		await mkdir(join(tempRepo, '.agents', 'skills', 'ignored'), {
+		await mkdir(join(tempRepo, '.agents', 'skills', 'agent'), {
+			recursive: true,
+		});
+		await mkdir(join(tempRepo, '.claude', 'skills', 'claude'), {
 			recursive: true,
 		});
 		await mkdir(join(tempRepo, '.codex', 'skills', 'nested', 'deeper'), {
 			recursive: true,
 		});
 		await writeFile(
-			demoSkill,
+			codexSkill,
 			Buffer.concat([
-				Buffer.from('---\nname: demo\ndescription: demo '),
+				Buffer.from('---\nname: codex\ndescription: codex '),
 				Buffer.from([0xff]),
 				Buffer.from('\n---\n# Demo\n'),
 			]),
 		);
 		await writeFile(
-			ignoredAgentSkill,
-			'---\nname: ignored-agent\ndescription: ignored\n---\n',
+			agentSkill,
+			'---\nname: agent\ndescription: agent skill\n---\n',
+		);
+		await writeFile(
+			claudeSkill,
+			'---\nname: claude\ndescription: claude skill\n---\n',
 		);
 		await writeFile(
 			ignoredNestedSkill,
@@ -213,9 +324,19 @@ void test('buildSkillDiscoveryCommand executes and discovers only repo-local cod
 		const skills = parseSkillDiscoveryOutput(stdout);
 		assert.deepEqual(skills, [
 			{
-				name: 'demo',
-				path: demoSkill,
-				description: 'demo \ufffd',
+				name: 'agent',
+				path: agentSkill,
+				description: 'agent skill',
+			},
+			{
+				name: 'claude',
+				path: claudeSkill,
+				description: 'claude skill',
+			},
+			{
+				name: 'codex',
+				path: codexSkill,
+				description: 'codex \ufffd',
 			},
 		]);
 	} finally {
@@ -297,6 +418,44 @@ void test('buildSkillDiscoveryCommand falls back to cwd when git is unavailable'
 	} finally {
 		await rm(tempRepo, { recursive: true, force: true });
 		await rm(tempBin, { recursive: true, force: true });
+	}
+});
+
+void test('buildSkillDiscoveryCommand discovers direct child repos from a home pane', async () => {
+	const tempHome = await mkdtemp(join(tmpdir(), 'skill-discovery-home-'));
+	try {
+		const childRepo = join(tempHome, 'fressh');
+		const demoSkill = join(
+			childRepo,
+			'.agents',
+			'skills',
+			'home-child',
+			'SKILL.md',
+		);
+		await mkdir(join(childRepo, '.agents', 'skills', 'home-child'), {
+			recursive: true,
+		});
+		await execFileAsync('git', ['init'], { cwd: childRepo });
+		await writeFile(
+			demoSkill,
+			'---\nname: home-child\ndescription: child repo skill\n---\n# Demo\n',
+		);
+
+		const { stdout } = await execFileAsync(
+			'bash',
+			['-lc', buildSkillDiscoveryCommand(tempHome)],
+			{ cwd: tempHome, env: { ...process.env, HOME: tempHome } },
+		);
+
+		assert.deepEqual(parseSkillDiscoveryOutput(stdout), [
+			{
+				name: 'home-child',
+				path: demoSkill,
+				description: 'child repo skill',
+			},
+		]);
+	} finally {
+		await rm(tempHome, { recursive: true, force: true });
 	}
 });
 
