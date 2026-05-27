@@ -24,10 +24,9 @@ export type TmuxProjectMetadataSourceParts = {
 	tmuxSessionName: string;
 };
 
-export type TmuxProjectMetadataWindowParts =
-	TmuxProjectMetadataSourceParts & {
-		windowId: string;
-	};
+export type TmuxProjectMetadataWindowParts = TmuxProjectMetadataSourceParts & {
+	windowId: string;
+};
 
 export type TmuxProjectMetadataCacheRecord = TmuxProjectMetadataSourceParts & {
 	version: typeof TMUX_PROJECT_METADATA_CACHE_VERSION;
@@ -124,10 +123,7 @@ export function createTmuxProjectMetadataCache({
 				updatedAt: now(),
 			};
 			const serialized = JSON.stringify(record);
-			storage.set(
-				buildTmuxProjectMetadataActiveCacheKey(input),
-				serialized,
-			);
+			storage.set(buildTmuxProjectMetadataActiveCacheKey(input), serialized);
 			storage.set(
 				buildTmuxProjectMetadataWindowCacheKey({
 					...input,

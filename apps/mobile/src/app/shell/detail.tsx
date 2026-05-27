@@ -2370,7 +2370,9 @@ fi
 
 	const resolveTmuxProjectMetadata = useCallback(async () => {
 		if (!tmuxEnabled) {
-			throw new Error('Tmux project metadata requires a tmux-enabled connection.');
+			throw new Error(
+				'Tmux project metadata requires a tmux-enabled connection.',
+			);
 		}
 		const output = await runHostBrowserCommand(
 			buildTmuxPaneProjectCommand(activeTmuxSessionName),
@@ -2466,11 +2468,11 @@ fi
 				}
 			}
 		},
-			[
-				connection,
-				resolveTmuxProjectMetadata,
-				runHostBrowserCommand,
-				stableSkillConnectionId,
+		[
+			connection,
+			resolveTmuxProjectMetadata,
+			runHostBrowserCommand,
+			stableSkillConnectionId,
 			skillSelectorSkills.length,
 			activeTmuxSessionName,
 			tmuxEnabled,

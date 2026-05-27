@@ -70,7 +70,10 @@ void test('tmux project command builders use mdev and shell-quote targets', () =
 		"mdev tmux pane project 'main'\\''quoted:'",
 	);
 	assert.equal(buildTmuxNavProjectCommand('next'), 'mdev tmux nav next');
-	assert.equal(buildTmuxNavProjectCommand('prev-all'), 'mdev tmux nav prev-all');
+	assert.equal(
+		buildTmuxNavProjectCommand('prev-all'),
+		'mdev tmux nav prev-all',
+	);
 });
 
 void test('tmux project metadata cache writes active and window records', () => {
