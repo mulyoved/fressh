@@ -12,6 +12,11 @@ import {
 	type SkillDiscoveryCacheStorage,
 } from '../../src/lib/skill-discovery-cache';
 import { loadSkillSelectorProject } from '../../src/lib/skill-selector-loader';
+import {
+	buildTmuxPaneProjectCommand,
+	parseTmuxProjectMetadataOutput,
+	type TmuxProjectMetadata,
+} from '../../src/lib/tmux-project-metadata';
 
 const stableConnectionId = 'connection-1';
 const tmuxTarget = 'session:1.2';
@@ -26,6 +31,7 @@ const projectCommand = buildSkillProjectCommand(panePath);
 const resolvedProjectCommand = buildSkillProjectCommand(resolvedPanePath);
 const discoveryCommand = buildSkillDiscoveryCommand(panePath);
 const resolvedDiscoveryCommand = buildSkillDiscoveryCommand(resolvedPanePath);
+const tmuxProjectCommand = buildTmuxPaneProjectCommand(tmuxTarget);
 
 const cachedSkills: DiscoveredSkill[] = [
 	{
@@ -50,6 +56,17 @@ const currentProjectSkills: DiscoveredSkill[] = [
 		description: 'Current project skill.',
 	},
 ];
+
+const tmuxProjectMetadata: TmuxProjectMetadata = {
+	sessionName: 'session',
+	windowId: '@3',
+	windowIndex: 3,
+	windowName: 'mobile',
+	paneId: '%12',
+	panePath,
+	projectRoot,
+	projectName,
+};
 
 function createMemoryStorage(initialEntries?: Record<string, string>) {
 	const entries = new Map(Object.entries(initialEntries ?? {}));
@@ -136,6 +153,110 @@ void test('loadSkillSelectorProject returns cached skills after resolving the cu
 		updatedAt: cachedRecord.updatedAt,
 		cacheRecord: cachedRecord,
 	});
+});
+
+void test('loadSkillSelectorProject returns cached skills without remote commands when trusted metadata and cache exist', async () => {
+	const { storage } = createMemoryStorage();
+	const cache = createSkillDiscoveryCache({
+		storage,
+		now: () => '2026-05-26T12:05:00.000Z',
+	});
+	const cachedRecord = cache.write({
+		stableConnectionId,
+		tmuxTarget,
+		projectRoot,
+		projectName,
+		skills: cachedSkills,
+	});
+	const { commands, runCommand } = createCommandRunner({});
+
+	const result = await loadSkillSelectorProject({
+		cache,
+		stableConnectionId,
+		tmuxTarget,
+		projectMetadata: tmuxProjectMetadata,
+		runCommand,
+		forceRefresh: false,
+	});
+
+	assert.deepEqual(commands, []);
+	assert.deepEqual(result, {
+		source: 'cache',
+		projectRoot,
+		projectName,
+		skills: cachedSkills,
+		updatedAt: cachedRecord.updatedAt,
+		cacheRecord: cachedRecord,
+	});
+});
+
+void test('loadSkillSelectorProject resolves mdev metadata before reading cache when trusted metadata is missing', async () => {
+	const { storage } = createMemoryStorage();
+	const cache = createSkillDiscoveryCache({
+		storage,
+		now: () => '2026-05-26T12:10:00.000Z',
+	});
+	const cachedRecord = cache.write({
+		stableConnectionId,
+		tmuxTarget,
+		projectRoot,
+		projectName,
+		skills: cachedSkills,
+	});
+	const { commands, runCommand } = createCommandRunner({
+		[tmuxProjectCommand]: JSON.stringify(tmuxProjectMetadata),
+	});
+
+	const result = await loadSkillSelectorProject({
+		cache,
+		stableConnectionId,
+		tmuxTarget,
+		resolveProjectMetadata: async () => {
+			const metadata = parseTmuxProjectMetadataOutput(
+				await runCommand(tmuxProjectCommand),
+			);
+			if (!metadata) throw new Error('Invalid mdev metadata');
+			return metadata;
+		},
+		runCommand,
+		forceRefresh: false,
+	});
+
+	assert.deepEqual(commands, [tmuxProjectCommand]);
+	assert.deepEqual(result, {
+		source: 'cache',
+		projectRoot,
+		projectName,
+		skills: cachedSkills,
+		updatedAt: cachedRecord.updatedAt,
+		cacheRecord: cachedRecord,
+	});
+});
+
+void test('loadSkillSelectorProject runs discovery from trusted metadata when cache is missing', async () => {
+	const { storage } = createMemoryStorage();
+	const cache = createSkillDiscoveryCache({
+		storage,
+		now: () => '2026-05-26T12:12:00.000Z',
+	});
+	const { commands, runCommand } = createCommandRunner({
+		[discoveryCommand]: createDiscoveryOutput(discoveredSkills),
+	});
+
+	const result = await loadSkillSelectorProject({
+		cache,
+		stableConnectionId,
+		tmuxTarget,
+		projectMetadata: tmuxProjectMetadata,
+		runCommand,
+		forceRefresh: false,
+	});
+
+	assert.deepEqual(commands, [discoveryCommand]);
+	assert.equal(result.source, 'remote');
+	assert.equal(result.projectRoot, projectRoot);
+	assert.equal(result.projectName, projectName);
+	assert.deepEqual(result.skills, discoveredSkills);
 });
 
 void test('loadSkillSelectorProject checks the current project before reading cached skills', async () => {
