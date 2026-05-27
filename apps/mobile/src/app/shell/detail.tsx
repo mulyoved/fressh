@@ -112,6 +112,13 @@ import { recordAcceptedTextEntryHistoryPaste } from '@/lib/text-entry-history-in
 import { textEntryHistoryStore } from '@/lib/text-entry-history-store-native';
 import { useTheme } from '@/lib/theme';
 import {
+	buildTmuxNavProjectCommand,
+	buildTmuxPaneProjectCommand,
+	parseTmuxProjectMetadataOutput,
+	type TmuxProjectMetadata,
+} from '@/lib/tmux-project-metadata';
+import { tmuxProjectMetadataCache } from '@/lib/tmux-project-metadata-cache-native';
+import {
 	buildTmuxScrollbackCopyModeCommand,
 	getTmuxScrollbackControlFailurePolicy,
 	isValidTmuxCancelKey,
@@ -734,6 +741,7 @@ function ShellDetail() {
 	const [skillSelectorRefreshError, setSkillSelectorRefreshError] = useState<
 		string | null
 	>(null);
+	const activeTmuxProjectMetadataRef = useRef<TmuxProjectMetadata | null>(null);
 	const skillSelectorRequestIdRef = useRef(0);
 	const skillSelectorActiveSourceKeyRef = useRef<string | null>(null);
 	const closeSkillSelector = useCallback(() => {
@@ -2324,13 +2332,62 @@ fi
 		return panePath;
 	}, [runHostBrowserCommand, tmuxEnabled, tmuxTarget]);
 
-	const skillSelectorSourceKey = `${connectionId}:${connectionStoredConnectionId ?? ''}:${channelId}:${tmuxEnabled ? 'tmux' : 'plain'}:${tmuxTarget}`;
+	const stableSkillConnectionId =
+		connectionStoredConnectionId || connectionId || '';
+	const activeTmuxSessionName = tmuxTarget.trim() || 'main';
+	const skillSelectorSourceKey = `${connectionId}:${connectionStoredConnectionId ?? ''}:${channelId}:${tmuxEnabled ? 'tmux' : 'plain'}:${activeTmuxSessionName}`;
 	const skillSelectorSourceKeyRef = useRef(skillSelectorSourceKey);
 	const skillSelectorCurrentSourceKeyRef = useRef(skillSelectorSourceKey);
 	skillSelectorCurrentSourceKeyRef.current = skillSelectorSourceKey;
 	const skillSelectorVisible =
 		skillSelectorOpen &&
 		skillSelectorActiveSourceKeyRef.current === skillSelectorSourceKey;
+
+	const writeActiveTmuxProjectMetadata = useCallback(
+		(metadata: TmuxProjectMetadata) => {
+			tmuxProjectMetadataCache.writeActive({
+				stableConnectionId: stableSkillConnectionId,
+				tmuxSessionName: activeTmuxSessionName,
+				metadata,
+			});
+			activeTmuxProjectMetadataRef.current = metadata;
+		},
+		[activeTmuxSessionName, stableSkillConnectionId],
+	);
+
+	useEffect(() => {
+		if (!tmuxEnabled) {
+			activeTmuxProjectMetadataRef.current = null;
+			return;
+		}
+
+		const cached = tmuxProjectMetadataCache.readActive({
+			stableConnectionId: stableSkillConnectionId,
+			tmuxSessionName: activeTmuxSessionName,
+		});
+		activeTmuxProjectMetadataRef.current = cached?.metadata ?? null;
+	}, [activeTmuxSessionName, stableSkillConnectionId, tmuxEnabled]);
+
+	const resolveTmuxProjectMetadata = useCallback(async () => {
+		if (!tmuxEnabled) {
+			throw new Error('Tmux project metadata requires a tmux-enabled connection.');
+		}
+		const output = await runHostBrowserCommand(
+			buildTmuxPaneProjectCommand(activeTmuxSessionName),
+			10_000,
+		);
+		const metadata = parseTmuxProjectMetadataOutput(output);
+		if (!metadata) {
+			throw new Error('mdev did not return valid tmux project metadata.');
+		}
+		writeActiveTmuxProjectMetadata(metadata);
+		return metadata;
+	}, [
+		runHostBrowserCommand,
+		activeTmuxSessionName,
+		tmuxEnabled,
+		writeActiveTmuxProjectMetadata,
+	]);
 
 	const loadSkillSelectorSkills = useCallback(
 		async ({ forceRefresh = false }: { forceRefresh?: boolean } = {}) => {
@@ -2361,14 +2418,15 @@ fi
 				}
 				const result = await loadSkillSelectorProject({
 					cache: skillDiscoveryCache,
-					stableConnectionId: connectionStoredConnectionId || connectionId,
-					tmuxTarget: tmuxTarget.trim() || 'main',
-					resolvePanePath: async () => {
-						const panePath = await resolveHostBrowserPanePath();
+					stableConnectionId: stableSkillConnectionId,
+					tmuxTarget: activeTmuxSessionName,
+					projectMetadata: activeTmuxProjectMetadataRef.current,
+					resolveProjectMetadata: async () => {
+						const metadata = await resolveTmuxProjectMetadata();
 						if (skillSelectorCurrentSourceKeyRef.current !== requestSourceKey) {
 							throw new Error('Skill selector source changed.');
 						}
-						return panePath;
+						return metadata;
 					},
 					runCommand: runHostBrowserCommand,
 					forceRefresh,
@@ -2408,15 +2466,14 @@ fi
 				}
 			}
 		},
-		[
-			connection,
-			connectionId,
-			connectionStoredConnectionId,
-			resolveHostBrowserPanePath,
-			runHostBrowserCommand,
+			[
+				connection,
+				resolveTmuxProjectMetadata,
+				runHostBrowserCommand,
+				stableSkillConnectionId,
 			skillSelectorSkills.length,
+			activeTmuxSessionName,
 			tmuxEnabled,
-			tmuxTarget,
 		],
 	);
 
@@ -2664,6 +2721,32 @@ fi
 		})();
 	}, [runHostBrowserCommand, showHostBrowserError, tmuxEnabled, tmuxTarget]);
 
+	const handleCycleTmuxWindow = useCallback(() => {
+		void (async () => {
+			try {
+				if (!tmuxEnabled) {
+					throw new Error('Window cycle requires a tmux-enabled connection.');
+				}
+				const output = await runHostBrowserCommand(
+					buildTmuxNavProjectCommand('next'),
+					10_000,
+				);
+				const metadata = parseTmuxProjectMetadataOutput(output);
+				if (!metadata) {
+					throw new Error('mdev did not return valid tmux project metadata.');
+				}
+				writeActiveTmuxProjectMetadata(metadata);
+			} catch (error) {
+				showHostBrowserError('Window cycle failed', getErrorMessage(error));
+			}
+		})();
+	}, [
+		runHostBrowserCommand,
+		showHostBrowserError,
+		tmuxEnabled,
+		writeActiveTmuxProjectMetadata,
+	]);
+
 	const actionContext = useMemo<ActionContext>(
 		() => ({
 			availableKeyboardIds,
@@ -2694,11 +2777,13 @@ fi
 			openHostDiffity: handleOpenHostDiffity,
 			openHostUrlSlot: handleOpenHostUrlSlot,
 			editHostUrlSlot: handleEditHostUrlSlot,
+			cycleTmuxWindow: handleCycleTmuxWindow,
 			cycleWorkmuxStatus: handleCycleWorkmuxStatus,
 		}),
 		[
 			availableKeyboardIds,
 			closeSkillSelector,
+			handleCycleTmuxWindow,
 			handleCycleWorkmuxStatus,
 			handleCopySelection,
 			handleCloseTextEntry,

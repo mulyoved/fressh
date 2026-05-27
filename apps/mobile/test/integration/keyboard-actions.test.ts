@@ -124,6 +124,47 @@ void test('host browser actions delegate to action context callbacks', async () 
 	assert.equal(statusCycled, 1);
 });
 
+void test('cycle tmux window delegates to the action context when available', async () => {
+	let cycles = 0;
+	const sentBytes: number[][] = [];
+
+	await runAction('CYCLE_TMUX_WINDOW', {
+		availableKeyboardIds: new Set(),
+		selectKeyboard: () => {},
+		rotateKeyboard: () => {},
+		openConfigurator: () => {},
+		sendBytes: (bytes) => {
+			sentBytes.push([...bytes]);
+		},
+		pasteClipboard: async () => {},
+		copySelection: () => {},
+		cycleTmuxWindow: () => {
+			cycles += 1;
+		},
+	} as Parameters<typeof runAction>[1]);
+
+	assert.equal(cycles, 1);
+	assert.deepEqual(sentBytes, []);
+});
+
+void test('cycle tmux window falls back to raw F18 bytes without callback', async () => {
+	const sentBytes: number[][] = [];
+
+	await runAction('CYCLE_TMUX_WINDOW', {
+		availableKeyboardIds: new Set(),
+		selectKeyboard: () => {},
+		rotateKeyboard: () => {},
+		openConfigurator: () => {},
+		sendBytes: (bytes) => {
+			sentBytes.push([...bytes]);
+		},
+		pasteClipboard: async () => {},
+		copySelection: () => {},
+	} as Parameters<typeof runAction>[1]);
+
+	assert.deepEqual(sentBytes, [[27, 91, 49, 56, 126]]);
+});
+
 void test('browser keyboard is a target keyboard action', () => {
 	assert.equal(KNOWN_ACTION_IDS.includes('OPEN_BROWSER_KEYBOARD'), true);
 });
