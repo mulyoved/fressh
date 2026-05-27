@@ -742,6 +742,8 @@ function ShellDetail() {
 		string | null
 	>(null);
 	const activeTmuxProjectMetadataRef = useRef<TmuxProjectMetadata | null>(null);
+	const pendingTmuxProjectMetadataRef =
+		useRef<Promise<TmuxProjectMetadata> | null>(null);
 	const skillSelectorRequestIdRef = useRef(0);
 	const skillSelectorActiveSourceKeyRef = useRef<string | null>(null);
 	const closeSkillSelector = useCallback(() => {
@@ -2358,6 +2360,7 @@ fi
 	useEffect(() => {
 		if (!tmuxEnabled) {
 			activeTmuxProjectMetadataRef.current = null;
+			pendingTmuxProjectMetadataRef.current = null;
 			return;
 		}
 
@@ -2368,28 +2371,49 @@ fi
 		activeTmuxProjectMetadataRef.current = cached?.metadata ?? null;
 	}, [activeTmuxSessionName, stableSkillConnectionId, tmuxEnabled]);
 
+	const runTmuxProjectMetadataCommand = useCallback(
+		(command: string) => {
+			const request = (async () => {
+				const output = await runHostBrowserCommand(command, 10_000);
+				const metadata = parseTmuxProjectMetadataOutput(output);
+				if (!metadata) {
+					throw new Error('mdev did not return valid tmux project metadata.');
+				}
+				writeActiveTmuxProjectMetadata(metadata);
+				return metadata;
+			})();
+			pendingTmuxProjectMetadataRef.current = request;
+			request.then(
+				() => {
+					if (pendingTmuxProjectMetadataRef.current === request) {
+						pendingTmuxProjectMetadataRef.current = null;
+					}
+				},
+				() => {
+					if (pendingTmuxProjectMetadataRef.current === request) {
+						pendingTmuxProjectMetadataRef.current = null;
+					}
+				},
+			);
+			return request;
+		},
+		[runHostBrowserCommand, writeActiveTmuxProjectMetadata],
+	);
+
 	const resolveTmuxProjectMetadata = useCallback(async () => {
 		if (!tmuxEnabled) {
 			throw new Error(
 				'Tmux project metadata requires a tmux-enabled connection.',
 			);
 		}
-		const output = await runHostBrowserCommand(
-			buildTmuxPaneProjectCommand(activeTmuxSessionName),
-			10_000,
-		);
-		const metadata = parseTmuxProjectMetadataOutput(output);
-		if (!metadata) {
-			throw new Error('mdev did not return valid tmux project metadata.');
+		const pendingRequest = pendingTmuxProjectMetadataRef.current;
+		if (pendingRequest) {
+			return await pendingRequest;
 		}
-		writeActiveTmuxProjectMetadata(metadata);
-		return metadata;
-	}, [
-		runHostBrowserCommand,
-		activeTmuxSessionName,
-		tmuxEnabled,
-		writeActiveTmuxProjectMetadata,
-	]);
+		return await runTmuxProjectMetadataCommand(
+			buildTmuxPaneProjectCommand(activeTmuxSessionName),
+		);
+	}, [activeTmuxSessionName, tmuxEnabled, runTmuxProjectMetadataCommand]);
 
 	const loadSkillSelectorSkills = useCallback(
 		async ({ forceRefresh = false }: { forceRefresh?: boolean } = {}) => {
@@ -2723,31 +2747,17 @@ fi
 		})();
 	}, [runHostBrowserCommand, showHostBrowserError, tmuxEnabled, tmuxTarget]);
 
-	const handleCycleTmuxWindow = useCallback(() => {
-		void (async () => {
-			try {
-				if (!tmuxEnabled) {
-					throw new Error('Window cycle requires a tmux-enabled connection.');
-				}
-				const output = await runHostBrowserCommand(
-					buildTmuxNavProjectCommand('next'),
-					10_000,
-				);
-				const metadata = parseTmuxProjectMetadataOutput(output);
-				if (!metadata) {
-					throw new Error('mdev did not return valid tmux project metadata.');
-				}
-				writeActiveTmuxProjectMetadata(metadata);
-			} catch (error) {
-				showHostBrowserError('Window cycle failed', getErrorMessage(error));
+	const handleCycleTmuxWindow = useCallback(async () => {
+		try {
+			if (!tmuxEnabled) {
+				throw new Error('Window cycle requires a tmux-enabled connection.');
 			}
-		})();
-	}, [
-		runHostBrowserCommand,
-		showHostBrowserError,
-		tmuxEnabled,
-		writeActiveTmuxProjectMetadata,
-	]);
+			activeTmuxProjectMetadataRef.current = null;
+			await runTmuxProjectMetadataCommand(buildTmuxNavProjectCommand('next'));
+		} catch (error) {
+			showHostBrowserError('Window cycle failed', getErrorMessage(error));
+		}
+	}, [runTmuxProjectMetadataCommand, showHostBrowserError, tmuxEnabled]);
 
 	const actionContext = useMemo<ActionContext>(
 		() => ({

@@ -147,6 +147,27 @@ void test('cycle tmux window delegates to the action context when available', as
 	assert.deepEqual(sentBytes, []);
 });
 
+void test('cycle tmux window waits for async action context work', async () => {
+	const events: string[] = [];
+
+	await runAction('CYCLE_TMUX_WINDOW', {
+		availableKeyboardIds: new Set(),
+		selectKeyboard: () => {},
+		rotateKeyboard: () => {},
+		openConfigurator: () => {},
+		sendBytes: () => {},
+		pasteClipboard: async () => {},
+		copySelection: () => {},
+		cycleTmuxWindow: async () => {
+			events.push('start');
+			await Promise.resolve();
+			events.push('done');
+		},
+	} as Parameters<typeof runAction>[1]);
+
+	assert.deepEqual(events, ['start', 'done']);
+});
+
 void test('cycle tmux window falls back to raw F18 bytes without callback', async () => {
 	const sentBytes: number[][] = [];
 

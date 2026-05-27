@@ -61,7 +61,7 @@ export type ActionContext = {
 	openHostDiffity?: () => void;
 	openHostUrlSlot?: (slot: HostBrowserUrlSlot) => void;
 	editHostUrlSlot?: (slot: HostBrowserUrlSlot) => void;
-	cycleTmuxWindow?: () => void;
+	cycleTmuxWindow?: () => Promise<void> | void;
 	cycleWorkmuxStatus?: () => void;
 };
 
@@ -120,7 +120,7 @@ export async function runAction(
 		}
 		case 'CYCLE_TMUX_WINDOW': {
 			if (context.cycleTmuxWindow) {
-				context.cycleTmuxWindow();
+				await context.cycleTmuxWindow();
 				return;
 			}
 			context.sendBytes(new Uint8Array([27, 91, 49, 56, 126]));
