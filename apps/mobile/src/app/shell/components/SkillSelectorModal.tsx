@@ -1,6 +1,13 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, {
+	useCallback,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from 'react';
 import {
 	ActivityIndicator,
+	InteractionManager,
 	Keyboard,
 	KeyboardAvoidingView,
 	Modal,
@@ -50,6 +57,17 @@ export function SkillSelectorModal({
 	onSelect: (skill: DiscoveredSkill) => void;
 }) {
 	const theme = useTheme();
+	const filterInputRef = useRef<TextInput | null>(null);
+	const focusTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const focusInteractionTaskRef = useRef<ReturnType<
+		typeof InteractionManager.runAfterInteractions
+	> | null>(null);
+	const focusRafRef = useRef<ReturnType<typeof requestAnimationFrame> | null>(
+		null,
+	);
+	const focusRequestIdRef = useRef(0);
+	const modalOpenRef = useRef(open);
+	modalOpenRef.current = open;
 	const { height: windowHeight } = useWindowDimensions();
 	const [query, setQuery] = useState('');
 	const [androidKeyboardHeight, setAndroidKeyboardHeight] = useState(0);
@@ -74,6 +92,93 @@ export function SkillSelectorModal({
 			}
 		}
 	}, [open]);
+
+	const clearFocusTimeout = useCallback(() => {
+		if (focusTimeoutRef.current) {
+			clearTimeout(focusTimeoutRef.current);
+			focusTimeoutRef.current = null;
+		}
+	}, []);
+
+	const cancelScheduledFocusWork = useCallback(() => {
+		if (focusInteractionTaskRef.current) {
+			focusInteractionTaskRef.current.cancel();
+			focusInteractionTaskRef.current = null;
+		}
+		if (focusRafRef.current != null) {
+			cancelAnimationFrame(focusRafRef.current);
+			focusRafRef.current = null;
+		}
+		clearFocusTimeout();
+	}, [clearFocusTimeout]);
+
+	const cancelPendingFocusWork = useCallback(() => {
+		focusRequestIdRef.current += 1;
+		cancelScheduledFocusWork();
+	}, [cancelScheduledFocusWork]);
+
+	const isFocusRequestActive = useCallback((requestId: number) => {
+		return modalOpenRef.current && focusRequestIdRef.current === requestId;
+	}, []);
+
+	const focusFilterInput = useCallback(
+		(delayMs = 0, requestId = focusRequestIdRef.current) => {
+			if (!isFocusRequestActive(requestId)) return;
+			clearFocusTimeout();
+			if (delayMs > 0) {
+				focusTimeoutRef.current = setTimeout(() => {
+					focusTimeoutRef.current = null;
+					if (!isFocusRequestActive(requestId)) return;
+					filterInputRef.current?.blur();
+					filterInputRef.current?.focus();
+				}, delayMs);
+				return;
+			}
+			filterInputRef.current?.blur();
+			filterInputRef.current?.focus();
+		},
+		[clearFocusTimeout, isFocusRequestActive],
+	);
+
+	const startFocusRequest = useCallback(() => {
+		cancelScheduledFocusWork();
+		focusRequestIdRef.current += 1;
+		return focusRequestIdRef.current;
+	}, [cancelScheduledFocusWork]);
+
+	const handleModalShow = useCallback(() => {
+		const requestId = startFocusRequest();
+		if (!isFocusRequestActive(requestId)) return;
+		if (Platform.OS === 'android') {
+			focusInteractionTaskRef.current = InteractionManager.runAfterInteractions(
+				() => {
+					focusInteractionTaskRef.current = null;
+					if (!isFocusRequestActive(requestId)) return;
+					focusRafRef.current = requestAnimationFrame(() => {
+						focusRafRef.current = null;
+						if (!isFocusRequestActive(requestId)) return;
+						focusFilterInput(0, requestId);
+						focusFilterInput(120, requestId);
+					});
+				},
+			);
+			return;
+		}
+		focusFilterInput(0, requestId);
+	}, [focusFilterInput, isFocusRequestActive, startFocusRequest]);
+
+	useEffect(() => {
+		if (!open) {
+			cancelPendingFocusWork();
+		}
+	}, [cancelPendingFocusWork, open]);
+
+	useEffect(
+		() => () => {
+			cancelPendingFocusWork();
+		},
+		[cancelPendingFocusWork],
+	);
 
 	useEffect(() => {
 		if (Platform.OS !== 'android' || !open) return undefined;
@@ -121,6 +226,7 @@ export function SkillSelectorModal({
 			visible={open}
 			animationType="slide"
 			onRequestClose={handleClose}
+			onShow={handleModalShow}
 		>
 			<Pressable
 				onPress={handleClose}
@@ -243,13 +349,17 @@ export function SkillSelectorModal({
 						</View>
 
 						<TextInput
+							ref={filterInputRef}
 							value={query}
 							onChangeText={setQuery}
 							placeholder="Filter skills"
 							placeholderTextColor={theme.colors.muted}
 							accessibilityLabel="Filter skills"
+							autoFocus
 							autoCapitalize="none"
 							autoCorrect={false}
+							returnKeyType="search"
+							showSoftInputOnFocus
 							style={{
 								borderWidth: 1,
 								borderColor: theme.colors.border,
