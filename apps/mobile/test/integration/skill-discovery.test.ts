@@ -47,26 +47,31 @@ void test('parseSkillDiscoveryOutput reads skill frontmatter and falls back to d
 	assert.deepEqual(parseSkillDiscoveryOutput(discoveryPayload), [
 		{
 			name: 'brainstorming',
+			directoryName: 'brainstorming',
 			path: '/repo/.codex/skills/brainstorming/SKILL.md',
 			description: 'Explore requirements before implementation.',
 		},
 		{
 			name: 'broken',
+			directoryName: 'broken',
 			path: '/repo/.codex/skills/broken/SKILL.md',
 			description: null,
 		},
 		{
 			name: 'expo-deployment',
+			directoryName: 'expo-deployment',
 			path: '/repo/.codex/skills/expo-deployment/SKILL.md',
 			description: 'Deploy Expo apps to stores and web.',
 		},
 		{
 			name: 'ignored',
+			directoryName: 'ignored',
 			path: '/repo/.agents/skills/ignored/SKILL.md',
 			description: null,
 		},
 		{
 			name: 'quoted-skill',
+			directoryName: 'quoted',
 			path: '/repo/.codex/skills/quoted/SKILL.md',
 			description: 'Quoted description',
 		},
@@ -88,26 +93,31 @@ void test('parseSkillDiscoveryOutput tolerates leading terminal control output',
 	assert.deepEqual(parseSkillDiscoveryOutput(output), [
 		{
 			name: 'brainstorming',
+			directoryName: 'brainstorming',
 			path: '/repo/.codex/skills/brainstorming/SKILL.md',
 			description: 'Explore requirements before implementation.',
 		},
 		{
 			name: 'broken',
+			directoryName: 'broken',
 			path: '/repo/.codex/skills/broken/SKILL.md',
 			description: null,
 		},
 		{
 			name: 'expo-deployment',
+			directoryName: 'expo-deployment',
 			path: '/repo/.codex/skills/expo-deployment/SKILL.md',
 			description: 'Deploy Expo apps to stores and web.',
 		},
 		{
 			name: 'ignored',
+			directoryName: 'ignored',
 			path: '/repo/.agents/skills/ignored/SKILL.md',
 			description: null,
 		},
 		{
 			name: 'quoted-skill',
+			directoryName: 'quoted',
 			path: '/repo/.codex/skills/quoted/SKILL.md',
 			description: 'Quoted description',
 		},
@@ -132,11 +142,52 @@ void test('parseSkillDiscoveryResult reads project metadata and skills', () => {
 		skills: [
 			{
 				name: 'cache-skill',
+				directoryName: 'cache',
 				path: '/repo/.codex/skills/cache/SKILL.md',
 				description: 'Cached skill.',
 			},
 		],
 	});
+});
+
+void test('parseSkillDiscoveryOutput deduplicates skills by command name and keeps the preferred source', () => {
+	const output = JSON.stringify([
+		{
+			path: '/repo/.claude/skills/duplicate/SKILL.md',
+			content:
+				'---\nname: shared-skill\ndescription: Claude copy.\n---\n\n# Shared\n',
+		},
+		{
+			path: '/repo/.codex/skills/duplicate-file/SKILL.md',
+			content:
+				'---\nname: shared-skill\ndescription: Codex copy.\n---\n\n# Shared\n',
+		},
+		{
+			path: '/repo/.agents/skills/duplicate-agent/SKILL.md',
+			content:
+				'---\nname: shared-skill\ndescription: Agent copy.\n---\n\n# Shared\n',
+		},
+		{
+			path: '/repo/.codex/skills/unique-folder/SKILL.md',
+			content:
+				'---\nname: unique-skill\ndescription: Unique skill.\n---\n\n# Unique\n',
+		},
+	]);
+
+	assert.deepEqual(parseSkillDiscoveryOutput(output), [
+		{
+			name: 'shared-skill',
+			directoryName: 'duplicate-agent',
+			path: '/repo/.agents/skills/duplicate-agent/SKILL.md',
+			description: 'Agent copy.',
+		},
+		{
+			name: 'unique-skill',
+			directoryName: 'unique-folder',
+			path: '/repo/.codex/skills/unique-folder/SKILL.md',
+			description: 'Unique skill.',
+		},
+	]);
 });
 
 void test('parseSkillProjectOutput tolerates leading terminal control output', () => {
@@ -163,6 +214,10 @@ void test('filterDiscoveredSkills matches names and descriptions', () => {
 	assert.deepEqual(
 		filterDiscoveredSkills(skills, 'requirements').map((skill) => skill.name),
 		['brainstorming'],
+	);
+	assert.deepEqual(
+		filterDiscoveredSkills(skills, 'quoted').map((skill) => skill.name),
+		['quoted-skill'],
 	);
 	assert.deepEqual(
 		filterDiscoveredSkills(skills, '').map((skill) => skill.name),
@@ -325,16 +380,19 @@ void test('buildSkillDiscoveryCommand executes and discovers repo-local skill ro
 		assert.deepEqual(skills, [
 			{
 				name: 'agent',
+				directoryName: 'agent',
 				path: agentSkill,
 				description: 'agent skill',
 			},
 			{
 				name: 'claude',
+				directoryName: 'claude',
 				path: claudeSkill,
 				description: 'claude skill',
 			},
 			{
 				name: 'codex',
+				directoryName: 'codex',
 				path: codexSkill,
 				description: 'codex \ufffd',
 			},
@@ -368,6 +426,7 @@ void test('buildSkillDiscoveryCommand resolves skills from a git repo root', asy
 		assert.deepEqual(parseSkillDiscoveryOutput(stdout), [
 			{
 				name: 'demo',
+				directoryName: 'demo',
 				path: demoSkill,
 				description: 'repo root',
 			},
@@ -411,6 +470,7 @@ void test('buildSkillDiscoveryCommand falls back to cwd when git is unavailable'
 		assert.deepEqual(parseSkillDiscoveryOutput(stdout), [
 			{
 				name: 'demo',
+				directoryName: 'demo',
 				path: demoSkill,
 				description: 'no git',
 			},
@@ -450,6 +510,7 @@ void test('buildSkillDiscoveryCommand discovers direct child repos from a home p
 		assert.deepEqual(parseSkillDiscoveryOutput(stdout), [
 			{
 				name: 'home-child',
+				directoryName: 'home-child',
 				path: demoSkill,
 				description: 'child repo skill',
 			},
@@ -494,6 +555,7 @@ void test('buildSkillDiscoveryCommand works with side-channel completion suffix'
 		assert.deepEqual(parseSkillDiscoveryOutput(cleanOutput), [
 			{
 				name: 'demo',
+				directoryName: 'demo',
 				path: demoSkill,
 				description: 'side channel',
 			},

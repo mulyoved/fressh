@@ -67,11 +67,13 @@ void test('write and read preserve version, key parts, project name, skills, and
 		skills: [
 			{
 				name: 'brainstorming',
+				directoryName: 'brainstorming',
 				path: '/repo/.codex/skills/brainstorming/SKILL.md',
 				description: 'Explore requirements.',
 			},
 			{
 				name: 'missing-description',
+				directoryName: 'missing-description',
 				path: '/repo/.codex/skills/missing-description/SKILL.md',
 				description: null,
 			},
@@ -85,11 +87,13 @@ void test('write and read preserve version, key parts, project name, skills, and
 		skills: [
 			{
 				name: 'brainstorming',
+				directoryName: 'brainstorming',
 				path: '/repo/.codex/skills/brainstorming/SKILL.md',
 				description: 'Explore requirements.',
 			},
 			{
 				name: 'missing-description',
+				directoryName: 'missing-description',
 				path: '/repo/.codex/skills/missing-description/SKILL.md',
 				description: null,
 			},
@@ -116,6 +120,42 @@ void test('malformed records return null and are deleted from storage', () => {
 
 	assert.equal(cache.read(keyParts), null);
 	assert.equal(entries.has(key), false);
+});
+
+void test('read normalizes legacy cached skills with directory names and duplicate removal', () => {
+	const key = buildSkillDiscoveryCacheKey(keyParts);
+	const { storage } = createMemoryStorage({
+		[key]: JSON.stringify({
+			version: SKILL_DISCOVERY_CACHE_VERSION,
+			stableConnectionId: keyParts.stableConnectionId,
+			tmuxTarget: keyParts.tmuxTarget,
+			projectRoot: keyParts.projectRoot,
+			projectName: 'fressh',
+			skills: [
+				{
+					name: 'shared-skill',
+					path: '/repo/.codex/skills/shared/SKILL.md',
+					description: 'Codex copy.',
+				},
+				{
+					name: 'shared-skill',
+					path: '/repo/.agents/skills/shared-agent/SKILL.md',
+					description: 'Agent copy.',
+				},
+			],
+			updatedAt: '2026-05-26T12:00:00.000Z',
+		}),
+	});
+	const cache = createSkillDiscoveryCache({ storage });
+
+	assert.deepEqual(cache.read(keyParts)?.skills, [
+		{
+			name: 'shared-skill',
+			directoryName: 'shared-agent',
+			path: '/repo/.agents/skills/shared-agent/SKILL.md',
+			description: 'Agent copy.',
+		},
+	]);
 });
 
 void test('delete removes the current project entry', () => {

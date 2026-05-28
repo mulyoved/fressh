@@ -2,8 +2,13 @@ import { quoteShell } from '@/lib/host-browser-actions';
 
 export type DiscoveredSkill = {
 	name: string;
+	directoryName: string;
 	path: string;
 	description: string | null;
+};
+
+export type DiscoveredSkillInput = Omit<DiscoveredSkill, 'directoryName'> & {
+	directoryName?: string;
 };
 
 export type SkillProject = {
@@ -27,6 +32,8 @@ type SkillDiscoveryEnvelope = {
 
 const skillPathPattern =
 	/\/\.(?:agents|claude|codex)\/skills\/([^/]+)\/SKILL\.md$/;
+const skillSourcePattern =
+	/\/\.(agents|codex|claude)\/skills\/[^/]+\/SKILL\.md$/;
 
 export function parseSkillDiscoveryOutput(output: string): DiscoveredSkill[] {
 	const result = parseSkillDiscoveryResult(output);
@@ -114,8 +121,8 @@ export function parseSkillDiscoveryResult(
 }
 
 function parseSkillDiscoveryRecords(records: unknown[]): DiscoveredSkill[] {
-	return records
-		.flatMap((record): DiscoveredSkill[] => {
+	return normalizeDiscoveredSkills(
+		records.flatMap((record): DiscoveredSkill[] => {
 			if (!isSkillDiscoveryRecord(record)) return [];
 
 			const pathMatch = record.path.match(skillPathPattern);
@@ -127,22 +134,75 @@ function parseSkillDiscoveryRecords(records: unknown[]): DiscoveredSkill[] {
 			return [
 				{
 					name: metadata.name || fallbackName,
+					directoryName: fallbackName,
 					path: record.path,
 					description: metadata.description,
 				},
 			];
-		})
-		.sort((a, b) => a.name.localeCompare(b.name));
+		}),
+	);
+}
+
+export function normalizeDiscoveredSkills(
+	skills: readonly DiscoveredSkillInput[],
+): DiscoveredSkill[] {
+	const deduped = new Map<string, DiscoveredSkill>();
+	for (const skill of skills) {
+		const normalizedSkill = normalizeDiscoveredSkill(skill);
+		const duplicateKey = normalizedSkill.name.toLowerCase();
+		const existingSkill = deduped.get(duplicateKey);
+		if (
+			!existingSkill ||
+			compareSkillSourcePriority(normalizedSkill, existingSkill) < 0
+		) {
+			deduped.set(duplicateKey, normalizedSkill);
+		}
+	}
+	return [...deduped.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+export function normalizeDiscoveredSkill(
+	skill: DiscoveredSkillInput,
+): DiscoveredSkill {
+	return {
+		...skill,
+		directoryName:
+			skill.directoryName || getSkillDirectoryNameFromPath(skill.path),
+	};
+}
+
+export function getSkillDirectoryNameFromPath(path: string): string {
+	const pathMatch = path.match(skillPathPattern);
+	return pathMatch?.[1] ?? '';
+}
+
+function compareSkillSourcePriority(
+	left: DiscoveredSkill,
+	right: DiscoveredSkill,
+): number {
+	const priorityDelta =
+		getSkillSourcePriority(left.path) - getSkillSourcePriority(right.path);
+	if (priorityDelta !== 0) return priorityDelta;
+	return left.path.localeCompare(right.path);
+}
+
+function getSkillSourcePriority(path: string): number {
+	const source = path.match(skillSourcePattern)?.[1];
+	if (source === 'agents') return 0;
+	if (source === 'codex') return 1;
+	if (source === 'claude') return 2;
+	return 3;
 }
 
 export function filterDiscoveredSkills(
-	skills: readonly DiscoveredSkill[],
+	skills: readonly DiscoveredSkillInput[],
 	query: string,
 ): DiscoveredSkill[] {
 	const normalizedQuery = query.trim().toLowerCase();
-	if (!normalizedQuery) return [...skills];
+	const normalizedSkills = normalizeDiscoveredSkills(skills);
+	if (!normalizedQuery) return normalizedSkills;
 
-	return skills
+	return normalizedSkills
 		.map((skill) => ({
 			skill,
 			rank: getSkillSearchRank(skill, normalizedQuery),
@@ -160,13 +220,19 @@ function getSkillSearchRank(
 	normalizedQuery: string,
 ): number | null {
 	const normalizedName = skill.name.toLowerCase();
+	const normalizedDirectoryName = skill.directoryName.toLowerCase();
 	const normalizedDescription = (skill.description ?? '').toLowerCase();
+	const normalizedPath = skill.path.toLowerCase();
 
 	if (normalizedName === normalizedQuery) return 1;
 	if (normalizedName.startsWith(normalizedQuery)) return 2;
 	if (normalizedName.includes(normalizedQuery)) return 3;
-	if (normalizedDescription.startsWith(normalizedQuery)) return 4;
-	if (normalizedDescription.includes(normalizedQuery)) return 5;
+	if (normalizedDirectoryName === normalizedQuery) return 4;
+	if (normalizedDirectoryName.startsWith(normalizedQuery)) return 5;
+	if (normalizedDirectoryName.includes(normalizedQuery)) return 6;
+	if (normalizedDescription.startsWith(normalizedQuery)) return 7;
+	if (normalizedDescription.includes(normalizedQuery)) return 8;
+	if (normalizedPath.includes(normalizedQuery)) return 9;
 	return null;
 }
 

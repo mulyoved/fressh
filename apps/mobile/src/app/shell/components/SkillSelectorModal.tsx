@@ -375,6 +375,16 @@ export function SkillSelectorModal({
 										>
 											{`$${skill.name}`}
 										</Text>
+										<Text
+											numberOfLines={1}
+											style={{
+												color: theme.colors.muted,
+												fontSize: 11,
+												marginTop: 3,
+											}}
+										>
+											{`folder: ${skill.directoryName}`}
+										</Text>
 										{skill.description ? (
 											<Text
 												numberOfLines={2}

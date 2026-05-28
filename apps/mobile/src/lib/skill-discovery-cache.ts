@@ -1,4 +1,8 @@
-import { type DiscoveredSkill } from '@/lib/skill-discovery';
+import {
+	normalizeDiscoveredSkills,
+	type DiscoveredSkillInput,
+	type DiscoveredSkill,
+} from '@/lib/skill-discovery';
 
 export const SKILL_DISCOVERY_CACHE_VERSION = 1;
 
@@ -75,7 +79,7 @@ export function createSkillDiscoveryCache({
 				tmuxTarget: input.tmuxTarget,
 				projectRoot: input.projectRoot,
 				projectName: input.projectName,
-				skills: input.skills.map((skill) => ({ ...skill })),
+				skills: normalizeDiscoveredSkills(input.skills),
 				updatedAt,
 			};
 			storage.set(buildSkillDiscoveryCacheKey(input), JSON.stringify(record));
@@ -118,16 +122,18 @@ function parseSkillDiscoveryCacheRecord(
 		tmuxTarget: parsed.tmuxTarget,
 		projectRoot: parsed.projectRoot,
 		projectName: parsed.projectName,
-		skills: parsed.skills,
+		skills: normalizeDiscoveredSkills(parsed.skills),
 		updatedAt: parsed.updatedAt,
 	};
 }
 
-function isDiscoveredSkillLike(value: unknown): value is DiscoveredSkill {
+function isDiscoveredSkillLike(value: unknown): value is DiscoveredSkillInput {
 	return (
 		isPlainObject(value) &&
 		typeof value.name === 'string' &&
 		typeof value.path === 'string' &&
+		(value.directoryName === undefined ||
+			typeof value.directoryName === 'string') &&
 		(typeof value.description === 'string' || value.description === null)
 	);
 }

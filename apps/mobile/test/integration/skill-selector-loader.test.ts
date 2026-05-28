@@ -36,6 +36,7 @@ const tmuxProjectCommand = buildTmuxPaneProjectCommand(tmuxTarget);
 const cachedSkills: DiscoveredSkill[] = [
 	{
 		name: 'cached-skill',
+		directoryName: 'cached-skill',
 		path: '/repo/.codex/skills/cached-skill/SKILL.md',
 		description: 'Cached skill.',
 	},
@@ -44,6 +45,7 @@ const cachedSkills: DiscoveredSkill[] = [
 const discoveredSkills: DiscoveredSkill[] = [
 	{
 		name: 'remote-skill',
+		directoryName: 'remote-skill',
 		path: '/repo/.codex/skills/remote-skill/SKILL.md',
 		description: 'Remote skill.',
 	},
@@ -52,6 +54,7 @@ const discoveredSkills: DiscoveredSkill[] = [
 const currentProjectSkills: DiscoveredSkill[] = [
 	{
 		name: 'current-skill',
+		directoryName: 'current-skill',
 		path: '/repo-current/.codex/skills/current-skill/SKILL.md',
 		description: 'Current project skill.',
 	},
