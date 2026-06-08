@@ -44,7 +44,7 @@ export function CommandMenuModal({
 	};
 
 	const activeMenu = menuStack[menuStack.length - 1];
-	const activeEntries = activeMenu?.presets ?? entries;
+	const activeEntries = activeMenu?.entries ?? entries;
 	const menuTitle = activeMenu?.label ?? 'Cmds';
 
 	const uniqueEntries = useMemo(() => {

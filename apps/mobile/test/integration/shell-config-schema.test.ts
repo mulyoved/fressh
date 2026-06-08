@@ -264,7 +264,7 @@ void test('runtime shell config rejects unsupported command menu action ids', ()
 		{
 			type: 'submenu',
 			label: 'mdev',
-			presets: [
+			entries: [
 				{
 					type: 'action',
 					label: 'Broken',

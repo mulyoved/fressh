@@ -8,7 +8,7 @@ void test('command menu selection dispatch opens submenu entries only', () => {
 	const entry: CommandMenuEntry = {
 		type: 'submenu',
 		label: 'mdev',
-		presets: [],
+		entries: [],
 	};
 
 	dispatchCommandMenuSelection(entry, {

@@ -20,7 +20,7 @@ function commandTree(entries: CommandMenuEntry[]): CommandTreeNode[] {
 		return {
 			label: entry.label,
 			type: entry.type,
-			children: commandTree(entry.presets),
+			children: commandTree(entry.entries),
 		};
 	});
 }
@@ -38,7 +38,7 @@ function findPreset(
 		return entry;
 	}
 	assert.equal(entry.type, 'submenu');
-	return findPreset(entry.presets, tail);
+	return findPreset(entry.entries, tail);
 }
 
 void test('bundled command menu exposes the approved Issue 91 tree', () => {
@@ -123,7 +123,7 @@ void test('mdev submenu routes feature request through a native app action', () 
 	assert.ok(mdev);
 	assert.equal(mdev.type, 'submenu');
 
-	assert.deepEqual(mdev.presets[0], {
+	assert.deepEqual(mdev.entries[0], {
 		type: 'action',
 		label: 'Request a Feature',
 		actionId: 'OPEN_REPO_FEATURE_REQUEST',

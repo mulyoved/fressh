@@ -26,7 +26,7 @@ export type CommandActionEntry = {
 export type CommandMenu = {
 	type: 'submenu';
 	label: string;
-	presets: CommandMenuEntry[];
+	entries: CommandMenuEntry[];
 };
 
 export type CommandMenuEntry =
@@ -161,7 +161,7 @@ const commandMenuEntrySchema: z.ZodType<CommandMenuEntry> = z.lazy(() =>
 		z.object({
 			type: z.literal('submenu'),
 			label: z.string().min(1),
-			presets: z.array(commandMenuEntrySchema),
+			entries: z.array(commandMenuEntrySchema),
 		}),
 	]),
 );
@@ -313,10 +313,10 @@ function validateCommandMenuEntryReferences({
 
 	if (entry.type !== 'submenu') return;
 
-	for (const [index, child] of entry.presets.entries()) {
+	for (const [index, child] of entry.entries.entries()) {
 		validateCommandMenuEntryReferences({
 			entry: child,
-			path: [...path, 'presets', index],
+			path: [...path, 'entries', index],
 			ctx,
 		});
 	}
