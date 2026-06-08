@@ -1,50 +1,31 @@
 import { type ActionId } from '@/lib/keyboard-actions';
 import {
+	type CommandMenu,
+	type CommandMenuEntry,
 	type CommandPreset,
-	type CommandPresetEntry,
-	type CommandPresetMenu,
 } from '@/lib/shell-config';
 
-export type CommandMenuSelectionResult =
-	| { type: 'submenu'; menu: CommandPresetMenu }
-	| { type: 'preset'; preset: CommandPreset }
-	| { type: 'action'; actionId: ActionId };
-
 export type CommandMenuSelectionDispatchHandlers = {
-	onSubmenu: (menu: CommandPresetMenu) => void;
+	onSubmenu: (menu: CommandMenu) => void;
 	onPreset: (preset: CommandPreset) => void;
 	onClose: () => void;
 	onAction: (actionId: ActionId) => void;
 };
 
-export function resolveCommandMenuSelection(
-	entry: CommandPresetEntry,
-): CommandMenuSelectionResult {
-	switch (entry.type) {
-		case 'submenu':
-			return { type: 'submenu', menu: entry };
-		case 'preset':
-			return { type: 'preset', preset: entry };
-		case 'action':
-			return { type: 'action', actionId: entry.actionId };
-	}
-}
-
 export function dispatchCommandMenuSelection(
-	entry: CommandPresetEntry,
+	entry: CommandMenuEntry,
 	handlers: CommandMenuSelectionDispatchHandlers,
 ) {
-	const selection = resolveCommandMenuSelection(entry);
-	switch (selection.type) {
+	switch (entry.type) {
 		case 'submenu':
-			handlers.onSubmenu(selection.menu);
+			handlers.onSubmenu(entry);
 			return;
 		case 'preset':
-			handlers.onPreset(selection.preset);
+			handlers.onPreset(entry);
 			return;
 		case 'action':
 			handlers.onClose();
-			handlers.onAction(selection.actionId);
+			handlers.onAction(entry.actionId);
 			return;
 	}
 }

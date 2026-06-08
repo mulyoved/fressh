@@ -1,18 +1,18 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+	type CommandMenuEntry,
 	type CommandPreset,
-	type CommandPresetEntry,
 	getBundledShellConfig,
 } from '../../src/lib/shell-config';
 
 type CommandTreeNode = {
 	label: string;
-	type: CommandPresetEntry['type'];
+	type: CommandMenuEntry['type'];
 	children?: CommandTreeNode[];
 };
 
-function commandTree(entries: CommandPresetEntry[]): CommandTreeNode[] {
+function commandTree(entries: CommandMenuEntry[]): CommandTreeNode[] {
 	return entries.map((entry) => {
 		if (entry.type !== 'submenu') {
 			return { label: entry.label, type: entry.type };
@@ -26,7 +26,7 @@ function commandTree(entries: CommandPresetEntry[]): CommandTreeNode[] {
 }
 
 function findPreset(
-	entries: CommandPresetEntry[],
+	entries: CommandMenuEntry[],
 	path: readonly string[],
 ): CommandPreset {
 	const [head, ...tail] = path;

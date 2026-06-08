@@ -165,7 +165,7 @@ import {
 	runWorkmuxScrollbackLiveInputSendPlan,
 } from '@/lib/workmux-scrollback-live-input';
 import { BrowserActionsModal } from './components/BrowserActionsModal';
-import { CommandPresetsModal } from './components/CommandPresetsModal';
+import { CommandMenuModal } from './components/CommandMenuModal';
 import { ConfigureModal } from './components/ConfigureModal';
 import { FeatureRequestModal } from './components/FeatureRequestModal';
 import { HostUrlModal } from './components/HostUrlModal';
@@ -3150,9 +3150,9 @@ function ShellDetail() {
 					selectionModeEnabled={selectionModeEnabled}
 					onCopySelection={handleCopySelection}
 				/>
-				<CommandPresetsModal
+				<CommandMenuModal
 					open={commandPresetsModal.open}
-					presets={shellConfig.commandMenus}
+					entries={shellConfig.commandMenus}
 					bottomOffset={Platform.OS === 'android' ? insets.bottom + 24 : 24}
 					onClose={commandPresetsModal.onClose}
 					onSelect={runCommandPreset}

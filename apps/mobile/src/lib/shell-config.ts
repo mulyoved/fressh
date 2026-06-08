@@ -23,15 +23,15 @@ export type CommandActionEntry = {
 	actionId: ActionId;
 };
 
-export type CommandPresetMenu = {
+export type CommandMenu = {
 	type: 'submenu';
 	label: string;
-	presets: CommandPresetEntry[];
+	presets: CommandMenuEntry[];
 };
 
-export type CommandPresetEntry =
+export type CommandMenuEntry =
 	| CommandPreset
-	| CommandPresetMenu
+	| CommandMenu
 	| CommandActionEntry;
 
 export type KeyboardLongPressOption =
@@ -93,7 +93,7 @@ export type ShellConfig = {
 	};
 	keyboards: KeyboardDefinition[];
 	macrosByKeyboardId: Record<string, MacroDef[]>;
-	commandMenus: CommandPresetEntry[];
+	commandMenus: CommandMenuEntry[];
 };
 
 const supportedActionIds = new Set<string>(CONFIG_SUPPORTED_ACTION_IDS);
@@ -154,14 +154,14 @@ const commandActionEntrySchema = z.object({
 	actionId: z.string().min(1),
 });
 
-const commandPresetEntrySchema: z.ZodType<CommandPresetEntry> = z.lazy(() =>
+const commandMenuEntrySchema: z.ZodType<CommandMenuEntry> = z.lazy(() =>
 	z.discriminatedUnion('type', [
 		commandPresetSchema,
 		commandActionEntrySchema,
 		z.object({
 			type: z.literal('submenu'),
 			label: z.string().min(1),
-			presets: z.array(commandPresetEntrySchema),
+			presets: z.array(commandMenuEntrySchema),
 		}),
 	]),
 );
@@ -298,7 +298,7 @@ function validateCommandMenuEntryReferences({
 	path,
 	ctx,
 }: {
-	entry: CommandPresetEntry;
+	entry: CommandMenuEntry;
 	path: (string | number)[];
 	ctx: z.RefinementCtx;
 }) {
@@ -334,7 +334,7 @@ const shellConfigSchema: z.ZodType<ShellConfig> = z
 		}),
 		keyboards: z.array(keyboardDefinitionSchema).min(1),
 		macrosByKeyboardId: z.record(z.string(), z.array(macroDefSchema)),
-		commandMenus: z.array(commandPresetEntrySchema),
+		commandMenus: z.array(commandMenuEntrySchema),
 	})
 	.superRefine((config, ctx) => {
 		const keyboardIds = new Set<string>();
