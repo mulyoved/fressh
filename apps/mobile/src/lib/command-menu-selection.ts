@@ -10,6 +10,13 @@ export type CommandMenuSelectionResult =
 	| { type: 'preset'; preset: CommandPreset }
 	| { type: 'action'; actionId: ActionId };
 
+export type CommandMenuSelectionDispatchHandlers = {
+	onSubmenu: (menu: CommandPresetMenu) => void;
+	onPreset: (preset: CommandPreset) => void;
+	onClose: () => void;
+	onAction: (actionId: ActionId) => void;
+};
+
 export function resolveCommandMenuSelection(
 	entry: CommandPresetEntry,
 ): CommandMenuSelectionResult {
@@ -20,5 +27,24 @@ export function resolveCommandMenuSelection(
 			return { type: 'preset', preset: entry };
 		case 'action':
 			return { type: 'action', actionId: entry.actionId };
+	}
+}
+
+export function dispatchCommandMenuSelection(
+	entry: CommandPresetEntry,
+	handlers: CommandMenuSelectionDispatchHandlers,
+) {
+	const selection = resolveCommandMenuSelection(entry);
+	switch (selection.type) {
+		case 'submenu':
+			handlers.onSubmenu(selection.menu);
+			return;
+		case 'preset':
+			handlers.onPreset(selection.preset);
+			return;
+		case 'action':
+			handlers.onClose();
+			handlers.onAction(selection.actionId);
+			return;
 	}
 }
