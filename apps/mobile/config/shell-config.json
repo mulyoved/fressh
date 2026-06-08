@@ -139,7 +139,7 @@
 					null,
 					{
 						"type": "action",
-						"actionId": "TOGGLE_COMMAND_PRESETS",
+						"actionId": "TOGGLE_COMMAND_MENU",
 						"label": "Cmds",
 						"icon": "Command",
 						"span": 2
