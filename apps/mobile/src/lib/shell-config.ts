@@ -17,13 +17,22 @@ export type CommandPreset = {
 	steps: CommandStep[];
 };
 
+export type CommandActionEntry = {
+	type: 'action';
+	label: string;
+	actionId: ActionId;
+};
+
 export type CommandPresetMenu = {
 	type: 'submenu';
 	label: string;
 	presets: CommandPresetEntry[];
 };
 
-export type CommandPresetEntry = CommandPreset | CommandPresetMenu;
+export type CommandPresetEntry =
+	| CommandPreset
+	| CommandPresetMenu
+	| CommandActionEntry;
 
 export type KeyboardLongPressOption =
 	| { type: 'text'; text: string; label: string; icon: string | null }
@@ -139,9 +148,16 @@ const commandPresetSchema = z.object({
 	steps: z.array(commandStepSchema),
 });
 
+const commandActionEntrySchema = z.object({
+	type: z.literal('action'),
+	label: z.string().min(1),
+	actionId: z.string().min(1),
+});
+
 const commandPresetEntrySchema: z.ZodType<CommandPresetEntry> = z.lazy(() =>
 	z.discriminatedUnion('type', [
 		commandPresetSchema,
+		commandActionEntrySchema,
 		z.object({
 			type: z.literal('submenu'),
 			label: z.string().min(1),
@@ -273,6 +289,35 @@ function validateExecutableItemReferences({
 			code: z.ZodIssueCode.custom,
 			path: [...path, 'actionId'],
 			message: `Unsupported actionId ${item.actionId}`,
+		});
+	}
+}
+
+function validateCommandMenuEntryReferences({
+	entry,
+	path,
+	ctx,
+}: {
+	entry: CommandPresetEntry;
+	path: (string | number)[];
+	ctx: z.RefinementCtx;
+}) {
+	if (entry.type === 'action' && !supportedActionIds.has(entry.actionId)) {
+		ctx.addIssue({
+			code: z.ZodIssueCode.custom,
+			path: [...path, 'actionId'],
+			message: `Unsupported command menu actionId ${entry.actionId}`,
+		});
+		return;
+	}
+
+	if (entry.type !== 'submenu') return;
+
+	for (const [index, child] of entry.presets.entries()) {
+		validateCommandMenuEntryReferences({
+			entry: child,
+			path: [...path, 'presets', index],
+			ctx,
 		});
 	}
 }
@@ -465,6 +510,14 @@ const shellConfigSchema: z.ZodType<ShellConfig> = z
 					}
 				}
 			}
+		}
+
+		for (const [index, entry] of config.commandMenus.entries()) {
+			validateCommandMenuEntryReferences({
+				entry,
+				path: ['commandMenus', index],
+				ctx,
+			});
 		}
 	});
 
