@@ -1,8 +1,8 @@
-import type { ActionId } from '@/lib/keyboard-actions';
-import type {
-	CommandPreset,
-	CommandPresetEntry,
-	CommandPresetMenu,
+import { type ActionId } from '@/lib/keyboard-actions';
+import {
+	type CommandPreset,
+	type CommandPresetEntry,
+	type CommandPresetMenu,
 } from '@/lib/shell-config';
 
 export type CommandMenuSelectionResult =

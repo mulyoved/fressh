@@ -5,7 +5,7 @@ import {
 	resolveCommandMenuSelection,
 	type CommandMenuSelectionResult,
 } from '../../src/lib/command-menu-selection';
-import type { CommandPresetEntry } from '../../src/lib/shell-config';
+import { type CommandPresetEntry } from '../../src/lib/shell-config';
 
 void test('command menu selection resolves submenu entries', () => {
 	const entry: CommandPresetEntry = {
