@@ -1,5 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Modal, Pressable, ScrollView, Text, View } from 'react-native';
+import { resolveCommandMenuSelection } from '@/lib/command-menu-selection';
+import { type ActionId } from '@/lib/keyboard-actions';
 import {
 	type CommandPreset,
 	type CommandPresetEntry,
@@ -17,12 +19,14 @@ export function CommandPresetsModal({
 	bottomOffset,
 	onClose,
 	onSelect,
+	onAction,
 }: {
 	open: boolean;
 	presets: CommandPresetEntry[];
 	bottomOffset: number;
 	onClose: () => void;
 	onSelect: (preset: CommandPreset) => void;
+	onAction: (actionId: ActionId) => void;
 }) {
 	const theme = useTheme();
 	const [menuStack, setMenuStack] = useState<CommandPresetMenu[]>([]);
@@ -55,14 +59,22 @@ export function CommandPresetsModal({
 	}, [activePresets]);
 
 	const handlePresetPress = (preset: CommandPresetEntry) => {
-		if (isCommandPresetMenu(preset)) {
-			setMenuStack((current) => [...current, preset]);
-			return;
+		const selection = resolveCommandMenuSelection(preset);
+		switch (selection.type) {
+			case 'submenu':
+				setMenuStack((current) => [...current, selection.menu]);
+				return;
+			case 'preset':
+				// Ensure the next open starts at the root even if the parent closes the modal
+				// as a side effect of selecting a preset.
+				setMenuStack([]);
+				onSelect(selection.preset);
+				return;
+			case 'action':
+				handleClose();
+				onAction(selection.actionId);
+				return;
 		}
-		// Ensure the next open starts at the root even if the parent closes the modal
-		// as a side effect of selecting a preset.
-		setMenuStack([]);
-		onSelect(preset);
 	};
 
 	return (

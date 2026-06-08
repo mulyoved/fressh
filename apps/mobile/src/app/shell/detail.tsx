@@ -3156,6 +3156,7 @@ function ShellDetail() {
 					bottomOffset={Platform.OS === 'android' ? insets.bottom + 24 : 24}
 					onClose={commandPresetsModal.onClose}
 					onSelect={runCommandPreset}
+					onAction={handleAction}
 				/>
 				<BrowserActionsModal
 					bottomOffset={Platform.OS === 'android' ? insets.bottom + 24 : 24}
