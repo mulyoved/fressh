@@ -65,6 +65,7 @@ export const KNOWN_ACTION_IDS = [
 	'OPEN_KEYBOARD_SETTINGS',
 	...KEYBOARD_TARGET_ACTION_IDS,
 	'TOGGLE_COMMAND_MENU',
+	'REFLOW_TERMINAL',
 	'OPEN_COMMANDER',
 	'OPEN_SKILL_SELECTOR',
 	'OPEN_BROWSER_ACTIONS',
@@ -244,6 +245,7 @@ export type ActionContext = {
 	pasteClipboard: () => Promise<void>;
 	copySelection: () => void;
 	toggleCommandMenu?: () => void;
+	reflowTerminal?: () => Promise<void> | void;
 	openCommander?: () => void;
 	openSkillSelector?: () => void;
 	openBrowserActions?: () => void;
@@ -366,6 +368,10 @@ export async function runAction(
 		}
 		case 'TOGGLE_COMMAND_MENU': {
 			context.toggleCommandMenu?.();
+			return;
+		}
+		case 'REFLOW_TERMINAL': {
+			await context.reflowTerminal?.();
 			return;
 		}
 		case 'OPEN_COMMANDER': {

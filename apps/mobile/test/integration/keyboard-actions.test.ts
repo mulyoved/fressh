@@ -132,6 +132,27 @@ void test('command menu action delegates to the action context', async () => {
 	assert.equal(toggled, 1);
 });
 
+void test('reflow terminal action delegates to the action context', async () => {
+	let reflowed = 0;
+
+	await runAction('REFLOW_TERMINAL', {
+		availableKeyboardIds: new Set(),
+		selectKeyboard: () => {},
+		rotateKeyboard: () => {},
+		openConfigurator: () => {},
+		sendBytes: () => {},
+		pasteClipboard: async () => {},
+		copySelection: () => {},
+		reflowTerminal: async () => {
+			reflowed += 1;
+		},
+	} as Parameters<typeof runAction>[1]);
+
+	assert.equal(reflowed, 1);
+	assert.equal(KNOWN_ACTION_IDS.includes('REFLOW_TERMINAL'), true);
+	assert.equal(CONFIG_SUPPORTED_ACTION_IDS.includes('REFLOW_TERMINAL'), true);
+});
+
 void test('Wispr text action delegates to the action context', async () => {
 	let opened = 0;
 
