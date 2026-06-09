@@ -107,6 +107,7 @@ import {
 	buildCommanderExecuteSegments,
 	buildTextEntryPastePayload,
 } from '@/lib/terminal-input-payloads';
+import { createManualTerminalReflowRunner } from '@/lib/terminal-reflow-runner';
 import { detachTerminalShellListener } from '@/lib/terminal-shell-listener';
 import {
 	getTextEntryHistoryCycleEntries,
@@ -432,6 +433,10 @@ const scrollbackExitKeyPayload = encoder.encode('q');
 
 function ShellDetail() {
 	const xtermRef = useRef<XtermWebViewHandle>(null);
+	const reflowLiveBufferRef = useRef({
+		active: false,
+		chunks: [] as Uint8Array[],
+	});
 	const listenerIdRef = useRef<bigint | null>(null);
 	const listenerOwnerRef = useRef<{
 		removeListener: (id: bigint) => void;
@@ -503,7 +508,7 @@ function ShellDetail() {
 			createWorkmuxControlChannel({
 				connection: connection ?? null,
 			}),
-		[connection, normalizedTmuxTarget],
+		[connection],
 	);
 	const workmuxControlChannelRef = useRef(workmuxControlChannel);
 	useLayoutEffect(() => {
@@ -1928,12 +1933,7 @@ function ShellDetail() {
 		configureModal.onClose();
 		if (!featureRequestCloseRef.current()) return false;
 		return true;
-	}, [
-		commandMenuModal,
-		commanderModal,
-		configureModal,
-		handleCloseTextEntry,
-	]);
+	}, [commandMenuModal, commanderModal, configureModal, handleCloseTextEntry]);
 
 	const runBrowserActionsWorkmuxCommand = useCallback(
 		async (_connection: unknown, argv: string[], timeoutMs: number) => {
@@ -1959,6 +1959,36 @@ function ShellDetail() {
 		getErrorMessage,
 		closeOtherModals: closeBrowserActionsOtherModals,
 	});
+	const manualTerminalReflowRunner = useMemo(
+		() =>
+			createManualTerminalReflowRunner({
+				getConnection: () => connection ?? null,
+				isTmuxEnabled: () => tmuxEnabled,
+				getTerminalSize: () => lastSizeRef.current,
+				getXterm: () => xtermRef.current,
+				resolvePaneContext: browserActions.resolveHostBrowserPaneContext,
+				executeSideChannelCommand,
+				beginLiveBuffer: () => {
+					reflowLiveBufferRef.current = {
+						active: true,
+						chunks: [],
+					};
+				},
+				endLiveBuffer: () => {
+					const chunks = reflowLiveBufferRef.current.chunks;
+					reflowLiveBufferRef.current = {
+						active: false,
+						chunks: [],
+					};
+					return chunks;
+				},
+				showFailure: (title, message) => {
+					Alert.alert(title, message);
+				},
+				getErrorMessage,
+			}),
+		[browserActions.resolveHostBrowserPaneContext, connection, tmuxEnabled],
+	);
 	const workmuxKeyboardTmuxEnabledRef = useRef(tmuxEnabled);
 	const workmuxKeyboardTmuxTargetRef = useRef(tmuxTarget);
 	const browserActionsInvalidateAllRef = useRef(browserActions.invalidateAll);
@@ -2423,6 +2453,11 @@ function ShellDetail() {
 		[workmuxKeyboardCommandRunner],
 	);
 
+	const handleReflowTerminal = useCallback(() => {
+		commandMenuModal.onClose();
+		void manualTerminalReflowRunner.run();
+	}, [commandMenuModal, manualTerminalReflowRunner]);
+
 	const actionContext = useMemo<ActionContext>(
 		() => ({
 			availableKeyboardIds,
@@ -2434,6 +2469,7 @@ function ShellDetail() {
 			sendBytes: sendBytesRaw,
 			pasteClipboard: handlePasteClipboard,
 			copySelection: handleCopySelection,
+			reflowTerminal: handleReflowTerminal,
 			toggleCommandMenu: () => {
 				browserActions.invalidateHostUrlReads();
 				commanderModal.onClose();
@@ -2476,6 +2512,7 @@ function ShellDetail() {
 			handleCopySelection,
 			handleCloseTextEntry,
 			handlePasteClipboard,
+			handleReflowTerminal,
 			handleOpenWisprTextEditor,
 			openConfigDialog,
 			rotateKeyboard,
@@ -2885,6 +2922,10 @@ function ShellDetail() {
 
 	const writeShellChunkToTerminal = useCallback((bytesBuffer: ArrayBuffer) => {
 		const bytes = new Uint8Array(bytesBuffer);
+		if (reflowLiveBufferRef.current.active) {
+			reflowLiveBufferRef.current.chunks.push(bytes);
+			return;
+		}
 		xtermRef.current?.write(bytes);
 	}, []);
 
