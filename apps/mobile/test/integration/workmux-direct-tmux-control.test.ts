@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { TERMINAL_REFLOW_HISTORY_LINES } from '../../src/lib/terminal-reflow';
 import {
+	buildDirectTmuxCapturePaneCommand,
 	buildDirectTmuxScrollEnterCommand,
 	buildDirectTmuxScrollExitCommand,
 	buildDirectTmuxScrollMoveCommand,
@@ -93,6 +95,61 @@ void test('DirectMux scroll move rejects invalid direction, unit, and count', ()
 					count,
 				}),
 			new RegExp(`Invalid DirectMux count: ${count}`),
+		);
+	}
+});
+
+void test('DirectMux capture pane command uses joined printed pane capture', () => {
+	assert.equal(
+		buildDirectTmuxCapturePaneCommand({
+			paneId: '%1',
+			historyLines: TERMINAL_REFLOW_HISTORY_LINES,
+		}),
+		`tmux capture-pane -J -p -t '%1' -S -${TERMINAL_REFLOW_HISTORY_LINES} -E -`,
+	);
+});
+
+void test('DirectMux capture pane command shell-quotes pane targets', () => {
+	assert.equal(
+		buildDirectTmuxCapturePaneCommand({
+			paneId: `%pane 'quoted' target`,
+			historyLines: 42,
+		}),
+		`tmux capture-pane -J -p -t '%pane '\\''quoted'\\'' target' -S -42 -E -`,
+	);
+});
+
+void test('DirectMux capture pane command accepts inclusive history edges', () => {
+	assert.equal(
+		buildDirectTmuxCapturePaneCommand({ paneId: '%1', historyLines: 1 }),
+		"tmux capture-pane -J -p -t '%1' -S -1 -E -",
+	);
+	assert.equal(
+		buildDirectTmuxCapturePaneCommand({ paneId: '%1', historyLines: 10_000 }),
+		"tmux capture-pane -J -p -t '%1' -S -10000 -E -",
+	);
+});
+
+void test('DirectMux capture pane command rejects unsafe pane targets', () => {
+	for (const paneId of ['   ', '%1\nwhoami', '%1\rwhoami', '%1\n', '\r%1']) {
+		assert.throws(
+			() =>
+				buildDirectTmuxCapturePaneCommand({
+					paneId,
+					historyLines: TERMINAL_REFLOW_HISTORY_LINES,
+				}),
+			paneId.trim() === ''
+				? /paneId must be non-empty/
+				: /paneId must not contain CR or LF/,
+		);
+	}
+});
+
+void test('DirectMux capture pane command rejects invalid history ranges', () => {
+	for (const historyLines of [0, -1, 10001, 1.5, Number.NaN]) {
+		assert.throws(
+			() => buildDirectTmuxCapturePaneCommand({ paneId: '%1', historyLines }),
+			/historyLines must be a safe integer from 1 through 10000/,
 		);
 	}
 });
@@ -272,7 +329,7 @@ void test('DirectMux transport overlapping dispose closes hidden shell once', as
 	assert.equal(await send, true);
 	await closeStarted.promise;
 	let secondDisposeResolved = false;
-	secondDispose.then(() => {
+	void secondDispose.then(() => {
 		secondDisposeResolved = true;
 	});
 	await new Promise((resolve) => setTimeout(resolve, 0));
