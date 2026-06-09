@@ -503,13 +503,12 @@ function ShellDetail() {
 	const normalizedTmuxTarget = tmuxTarget.trim().length
 		? tmuxTarget.trim()
 		: 'main';
-	const workmuxControlChannel = useMemo<WorkmuxControlChannel>(
-		() =>
-			createWorkmuxControlChannel({
-				connection: connection ?? null,
-			}),
-		[connection],
-	);
+	const workmuxControlChannel = useMemo<WorkmuxControlChannel>(() => {
+		void normalizedTmuxTarget;
+		return createWorkmuxControlChannel({
+			connection: connection ?? null,
+		});
+	}, [connection, normalizedTmuxTarget]);
 	const workmuxControlChannelRef = useRef(workmuxControlChannel);
 	useLayoutEffect(() => {
 		workmuxControlChannelRef.current = workmuxControlChannel;
