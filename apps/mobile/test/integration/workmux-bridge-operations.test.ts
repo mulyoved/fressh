@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
 	WORKMUX_REQUIRED_MDEV_BRIDGE_OPERATIONS,
+	CODEX_RESTART_BRIDGE_OPERATION,
+	buildCodexRestartBridgeOperation,
 	buildMdevBridgeOperationFromWorkmuxArgv,
 } from '../../src/lib/workmux-bridge-operations';
 
@@ -15,8 +17,8 @@ void test('required bridge operations exclude scroll operations', () => {
 		'tmux.nav',
 	]);
 	assert.equal(
-		WORKMUX_REQUIRED_MDEV_BRIDGE_OPERATIONS.some((operation) =>
-			operation.includes('scroll'),
+		WORKMUX_REQUIRED_MDEV_BRIDGE_OPERATIONS.includes(
+			'codex.restart' as (typeof WORKMUX_REQUIRED_MDEV_BRIDGE_OPERATIONS)[number],
 		),
 		false,
 	);
@@ -179,5 +181,20 @@ void test('rejects unknown argv locally', () => {
 				'main',
 			]),
 		/Unsupported Workmux bridge command/,
+	);
+});
+
+void test('builds Codex restart bridge operation', () => {
+	assert.equal(CODEX_RESTART_BRIDGE_OPERATION, 'codex.restart');
+	assert.deepEqual(buildCodexRestartBridgeOperation('main:@12'), {
+		operation: 'codex.restart',
+		params: { target: 'main:@12' },
+	});
+});
+
+void test('rejects blank Codex restart target locally', () => {
+	assert.throws(
+		() => buildCodexRestartBridgeOperation('   '),
+		/Invalid Codex restart target/,
 	);
 });

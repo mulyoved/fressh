@@ -5,6 +5,7 @@ import {
 } from './mdev-bridge-client';
 import { type WorkmuxScrollDirection } from './workmux-app-commands';
 import {
+	type MdevBridgeOperationRequest,
 	WORKMUX_REQUIRED_MDEV_BRIDGE_OPERATIONS,
 	buildMdevBridgeOperationFromWorkmuxArgv,
 } from './workmux-bridge-operations';
@@ -43,6 +44,10 @@ export type WorkmuxScrollMove = WorkmuxScrollTarget & {
 export type WorkmuxControlChannel = {
 	command: (
 		argv: string[],
+		options?: WorkmuxControlCommandOptions,
+	) => Promise<WorkmuxControlCommandResult>;
+	operation: (
+		request: MdevBridgeOperationRequest,
 		options?: WorkmuxControlCommandOptions,
 	) => Promise<WorkmuxControlCommandResult>;
 	scroll: {
@@ -110,6 +115,25 @@ export function createWorkmuxControlChannel({
 		return runDirect(buildCommand());
 	};
 
+	const runBridgeOperation = (
+		request: MdevBridgeOperationRequest,
+		options?: WorkmuxControlCommandOptions,
+	): Promise<WorkmuxControlCommandResult> => {
+		if (disposed) {
+			return Promise.resolve(
+				failureResult('Workmux control channel disposed.'),
+			);
+		}
+		if (!connection || !resolvedBridgeClient) {
+			return Promise.resolve(failureResult('No SSH connection available.'));
+		}
+		return resolvedBridgeClient.runOperation({
+			operation: request.operation,
+			params: request.params,
+			timeoutMs: options?.timeoutMs ?? DEFAULT_WORKMUX_CONTROL_COMMAND_TIMEOUT_MS,
+		});
+	};
+
 	return {
 		command: (argv, options) => {
 			if (disposed) {
@@ -121,23 +145,17 @@ export function createWorkmuxControlChannel({
 				return Promise.resolve(failureResult('No SSH connection available.'));
 			}
 			try {
-				const { operation, params } =
-					buildMdevBridgeOperationFromWorkmuxArgv(argv);
-				if (!resolvedBridgeClient) {
-					return Promise.resolve(failureResult('No SSH connection available.'));
-				}
-				return resolvedBridgeClient.runOperation({
-					operation,
-					params,
-					timeoutMs:
-						options?.timeoutMs ?? DEFAULT_WORKMUX_CONTROL_COMMAND_TIMEOUT_MS,
-				});
+				return runBridgeOperation(
+					buildMdevBridgeOperationFromWorkmuxArgv(argv),
+					options,
+				);
 			} catch (error) {
 				return Promise.resolve(
 					failureResult(error instanceof Error ? error.message : String(error)),
 				);
 			}
 		},
+		operation: runBridgeOperation,
 		scroll: {
 			enter: (input) =>
 				runScroll(() => buildDirectTmuxScrollEnterCommand(input.sessionName)),
