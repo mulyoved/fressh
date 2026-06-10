@@ -16,6 +16,7 @@ export type XtermWebViewHandle = {
     writeMany: (chunks: Uint8Array[]) => void;
     flush: () => void;
     clear: () => void;
+    reset: () => void;
     focus: () => void;
     setSystemKeyboardEnabled: (enabled: boolean) => void;
     setSelectionModeEnabled: (enabled: boolean) => void;

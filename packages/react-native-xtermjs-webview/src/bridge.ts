@@ -184,6 +184,7 @@ export type BridgeOutboundMessage =
 			opts: Partial<Omit<ITerminalOptions, keyof ITerminalInitOnlyOptions>>;
 	  }
 	| { type: 'clear' }
+	| { type: 'reset' }
 	| { type: 'focus' };
 
 export const binaryToBStr = (binary: Uint8Array): string =>

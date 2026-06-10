@@ -15,6 +15,7 @@ export type TerminalReflowSize = {
 
 export type ManualTerminalReflowXterm = {
 	clear: () => void;
+	reset: () => void;
 	write: (bytes: Uint8Array) => void;
 	flush: () => void;
 	fit: () => void;
@@ -135,7 +136,7 @@ export function createManualTerminalReflowRunner<Connection>(
 
 				liveChunks = deps.endLiveBuffer();
 				buffering = false;
-				xterm.clear();
+				xterm.reset();
 				xterm.write(snapshot);
 				xterm.flush();
 				writeBufferedLiveChunks(xterm, liveChunks);

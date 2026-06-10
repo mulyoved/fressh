@@ -20,6 +20,7 @@ function createHarness(
 	const connection = { id: 'connection' };
 	const xterm: ManualTerminalReflowXterm = {
 		clear: () => calls.push('clear'),
+		reset: () => calls.push('reset'),
 		write: (bytes) => {
 			writes.push(decoder.decode(bytes));
 			calls.push(`write:${decoder.decode(bytes)}`);
@@ -98,7 +99,7 @@ void test('manual terminal reflow captures active pane and rebuilds xterm view',
 	assert.deepEqual(harness.calls, [
 		'begin',
 		'end',
-		'clear',
+		'reset',
 		'write:START:abcdefghijklmn\r\nopqrstuvwxyz:END\r\n',
 		'flush',
 		'write:LIVE',
