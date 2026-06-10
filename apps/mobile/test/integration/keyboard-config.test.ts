@@ -519,7 +519,7 @@ void test('shell config accepts legacy detected-open action ids', () => {
 	assert.doesNotThrow(() => parseShellConfigData(macroConfig));
 });
 
-void test('mdev command menu exposes terminal reflow action', () => {
+void test('mdev command menu exposes terminal fit action', () => {
 	const config = getBundledShellConfig();
 	const mdevMenu = config.commandMenus.find(
 		(entry) => entry.type === 'submenu' && entry.label === 'mdev',
@@ -535,8 +535,8 @@ void test('mdev command menu exposes terminal reflow action', () => {
 		},
 		{
 			type: 'action',
-			label: 'Reflow terminal',
-			actionId: 'REFLOW_TERMINAL',
+			label: 'Fit terminal to device',
+			actionId: 'FIT_TERMINAL_TO_DEVICE',
 		},
 	]);
 });

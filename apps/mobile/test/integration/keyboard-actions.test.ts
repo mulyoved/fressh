@@ -132,8 +132,32 @@ void test('command menu action delegates to the action context', async () => {
 	assert.equal(toggled, 1);
 });
 
-void test('reflow terminal action delegates to the action context', async () => {
-	let reflowed = 0;
+void test('fit terminal action delegates to the action context', async () => {
+	let fitted = 0;
+
+	await runAction('FIT_TERMINAL_TO_DEVICE', {
+		availableKeyboardIds: new Set(),
+		selectKeyboard: () => {},
+		rotateKeyboard: () => {},
+		openConfigurator: () => {},
+		sendBytes: () => {},
+		pasteClipboard: async () => {},
+		copySelection: () => {},
+		fitTerminalToDevice: async () => {
+			fitted += 1;
+		},
+	} as Parameters<typeof runAction>[1]);
+
+	assert.equal(fitted, 1);
+	assert.equal(KNOWN_ACTION_IDS.includes('FIT_TERMINAL_TO_DEVICE'), true);
+	assert.equal(
+		CONFIG_SUPPORTED_ACTION_IDS.includes('FIT_TERMINAL_TO_DEVICE'),
+		true,
+	);
+});
+
+void test('legacy reflow terminal action aliases terminal fit', async () => {
+	let fitted = 0;
 
 	await runAction('REFLOW_TERMINAL', {
 		availableKeyboardIds: new Set(),
@@ -143,12 +167,12 @@ void test('reflow terminal action delegates to the action context', async () => 
 		sendBytes: () => {},
 		pasteClipboard: async () => {},
 		copySelection: () => {},
-		reflowTerminal: async () => {
-			reflowed += 1;
+		fitTerminalToDevice: async () => {
+			fitted += 1;
 		},
 	} as Parameters<typeof runAction>[1]);
 
-	assert.equal(reflowed, 1);
+	assert.equal(fitted, 1);
 	assert.equal(KNOWN_ACTION_IDS.includes('REFLOW_TERMINAL'), true);
 	assert.equal(CONFIG_SUPPORTED_ACTION_IDS.includes('REFLOW_TERMINAL'), true);
 });

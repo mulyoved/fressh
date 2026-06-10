@@ -1,8 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { TERMINAL_REFLOW_HISTORY_LINES } from '../../src/lib/terminal-reflow';
 import {
-	buildDirectTmuxCapturePaneCommand,
+	buildDirectTmuxResizeWindowCommand,
 	buildDirectTmuxScrollEnterCommand,
 	buildDirectTmuxScrollExitCommand,
 	buildDirectTmuxScrollMoveCommand,
@@ -99,57 +98,44 @@ void test('DirectMux scroll move rejects invalid direction, unit, and count', ()
 	}
 });
 
-void test('DirectMux capture pane command uses joined printed pane capture', () => {
+void test('DirectMux resize window command targets explicit terminal size', () => {
 	assert.equal(
-		buildDirectTmuxCapturePaneCommand({
-			paneId: '%1',
-			historyLines: TERMINAL_REFLOW_HISTORY_LINES,
+		buildDirectTmuxResizeWindowCommand({
+			targetName: 'main',
+			cols: 42,
+			rows: 17,
 		}),
-		`tmux capture-pane -J -p -t '%1' -S -${TERMINAL_REFLOW_HISTORY_LINES} -E -`,
+		'tmux resize-window -t main -x 42 -y 17 \\; set-window-option -t main window-size latest',
 	);
-});
-
-void test('DirectMux capture pane command shell-quotes pane targets', () => {
 	assert.equal(
-		buildDirectTmuxCapturePaneCommand({
-			paneId: `%pane 'quoted' target`,
-			historyLines: 42,
+		buildDirectTmuxResizeWindowCommand({
+			targetName: "main's work",
+			cols: 88,
+			rows: 33,
 		}),
-		`tmux capture-pane -J -p -t '%pane '\\''quoted'\\'' target' -S -42 -E -`,
+		"tmux resize-window -t 'main'\\''s work' -x 88 -y 33 \\; set-window-option -t 'main'\\''s work' window-size latest",
 	);
 });
 
-void test('DirectMux capture pane command accepts inclusive history edges', () => {
-	assert.equal(
-		buildDirectTmuxCapturePaneCommand({ paneId: '%1', historyLines: 1 }),
-		"tmux capture-pane -J -p -t '%1' -S -1 -E -",
-	);
-	assert.equal(
-		buildDirectTmuxCapturePaneCommand({ paneId: '%1', historyLines: 10_000 }),
-		"tmux capture-pane -J -p -t '%1' -S -10000 -E -",
-	);
-});
-
-void test('DirectMux capture pane command rejects unsafe pane targets', () => {
-	for (const paneId of ['   ', '%1\nwhoami', '%1\rwhoami', '%1\n', '\r%1']) {
+void test('DirectMux resize window command rejects invalid terminal sizes', () => {
+	for (const size of [0, -1, 1.5, Number.NaN]) {
 		assert.throws(
 			() =>
-				buildDirectTmuxCapturePaneCommand({
-					paneId,
-					historyLines: TERMINAL_REFLOW_HISTORY_LINES,
+				buildDirectTmuxResizeWindowCommand({
+					targetName: 'main',
+					cols: size,
+					rows: 24,
 				}),
-			paneId.trim() === ''
-				? /paneId must be non-empty/
-				: /paneId must not contain CR or LF/,
+			new RegExp(`Invalid DirectMux count: ${size}`),
 		);
-	}
-});
-
-void test('DirectMux capture pane command rejects invalid history ranges', () => {
-	for (const historyLines of [0, -1, 10001, 1.5, Number.NaN]) {
 		assert.throws(
-			() => buildDirectTmuxCapturePaneCommand({ paneId: '%1', historyLines }),
-			/historyLines must be a safe integer from 1 through 10000/,
+			() =>
+				buildDirectTmuxResizeWindowCommand({
+					targetName: 'main',
+					cols: 80,
+					rows: size,
+				}),
+			new RegExp(`Invalid DirectMux count: ${size}`),
 		);
 	}
 });

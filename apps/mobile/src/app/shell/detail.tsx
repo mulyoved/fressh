@@ -102,12 +102,12 @@ import {
 } from '@/lib/shell-modals';
 import { executeSideChannelCommand } from '@/lib/ssh-side-channel';
 import { useSshStore } from '@/lib/ssh-store';
+import { createManualTerminalFitRunner } from '@/lib/terminal-fit-runner';
 import {
 	buildClipboardPasteSegments,
 	buildCommanderExecuteSegments,
 	buildTextEntryPastePayload,
 } from '@/lib/terminal-input-payloads';
-import { createManualTerminalReflowRunner } from '@/lib/terminal-reflow-runner';
 import { detachTerminalShellListener } from '@/lib/terminal-shell-listener';
 import {
 	getTextEntryHistoryCycleEntries,
@@ -433,10 +433,6 @@ const scrollbackExitKeyPayload = encoder.encode('q');
 
 function ShellDetail() {
 	const xtermRef = useRef<XtermWebViewHandle>(null);
-	const reflowLiveBufferRef = useRef({
-		active: false,
-		chunks: [] as Uint8Array[],
-	});
 	const listenerIdRef = useRef<bigint | null>(null);
 	const listenerOwnerRef = useRef<{
 		removeListener: (id: bigint) => void;
@@ -1958,35 +1954,27 @@ function ShellDetail() {
 		getErrorMessage,
 		closeOtherModals: closeBrowserActionsOtherModals,
 	});
-	const manualTerminalReflowRunner = useMemo(
+	const manualTerminalFitRunner = useMemo(
 		() =>
-			createManualTerminalReflowRunner({
+			createManualTerminalFitRunner({
 				getConnection: () => connection ?? null,
 				isTmuxEnabled: () => tmuxEnabled,
 				getTerminalSize: () => lastSizeRef.current,
 				getXterm: () => xtermRef.current,
-				resolvePaneContext: browserActions.resolveHostBrowserPaneContext,
+				getTargetName: () => tmuxTarget.trim() || 'main',
+				resizePty: async (cols, rows) => {
+					if (!shell) {
+						throw new Error('No shell is available.');
+					}
+					await shell.resizePty(cols, rows);
+				},
 				executeSideChannelCommand,
-				beginLiveBuffer: () => {
-					reflowLiveBufferRef.current = {
-						active: true,
-						chunks: [],
-					};
-				},
-				endLiveBuffer: () => {
-					const chunks = reflowLiveBufferRef.current.chunks;
-					reflowLiveBufferRef.current = {
-						active: false,
-						chunks: [],
-					};
-					return chunks;
-				},
 				showFailure: (title, message) => {
 					Alert.alert(title, message);
 				},
 				getErrorMessage,
 			}),
-		[browserActions.resolveHostBrowserPaneContext, connection, tmuxEnabled],
+		[connection, shell, tmuxEnabled, tmuxTarget],
 	);
 	const workmuxKeyboardTmuxEnabledRef = useRef(tmuxEnabled);
 	const workmuxKeyboardTmuxTargetRef = useRef(tmuxTarget);
@@ -2452,10 +2440,10 @@ function ShellDetail() {
 		[workmuxKeyboardCommandRunner],
 	);
 
-	const handleReflowTerminal = useCallback(() => {
+	const handleFitTerminalToDevice = useCallback(() => {
 		commandMenuModal.onClose();
-		void manualTerminalReflowRunner.run();
-	}, [commandMenuModal, manualTerminalReflowRunner]);
+		void manualTerminalFitRunner.run();
+	}, [commandMenuModal, manualTerminalFitRunner]);
 
 	const actionContext = useMemo<ActionContext>(
 		() => ({
@@ -2468,7 +2456,7 @@ function ShellDetail() {
 			sendBytes: sendBytesRaw,
 			pasteClipboard: handlePasteClipboard,
 			copySelection: handleCopySelection,
-			reflowTerminal: handleReflowTerminal,
+			fitTerminalToDevice: handleFitTerminalToDevice,
 			toggleCommandMenu: () => {
 				browserActions.invalidateHostUrlReads();
 				commanderModal.onClose();
@@ -2511,7 +2499,7 @@ function ShellDetail() {
 			handleCopySelection,
 			handleCloseTextEntry,
 			handlePasteClipboard,
-			handleReflowTerminal,
+			handleFitTerminalToDevice,
 			handleOpenWisprTextEditor,
 			openConfigDialog,
 			rotateKeyboard,
@@ -2920,12 +2908,7 @@ function ShellDetail() {
 	}, [clearScrollbackState]);
 
 	const writeShellChunkToTerminal = useCallback((bytesBuffer: ArrayBuffer) => {
-		const bytes = new Uint8Array(bytesBuffer);
-		if (reflowLiveBufferRef.current.active) {
-			reflowLiveBufferRef.current.chunks.push(bytes);
-			return;
-		}
-		xtermRef.current?.write(bytes);
+		xtermRef.current?.write(new Uint8Array(bytesBuffer));
 	}, []);
 
 	const detachShellListener = useCallback(() => {

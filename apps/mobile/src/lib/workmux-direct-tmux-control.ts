@@ -31,9 +31,10 @@ export type DirectTmuxScrollMove = {
 	count: number;
 };
 
-export type DirectTmuxCapturePane = {
-	paneId: string;
-	historyLines: number;
+export type DirectTmuxResizeWindow = {
+	targetName: string;
+	cols: number;
+	rows: number;
 };
 
 export type DirectTmuxControlTransport = {
@@ -42,16 +43,11 @@ export type DirectTmuxControlTransport = {
 };
 
 const encoder = new TextEncoder();
-const MAX_DIRECT_TMUX_CAPTURE_HISTORY_LINES = 10_000;
 
 function quoteTmuxTarget(target: string): string {
 	return /^[A-Za-z0-9_@.=-]+$/.test(target)
 		? target
 		: `'${target.replace(/'/g, "'\\''")}'`;
-}
-
-function quoteTmuxShellValue(value: string): string {
-	return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
 function requirePositiveInteger(count: number): number {
@@ -110,26 +106,24 @@ export function buildDirectTmuxScrollMoveCommand({
 	].join(' ');
 }
 
-export function buildDirectTmuxCapturePaneCommand({
-	paneId,
-	historyLines,
-}: DirectTmuxCapturePane): string {
-	if (/[\r\n]/.test(paneId)) {
-		throw new Error('paneId must not contain CR or LF');
-	}
-	const target = paneId.trim();
-	if (target === '') {
-		throw new Error('paneId must be non-empty');
-	}
-	if (
-		!Number.isSafeInteger(historyLines) ||
-		historyLines < 1 ||
-		historyLines > MAX_DIRECT_TMUX_CAPTURE_HISTORY_LINES
-	) {
-		throw new Error('historyLines must be a safe integer from 1 through 10000');
-	}
-
-	return `tmux capture-pane -J -p -t ${quoteTmuxShellValue(target)} -S -${historyLines} -E -`;
+export function buildDirectTmuxResizeWindowCommand({
+	targetName,
+	cols,
+	rows,
+}: DirectTmuxResizeWindow): string {
+	const safeCols = requirePositiveInteger(cols);
+	const safeRows = requirePositiveInteger(rows);
+	const target = quoteTmuxTarget(targetName);
+	return [
+		'tmux resize-window',
+		`-t ${target}`,
+		`-x ${safeCols}`,
+		`-y ${safeRows}`,
+		'\\;',
+		'set-window-option',
+		`-t ${target}`,
+		'window-size latest',
+	].join(' ');
 }
 
 export function createDirectTmuxControlTransport({

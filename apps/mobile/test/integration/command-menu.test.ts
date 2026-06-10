@@ -95,7 +95,7 @@ void test('bundled command menu exposes the approved Issue 91 tree', () => {
 			type: 'submenu',
 			children: [
 				{ label: 'Request a Feature', type: 'action' },
-				{ label: 'Reflow terminal', type: 'action' },
+				{ label: 'Fit terminal to device', type: 'action' },
 				{ label: 'Open Workspace', type: 'preset' },
 				{ label: 'Close Workspace', type: 'preset' },
 				{ label: 'Rename Workspace', type: 'preset' },

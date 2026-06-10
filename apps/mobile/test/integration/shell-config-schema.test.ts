@@ -247,8 +247,8 @@ void test('runtime shell config accepts command menu action entries', () => {
 		},
 		{
 			type: 'action',
-			label: 'Reflow terminal',
-			actionId: 'REFLOW_TERMINAL',
+			label: 'Fit terminal to device',
+			actionId: 'FIT_TERMINAL_TO_DEVICE',
 		},
 	];
 
@@ -262,8 +262,8 @@ void test('runtime shell config accepts command menu action entries', () => {
 		},
 		{
 			type: 'action',
-			label: 'Reflow terminal',
-			actionId: 'REFLOW_TERMINAL',
+			label: 'Fit terminal to device',
+			actionId: 'FIT_TERMINAL_TO_DEVICE',
 		},
 	]);
 });
