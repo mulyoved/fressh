@@ -23,6 +23,18 @@ export type CommandActionEntry = {
 	actionId: ActionId;
 };
 
+export const COMMAND_BRIDGE_OPERATION_IDS = ['codex.restart'] as const;
+
+export type CommandBridgeOperationId =
+	(typeof COMMAND_BRIDGE_OPERATION_IDS)[number];
+
+export type CommandBridgeEntry = {
+	type: 'bridge';
+	label: string;
+	operation: CommandBridgeOperationId;
+	timeoutMs?: number;
+};
+
 export type CommandMenu = {
 	type: 'submenu';
 	label: string;
@@ -32,7 +44,8 @@ export type CommandMenu = {
 export type CommandMenuEntry =
 	| CommandPreset
 	| CommandMenu
-	| CommandActionEntry;
+	| CommandActionEntry
+	| CommandBridgeEntry;
 
 export type KeyboardLongPressOption =
 	| { type: 'text'; text: string; label: string; icon: string | null }
@@ -98,6 +111,7 @@ export type ShellConfig = {
 
 const supportedActionIds = new Set<string>(CONFIG_SUPPORTED_ACTION_IDS);
 const keyboardTargetActionIds = new Set<string>(KEYBOARD_TARGET_ACTION_IDS);
+const commandBridgeOperationIds = new Set<string>(COMMAND_BRIDGE_OPERATION_IDS);
 
 const modifierKeySchema = z.enum(['CTRL', 'ALT', 'SHIFT', 'CMD']);
 const iconSchema = z.string().nullable();
@@ -154,10 +168,23 @@ const commandActionEntrySchema = z.object({
 	actionId: z.string().min(1),
 });
 
+const commandBridgeOperationSchema = z.custom<CommandBridgeOperationId>(
+	(value) => typeof value === 'string' && value.length > 0,
+	{ message: 'Bridge operation must be a non-empty string' },
+);
+
+const commandBridgeEntrySchema = z.object({
+	type: z.literal('bridge'),
+	label: z.string().min(1),
+	operation: commandBridgeOperationSchema,
+	timeoutMs: z.number().int().positive().optional(),
+});
+
 const commandMenuEntrySchema: z.ZodType<CommandMenuEntry> = z.lazy(() =>
 	z.discriminatedUnion('type', [
 		commandPresetSchema,
 		commandActionEntrySchema,
+		commandBridgeEntrySchema,
 		z.object({
 			type: z.literal('submenu'),
 			label: z.string().min(1),
@@ -307,6 +334,18 @@ function validateCommandMenuEntryReferences({
 			code: z.ZodIssueCode.custom,
 			path: [...path, 'actionId'],
 			message: `Unsupported command menu actionId ${entry.actionId}`,
+		});
+		return;
+	}
+
+	if (
+		entry.type === 'bridge' &&
+		!commandBridgeOperationIds.has(entry.operation)
+	) {
+		ctx.addIssue({
+			code: z.ZodIssueCode.custom,
+			path: [...path, 'operation'],
+			message: `Unsupported command menu bridge operation ${entry.operation}`,
 		});
 		return;
 	}
