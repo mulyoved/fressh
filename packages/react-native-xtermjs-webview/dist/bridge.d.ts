@@ -161,8 +161,6 @@ export type BridgeOutboundMessage = {
 } | {
     type: 'clear';
 } | {
-    type: 'reset';
-} | {
     type: 'focus';
 };
 export declare const binaryToBStr: (binary: Uint8Array) => string;

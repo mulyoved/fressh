@@ -25,7 +25,6 @@ type MessageHandlerTerminal = Pick<
 	| 'resize'
 	| 'getSelection'
 	| 'clear'
-	| 'reset'
 	| 'focus'
 > & {
 	options: ITerminalOptions;
@@ -143,10 +142,6 @@ export function createXtermWebViewMessageHandler({
 				}
 				case 'clear': {
 					term.clear();
-					break;
-				}
-				case 'reset': {
-					term.reset();
 					break;
 				}
 				case 'focus': {

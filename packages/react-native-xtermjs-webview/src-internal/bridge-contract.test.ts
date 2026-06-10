@@ -1014,7 +1014,6 @@ void test('WebView outbound handler ignores stale scrollback instance messages',
 			resize: () => events.push('resize'),
 			getSelection: () => 'selected',
 			clear: () => events.push('clear'),
-			reset: () => events.push('reset'),
 			focus: () => events.push('focus'),
 		},
 		fitAddon: {
@@ -1071,45 +1070,6 @@ void test('WebView outbound handler ignores stale scrollback instance messages',
 	assert.deepEqual(events, [['exit', { requestId: 3 }], ['ack', 4], ['ack', 5]]);
 });
 
-void test('WebView outbound handler resets the terminal on reset messages', () => {
-	const events: unknown[] = [];
-	const handler = createXtermWebViewMessageHandler({
-		instanceId: 'current-instance',
-		term: {
-			cols: 80,
-			rows: 24,
-			options: {},
-			write: () => events.push('write'),
-			resize: () => events.push('resize'),
-			getSelection: () => 'selected',
-			clear: () => events.push('clear'),
-			reset: () => events.push('reset'),
-			focus: () => events.push('focus'),
-		},
-		fitAddon: {
-			fit: () => events.push('fit'),
-		},
-		selectionHandles: {
-			applySelectionMode: () => events.push('selection-mode'),
-		},
-		touchScrollController: {
-			setConfig: () => events.push('set-config'),
-			exitScrollback: (opts) => events.push(['exit', opts]),
-			handleEnterAck: (requestId) => events.push(['ack', requestId]),
-		},
-		sendToRn: (message) => events.push(['rn', message]),
-		applyFontFamily: () => events.push('font-family'),
-	});
-
-	handler({
-		data: {
-			type: 'reset',
-		},
-	} as MessageEvent);
-
-	assert.deepEqual(events, ['reset']);
-});
-
 void test('public tmux ack handle sends the legacy tmux ack type', () => {
 	const messages: unknown[] = [];
 	const sendToWebView = (message: BridgeOutboundMessage) => messages.push(message);
@@ -1137,29 +1097,6 @@ void test('public tmux ack handle sends the legacy tmux ack type', () => {
 			instanceId: 'current-instance',
 		},
 	]);
-});
-
-void test('public xterm handle sends reset messages', () => {
-	const messages: unknown[] = [];
-	const sendToWebView = (message: BridgeOutboundMessage) => messages.push(message);
-	const handle = createXtermWebViewHandle({
-		write: () => {},
-		writeMany: () => {},
-		flush: () => {},
-		sendToWebView,
-		webRef: { current: null },
-		setSystemKeyboardEnabled: () => {},
-		setSelectionModeEnabled: () => {},
-		getSelection: () => Promise.resolve(''),
-		autoFitFn: () => {},
-		appliedSizeRef: { current: null },
-		fit: () => {},
-		...createXtermWebViewAckSenders(sendToWebView),
-	});
-
-	handle.reset();
-
-	assert.deepEqual(messages, [{ type: 'reset' }]);
 });
 
 void test('XtermJsWebView message handler reports rejected scrollback enter callbacks', async () => {
