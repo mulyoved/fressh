@@ -122,7 +122,7 @@ export function buildDirectTmuxResizeWindowCommand({
 		'\\;',
 		'set-window-option',
 		`-t ${target}`,
-		'window-size latest',
+		'window-size manual',
 	].join(' ');
 }
 

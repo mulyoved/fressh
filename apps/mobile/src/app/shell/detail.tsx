@@ -102,7 +102,10 @@ import {
 } from '@/lib/shell-modals';
 import { executeSideChannelCommand } from '@/lib/ssh-side-channel';
 import { useSshStore } from '@/lib/ssh-store';
-import { createManualTerminalFitRunner } from '@/lib/terminal-fit-runner';
+import {
+	createManualTerminalFitRunner,
+	type TerminalFitSize,
+} from '@/lib/terminal-fit-runner';
 import {
 	buildClipboardPasteSegments,
 	buildCommanderExecuteSegments,
@@ -441,6 +444,9 @@ function ShellDetail() {
 	const hasAttachedOnceRef = useRef(false);
 	const workmuxScrollbackCommandExecutorRef =
 		useRef<WorkmuxScrollbackCommandExecutor | null>(null);
+	const waitForTerminalSizeAfterFitRef = useRef<
+		() => Promise<TerminalFitSize | null>
+	>(async () => null);
 	const [terminalReady, setTerminalReady] = useState(false);
 	const [hasRenderedTerminal, setHasRenderedTerminal] = useState(false);
 	const [shellConfigState, setShellConfigState] = useState(() =>
@@ -1962,6 +1968,8 @@ function ShellDetail() {
 				getTerminalSize: () => lastSizeRef.current,
 				getXterm: () => xtermRef.current,
 				getTargetName: () => tmuxTarget.trim() || 'main',
+				waitForTerminalSizeAfterFit: () =>
+					waitForTerminalSizeAfterFitRef.current(),
 				resizePty: async (cols, rows) => {
 					if (!shell) {
 						throw new Error('No shell is available.');
@@ -2596,20 +2604,56 @@ function ShellDetail() {
 	// Debounced PTY resize handler
 	const resizeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const lastSizeRef = useRef<{ cols: number; rows: number } | null>(null);
+	const terminalFitSizeWaitersRef = useRef(
+		new Set<(size: TerminalFitSize) => void>(),
+	);
 	const resumeDismissTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
 		null,
 	);
 
+	const waitForTerminalSizeAfterFit = useCallback(() => {
+		return new Promise<TerminalFitSize | null>((resolve) => {
+			let settled = false;
+			let timeoutId: ReturnType<typeof setTimeout> | null = null;
+			let waiter: ((size: TerminalFitSize) => void) | null = null;
+
+			const finish = (size: TerminalFitSize | null) => {
+				if (settled) return;
+				settled = true;
+				if (timeoutId) {
+					clearTimeout(timeoutId);
+				}
+				if (waiter) {
+					terminalFitSizeWaitersRef.current.delete(waiter);
+				}
+				resolve(size);
+			};
+			waiter = (size: TerminalFitSize) => finish(size);
+
+			terminalFitSizeWaitersRef.current.add(waiter);
+			timeoutId = setTimeout(() => {
+				finish(lastSizeRef.current);
+			}, 250);
+		});
+	}, []);
+	waitForTerminalSizeAfterFitRef.current = waitForTerminalSizeAfterFit;
+
 	const handleTerminalResize = useCallback(
 		(cols: number, rows: number) => {
+			const previousSize = lastSizeRef.current;
+			const nextSize = { cols, rows };
+			lastSizeRef.current = nextSize;
+			if (terminalFitSizeWaitersRef.current.size > 0) {
+				for (const waiter of terminalFitSizeWaitersRef.current) {
+					waiter(nextSize);
+				}
+				terminalFitSizeWaitersRef.current.clear();
+			}
+
 			// Skip if same size
-			if (
-				lastSizeRef.current?.cols === cols &&
-				lastSizeRef.current?.rows === rows
-			) {
+			if (previousSize?.cols === cols && previousSize?.rows === rows) {
 				return;
 			}
-			lastSizeRef.current = { cols, rows };
 
 			// Clear pending resize
 			if (resizeTimeoutRef.current) {

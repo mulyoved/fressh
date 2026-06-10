@@ -105,7 +105,7 @@ void test('DirectMux resize window command targets explicit terminal size', () =
 			cols: 42,
 			rows: 17,
 		}),
-		'tmux resize-window -t main -x 42 -y 17 \\; set-window-option -t main window-size latest',
+		'tmux resize-window -t main -x 42 -y 17 \\; set-window-option -t main window-size manual',
 	);
 	assert.equal(
 		buildDirectTmuxResizeWindowCommand({
@@ -113,7 +113,7 @@ void test('DirectMux resize window command targets explicit terminal size', () =
 			cols: 88,
 			rows: 33,
 		}),
-		"tmux resize-window -t 'main'\\''s work' -x 88 -y 33 \\; set-window-option -t 'main'\\''s work' window-size latest",
+		"tmux resize-window -t 'main'\\''s work' -x 88 -y 33 \\; set-window-option -t 'main'\\''s work' window-size manual",
 	);
 });
 

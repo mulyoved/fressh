@@ -21,6 +21,7 @@ export type ManualTerminalFitRunnerDeps<Connection> = {
 	getTerminalSize: () => TerminalFitSize | null;
 	getXterm: () => ManualTerminalFitXterm | null;
 	getTargetName: () => string;
+	waitForTerminalSizeAfterFit?: () => Promise<TerminalFitSize | null>;
 	resizePty: (cols: number, rows: number) => Promise<void>;
 	executeSideChannelCommand: (
 		connection: Connection,
@@ -51,8 +52,9 @@ export function createManualTerminalFitRunner<Connection>(
 				return;
 			}
 
+			const terminalSizeAfterFit = deps.waitForTerminalSizeAfterFit?.();
 			xterm.fit();
-			const terminalSize = deps.getTerminalSize();
+			const terminalSize = (await terminalSizeAfterFit) ?? deps.getTerminalSize();
 			if (!terminalSize) {
 				deps.showFailure(
 					'Fit terminal failed',

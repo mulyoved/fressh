@@ -24,6 +24,7 @@ function createHarness(
 		getTerminalSize: () => ({ cols: 42, rows: 17 }),
 		getXterm: () => xterm,
 		getTargetName: () => 'main',
+		waitForTerminalSizeAfterFit: undefined,
 		resizePty: async (cols, rows) => {
 			calls.push(`resizePty:${cols}x${rows}`);
 		},
@@ -61,7 +62,23 @@ void test('manual terminal fit resizes local PTY and tmux window', async () => {
 	assert.deepEqual(harness.calls, [
 		'fit',
 		'resizePty:42x17',
-		'tmux:tmux resize-window -t main -x 42 -y 17 \\; set-window-option -t main window-size latest:30000',
+		'tmux:tmux resize-window -t main -x 42 -y 17 \\; set-window-option -t main window-size manual:30000',
+	]);
+	assert.deepEqual(harness.failures, []);
+});
+
+void test('manual terminal fit waits for size measured after fit', async () => {
+	const harness = createHarness({
+		getTerminalSize: () => ({ cols: 120, rows: 40 }),
+		waitForTerminalSizeAfterFit: async () => ({ cols: 42, rows: 17 }),
+	});
+
+	await harness.run();
+
+	assert.deepEqual(harness.calls, [
+		'fit',
+		'resizePty:42x17',
+		'tmux:tmux resize-window -t main -x 42 -y 17 \\; set-window-option -t main window-size manual:30000',
 	]);
 	assert.deepEqual(harness.failures, []);
 });
