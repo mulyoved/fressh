@@ -44,7 +44,10 @@ import {
 	createDiffBrowserActionErrorInput,
 	type BrowserActionErrorInput,
 } from './shell-browser-action-error-inputs';
-import { runGitHubTargetOpenRequest } from './shell-github-target-request';
+import {
+	GitHubRepositoryResolutionError,
+	runGitHubTargetOpenRequest,
+} from './shell-github-target-request';
 import { runHostUrlReadRequest } from './shell-host-url-read-request';
 import { runHostUrlSubmitRequest } from './shell-host-url-submit-request';
 import { type DiscoveredSkill } from './skill-discovery';
@@ -844,9 +847,12 @@ export function useBrowserActionsController<TConnection>(
 		const output = await runHostBrowserCommand(command, 10_000);
 		const repository = parseGitHubRepositoryResolutionOutput(output);
 		if (!repository) {
-			throw new Error(
-				'Could not resolve GitHub repository for current window.',
-			);
+			throw new GitHubRepositoryResolutionError({
+				message: 'Could not resolve GitHub repository for current window.',
+				panePath,
+				command,
+				output,
+			});
 		}
 		return { repository, panePath, command, output };
 	}, [resolveHostBrowserPanePath, runHostBrowserCommand]);

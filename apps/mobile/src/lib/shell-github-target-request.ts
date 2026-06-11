@@ -12,6 +12,30 @@ export type GitHubRepositoryResolutionContext = {
 	output?: string;
 };
 
+export class GitHubRepositoryResolutionError extends Error {
+	readonly panePath?: string;
+	readonly command?: string;
+	readonly output?: string;
+
+	constructor({
+		message,
+		panePath,
+		command,
+		output,
+	}: {
+		message: string;
+		panePath?: string;
+		command?: string;
+		output?: string;
+	}) {
+		super(message);
+		this.name = 'GitHubRepositoryResolutionError';
+		this.panePath = panePath;
+		this.command = command;
+		this.output = output;
+	}
+}
+
 export function runGitHubTargetOpenRequest({
 	target,
 	requestId,
@@ -42,15 +66,21 @@ export function runGitHubTargetOpenRequest({
 			await openAndroidUrl(url);
 		} catch (err) {
 			if (!requestId.isCurrent(id)) return;
-			showError({
+			const resolutionError =
+				err instanceof GitHubRepositoryResolutionError ? err : null;
+			const input: BrowserActionErrorInput = {
 				action: target === 'issues' ? 'GitHub Issues' : 'GitHub Pull Requests',
 				title,
 				message: getErrorMessage(err),
-				panePath: context?.panePath,
-				command: context?.command,
-				output: context?.output,
-				url,
-			});
+			};
+			const panePath = context?.panePath ?? resolutionError?.panePath;
+			const command = context?.command ?? resolutionError?.command;
+			const output = context?.output ?? resolutionError?.output;
+			if (panePath !== undefined) input.panePath = panePath;
+			if (command !== undefined) input.command = command;
+			if (output !== undefined) input.output = output;
+			if (url !== undefined) input.url = url;
+			showError(input);
 		}
 	})();
 }

@@ -22,7 +22,10 @@ import {
 	createHostUrlOpenBrowserActionErrorInput,
 	createHostUrlSubmitBrowserActionErrorInput,
 } from '../../src/lib/shell-browser-action-error-inputs';
-import { runGitHubTargetOpenRequest } from '../../src/lib/shell-github-target-request';
+import {
+	GitHubRepositoryResolutionError,
+	runGitHubTargetOpenRequest,
+} from '../../src/lib/shell-github-target-request';
 import { runHostUrlReadRequest } from '../../src/lib/shell-host-url-read-request';
 import { runHostUrlSubmitRequest } from '../../src/lib/shell-host-url-submit-request';
 
@@ -273,6 +276,60 @@ void test('GitHub target request suppresses stale errors', async () => {
 	await deferredResolution.promise;
 	await Promise.resolve();
 	assert.deepEqual(reports, []);
+});
+
+void test('GitHub target request reports repository parse failures with context', async () => {
+	let currentId = 0;
+	const requestId: RequestIdHandle = {
+		next: () => {
+			currentId += 1;
+			return currentId;
+		},
+		isCurrent: (id) => id === currentId,
+		invalidate: () => {
+			currentId += 1;
+		},
+	};
+	const reports: {
+		action: string;
+		title: string;
+		message: string;
+		panePath?: string;
+		command?: string;
+		output?: string;
+	}[] = [];
+
+	runGitHubTargetOpenRequest({
+		target: 'issues',
+		requestId,
+		resolveRepositoryContext: async () => {
+			throw new GitHubRepositoryResolutionError({
+				message: 'Could not resolve GitHub repository for current window.',
+				panePath: '/tmp/project',
+				command: 'git remote get-url origin',
+				output: 'not a GitHub remote',
+			});
+		},
+		openAndroidUrl: async () => {
+			throw new Error('should not open without repository');
+		},
+		showError: (report) => reports.push(report),
+		getErrorMessage: (error) =>
+			error instanceof Error ? error.message : String(error),
+	});
+
+	await Promise.resolve();
+	await Promise.resolve();
+	assert.deepEqual(reports, [
+		{
+			action: 'GitHub Issues',
+			title: 'GitHub Issues failed',
+			message: 'Could not resolve GitHub repository for current window.',
+			panePath: '/tmp/project',
+			command: 'git remote get-url origin',
+			output: 'not a GitHub remote',
+		},
+	]);
 });
 
 void test('host URL read request reports existing saved URL open failures with context', async () => {
