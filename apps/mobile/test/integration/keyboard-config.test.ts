@@ -290,6 +290,21 @@ void test('phone base keyboard exposes role and workspace navigation controls', 
 	);
 });
 
+void test('tmux keyboard restart key uses mobile restart action instead of raw Alt-Shift-X bytes', () => {
+	const config = getBundledShellConfig();
+	const tmuxKeyboard = config.keyboards.find(
+		(keyboard) => keyboard.id === 'tmux_keyboard',
+	);
+	assert.ok(tmuxKeyboard);
+
+	assert.deepEqual(tmuxKeyboard.grid[0]?.[1], {
+		type: 'action',
+		actionId: 'RESTART_CODEX',
+		label: 'Restart',
+		icon: null,
+	});
+});
+
 void test('bundled keyboards do not expose tmux history actions', () => {
 	const config = getBundledShellConfig();
 

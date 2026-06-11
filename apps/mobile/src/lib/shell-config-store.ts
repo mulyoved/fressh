@@ -19,6 +19,7 @@ const cacheKeys = {
 	json: 'shellConfig.json',
 	lastLoadedAt: 'shellConfig.lastLoadedAt',
 	lastError: 'shellConfig.lastError',
+	lastVersion: 'shellConfig.lastVersion',
 } as const;
 
 export const SHELL_CONFIG_RAW_URL =
@@ -33,6 +34,21 @@ function parseUpdatedAtTime(config: ShellConfig): number | null {
 	return Number.isNaN(time) ? null : time;
 }
 
+function compareConfigVersions(left: string, right: string): number | null {
+	if (!/^\d+(?:[-.]\d+)*$/.test(left) || !/^\d+(?:[-.]\d+)*$/.test(right)) {
+		return null;
+	}
+	const leftParts = left.split(/[-.]/).map(Number);
+	const rightParts = right.split(/[-.]/).map(Number);
+	const maxLength = Math.max(leftParts.length, rightParts.length);
+	for (let index = 0; index < maxLength; index += 1) {
+		const leftPart = leftParts[index] ?? 0;
+		const rightPart = rightParts[index] ?? 0;
+		if (leftPart !== rightPart) return leftPart - rightPart;
+	}
+	return 0;
+}
+
 function isStaleComparedToBundled({
 	cachedConfig,
 	bundledConfig,
@@ -43,26 +59,44 @@ function isStaleComparedToBundled({
 	const cachedTime = parseUpdatedAtTime(cachedConfig);
 	const bundledTime = parseUpdatedAtTime(bundledConfig);
 	if (cachedTime === null || bundledTime === null) return false;
-	return cachedTime < bundledTime;
+	if (cachedTime < bundledTime) return true;
+	if (cachedTime > bundledTime) return false;
+	const versionOrder = compareConfigVersions(
+		cachedConfig.version,
+		bundledConfig.version,
+	);
+	return versionOrder !== null && versionOrder < 0;
 }
 
 function clearCachedRuntimeMetadata(cache: ShellConfigCacheStorage) {
 	cache.delete(cacheKeys.lastLoadedAt);
 	cache.delete(cacheKeys.lastError);
+	cache.delete(cacheKeys.lastVersion);
 }
 
 function isRuntimeMetadataStaleComparedToBundled({
 	lastLoadedAt,
+	lastVersion,
 	bundledConfig,
 }: {
 	lastLoadedAt: string | null;
+	lastVersion: string | null;
 	bundledConfig: ShellConfig;
 }): boolean {
-	if (!lastLoadedAt) return false;
+	if (!lastLoadedAt && !lastVersion) return false;
+	if (!lastVersion) return true;
+	if (!lastLoadedAt) return true;
 	const loadedTime = Date.parse(lastLoadedAt);
 	const bundledTime = parseUpdatedAtTime(bundledConfig);
 	if (Number.isNaN(loadedTime) || bundledTime === null) return false;
-	return loadedTime < bundledTime;
+	const versionOrder = compareConfigVersions(
+		lastVersion,
+		bundledConfig.version,
+	);
+	if (versionOrder !== null && versionOrder < 0) return true;
+	if (loadedTime < bundledTime) return true;
+	if (loadedTime > bundledTime) return false;
+	return false;
 }
 
 export function loadInitialShellConfigState({
@@ -75,6 +109,7 @@ export function loadInitialShellConfigState({
 	const cachedText = cache.getString(cacheKeys.json);
 	const lastLoadedAt = cache.getString(cacheKeys.lastLoadedAt) ?? null;
 	const lastError = cache.getString(cacheKeys.lastError) ?? null;
+	const lastVersion = cache.getString(cacheKeys.lastVersion) ?? null;
 
 	if (cachedText) {
 		try {
@@ -98,6 +133,7 @@ export function loadInitialShellConfigState({
 		} catch (error) {
 			cache.delete(cacheKeys.json);
 			cache.delete(cacheKeys.lastLoadedAt);
+			cache.delete(cacheKeys.lastVersion);
 			const message = toErrorMessage(error);
 			cache.set(cacheKeys.lastError, message);
 			return {
@@ -112,6 +148,7 @@ export function loadInitialShellConfigState({
 	if (
 		isRuntimeMetadataStaleComparedToBundled({
 			lastLoadedAt,
+			lastVersion,
 			bundledConfig,
 		})
 	) {
@@ -143,7 +180,9 @@ export async function fetchRemoteShellConfigText({
 		headers: { Accept: 'application/json' },
 	});
 	if (!response.ok) {
-		throw new Error(`Remote shell config request failed with ${response.status}`);
+		throw new Error(
+			`Remote shell config request failed with ${response.status}`,
+		);
 	}
 	return response.text();
 }
@@ -163,6 +202,7 @@ export async function reloadShellConfigFromRemote({
 		const loadedAt = now();
 		cache.set(cacheKeys.json, text);
 		cache.set(cacheKeys.lastLoadedAt, loadedAt);
+		cache.set(cacheKeys.lastVersion, config.version);
 		cache.delete(cacheKeys.lastError);
 		return {
 			config,

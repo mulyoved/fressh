@@ -1,5 +1,5 @@
 {
-	"version": "2026-06-10.1",
+	"version": "2026-06-10.2",
 	"updatedAt": "2026-06-10T00:00:00.000Z",
 	"defaultKeyboardId": "phone_base",
 	"activeKeyboardIds": [
@@ -488,8 +488,8 @@
 						"icon": "X"
 					},
 					{
-						"type": "bytes",
-						"bytes": [27, 88],
+						"type": "action",
+						"actionId": "RESTART_CODEX",
 						"label": "Restart",
 						"icon": null
 					},
@@ -1134,17 +1134,10 @@
 					]
 				},
 				{
-					"type": "preset",
+					"type": "bridge",
 					"label": "restart codex",
-					"steps": [
-						{
-							"type": "text",
-							"data": "mdev codex restart \"$(mdev tmux app context --session main | sed -n 's/.*\"target\":\"\\([^\"]*\\)\".*/\\1/p')\""
-						},
-						{
-							"type": "enter"
-						}
-					]
+					"operation": "codex.restart",
+					"timeoutMs": 10000
 				}
 			]
 		},

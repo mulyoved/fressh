@@ -81,6 +81,7 @@ void test('initial shell config state prefers cached config when it is valid', a
 	assert.equal(state.source, 'cache');
 	assert.equal(state.config.version, 'runtime-v2');
 	assert.equal(state.lastError, null);
+	assert.equal(storage.getString('shellConfig.lastVersion'), 'runtime-v2');
 });
 
 void test('initial shell config state ignores stale cached config', async () => {
@@ -105,6 +106,93 @@ void test('initial shell config state ignores stale cached config', async () => 
 	assert.equal(state.source, 'bundled');
 	assert.equal(state.config.version, bundledConfig.version);
 	assert.equal(state.lastError, null);
+	assert.equal(storage.getString('shellConfig.lastVersion'), undefined);
+});
+
+void test('initial shell config state ignores cached config with older version and same timestamp', () => {
+	const storage = createMemoryStorage();
+	const cachedText = JSON.stringify({
+		...bundledConfig,
+		version: '2026-06-10.1',
+		updatedAt: bundledConfig.updatedAt,
+	});
+	storage.set('shellConfig.json', cachedText);
+	storage.set('shellConfig.lastLoadedAt', '2026-06-10T00:05:00.000Z');
+	storage.set('shellConfig.lastError', 'Unsupported actionId OLD_RESTART');
+	storage.set('shellConfig.lastVersion', '2026-06-10.1');
+
+	const state = loadInitialShellConfigState({
+		storage,
+		bundledConfig,
+	});
+
+	assert.equal(state.source, 'bundled');
+	assert.equal(state.config.version, bundledConfig.version);
+	assert.equal(state.lastLoadedAt, null);
+	assert.equal(state.lastError, null);
+	assert.equal(storage.getString('shellConfig.json'), undefined);
+	assert.equal(storage.getString('shellConfig.lastLoadedAt'), undefined);
+	assert.equal(storage.getString('shellConfig.lastError'), undefined);
+	assert.equal(storage.getString('shellConfig.lastVersion'), undefined);
+});
+
+void test('initial shell config state clears legacy runtime metadata when cached config is missing', () => {
+	const storage = createMemoryStorage();
+	storage.set('shellConfig.lastLoadedAt', '2026-06-10T00:05:00.000Z');
+	storage.set('shellConfig.lastError', 'Unsupported actionId OLD_RESTART');
+
+	const state = loadInitialShellConfigState({
+		storage,
+		bundledConfig,
+	});
+
+	assert.equal(state.source, 'bundled');
+	assert.equal(state.config.version, bundledConfig.version);
+	assert.equal(state.lastLoadedAt, null);
+	assert.equal(state.lastError, null);
+	assert.equal(storage.getString('shellConfig.lastLoadedAt'), undefined);
+	assert.equal(storage.getString('shellConfig.lastError'), undefined);
+});
+
+void test('initial shell config state clears runtime metadata with older version when cached config is missing', () => {
+	const storage = createMemoryStorage();
+	storage.set('shellConfig.lastLoadedAt', '2026-06-10T00:05:00.000Z');
+	storage.set('shellConfig.lastError', 'Unsupported actionId OLD_RESTART');
+	storage.set('shellConfig.lastVersion', '2026-06-10.1');
+
+	const state = loadInitialShellConfigState({
+		storage,
+		bundledConfig,
+	});
+
+	assert.equal(state.source, 'bundled');
+	assert.equal(state.config.version, bundledConfig.version);
+	assert.equal(state.lastLoadedAt, null);
+	assert.equal(state.lastError, null);
+	assert.equal(storage.getString('shellConfig.lastLoadedAt'), undefined);
+	assert.equal(storage.getString('shellConfig.lastError'), undefined);
+	assert.equal(storage.getString('shellConfig.lastVersion'), undefined);
+});
+
+void test('initial shell config state keeps cached config with newer version and same timestamp', () => {
+	const storage = createMemoryStorage();
+	const cachedText = JSON.stringify({
+		...bundledConfig,
+		version: '2026-06-10.10',
+		updatedAt: bundledConfig.updatedAt,
+	});
+	storage.set('shellConfig.json', cachedText);
+	storage.set('shellConfig.lastLoadedAt', '2026-06-10T00:05:00.000Z');
+
+	const state = loadInitialShellConfigState({
+		storage,
+		bundledConfig,
+	});
+
+	assert.equal(state.source, 'cache');
+	assert.equal(state.config.version, '2026-06-10.10');
+	assert.equal(state.lastLoadedAt, '2026-06-10T00:05:00.000Z');
+	assert.equal(storage.getString('shellConfig.json'), cachedText);
 });
 
 void test('remote reload keeps the current config when fetched json is invalid', async () => {
