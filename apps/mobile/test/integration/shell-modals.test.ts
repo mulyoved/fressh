@@ -164,6 +164,7 @@ void test('shell Browser action error input distinguishes saved URL open failure
 			slot: 'window-url',
 			message: 'Android could not open URL',
 			panePath: '/tmp/project',
+			command: 'mdev tmux url get window-url',
 			url: 'https://example.test',
 		}),
 		{
@@ -171,6 +172,7 @@ void test('shell Browser action error input distinguishes saved URL open failure
 			title: 'Open URL failed',
 			message: 'Android could not open URL',
 			panePath: '/tmp/project',
+			command: 'mdev tmux url get window-url',
 			url: 'https://example.test',
 		},
 	);
@@ -248,6 +250,11 @@ void test('host URL submit request reports open-after-save failures as open fail
 			title: 'Open URL failed',
 			message: 'Android could not open URL',
 			panePath: '/tmp/project',
+			command: buildTmuxWindowConfigSetCommand(
+				'window-url',
+				'/tmp/project',
+				'https://example.test/',
+			),
 			url: 'https://example.test/',
 		},
 	]);
@@ -483,6 +490,11 @@ void test('host URL submit request reports command failures as save failures', a
 			title: 'Save URL failed',
 			message: 'tmux config set failed',
 			panePath: '/tmp/project',
+			command: buildTmuxWindowConfigSetCommand(
+				'window-url',
+				'/tmp/project',
+				'https://example.test/',
+			),
 			url: 'https://example.test/',
 		},
 	]);
@@ -722,6 +734,7 @@ void test('current Diffity request reports Android URL open failures with extrac
 			message: 'cannot open URL',
 			panePath: '/tmp/project',
 			command: "cd '/tmp/project' && mdev diffity share",
+			output: 'created https://diffity.example/current',
 			url: 'https://diffity.example/current',
 		},
 	]);

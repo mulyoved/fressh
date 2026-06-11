@@ -50,11 +50,13 @@ export function runHostUrlSubmitRequest({
 		let operation: 'save' | 'open' = 'save';
 		setHostUrlModalSubmitting(true);
 		setHostUrlModalError(null);
+		const command = buildTmuxWindowConfigSetCommand(
+			state.slot,
+			state.panePath,
+			url,
+		);
 		try {
-			await runHostBrowserCommand(
-				buildTmuxWindowConfigSetCommand(state.slot, state.panePath, url),
-				10_000,
-			);
+			await runHostBrowserCommand(command, 10_000);
 			if (!hostUrlSubmitRequestId.isCurrent(id)) return;
 			if (state.mode === 'open-missing') {
 				operation = 'open';
@@ -72,12 +74,14 @@ export function runHostUrlSubmitRequest({
 							slot: state.slot,
 							message,
 							panePath: state.panePath,
+							command,
 							url,
 						})
 					: createHostUrlSubmitBrowserActionErrorInput({
 							slot: state.slot,
 							message,
 							panePath: state.panePath,
+							command,
 							url,
 						}),
 			);

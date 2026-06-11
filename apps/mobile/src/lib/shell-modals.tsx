@@ -898,10 +898,22 @@ export function useBrowserActionsController<TConnection>(
 					? 'GitHub Issues failed'
 					: 'GitHub Pull Requests failed';
 			void (async () => {
+				let panePath: string | undefined;
+				let command: string | undefined;
+				let output: string | undefined;
+				let url: string | undefined;
 				try {
-					const repository = await resolveCurrentGitHubRepository();
+					panePath = await resolveHostBrowserPanePath();
+					command = buildResolveGitHubRepositoryCommand(panePath);
+					output = await runHostBrowserCommand(command, 10_000);
+					const repository = parseGitHubRepositoryResolutionOutput(output);
+					if (!repository) {
+						throw new Error(
+							'Could not resolve GitHub repository for current window.',
+						);
+					}
 					if (!browserGitHubTargetRequestId.isCurrent(id)) return;
-					const url = buildGitHubRepositoryTargetUrl(repository, target);
+					url = buildGitHubRepositoryTargetUrl(repository, target);
 					await openAndroidUrl(url);
 				} catch (err) {
 					if (!browserGitHubTargetRequestId.isCurrent(id)) return;
@@ -910,6 +922,10 @@ export function useBrowserActionsController<TConnection>(
 							target === 'issues' ? 'GitHub Issues' : 'GitHub Pull Requests',
 						title,
 						message: getErrorMessage(err),
+						panePath,
+						command,
+						output,
+						url,
 					});
 				}
 			})();
@@ -918,7 +934,8 @@ export function useBrowserActionsController<TConnection>(
 			browserGitHubTargetRequestId,
 			getErrorMessage,
 			openAndroidUrl,
-			resolveCurrentGitHubRepository,
+			resolveHostBrowserPanePath,
+			runHostBrowserCommand,
 			showError,
 		],
 	);
@@ -969,11 +986,13 @@ export function useBrowserActionsController<TConnection>(
 				resolvePaneContext: resolveHostBrowserPaneContext,
 				runHostBrowserCommand,
 				setOpen,
-				showError: (title, message) =>
+				showError: (report) =>
 					showError({
 						action: mode === 'pick' ? 'Pick' : 'Open',
-						title,
-						message,
+						title: report.title,
+						message: report.message,
+						panePath: report.panePath,
+						command: report.command,
 					}),
 				getErrorMessage,
 			});
@@ -1003,15 +1022,16 @@ export function useBrowserActionsController<TConnection>(
 			setOpen(false);
 			const id = hostUrlReadRequestId.next();
 			let resolvedPanePath: string | undefined;
+			let command: string | undefined;
+			let openedUrl: string | undefined;
+			let operation: 'read' | 'open' = 'read';
 			void (async () => {
 				try {
 					const panePath = await resolveHostBrowserPanePath();
 					resolvedPanePath = panePath;
 					if (!hostUrlReadRequestId.isCurrent(id)) return;
-					const value = await runHostBrowserCommand(
-						buildTmuxWindowConfigGetCommand(slot, panePath),
-						10_000,
-					);
+					command = buildTmuxWindowConfigGetCommand(slot, panePath);
+					const value = await runHostBrowserCommand(command, 10_000);
 					if (!hostUrlReadRequestId.isCurrent(id)) return;
 					const savedUrl = value.trim();
 					if (savedUrl) {
@@ -1027,6 +1047,8 @@ export function useBrowserActionsController<TConnection>(
 							return;
 						}
 						if (parsed.type === 'empty') return;
+						operation = 'open';
+						openedUrl = parsed.url;
 						await openAndroidUrl(parsed.url);
 						return;
 					}
@@ -1041,9 +1063,14 @@ export function useBrowserActionsController<TConnection>(
 					if (!hostUrlReadRequestId.isCurrent(id)) return;
 					showError({
 						action: getHostBrowserUrlSlotLabel(slot),
-						title: `${getHostBrowserUrlSlotLabel(slot)} failed`,
+						title:
+							operation === 'open'
+								? `Open ${getHostBrowserUrlSlotLabel(slot)} failed`
+								: `${getHostBrowserUrlSlotLabel(slot)} failed`,
 						message: getErrorMessage(err),
 						panePath: resolvedPanePath,
+						command,
+						url: openedUrl,
 					});
 				}
 			})();
@@ -1063,15 +1090,14 @@ export function useBrowserActionsController<TConnection>(
 			setOpen(false);
 			const id = hostUrlReadRequestId.next();
 			let resolvedPanePath: string | undefined;
+			let command: string | undefined;
 			void (async () => {
 				try {
 					const panePath = await resolveHostBrowserPanePath();
 					resolvedPanePath = panePath;
 					if (!hostUrlReadRequestId.isCurrent(id)) return;
-					const value = await runHostBrowserCommand(
-						buildTmuxWindowConfigGetCommand(slot, panePath),
-						10_000,
-					);
+					command = buildTmuxWindowConfigGetCommand(slot, panePath);
+					const value = await runHostBrowserCommand(command, 10_000);
 					if (!hostUrlReadRequestId.isCurrent(id)) return;
 					setHostUrlModalError(null);
 					setHostUrlModalState({
@@ -1087,6 +1113,7 @@ export function useBrowserActionsController<TConnection>(
 						title: `Edit ${getHostBrowserUrlSlotLabel(slot)} failed`,
 						message: getErrorMessage(err),
 						panePath: resolvedPanePath,
+						command,
 					});
 				}
 			})();

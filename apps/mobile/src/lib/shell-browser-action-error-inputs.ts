@@ -28,40 +28,48 @@ export function createHostUrlSubmitBrowserActionErrorInput({
 	slot,
 	message,
 	panePath,
+	command,
 	url,
 }: {
 	slot: HostBrowserUrlSlot;
 	message: string;
 	panePath: string;
+	command?: string;
 	url?: string;
 }): BrowserActionErrorInput {
 	const label = getHostBrowserUrlSlotLabel(slot);
-	return {
+	const input: BrowserActionErrorInput = {
 		action: label,
 		title: `Save ${label} failed`,
 		message,
 		panePath,
 		url,
 	};
+	if (command !== undefined) input.command = command;
+	return input;
 }
 
 export function createHostUrlOpenBrowserActionErrorInput({
 	slot,
 	message,
 	panePath,
+	command,
 	url,
 }: {
 	slot: HostBrowserUrlSlot;
 	message: string;
 	panePath: string;
+	command?: string;
 	url: string;
 }): BrowserActionErrorInput {
 	const label = getHostBrowserUrlSlotLabel(slot);
-	return {
+	const input: BrowserActionErrorInput = {
 		action: label,
 		title: `Open ${label} failed`,
 		message,
 		panePath,
 		url,
 	};
+	if (command !== undefined) input.command = command;
+	return input;
 }

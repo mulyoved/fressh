@@ -90,6 +90,7 @@ export function runHostDiffityOpenRequest({
 			};
 			if (panePath !== undefined) report.panePath = panePath;
 			if (command !== undefined) report.command = command;
+			if (shareResult?.output !== undefined) report.output = shareResult.output;
 			if (url !== null) report.url = url;
 			showError(report);
 		} finally {
