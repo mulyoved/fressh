@@ -82,10 +82,16 @@ void test('browser action error alert copies formatted report when Copy Error is
 void test('browser action error alert logs copy failures without throwing', async () => {
 	let buttons: BrowserActionErrorAlertButton[] = [];
 	const warnings: string[] = [];
+	const alerts: {
+		title: string;
+		message: string;
+		buttons: BrowserActionErrorAlertButton[];
+	}[] = [];
 	const copyError = new Error('clipboard unavailable');
 
 	showBrowserActionErrorReport(createReport(), {
-		alert: (_title, _message, alertButtons) => {
+		alert: (title, message, alertButtons) => {
+			alerts.push({ title, message, buttons: alertButtons });
 			buttons = alertButtons;
 		},
 		copyText: async () => {
@@ -105,4 +111,14 @@ void test('browser action error alert logs copy failures without throwing', asyn
 	assert.deepEqual(warnings, [
 		'copy Browser action error failed: clipboard unavailable',
 	]);
+	assert.equal(alerts.length, 2);
+	assert.equal(alerts[1]?.title, 'Copy Error failed');
+	assert.match(
+		alerts[1]?.message ?? '',
+		/^Clipboard copy failed\. Error report:\n\nFressh Browser Action Error/,
+	);
+	assert.deepEqual(
+		alerts[1]?.buttons.map((button) => button.text),
+		['OK'],
+	);
 });

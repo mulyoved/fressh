@@ -274,7 +274,10 @@ void test('detected open controller starts accepted request and clears in-flight
 		setOpen: (open) => {
 			openStates.push(open);
 		},
-		showError: (report) => {
+		showError: (title, message) => {
+			errors.push(`${title}: ${message}`);
+		},
+		showErrorReport: (report) => {
 			errors.push(`${report.title}: ${report.message}`);
 		},
 		getErrorMessage: (error) =>
@@ -314,11 +317,14 @@ void test('detected open controller rejects busy request without closing modal',
 		setOpen: () => {
 			throw new Error('setOpen should not run');
 		},
-		showError: (report) => {
-			assert.deepEqual(report, {
-				title: 'Open already running',
-				message: 'Wait for the current browser action to finish.',
-			});
+		showError: (title, message) => {
+			assert.deepEqual(
+				{ title, message },
+				{
+					title: 'Open already running',
+					message: 'Wait for the current browser action to finish.',
+				},
+			);
 		},
 		getErrorMessage: (error) =>
 			error instanceof Error ? error.message : String(error),
@@ -362,7 +368,10 @@ void test('detected open controller reports mode-specific failures and clears in
 			inFlightRef,
 			requestId: createRequestId(),
 			setOpen: () => {},
-			showError: (report) => {
+			showError: (title, message) => {
+				errors.push({ title, message });
+			},
+			showErrorReport: (report) => {
 				errors.push(report);
 			},
 			getErrorMessage: (error) =>
@@ -392,6 +401,35 @@ void test('detected open controller reports mode-specific failures and clears in
 	}
 });
 
+void test('detected open controller supports legacy two-argument error callback', async () => {
+	const inFlightRef = { current: false };
+	const errors: string[] = [];
+	const result = runDetectedOpenControllerRequest({
+		mode: 'auto',
+		inFlightRef,
+		requestId: createRequestId(),
+		setOpen: () => {},
+		showError: (title, message) => {
+			errors.push(`${title}: ${message}`);
+		},
+		getErrorMessage: (error) =>
+			error instanceof Error ? error.message : String(error),
+		resolvePaneContext: async () => ({
+			paneId: '%9',
+			paneTty: '/dev/pts/9',
+			panePath: '/tmp/project',
+		}),
+		runHostBrowserCommand: async () => {
+			throw new Error('remote failed');
+		},
+	});
+
+	assert.equal(result.accepted, true);
+	if (result.accepted) await result.completion;
+	assert.deepEqual(errors, ['Open failed: remote failed']);
+	assert.equal(inFlightRef.current, false);
+});
+
 void test('detected open controller suppresses stale request side effects', async () => {
 	const inFlightRef = { current: false };
 	const requestId = createRequestId();
@@ -406,7 +444,10 @@ void test('detected open controller suppresses stale request side effects', asyn
 		inFlightRef,
 		requestId,
 		setOpen: () => {},
-		showError: (report) => {
+		showError: (title, message) => {
+			errors.push(`${title}: ${message}`);
+		},
+		showErrorReport: (report) => {
 			errors.push(`${report.title}: ${report.message}`);
 		},
 		getErrorMessage: (error) =>
@@ -453,7 +494,10 @@ void test('detected open controller suppresses stale command rejection', async (
 		inFlightRef,
 		requestId,
 		setOpen: () => {},
-		showError: (report) => {
+		showError: (title, message) => {
+			errors.push(`${title}: ${message}`);
+		},
+		showErrorReport: (report) => {
 			errors.push(`${report.title}: ${report.message}`);
 		},
 		getErrorMessage: (error) =>

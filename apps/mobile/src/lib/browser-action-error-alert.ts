@@ -30,11 +30,14 @@ export function showBrowserActionErrorReport(
 		{
 			text: 'Copy Error',
 			onPress: () => {
-				void deps
-					.copyText(copyText)
-					.catch((error: unknown) =>
-						deps.warn('copy Browser action error failed', error),
+				void deps.copyText(copyText).catch((error: unknown) => {
+					deps.warn('copy Browser action error failed', error);
+					deps.alert(
+						'Copy Error failed',
+						`Clipboard copy failed. Error report:\n\n${copyText}`,
+						[{ text: 'OK' }],
 					);
+				});
 			},
 		},
 		{ text: 'OK' },

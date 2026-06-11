@@ -78,7 +78,8 @@ export type RunDetectedOpenControllerRequestDeps =
 		inFlightRef: DetectedOpenInFlightRef;
 		requestId: DetectedOpenRequestId;
 		setOpen: (open: boolean) => void;
-		showError: (report: DetectedOpenErrorReport) => void;
+		showError: (title: string, message: string) => void;
+		showErrorReport?: (report: DetectedOpenErrorReport) => void;
 		getErrorMessage: (error: unknown) => string;
 	};
 
@@ -173,16 +174,20 @@ export function runDetectedOpenControllerRequest({
 	runHostBrowserCommand,
 	setOpen,
 	showError,
+	showErrorReport,
 	getErrorMessage,
 }: RunDetectedOpenControllerRequestDeps): DetectedOpenControllerRequestResult {
 	if (
 		!tryBeginDetectedOpenRequest({
 			inFlightRef,
 			onBusy: () => {
-				showError({
-					title: 'Open already running',
-					message: 'Wait for the current browser action to finish.',
-				});
+				showDetectedOpenError(
+					{ showError, showErrorReport },
+					{
+						title: 'Open already running',
+						message: 'Wait for the current browser action to finish.',
+					},
+				);
 			},
 		})
 	) {
@@ -200,12 +205,15 @@ export function runDetectedOpenControllerRequest({
 			await runHostBrowserCommand(command, getDetectedOpenTimeoutMs(mode));
 		} catch (err) {
 			if (!requestId.isCurrent(id)) return;
-			showError({
-				title: mode === 'pick' ? 'Pick failed' : 'Open failed',
-				message: getErrorMessage(err),
-				panePath: context?.panePath,
-				command,
-			});
+			showDetectedOpenError(
+				{ showError, showErrorReport },
+				{
+					title: mode === 'pick' ? 'Pick failed' : 'Open failed',
+					message: getErrorMessage(err),
+					panePath: context?.panePath,
+					command,
+				},
+			);
 		} finally {
 			if (requestId.isCurrent(id)) {
 				finishDetectedOpenRequest(inFlightRef);
@@ -213,4 +221,21 @@ export function runDetectedOpenControllerRequest({
 		}
 	})();
 	return { accepted: true, completion };
+}
+
+function showDetectedOpenError(
+	{
+		showError,
+		showErrorReport,
+	}: {
+		showError: (title: string, message: string) => void;
+		showErrorReport?: (report: DetectedOpenErrorReport) => void;
+	},
+	report: DetectedOpenErrorReport,
+) {
+	if (showErrorReport) {
+		showErrorReport(report);
+		return;
+	}
+	showError(report.title, report.message);
 }

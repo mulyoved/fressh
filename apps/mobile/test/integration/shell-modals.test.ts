@@ -6,7 +6,10 @@ import {
 } from '../../src/lib/browser-action-error-alert';
 import { createBrowserActionErrorReport } from '../../src/lib/browser-action-error-report';
 import { cleanupBrowserActionRequests } from '../../src/lib/browser-actions-request-cleanup';
-import { buildTmuxWindowConfigSetCommand } from '../../src/lib/host-browser-actions';
+import {
+	buildTmuxWindowConfigGetCommand,
+	buildTmuxWindowConfigSetCommand,
+} from '../../src/lib/host-browser-actions';
 import {
 	HostDiffityShareError,
 	runHostDiffityOpenRequest,
@@ -19,6 +22,8 @@ import {
 	createHostUrlOpenBrowserActionErrorInput,
 	createHostUrlSubmitBrowserActionErrorInput,
 } from '../../src/lib/shell-browser-action-error-inputs';
+import { runGitHubTargetOpenRequest } from '../../src/lib/shell-github-target-request';
+import { runHostUrlReadRequest } from '../../src/lib/shell-host-url-read-request';
 import { runHostUrlSubmitRequest } from '../../src/lib/shell-host-url-submit-request';
 
 const deferred = <T>() => {
@@ -119,8 +124,7 @@ void test('shell Diffity copyable report includes metadata and shell context', a
 	);
 
 	buttons[0]?.onPress?.();
-	await Promise.resolve();
-	await Promise.resolve();
+	await new Promise((resolve) => setTimeout(resolve, 0));
 
 	assert.deepEqual(copied, [
 		[
@@ -176,6 +180,210 @@ void test('shell Browser action error input distinguishes saved URL open failure
 			url: 'https://example.test',
 		},
 	);
+});
+
+void test('GitHub target request reports Android open failures with context', async () => {
+	let currentId = 0;
+	const requestId: RequestIdHandle = {
+		next: () => {
+			currentId += 1;
+			return currentId;
+		},
+		isCurrent: (id) => id === currentId,
+		invalidate: () => {
+			currentId += 1;
+		},
+	};
+	const reports: {
+		action: string;
+		title: string;
+		message: string;
+		panePath?: string;
+		command?: string;
+		output?: string;
+		url?: string;
+	}[] = [];
+
+	runGitHubTargetOpenRequest({
+		target: 'issues',
+		requestId,
+		resolveRepositoryContext: async () => ({
+			repository: 'owner/repo',
+			panePath: '/tmp/project',
+			command: 'git remote get-url origin',
+			output: 'owner/repo',
+		}),
+		openAndroidUrl: async () => {
+			throw new Error('Android could not open URL');
+		},
+		showError: (report) => reports.push(report),
+		getErrorMessage: (error) =>
+			error instanceof Error ? error.message : String(error),
+	});
+
+	await Promise.resolve();
+	await Promise.resolve();
+	assert.deepEqual(reports, [
+		{
+			action: 'GitHub Issues',
+			title: 'GitHub Issues failed',
+			message: 'Android could not open URL',
+			panePath: '/tmp/project',
+			command: 'git remote get-url origin',
+			output: 'owner/repo',
+			url: 'https://github.com/owner/repo/issues',
+		},
+	]);
+});
+
+void test('GitHub target request suppresses stale errors', async () => {
+	let currentId = 0;
+	const requestId: RequestIdHandle = {
+		next: () => {
+			currentId += 1;
+			return currentId;
+		},
+		isCurrent: (id) => id === currentId,
+		invalidate: () => {
+			currentId += 1;
+		},
+	};
+	const deferredResolution = deferred<{
+		repository: string;
+		panePath?: string;
+		command?: string;
+		output?: string;
+	}>();
+	const reports: unknown[] = [];
+
+	runGitHubTargetOpenRequest({
+		target: 'pulls',
+		requestId,
+		resolveRepositoryContext: () => deferredResolution.promise,
+		openAndroidUrl: async () => {
+			throw new Error('should not open stale URL');
+		},
+		showError: (report) => reports.push(report),
+		getErrorMessage: (error) =>
+			error instanceof Error ? error.message : String(error),
+	});
+	requestId.invalidate();
+
+	deferredResolution.resolve({ repository: 'owner/repo' });
+	await deferredResolution.promise;
+	await Promise.resolve();
+	assert.deepEqual(reports, []);
+});
+
+void test('host URL read request reports existing saved URL open failures with context', async () => {
+	let currentId = 0;
+	const requestId: RequestIdHandle = {
+		next: () => {
+			currentId += 1;
+			return currentId;
+		},
+		isCurrent: (id) => id === currentId,
+		invalidate: () => {
+			currentId += 1;
+		},
+	};
+	const reports: {
+		action: string;
+		title: string;
+		message: string;
+		panePath?: string;
+		command?: string;
+		url?: string;
+	}[] = [];
+	const modalStates: unknown[] = [];
+	const modalErrors: (string | null)[] = [];
+	const openStates: boolean[] = [];
+
+	runHostUrlReadRequest({
+		mode: 'open',
+		slot: 'window-url',
+		requestId,
+		resolvePanePath: async () => '/tmp/project',
+		runHostBrowserCommand: async () => 'https://example.test/',
+		openAndroidUrl: async () => {
+			throw new Error('Android could not open URL');
+		},
+		setOpen: (open) => openStates.push(open),
+		setHostUrlModalState: (state) => modalStates.push(state),
+		setHostUrlModalError: (message) => modalErrors.push(message),
+		showError: (report) => reports.push(report),
+		getErrorMessage: (error) =>
+			error instanceof Error ? error.message : String(error),
+	});
+
+	await new Promise((resolve) => setTimeout(resolve, 0));
+	assert.deepEqual(openStates, [false]);
+	assert.deepEqual(modalStates, []);
+	assert.deepEqual(modalErrors, []);
+	assert.equal(reports.length, 1);
+	assert.equal(reports[0]?.action, 'URL');
+	assert.equal(reports[0]?.title, 'Open URL failed');
+	assert.equal(reports[0]?.message, 'Android could not open URL');
+	assert.equal(reports[0]?.panePath, '/tmp/project');
+	assert.equal(
+		reports[0]?.command,
+		buildTmuxWindowConfigGetCommand('window-url', '/tmp/project'),
+	);
+	assert.equal(reports[0]?.url, 'https://example.test/');
+});
+
+void test('host URL read request reports edit read failures with command context', async () => {
+	let currentId = 0;
+	const requestId: RequestIdHandle = {
+		next: () => {
+			currentId += 1;
+			return currentId;
+		},
+		isCurrent: (id) => id === currentId,
+		invalidate: () => {
+			currentId += 1;
+		},
+	};
+	const reports: {
+		action: string;
+		title: string;
+		message: string;
+		panePath?: string;
+		command?: string;
+	}[] = [];
+
+	runHostUrlReadRequest({
+		mode: 'edit',
+		slot: 'window-url',
+		requestId,
+		resolvePanePath: async () => '/tmp/project',
+		runHostBrowserCommand: async () => {
+			throw new Error('tmux config get failed');
+		},
+		openAndroidUrl: async () => {
+			throw new Error('should not open while editing');
+		},
+		setOpen: () => {},
+		setHostUrlModalState: () => {
+			throw new Error('modal should not open on read failure');
+		},
+		setHostUrlModalError: () => {},
+		showError: (report) => reports.push(report),
+		getErrorMessage: (error) =>
+			error instanceof Error ? error.message : String(error),
+	});
+
+	await Promise.resolve();
+	await Promise.resolve();
+	assert.deepEqual(reports, [
+		{
+			action: 'URL',
+			title: 'Edit URL failed',
+			message: 'tmux config get failed',
+			panePath: '/tmp/project',
+			command: buildTmuxWindowConfigGetCommand('window-url', '/tmp/project'),
+		},
+	]);
 });
 
 void test('host URL submit request reports open-after-save failures as open failures', async () => {
@@ -362,6 +570,78 @@ void test('stale host URL submit completion does not clear newer in-flight reque
 	assert.deepEqual(reports, []);
 });
 
+void test('stale host URL submit rejection does not report old failure', async () => {
+	let currentId = 0;
+	const nextIds = [1, 3];
+	const requestId: RequestIdHandle = {
+		next: () => {
+			const next = nextIds.shift();
+			if (next == null) throw new Error('missing next request id');
+			currentId = next;
+			return next;
+		},
+		isCurrent: (id) => id === currentId,
+		invalidate: () => {
+			currentId += 1;
+		},
+	};
+	const inFlightRef = { current: false };
+	const firstSave = deferred<string>();
+	const secondSave = deferred<string>();
+	const saves = [firstSave.promise, secondSave.promise];
+	const closed: null[] = [];
+	const errors: (string | null)[] = [];
+	const reports: unknown[] = [];
+
+	const runRequest = (url: string) =>
+		runHostUrlSubmitRequest({
+			state: {
+				mode: 'edit',
+				slot: 'window-url',
+				panePath: '/tmp/project',
+			},
+			url,
+			hostUrlSubmitInFlightRef: inFlightRef,
+			hostUrlSubmitRequestId: requestId,
+			runHostBrowserCommand: () => {
+				const save = saves.shift();
+				if (!save) throw new Error('missing save request');
+				return save;
+			},
+			openAndroidUrl: async () => {
+				throw new Error('should not open in edit mode');
+			},
+			setHostUrlModalState: (state) => {
+				closed.push(state);
+			},
+			setHostUrlModalSubmitting: () => {},
+			setHostUrlModalError: (message) => errors.push(message),
+			showError: (report) => reports.push(report),
+			getErrorMessage: (error) =>
+				error instanceof Error ? error.message : String(error),
+		});
+
+	assert.equal(runRequest('https://example.test/old'), true);
+	requestId.invalidate();
+	inFlightRef.current = false;
+	assert.equal(runRequest('https://example.test/new'), true);
+
+	firstSave.reject(new Error('old save failed'));
+	await firstSave.promise.catch(() => {});
+	await Promise.resolve();
+	assert.equal(inFlightRef.current, true);
+	assert.deepEqual(closed, []);
+	assert.deepEqual(reports, []);
+
+	secondSave.resolve('');
+	await secondSave.promise;
+	await Promise.resolve();
+	assert.equal(inFlightRef.current, false);
+	assert.deepEqual(closed, [null]);
+	assert.deepEqual(errors, [null, null]);
+	assert.deepEqual(reports, []);
+});
+
 void test('browser action cleanup suppresses pending host URL submit completion', async () => {
 	let currentId = 0;
 	const requestId: RequestIdHandle = {
@@ -534,7 +814,12 @@ void test('stale Diffity completion does not clear newer in-flight request', asy
 			openAndroidUrl: async (url) => {
 				openedUrls.push(url);
 			},
-			showError: (report) => {
+			showError: (title, message) => {
+				throw new Error(
+					`legacy error callback should not run: ${title} ${message}`,
+				);
+			},
+			showErrorReport: (report) => {
 				errors.push(report);
 			},
 			getErrorMessage: (error) =>
@@ -558,7 +843,12 @@ void test('stale Diffity completion does not clear newer in-flight request', asy
 			openAndroidUrl: async (url) => {
 				openedUrls.push(url);
 			},
-			showError: (report) => {
+			showError: (title, message) => {
+				throw new Error(
+					`legacy error callback should not run: ${title} ${message}`,
+				);
+			},
+			showErrorReport: (report) => {
 				errors.push(report);
 			},
 			getErrorMessage: (error) =>
@@ -580,6 +870,43 @@ void test('stale Diffity completion does not clear newer in-flight request', asy
 	assert.equal(inFlightRef.current, false);
 	assert.deepEqual(openedUrls, ['https://diffity.example/new']);
 	assert.deepEqual(errors, []);
+});
+
+void test('Diffity open request accepts legacy string output and two-argument errors', async () => {
+	let currentId = 0;
+	const requestId: RequestIdHandle = {
+		next: () => {
+			currentId += 1;
+			return currentId;
+		},
+		isCurrent: (id) => id === currentId,
+		invalidate: () => {
+			currentId += 1;
+		},
+	};
+	const inFlightRef = { current: false };
+	const errors: string[] = [];
+
+	assert.equal(
+		runHostDiffityOpenRequest({
+			hostDiffityInFlightRef: inFlightRef,
+			hostDiffityRequestId: requestId,
+			runDiffityShare: async () => 'no url here',
+			openAndroidUrl: async () => {
+				throw new Error('should not open');
+			},
+			showError: (title, message) => {
+				errors.push(`${title}: ${message}`);
+			},
+			getErrorMessage: (error) =>
+				error instanceof Error ? error.message : String(error),
+		}),
+		true,
+	);
+
+	await Promise.resolve();
+	await Promise.resolve();
+	assert.deepEqual(errors, ['Diffity failed: no url here']);
 });
 
 void test('browser action cleanup suppresses pending Diffity completion', async () => {
@@ -607,7 +934,12 @@ void test('browser action cleanup suppresses pending Diffity completion', async 
 			openAndroidUrl: async (url) => {
 				openedUrls.push(url);
 			},
-			showError: (report) => {
+			showError: (title, message) => {
+				throw new Error(
+					`legacy error callback should not run: ${title} ${message}`,
+				);
+			},
+			showErrorReport: (report) => {
 				errors.push(report);
 			},
 			getErrorMessage: (error) =>
@@ -666,7 +998,12 @@ void test('current Diffity request reports missing HTTPS URL output with command
 			openAndroidUrl: async () => {
 				throw new Error('should not open');
 			},
-			showError: (report) => {
+			showError: (title, message) => {
+				throw new Error(
+					`legacy error callback should not run: ${title} ${message}`,
+				);
+			},
+			showErrorReport: (report) => {
 				errors.push(report);
 			},
 			getErrorMessage: (error) =>
@@ -685,6 +1022,60 @@ void test('current Diffity request reports missing HTTPS URL output with command
 			panePath: '/tmp/project',
 			command: "cd '/tmp/project' && mdev diffity share",
 			output: 'no url here',
+		},
+	]);
+});
+
+void test('current Diffity request reports empty output fallback message', async () => {
+	let currentId = 0;
+	const requestId: RequestIdHandle = {
+		next: () => {
+			currentId += 1;
+			return currentId;
+		},
+		isCurrent: (id) => id === currentId,
+		invalidate: () => {
+			currentId += 1;
+		},
+	};
+	const inFlightRef = { current: false };
+	const errors: HostDiffityOpenErrorReport[] = [];
+
+	assert.equal(
+		runHostDiffityOpenRequest({
+			hostDiffityInFlightRef: inFlightRef,
+			hostDiffityRequestId: requestId,
+			runDiffityShare: async () => ({
+				output: '',
+				panePath: '/tmp/project',
+				command: "cd '/tmp/project' && mdev diffity share",
+			}),
+			openAndroidUrl: async () => {
+				throw new Error('should not open');
+			},
+			showError: (title, message) => {
+				throw new Error(
+					`legacy error callback should not run: ${title} ${message}`,
+				);
+			},
+			showErrorReport: (report) => {
+				errors.push(report);
+			},
+			getErrorMessage: (error) =>
+				error instanceof Error ? error.message : String(error),
+		}),
+		true,
+	);
+
+	await Promise.resolve();
+	await Promise.resolve();
+	assert.deepEqual(errors, [
+		{
+			title: 'Diffity failed',
+			message: 'mdev diffity share did not return an HTTPS URL.',
+			panePath: '/tmp/project',
+			command: "cd '/tmp/project' && mdev diffity share",
+			output: '',
 		},
 	]);
 });
@@ -716,7 +1107,12 @@ void test('current Diffity request reports Android URL open failures with extrac
 			openAndroidUrl: async () => {
 				throw new Error('cannot open URL');
 			},
-			showError: (report) => {
+			showError: (title, message) => {
+				throw new Error(
+					`legacy error callback should not run: ${title} ${message}`,
+				);
+			},
+			showErrorReport: (report) => {
 				errors.push(report);
 			},
 			getErrorMessage: (error) =>
@@ -770,7 +1166,12 @@ void test('current Diffity request reports command rejection with command contex
 			openAndroidUrl: async () => {
 				throw new Error('should not open');
 			},
-			showError: (report) => {
+			showError: (title, message) => {
+				throw new Error(
+					`legacy error callback should not run: ${title} ${message}`,
+				);
+			},
+			showErrorReport: (report) => {
 				errors.push(report);
 			},
 			getErrorMessage: (error) =>

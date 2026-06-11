@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
 	runBrowserActionsDetectedOpen,
 	runBrowserActionsDiffityShare,
+	runBrowserActionsDiffityShareWithContext,
 	resolveBrowserActionsWorkspace,
 } from '../../src/lib/browser-actions-controller-actions';
 import { HostDiffityShareError } from '../../src/lib/host-diffity-open-request';
@@ -71,7 +72,7 @@ function createRemoteHarness(options?: {
 void test('browser actions diffity resolves pane path through Workmux app context', async () => {
 	const harness = createRemoteHarness();
 
-	const result = await runBrowserActionsDiffityShare({
+	const result = await runBrowserActionsDiffityShareWithContext({
 		tmuxEnabled: true,
 		tmuxTarget: "main'quoted",
 		runHostBrowserCommand: harness.runHostBrowserCommand,
@@ -99,13 +100,28 @@ void test('browser actions diffity resolves pane path through Workmux app contex
 	]);
 });
 
+void test('browser actions diffity legacy helper returns output string', async () => {
+	const harness = createRemoteHarness();
+
+	const output = await runBrowserActionsDiffityShare({
+		tmuxEnabled: true,
+		tmuxTarget: "main'quoted",
+		runHostBrowserCommand: harness.runHostBrowserCommand,
+		runWorkmuxCommand: harness.runWorkmuxCommand,
+		getErrorMessage: (error) =>
+			error instanceof Error ? error.message : String(error),
+	});
+
+	assert.equal(output, 'https://example.test/diff');
+});
+
 void test('browser actions diffity wraps host command rejection with command context', async () => {
 	const harness = createRemoteHarness();
 	const commandFailure = new Error('diffity share failed hard');
 	const commands: BrowserActionsRemoteCommand[] = [];
 
 	await assert.rejects(
-		runBrowserActionsDiffityShare({
+		runBrowserActionsDiffityShareWithContext({
 			tmuxEnabled: true,
 			tmuxTarget: 'main',
 			runHostBrowserCommand: async (command, timeoutMs) => {
@@ -198,7 +214,7 @@ void test('browser actions format old mdev Workmux app context failures', async 
 	});
 
 	await assert.rejects(
-		runBrowserActionsDiffityShare({
+		runBrowserActionsDiffityShareWithContext({
 			tmuxEnabled: true,
 			tmuxTarget: 'main',
 			runHostBrowserCommand: harness.runHostBrowserCommand,

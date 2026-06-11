@@ -15,6 +15,8 @@ export type HostDiffityOpenErrorReport = {
 	url?: string;
 };
 
+export type HostDiffityShareValue = string | HostDiffityShareResult;
+
 export class HostDiffityShareError extends Error {
 	readonly panePath: string;
 	readonly command: string;
@@ -43,6 +45,7 @@ export function runHostDiffityOpenRequest({
 	runDiffityShare,
 	openAndroidUrl,
 	showError,
+	showErrorReport,
 	getErrorMessage,
 }: {
 	hostDiffityInFlightRef: { current: boolean };
@@ -50,9 +53,10 @@ export function runHostDiffityOpenRequest({
 		next: () => number;
 		isCurrent: (id: number) => boolean;
 	};
-	runDiffityShare: () => Promise<HostDiffityShareResult>;
+	runDiffityShare: () => Promise<HostDiffityShareValue>;
 	openAndroidUrl: (url: string) => Promise<void>;
-	showError: (report: HostDiffityOpenErrorReport) => void;
+	showError: (title: string, message: string) => void;
+	showErrorReport?: (report: HostDiffityOpenErrorReport) => void;
 	getErrorMessage: (error: unknown) => string;
 }): boolean {
 	if (hostDiffityInFlightRef.current) return false;
@@ -62,19 +66,24 @@ export function runHostDiffityOpenRequest({
 		let shareResult: HostDiffityShareResult | null = null;
 		let url: string | null = null;
 		try {
-			shareResult = await runDiffityShare();
+			const shareValue = await runDiffityShare();
+			shareResult =
+				typeof shareValue === 'string' ? { output: shareValue } : shareValue;
 			url = extractLastHttpsUrl(shareResult.output);
 			if (!url) {
 				if (!hostDiffityRequestId.isCurrent(id)) return;
-				showError({
-					title: 'Diffity failed',
-					message:
-						shareResult.output ||
-						'mdev diffity share did not return an HTTPS URL.',
-					panePath: shareResult.panePath,
-					command: shareResult.command,
-					output: shareResult.output,
-				});
+				showHostDiffityOpenError(
+					{ showError, showErrorReport },
+					{
+						title: 'Diffity failed',
+						message:
+							shareResult.output ||
+							'mdev diffity share did not return an HTTPS URL.',
+						panePath: shareResult.panePath,
+						command: shareResult.command,
+						output: shareResult.output,
+					},
+				);
 				return;
 			}
 			if (!hostDiffityRequestId.isCurrent(id)) return;
@@ -92,7 +101,7 @@ export function runHostDiffityOpenRequest({
 			if (command !== undefined) report.command = command;
 			if (shareResult?.output !== undefined) report.output = shareResult.output;
 			if (url !== null) report.url = url;
-			showError(report);
+			showHostDiffityOpenError({ showError, showErrorReport }, report);
 		} finally {
 			if (hostDiffityRequestId.isCurrent(id)) {
 				hostDiffityInFlightRef.current = false;
@@ -100,4 +109,21 @@ export function runHostDiffityOpenRequest({
 		}
 	})();
 	return true;
+}
+
+function showHostDiffityOpenError(
+	{
+		showError,
+		showErrorReport,
+	}: {
+		showError: (title: string, message: string) => void;
+		showErrorReport?: (report: HostDiffityOpenErrorReport) => void;
+	},
+	report: HostDiffityOpenErrorReport,
+) {
+	if (showErrorReport) {
+		showErrorReport(report);
+		return;
+	}
+	showError(report.title, report.message);
 }

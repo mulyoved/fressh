@@ -123,7 +123,7 @@ export async function resolveBrowserActionsPaneContext(
 	}
 }
 
-export async function runBrowserActionsDiffityShare(
+export async function runBrowserActionsDiffityShareWithContext(
 	deps: BrowserActionsContextDeps,
 ): Promise<BrowserActionsDiffityShareResult> {
 	const panePath = await resolveBrowserActionsPanePath(deps);
@@ -144,6 +144,13 @@ export async function runBrowserActionsDiffityShare(
 		panePath,
 		command,
 	};
+}
+
+export async function runBrowserActionsDiffityShare(
+	deps: BrowserActionsContextDeps,
+): Promise<string> {
+	const result = await runBrowserActionsDiffityShareWithContext(deps);
+	return result.output;
 }
 
 export async function runBrowserActionsDetectedOpen({
