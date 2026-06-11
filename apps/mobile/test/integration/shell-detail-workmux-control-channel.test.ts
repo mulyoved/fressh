@@ -67,6 +67,17 @@ function extractHandleRestartCodexBlock(source: string): string {
 	return source.slice(callbackStart, callbackEnd);
 }
 
+function extractActionContextBlock(source: string): string {
+	const contextStart = source.indexOf('const actionContext = useMemo');
+	assert.notEqual(contextStart, -1);
+	const contextEnd = source.indexOf(
+		'const handleAction = useCallback',
+		contextStart,
+	);
+	assert.notEqual(contextEnd, -1);
+	return source.slice(contextStart, contextEnd);
+}
+
 function extractHandleCommandBridgeEntryBlock(source: string): string {
 	const callbackStart = source.indexOf(
 		'const handleCommandBridgeEntry = useCallback',
@@ -181,11 +192,13 @@ void describe('shell detail Workmux control channel wiring', () => {
 	void test('wires bridge-backed Codex restart through WorkmuxControlChannel operation', () => {
 		const source = readFileSync(detailSourcePath, 'utf8');
 		const block = extractHandleRestartCodexBlock(source);
+		const actionContextBlock = extractActionContextBlock(source);
 
 		assert.match(
 			source,
 			/import \{ restartCodexWithBridge \} from '@\/lib\/codex-restart'/,
 		);
+		assert.match(actionContextBlock, /restartCodex:\s*handleRestartCodex/);
 		assert.match(block, /restartCodexWithBridge\(\{/);
 		assert.match(
 			block,
