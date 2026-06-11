@@ -49,6 +49,7 @@ import {
 	subscribeAgentNotificationPending,
 } from '@/lib/agent-notification-visibility';
 import { useAutoConnectStore } from '@/lib/auto-connect';
+import { restartCodexWithBridge } from '@/lib/codex-restart';
 import { getStoredConnectionId } from '@/lib/connection-utils';
 import {
 	planDetectedOpenShortcutPress,
@@ -83,6 +84,7 @@ import {
 	getKeyboardsById,
 	resolveActiveOneShotReturnKeyboardId,
 	resolveSelectedKeyboardId,
+	type CommandBridgeEntry,
 	type CommandPreset,
 	type CommandStep,
 	type KeyboardDefinition,
@@ -725,6 +727,8 @@ function ShellDetail() {
 	const currentInstanceIdRef = useRef<string | null>(null);
 	const writerRef = useRef<OrderedWriter | null>(null);
 	const liveInputGenerationRef = useRef(0);
+	const codexRestartGenerationRef = useRef(0);
+	const codexRestartInFlightRef = useRef(false);
 	const commandTimeoutsRef = useRef<ReturnType<typeof setTimeout>[]>([]);
 	const wisprAutomationStateRef = useRef<WisprAutomationState>({
 		phase: 'idle',
@@ -782,6 +786,9 @@ function ShellDetail() {
 			}),
 		[hasConnection, height, scrollTraceEnabled, tmuxEnabled, width],
 	);
+	const invalidateCodexRestartRequests = useCallback(() => {
+		codexRestartGenerationRef.current += 1;
+	}, []);
 	const exitSelectionMode = useCallback(() => {
 		setSelectionModeEnabled(false);
 		xtermRef.current?.setSelectionModeEnabled(false);
@@ -2354,6 +2361,7 @@ function ShellDetail() {
 			runtimeShellConfigReloadRequestIdRef.current += 1;
 			browserActions.invalidateAll();
 			browserActions.close();
+			invalidateCodexRestartRequests();
 			liveInputGenerationRef.current += 1;
 			clearCommandTimeouts();
 			scrollbackEnterRequestGenerationRef.current += 1;
@@ -2366,6 +2374,7 @@ function ShellDetail() {
 		clearScrollbackState,
 		clearCommandTimeouts,
 		connectionStoredConnectionId,
+		invalidateCodexRestartRequests,
 		isFocused,
 		tmuxTarget,
 	]);
@@ -2375,6 +2384,7 @@ function ShellDetail() {
 			agentNotificationAckRequestIdRef.current += 1;
 			isFocusedRef.current = false;
 			isAppActiveRef.current = false;
+			invalidateCodexRestartRequests();
 			runtimeShellConfigReloadRequestIdRef.current += 1;
 			visibleConnectionIdRef.current = null;
 			visibleChannelIdRef.current = null;
@@ -2382,7 +2392,7 @@ function ShellDetail() {
 			liveInputGenerationRef.current += 1;
 			clearCommandTimeouts();
 		};
-	}, [clearCommandTimeouts]);
+	}, [clearCommandTimeouts, invalidateCodexRestartRequests]);
 
 	useLayoutEffect(() => {
 		if (Platform.OS !== 'android') return undefined;
@@ -2433,7 +2443,12 @@ function ShellDetail() {
 		if (workmuxKeyboardSourceKeyRef.current === skillSelectorSourceKey) return;
 		workmuxKeyboardSourceKeyRef.current = skillSelectorSourceKey;
 		workmuxKeyboardCommandRunner.invalidate();
-	}, [skillSelectorSourceKey, workmuxKeyboardCommandRunner]);
+		invalidateCodexRestartRequests();
+	}, [
+		invalidateCodexRestartRequests,
+		skillSelectorSourceKey,
+		workmuxKeyboardCommandRunner,
+	]);
 
 	useLayoutEffect(() => {
 		return () => {
@@ -2453,6 +2468,66 @@ function ShellDetail() {
 		void manualTerminalFitRunner.run();
 	}, [commandMenuModal, manualTerminalFitRunner]);
 
+	const handleRestartCodex = useCallback(
+		async (options?: { timeoutMs?: number }) => {
+			commandMenuModal.onClose();
+			if (codexRestartInFlightRef.current) return;
+
+			const restartGeneration = codexRestartGenerationRef.current + 1;
+			codexRestartGenerationRef.current = restartGeneration;
+			codexRestartInFlightRef.current = true;
+			const workmuxControlChannelSnapshot = workmuxControlChannelRef.current;
+			const isCurrentRestart = () =>
+				codexRestartGenerationRef.current === restartGeneration;
+
+			try {
+				await restartCodexWithBridge({
+					tmuxEnabled,
+					sessionName: activeTmuxSessionName,
+					workmuxControlChannel: {
+						command: (argv, commandOptions) =>
+							workmuxControlChannelSnapshot.command(argv, commandOptions),
+						operation: (request, commandOptions) => {
+							if (!isCurrentRestart()) {
+								return Promise.resolve({
+									success: false,
+									output: '',
+									error: 'Codex restart superseded.',
+								});
+							}
+							return workmuxControlChannelSnapshot.operation(
+								request,
+								commandOptions,
+							);
+						},
+					},
+					showFailure: (message) => {
+						if (!isCurrentRestart()) {
+							logger.warn('Codex restart failed after becoming stale', message);
+							return;
+						}
+						if (
+							!shouldShowFocusedActiveFeedback({
+								isFocused: isFocusedRef.current,
+								isAppActive: isAppActiveRef.current,
+							})
+						) {
+							logger.warn('Codex restart failed', message);
+							return;
+						}
+						Alert.alert('Codex restart failed', message);
+					},
+					...(options?.timeoutMs === undefined
+						? {}
+						: { timeoutMs: options.timeoutMs }),
+				});
+			} finally {
+				codexRestartInFlightRef.current = false;
+			}
+		},
+		[activeTmuxSessionName, commandMenuModal, tmuxEnabled],
+	);
+
 	const actionContext = useMemo<ActionContext>(
 		() => ({
 			availableKeyboardIds,
@@ -2465,6 +2540,7 @@ function ShellDetail() {
 			pasteClipboard: handlePasteClipboard,
 			copySelection: handleCopySelection,
 			fitTerminalToDevice: handleFitTerminalToDevice,
+			restartCodex: handleRestartCodex,
 			toggleCommandMenu: () => {
 				browserActions.invalidateHostUrlReads();
 				commanderModal.onClose();
@@ -2508,6 +2584,7 @@ function ShellDetail() {
 			handleCloseTextEntry,
 			handlePasteClipboard,
 			handleFitTerminalToDevice,
+			handleRestartCodex,
 			handleOpenWisprTextEditor,
 			openConfigDialog,
 			rotateKeyboard,
@@ -2516,6 +2593,20 @@ function ShellDetail() {
 			selectKeyboardIfExists,
 			sendBytesRaw,
 		],
+	);
+
+	const handleCommandBridgeEntry = useCallback(
+		(entry: CommandBridgeEntry) => {
+			switch (entry.operation) {
+				case 'codex.restart':
+					void handleRestartCodex({ timeoutMs: entry.timeoutMs });
+					return;
+				default:
+					logger.warn('Unhandled command bridge operation', entry.operation);
+					return;
+			}
+		},
+		[handleRestartCodex],
 	);
 
 	const handleAction = useCallback(
@@ -2749,6 +2840,7 @@ function ShellDetail() {
 				runtimeShellConfigReloadRequestIdRef.current += 1;
 				browserActionsInvalidateAllRef.current();
 				workmuxKeyboardCommandRunner.invalidate();
+				invalidateCodexRestartRequests();
 				liveInputGenerationRef.current += 1;
 				clearCommandTimeouts();
 				if (isAndroid) {
@@ -2762,6 +2854,7 @@ function ShellDetail() {
 	}, [
 		clearCommandTimeouts,
 		clearScrollbackState,
+		invalidateCodexRestartRequests,
 		systemKeyboardEnabled,
 		workmuxKeyboardCommandRunner,
 	]);
@@ -3223,6 +3316,7 @@ function ShellDetail() {
 					onClose={commandMenuModal.onClose}
 					onSelect={runCommandPreset}
 					onAction={handleAction}
+					onBridge={handleCommandBridgeEntry}
 				/>
 				<BrowserActionsModal
 					bottomOffset={Platform.OS === 'android' ? insets.bottom + 24 : 24}

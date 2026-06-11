@@ -1,5 +1,6 @@
 import { type ActionId } from '@/lib/keyboard-actions';
 import {
+	type CommandBridgeEntry,
 	type CommandMenu,
 	type CommandMenuEntry,
 	type CommandPreset,
@@ -10,6 +11,7 @@ export type CommandMenuSelectionDispatchHandlers = {
 	onPreset: (preset: CommandPreset) => void;
 	onClose: () => void;
 	onAction: (actionId: ActionId) => void;
+	onBridge: (entry: CommandBridgeEntry) => void;
 };
 
 export function dispatchCommandMenuSelection(
@@ -26,6 +28,10 @@ export function dispatchCommandMenuSelection(
 		case 'action':
 			handlers.onClose();
 			handlers.onAction(entry.actionId);
+			return;
+		case 'bridge':
+			handlers.onClose();
+			handlers.onBridge(entry);
 			return;
 	}
 }
