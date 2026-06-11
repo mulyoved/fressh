@@ -186,57 +186,72 @@ void test('shell Browser action error input distinguishes saved URL open failure
 });
 
 void test('GitHub target request reports Android open failures with context', async () => {
-	let currentId = 0;
-	const requestId: RequestIdHandle = {
-		next: () => {
-			currentId += 1;
-			return currentId;
-		},
-		isCurrent: (id) => id === currentId,
-		invalidate: () => {
-			currentId += 1;
-		},
-	};
-	const reports: {
-		action: string;
-		title: string;
-		message: string;
-		panePath?: string;
-		command?: string;
-		output?: string;
-		url?: string;
-	}[] = [];
-
-	runGitHubTargetOpenRequest({
-		target: 'issues',
-		requestId,
-		resolveRepositoryContext: async () => ({
-			repository: 'owner/repo',
-			panePath: '/tmp/project',
-			command: 'git remote get-url origin',
-			output: 'owner/repo',
-		}),
-		openAndroidUrl: async () => {
-			throw new Error('Android could not open URL');
-		},
-		showError: (report) => reports.push(report),
-		getErrorMessage: (error) =>
-			error instanceof Error ? error.message : String(error),
-	});
-
-	await Promise.resolve();
-	await Promise.resolve();
-	assert.deepEqual(reports, [
+	for (const testCase of [
 		{
+			target: 'issues' as const,
 			action: 'GitHub Issues',
 			title: 'GitHub Issues failed',
-			message: 'Android could not open URL',
-			panePath: '/tmp/project',
-			command: 'git remote get-url origin',
-			output: 'owner/repo',
 			url: 'https://github.com/owner/repo/issues',
 		},
-	]);
+		{
+			target: 'pulls' as const,
+			action: 'GitHub Pull Requests',
+			title: 'GitHub Pull Requests failed',
+			url: 'https://github.com/owner/repo/pulls',
+		},
+	]) {
+		let currentId = 0;
+		const requestId: RequestIdHandle = {
+			next: () => {
+				currentId += 1;
+				return currentId;
+			},
+			isCurrent: (id) => id === currentId,
+			invalidate: () => {
+				currentId += 1;
+			},
+		};
+		const reports: {
+			action: string;
+			title: string;
+			message: string;
+			panePath?: string;
+			command?: string;
+			output?: string;
+			url?: string;
+		}[] = [];
+
+		runGitHubTargetOpenRequest({
+			target: testCase.target,
+			requestId,
+			resolveRepositoryContext: async () => ({
+				repository: 'owner/repo',
+				panePath: '/tmp/project',
+				command: 'git remote get-url origin',
+				output: 'owner/repo',
+			}),
+			openAndroidUrl: async () => {
+				throw new Error('Android could not open URL');
+			},
+			showError: (report) => reports.push(report),
+			getErrorMessage: (error) =>
+				error instanceof Error ? error.message : String(error),
+		});
+
+		await Promise.resolve();
+		await Promise.resolve();
+		assert.deepEqual(reports, [
+			{
+				action: testCase.action,
+				title: testCase.title,
+				message: 'Android could not open URL',
+				panePath: '/tmp/project',
+				command: 'git remote get-url origin',
+				output: 'owner/repo',
+				url: testCase.url,
+			},
+		]);
+	}
 });
 
 void test('GitHub target request suppresses stale errors', async () => {
@@ -436,6 +451,60 @@ void test('host URL read request reports edit read failures with command context
 		{
 			action: 'URL',
 			title: 'Edit URL failed',
+			message: 'tmux config get failed',
+			panePath: '/tmp/project',
+			command: buildTmuxWindowConfigGetCommand('window-url', '/tmp/project'),
+		},
+	]);
+});
+
+void test('host URL read request reports open read failures with command context', async () => {
+	let currentId = 0;
+	const requestId: RequestIdHandle = {
+		next: () => {
+			currentId += 1;
+			return currentId;
+		},
+		isCurrent: (id) => id === currentId,
+		invalidate: () => {
+			currentId += 1;
+		},
+	};
+	const reports: {
+		action: string;
+		title: string;
+		message: string;
+		panePath?: string;
+		command?: string;
+	}[] = [];
+
+	runHostUrlReadRequest({
+		mode: 'open',
+		slot: 'window-url',
+		requestId,
+		resolvePanePath: async () => '/tmp/project',
+		runHostBrowserCommand: async () => {
+			throw new Error('tmux config get failed');
+		},
+		openAndroidUrl: async () => {
+			throw new Error('should not open after read failure');
+		},
+		setOpen: () => {},
+		setHostUrlModalState: () => {
+			throw new Error('modal should not open on read failure');
+		},
+		setHostUrlModalError: () => {},
+		showError: (report) => reports.push(report),
+		getErrorMessage: (error) =>
+			error instanceof Error ? error.message : String(error),
+	});
+
+	await Promise.resolve();
+	await Promise.resolve();
+	assert.deepEqual(reports, [
+		{
+			action: 'URL',
+			title: 'URL failed',
 			message: 'tmux config get failed',
 			panePath: '/tmp/project',
 			command: buildTmuxWindowConfigGetCommand('window-url', '/tmp/project'),
