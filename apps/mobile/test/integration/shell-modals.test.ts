@@ -2,7 +2,10 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { cleanupBrowserActionRequests } from '../../src/lib/browser-actions-request-cleanup';
 import {
+	HostDiffityShareError,
 	runHostDiffityOpenRequest,
+	type HostDiffityOpenErrorReport,
+	type HostDiffityShareResult,
 } from '../../src/lib/host-diffity-open-request';
 import { type RequestIdHandle } from '../../src/lib/request-id';
 
@@ -68,11 +71,11 @@ void test('stale Diffity completion does not clear newer in-flight request', asy
 		},
 	};
 	const inFlightRef = { current: false };
-	const firstShare = deferred<string>();
-	const secondShare = deferred<string>();
+	const firstShare = deferred<HostDiffityShareResult>();
+	const secondShare = deferred<HostDiffityShareResult>();
 	const shares = [firstShare.promise, secondShare.promise];
 	const openedUrls: string[] = [];
-	const errors: string[] = [];
+	const errors: HostDiffityOpenErrorReport[] = [];
 
 	assert.equal(
 		runHostDiffityOpenRequest({
@@ -86,8 +89,8 @@ void test('stale Diffity completion does not clear newer in-flight request', asy
 			openAndroidUrl: async (url) => {
 				openedUrls.push(url);
 			},
-			showError: (_title, message) => {
-				errors.push(message);
+			showError: (report) => {
+				errors.push(report);
 			},
 			getErrorMessage: (error) =>
 				error instanceof Error ? error.message : String(error),
@@ -110,8 +113,8 @@ void test('stale Diffity completion does not clear newer in-flight request', asy
 			openAndroidUrl: async (url) => {
 				openedUrls.push(url);
 			},
-			showError: (_title, message) => {
-				errors.push(message);
+			showError: (report) => {
+				errors.push(report);
 			},
 			getErrorMessage: (error) =>
 				error instanceof Error ? error.message : String(error),
@@ -120,13 +123,13 @@ void test('stale Diffity completion does not clear newer in-flight request', asy
 	);
 	assert.equal(inFlightRef.current, true);
 
-	firstShare.resolve('https://diffity.example/old');
+	firstShare.resolve({ output: 'https://diffity.example/old' });
 	await firstShare.promise;
 	await Promise.resolve();
 	assert.equal(inFlightRef.current, true);
 	assert.deepEqual(openedUrls, []);
 
-	secondShare.resolve('https://diffity.example/new');
+	secondShare.resolve({ output: 'https://diffity.example/new' });
 	await secondShare.promise;
 	await Promise.resolve();
 	assert.equal(inFlightRef.current, false);
@@ -147,9 +150,9 @@ void test('browser action cleanup suppresses pending Diffity completion', async 
 		},
 	};
 	const inFlightRef = { current: false };
-	const share = deferred<string>();
+	const share = deferred<HostDiffityShareResult>();
 	const openedUrls: string[] = [];
-	const errors: string[] = [];
+	const errors: HostDiffityOpenErrorReport[] = [];
 
 	assert.equal(
 		runHostDiffityOpenRequest({
@@ -159,8 +162,8 @@ void test('browser action cleanup suppresses pending Diffity completion', async 
 			openAndroidUrl: async (url) => {
 				openedUrls.push(url);
 			},
-			showError: (_title, message) => {
-				errors.push(message);
+			showError: (report) => {
+				errors.push(report);
 			},
 			getErrorMessage: (error) =>
 				error instanceof Error ? error.message : String(error),
@@ -181,7 +184,7 @@ void test('browser action cleanup suppresses pending Diffity completion', async 
 	});
 	assert.equal(inFlightRef.current, false);
 
-	share.resolve('https://diffity.example/backgrounded');
+	share.resolve({ output: 'https://diffity.example/backgrounded' });
 	await share.promise;
 	await Promise.resolve();
 	assert.deepEqual(openedUrls, []);
@@ -189,7 +192,7 @@ void test('browser action cleanup suppresses pending Diffity completion', async 
 	assert.equal(inFlightRef.current, false);
 });
 
-void test('current Diffity request reports missing HTTPS URL output', async () => {
+void test('current Diffity request reports missing HTTPS URL output with command context', async () => {
 	let currentId = 0;
 	const requestId: RequestIdHandle = {
 		next: () => {
@@ -202,18 +205,24 @@ void test('current Diffity request reports missing HTTPS URL output', async () =
 		},
 	};
 	const inFlightRef = { current: false };
-	const errors: { title: string; message: string }[] = [];
+	const errors: HostDiffityOpenErrorReport[] = [];
+
+	const shareResult: HostDiffityShareResult = {
+		output: 'no url here',
+		panePath: '/tmp/project',
+		command: "cd '/tmp/project' && mdev diffity share",
+	};
 
 	assert.equal(
 		runHostDiffityOpenRequest({
 			hostDiffityInFlightRef: inFlightRef,
 			hostDiffityRequestId: requestId,
-			runDiffityShare: async () => 'no url here',
+			runDiffityShare: async () => shareResult,
 			openAndroidUrl: async () => {
 				throw new Error('should not open');
 			},
-			showError: (title, message) => {
-				errors.push({ title, message });
+			showError: (report) => {
+				errors.push(report);
 			},
 			getErrorMessage: (error) =>
 				error instanceof Error ? error.message : String(error),
@@ -225,11 +234,17 @@ void test('current Diffity request reports missing HTTPS URL output', async () =
 	await Promise.resolve();
 	assert.equal(inFlightRef.current, false);
 	assert.deepEqual(errors, [
-		{ title: 'Diffity failed', message: 'no url here' },
+		{
+			title: 'Diffity failed',
+			message: 'no url here',
+			panePath: '/tmp/project',
+			command: "cd '/tmp/project' && mdev diffity share",
+			output: 'no url here',
+		},
 	]);
 });
 
-void test('current Diffity request reports Android URL open failures', async () => {
+void test('current Diffity request reports Android URL open failures with extracted URL', async () => {
 	let currentId = 0;
 	const requestId: RequestIdHandle = {
 		next: () => {
@@ -242,18 +257,22 @@ void test('current Diffity request reports Android URL open failures', async () 
 		},
 	};
 	const inFlightRef = { current: false };
-	const errors: { title: string; message: string }[] = [];
+	const errors: HostDiffityOpenErrorReport[] = [];
 
 	assert.equal(
 		runHostDiffityOpenRequest({
 			hostDiffityInFlightRef: inFlightRef,
 			hostDiffityRequestId: requestId,
-			runDiffityShare: async () => 'created https://diffity.example/current',
+			runDiffityShare: async () => ({
+				output: 'created https://diffity.example/current',
+				panePath: '/tmp/project',
+				command: "cd '/tmp/project' && mdev diffity share",
+			}),
 			openAndroidUrl: async () => {
 				throw new Error('cannot open URL');
 			},
-			showError: (title, message) => {
-				errors.push({ title, message });
+			showError: (report) => {
+				errors.push(report);
 			},
 			getErrorMessage: (error) =>
 				error instanceof Error ? error.message : String(error),
@@ -265,6 +284,64 @@ void test('current Diffity request reports Android URL open failures', async () 
 	await Promise.resolve();
 	assert.equal(inFlightRef.current, false);
 	assert.deepEqual(errors, [
-		{ title: 'Diffity failed', message: 'cannot open URL' },
+		{
+			title: 'Diffity failed',
+			message: 'cannot open URL',
+			panePath: '/tmp/project',
+			command: "cd '/tmp/project' && mdev diffity share",
+			url: 'https://diffity.example/current',
+		},
+	]);
+});
+
+void test('current Diffity request reports command rejection with command context', async () => {
+	let currentId = 0;
+	const requestId: RequestIdHandle = {
+		next: () => {
+			currentId += 1;
+			return currentId;
+		},
+		isCurrent: (id) => id === currentId,
+		invalidate: () => {
+			currentId += 1;
+		},
+	};
+	const inFlightRef = { current: false };
+	const errors: HostDiffityOpenErrorReport[] = [];
+
+	assert.equal(
+		runHostDiffityOpenRequest({
+			hostDiffityInFlightRef: inFlightRef,
+			hostDiffityRequestId: requestId,
+			runDiffityShare: async () => {
+				throw new HostDiffityShareError({
+					message: 'remote command failed',
+					panePath: '/tmp/project',
+					command: "cd '/tmp/project' && mdev diffity share",
+					cause: new Error('remote command failed'),
+				});
+			},
+			openAndroidUrl: async () => {
+				throw new Error('should not open');
+			},
+			showError: (report) => {
+				errors.push(report);
+			},
+			getErrorMessage: (error) =>
+				error instanceof Error ? error.message : String(error),
+		}),
+		true,
+	);
+
+	await Promise.resolve();
+	await Promise.resolve();
+	assert.equal(inFlightRef.current, false);
+	assert.deepEqual(errors, [
+		{
+			title: 'Diffity failed',
+			message: 'remote command failed',
+			panePath: '/tmp/project',
+			command: "cd '/tmp/project' && mdev diffity share",
+		},
 	]);
 });

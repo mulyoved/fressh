@@ -912,7 +912,9 @@ export function useBrowserActionsController<TConnection>(
 					getErrorMessage,
 				}),
 			openAndroidUrl,
-			showError,
+			showError: (report) => {
+				showError(report.title, report.message);
+			},
 			getErrorMessage,
 		});
 	}, [
