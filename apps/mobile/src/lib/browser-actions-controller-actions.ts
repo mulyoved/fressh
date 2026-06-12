@@ -1,6 +1,8 @@
-import { runDetectedOpenCommand } from '@/lib/detected-open-actions';
+import { getDetectedOpenTimeoutMs } from '@/lib/detected-open-actions';
 import {
 	buildDiffityShareCommand,
+	buildMdevOpenAutoPrintUrlCommand,
+	buildMdevOpenDetectJsonCommand,
 	type HostBrowserOpenMode,
 	type TmuxPaneContext,
 } from './host-browser-actions';
@@ -157,9 +159,11 @@ export async function runBrowserActionsDetectedOpen({
 	mode,
 	...deps
 }: BrowserActionsDetectedOpenDeps): Promise<void> {
-	await runDetectedOpenCommand({
-		mode,
-		resolvePaneContext: () => resolveBrowserActionsPaneContext(deps),
-		runHostBrowserCommand: deps.runHostBrowserCommand,
-	});
+	const context = await resolveBrowserActionsPaneContext(deps);
+	await deps.runHostBrowserCommand(
+		mode === 'pick'
+			? buildMdevOpenDetectJsonCommand(context)
+			: buildMdevOpenAutoPrintUrlCommand(context),
+		getDetectedOpenTimeoutMs(mode),
+	);
 }

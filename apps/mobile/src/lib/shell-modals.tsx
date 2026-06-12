@@ -957,6 +957,8 @@ export function useBrowserActionsController<TConnection>(
 				resolvePaneContext: resolveHostBrowserPaneContext,
 				runHostBrowserCommand,
 				setOpen,
+				openUrl: openAndroidUrl,
+				setPickerCandidates: () => {},
 				showError: (title, message) =>
 					showError({
 						action: mode === 'pick' ? 'Pick' : 'Open',
@@ -978,6 +980,7 @@ export function useBrowserActionsController<TConnection>(
 		[
 			getErrorMessage,
 			hostDetectedOpenRequestId,
+			openAndroidUrl,
 			resolveHostBrowserPaneContext,
 			runHostBrowserCommand,
 			showError,

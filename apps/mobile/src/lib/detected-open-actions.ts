@@ -1,10 +1,17 @@
 import {
-	buildMdevOpenCommand,
+	buildMdevOpenAutoPrintUrlCommand,
+	buildMdevOpenBridgePrintUrlCommand,
+	buildMdevOpenDetectJsonCommand,
+	parseDetectedOpenCandidates,
+	parsePrintedOpenUrl,
+	type DetectedOpenCandidate,
 	type HostBrowserOpenMode,
 	type TmuxPaneContext,
 } from '@/lib/host-browser-actions';
 
-export type RunDetectedOpenCommandDeps = {
+export type { DetectedOpenCandidate };
+
+export type RunDetectedOpenHostCommandDeps = {
 	mode: HostBrowserOpenMode;
 	resolvePaneContext: () => Promise<TmuxPaneContext>;
 	runHostBrowserCommand: (
@@ -74,14 +81,29 @@ export type DetectedOpenErrorReport = {
 };
 
 export type RunDetectedOpenControllerRequestDeps =
-	RunDetectedOpenCommandDeps & {
+	RunDetectedOpenHostCommandDeps & {
 		inFlightRef: DetectedOpenInFlightRef;
 		requestId: DetectedOpenRequestId;
 		setOpen: (open: boolean) => void;
+		openUrl: (url: string) => Promise<void>;
+		setPickerCandidates: (
+			candidates: DetectedOpenCandidate[],
+			context: TmuxPaneContext,
+		) => void;
 		showError: (title: string, message: string) => void;
 		showErrorReport?: (report: DetectedOpenErrorReport) => void;
 		getErrorMessage: (error: unknown) => string;
 	};
+
+export type RunDetectedOpenPickerSelectionRequestDeps = {
+	context: TmuxPaneContext;
+	candidate: DetectedOpenCandidate;
+	runHostBrowserCommand: (
+		command: string,
+		timeoutMs: number,
+	) => Promise<string>;
+	openUrl: (url: string) => Promise<void>;
+};
 
 export type DetectedOpenControllerRequestResult =
 	| { accepted: false; completion: null }
@@ -154,18 +176,6 @@ export function planDetectedOpenShortcutPress(
 	return { type: 'bytes', bytes: item.bytes };
 }
 
-export async function runDetectedOpenCommand({
-	mode,
-	resolvePaneContext,
-	runHostBrowserCommand,
-}: RunDetectedOpenCommandDeps): Promise<void> {
-	const context = await resolvePaneContext();
-	await runHostBrowserCommand(
-		buildMdevOpenCommand(mode, context),
-		getDetectedOpenTimeoutMs(mode),
-	);
-}
-
 export function runDetectedOpenControllerRequest({
 	mode,
 	inFlightRef,
@@ -173,6 +183,8 @@ export function runDetectedOpenControllerRequest({
 	resolvePaneContext,
 	runHostBrowserCommand,
 	setOpen,
+	openUrl,
+	setPickerCandidates,
 	showError,
 	showErrorReport,
 	getErrorMessage,
@@ -200,9 +212,28 @@ export function runDetectedOpenControllerRequest({
 		let command: string | undefined;
 		try {
 			context = await resolvePaneContext();
-			command = buildMdevOpenCommand(mode, context);
+			command =
+				mode === 'pick'
+					? buildMdevOpenDetectJsonCommand(context)
+					: buildMdevOpenAutoPrintUrlCommand(context);
 			if (!requestId.isCurrent(id)) return;
-			await runHostBrowserCommand(command, getDetectedOpenTimeoutMs(mode));
+			const output = await runHostBrowserCommand(
+				command,
+				getDetectedOpenTimeoutMs(mode),
+			);
+			if (!requestId.isCurrent(id)) return;
+			if (mode === 'pick') {
+				const parsed = parseDetectedOpenCandidates(output);
+				if (parsed.type === 'invalid') throw new Error(parsed.message);
+				if (parsed.candidates.length === 0) {
+					throw new Error('mdev open detect returned no candidates.');
+				}
+				setPickerCandidates(parsed.candidates, context);
+				return;
+			}
+			const parsed = parsePrintedOpenUrl(output);
+			if (parsed.type === 'invalid') throw new Error(parsed.message);
+			await openUrl(parsed.url);
 		} catch (err) {
 			if (!requestId.isCurrent(id)) return;
 			showDetectedOpenError(
@@ -221,6 +252,21 @@ export function runDetectedOpenControllerRequest({
 		}
 	})();
 	return { accepted: true, completion };
+}
+
+export async function runDetectedOpenPickerSelectionRequest({
+	context,
+	candidate,
+	runHostBrowserCommand,
+	openUrl,
+}: RunDetectedOpenPickerSelectionRequestDeps): Promise<void> {
+	const output = await runHostBrowserCommand(
+		buildMdevOpenBridgePrintUrlCommand(context, candidate.raw),
+		getDetectedOpenTimeoutMs('pick'),
+	);
+	const parsed = parsePrintedOpenUrl(output);
+	if (parsed.type === 'invalid') throw new Error(parsed.message);
+	await openUrl(parsed.url);
 }
 
 function showDetectedOpenError(

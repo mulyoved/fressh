@@ -8,9 +8,10 @@ import {
 	planDetectedOpenShortcutPress,
 	resolveDetectedOpenShortcutMode,
 	runDetectedOpenCallback,
-	runDetectedOpenCommand,
 	runDetectedOpenControllerRequest,
+	runDetectedOpenPickerSelectionRequest,
 	tryBeginDetectedOpenRequest,
+	type DetectedOpenCandidate,
 } from '../../src/lib/detected-open-actions';
 
 function createRequestId() {
@@ -212,59 +213,10 @@ void test('detected open shortcut press falls back to raw bytes for nonmatches',
 	);
 });
 
-void test('detected open command runs auto mode with pane context', async () => {
-	const commands: { command: string; timeoutMs: number }[] = [];
-
-	await runDetectedOpenCommand({
-		mode: 'auto',
-		resolvePaneContext: async () => ({
-			paneId: '%12',
-			paneTty: '/dev/pts/7',
-			panePath: "/home/muly/work repo's",
-		}),
-		runHostBrowserCommand: async (command, timeoutMs) => {
-			commands.push({ command, timeoutMs });
-			return '';
-		},
-	});
-
-	assert.deepEqual(commands, [
-		{
-			command:
-				"TMUX_PANE='%12' TMUX_PANE_TTY='/dev/pts/7' TMUX_PANE_PATH='/home/muly/work repo'\\''s' mdev open auto",
-			timeoutMs: 30_000,
-		},
-	]);
-});
-
-void test('detected open command runs pick mode with pane context', async () => {
-	const commands: { command: string; timeoutMs: number }[] = [];
-
-	await runDetectedOpenCommand({
-		mode: 'pick',
-		resolvePaneContext: async () => ({
-			paneId: '%12',
-			paneTty: '/dev/pts/7',
-			panePath: '/home/muly/work repo',
-		}),
-		runHostBrowserCommand: async (command, timeoutMs) => {
-			commands.push({ command, timeoutMs });
-			return '';
-		},
-	});
-
-	assert.deepEqual(commands, [
-		{
-			command:
-				"TMUX_PANE='%12' TMUX_PANE_TTY='/dev/pts/7' TMUX_PANE_PATH='/home/muly/work repo' mdev open pick",
-			timeoutMs: 60_000,
-		},
-	]);
-});
-
-void test('detected open controller starts accepted request and clears in-flight state', async () => {
+void test('detected open controller auto mode opens parsed URL and clears in-flight state', async () => {
 	const inFlightRef = { current: false };
 	const openStates: boolean[] = [];
+	const openedUrls: string[] = [];
 	const commands: { command: string; timeoutMs: number }[] = [];
 	const errors: string[] = [];
 	const result = runDetectedOpenControllerRequest({
@@ -282,6 +234,12 @@ void test('detected open controller starts accepted request and clears in-flight
 		},
 		getErrorMessage: (error) =>
 			error instanceof Error ? error.message : String(error),
+		openUrl: async (url) => {
+			openedUrls.push(url);
+		},
+		setPickerCandidates: () => {
+			throw new Error('setPickerCandidates should not run');
+		},
 		resolvePaneContext: async () => ({
 			paneId: '%9',
 			paneTty: '/dev/pts/9',
@@ -289,7 +247,7 @@ void test('detected open controller starts accepted request and clears in-flight
 		}),
 		runHostBrowserCommand: async (command, timeoutMs) => {
 			commands.push({ command, timeoutMs });
-			return '';
+			return 'warning: reused serve\nhttps://example.test/app\n';
 		},
 	});
 
@@ -300,11 +258,139 @@ void test('detected open controller starts accepted request and clears in-flight
 
 	assert.equal(inFlightRef.current, false);
 	assert.deepEqual(errors, []);
+	assert.deepEqual(openedUrls, ['https://example.test/app']);
 	assert.deepEqual(commands, [
 		{
 			command:
-				"TMUX_PANE='%9' TMUX_PANE_TTY='/dev/pts/9' TMUX_PANE_PATH='/tmp/project' mdev open auto",
+				"TMUX_PANE='%9' TMUX_PANE_TTY='/dev/pts/9' TMUX_PANE_PATH='/tmp/project' mdev open auto --print-url",
 			timeoutMs: 30_000,
+		},
+	]);
+});
+
+void test('detected open controller pick mode sets candidates without opening URL', async () => {
+	const inFlightRef = { current: false };
+	const openStates: boolean[] = [];
+	const openedUrls: string[] = [];
+	const pickerSelections: {
+		candidates: DetectedOpenCandidate[];
+		context: {
+			paneId: string;
+			paneTty: string;
+			panePath: string;
+		};
+	}[] = [];
+	const commands: { command: string; timeoutMs: number }[] = [];
+	const errors: string[] = [];
+	const candidates: DetectedOpenCandidate[] = [
+		{
+			kind: 'remote-url',
+			raw: 'https://example.test/app',
+			normalized: 'https://example.test/app',
+			display: 'https://example.test/app',
+			path: null,
+			line: null,
+			url: 'https://example.test/app',
+		},
+		{
+			kind: 'file',
+			raw: 'src/app.ts:12',
+			normalized: '/tmp/project/src/app.ts:12',
+			display: 'src/app.ts:12',
+			path: '/tmp/project/src/app.ts',
+			line: 12,
+			url: null,
+		},
+	];
+	const context = {
+		paneId: '%9',
+		paneTty: '/dev/pts/9',
+		panePath: '/tmp/project',
+	};
+	const result = runDetectedOpenControllerRequest({
+		mode: 'pick',
+		inFlightRef,
+		requestId: createRequestId(),
+		setOpen: (open) => {
+			openStates.push(open);
+		},
+		showError: (title, message) => {
+			errors.push(`${title}: ${message}`);
+		},
+		showErrorReport: (report) => {
+			errors.push(`${report.title}: ${report.message}`);
+		},
+		getErrorMessage: (error) =>
+			error instanceof Error ? error.message : String(error),
+		openUrl: async (url) => {
+			openedUrls.push(url);
+		},
+		setPickerCandidates: (nextCandidates, nextContext) => {
+			pickerSelections.push({
+				candidates: nextCandidates,
+				context: nextContext,
+			});
+		},
+		resolvePaneContext: async () => context,
+		runHostBrowserCommand: async (command, timeoutMs) => {
+			commands.push({ command, timeoutMs });
+			return JSON.stringify(candidates);
+		},
+	});
+
+	assert.equal(result.accepted, true);
+	assert.equal(inFlightRef.current, true);
+	assert.deepEqual(openStates, [false]);
+	if (result.accepted) await result.completion;
+
+	assert.equal(inFlightRef.current, false);
+	assert.deepEqual(errors, []);
+	assert.deepEqual(openedUrls, []);
+	assert.deepEqual(pickerSelections, [{ candidates, context }]);
+	assert.deepEqual(commands, [
+		{
+			command:
+				"TMUX_PANE='%9' TMUX_PANE_TTY='/dev/pts/9' TMUX_PANE_PATH='/tmp/project' mdev open detect --json",
+			timeoutMs: 60_000,
+		},
+	]);
+});
+
+void test('detected open picker selection opens parsed bridge URL', async () => {
+	const commands: { command: string; timeoutMs: number }[] = [];
+	const openedUrls: string[] = [];
+	const candidate: DetectedOpenCandidate = {
+		kind: 'file',
+		raw: '--print-url',
+		normalized: '/tmp/project/--print-url',
+		display: '--print-url',
+		path: '/tmp/project/--print-url',
+		line: null,
+		url: null,
+	};
+
+	await runDetectedOpenPickerSelectionRequest({
+		context: {
+			paneId: '%9',
+			paneTty: '/dev/pts/9',
+			panePath: '/tmp/project',
+		},
+		candidate,
+		runHostBrowserCommand: async (command, timeoutMs) => {
+			commands.push({ command, timeoutMs });
+			return 'https://example.test/file\n';
+		},
+		openUrl: async (url) => {
+			openedUrls.push(url);
+		},
+	});
+
+	assert.deepEqual(openedUrls, ['https://example.test/file']);
+	assert.deepEqual(commands, [
+		{
+			command:
+				"TMUX_PANE='%9' TMUX_PANE_TTY='/dev/pts/9' TMUX_PANE_PATH='/tmp/project' mdev open bridge --print-url -- '--print-url'",
+			timeoutMs: 60_000,
 		},
 	]);
 });
@@ -328,6 +414,12 @@ void test('detected open controller rejects busy request without closing modal',
 		},
 		getErrorMessage: (error) =>
 			error instanceof Error ? error.message : String(error),
+		openUrl: async () => {
+			throw new Error('openUrl should not run');
+		},
+		setPickerCandidates: () => {
+			throw new Error('setPickerCandidates should not run');
+		},
 		resolvePaneContext: async () => {
 			throw new Error('resolvePaneContext should not run');
 		},
@@ -345,13 +437,13 @@ void test('detected open controller reports mode-specific failures and clears in
 			mode: 'auto' as const,
 			expectedTitle: 'Open failed',
 			expectedCommand:
-				"TMUX_PANE='%9' TMUX_PANE_TTY='/dev/pts/9' TMUX_PANE_PATH='/tmp/project' mdev open auto",
+				"TMUX_PANE='%9' TMUX_PANE_TTY='/dev/pts/9' TMUX_PANE_PATH='/tmp/project' mdev open auto --print-url",
 		},
 		{
 			mode: 'pick' as const,
 			expectedTitle: 'Pick failed',
 			expectedCommand:
-				"TMUX_PANE='%9' TMUX_PANE_TTY='/dev/pts/9' TMUX_PANE_PATH='/tmp/project' mdev open pick",
+				"TMUX_PANE='%9' TMUX_PANE_TTY='/dev/pts/9' TMUX_PANE_PATH='/tmp/project' mdev open detect --json",
 		},
 	];
 
@@ -376,6 +468,12 @@ void test('detected open controller reports mode-specific failures and clears in
 			},
 			getErrorMessage: (error) =>
 				error instanceof Error ? error.message : String(error),
+			openUrl: async () => {
+				throw new Error('openUrl should not run');
+			},
+			setPickerCandidates: () => {
+				throw new Error('setPickerCandidates should not run');
+			},
 			resolvePaneContext: async () => ({
 				paneId: '%9',
 				paneTty: '/dev/pts/9',
@@ -414,6 +512,12 @@ void test('detected open controller supports legacy two-argument error callback'
 		},
 		getErrorMessage: (error) =>
 			error instanceof Error ? error.message : String(error),
+		openUrl: async () => {
+			throw new Error('openUrl should not run');
+		},
+		setPickerCandidates: () => {
+			throw new Error('setPickerCandidates should not run');
+		},
 		resolvePaneContext: async () => ({
 			paneId: '%9',
 			paneTty: '/dev/pts/9',
@@ -452,6 +556,12 @@ void test('detected open controller suppresses stale request side effects', asyn
 		},
 		getErrorMessage: (error) =>
 			error instanceof Error ? error.message : String(error),
+		openUrl: async () => {
+			throw new Error('openUrl should not run');
+		},
+		setPickerCandidates: () => {
+			throw new Error('setPickerCandidates should not run');
+		},
 		resolvePaneContext: async () =>
 			new Promise((resolve) => {
 				resumeContext = () => {
@@ -502,6 +612,12 @@ void test('detected open controller suppresses stale command rejection', async (
 		},
 		getErrorMessage: (error) =>
 			error instanceof Error ? error.message : String(error),
+		openUrl: async () => {
+			throw new Error('openUrl should not run');
+		},
+		setPickerCandidates: () => {
+			throw new Error('setPickerCandidates should not run');
+		},
 		resolvePaneContext: async () => ({
 			paneId: '%9',
 			paneTty: '/dev/pts/9',

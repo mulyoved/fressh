@@ -199,7 +199,7 @@ void test('browser actions detected open resolves pane context through Workmux a
 	assert.deepEqual(harness.commands, [
 		{
 			command:
-				"TMUX_PANE='%34' TMUX_PANE_TTY='/dev/pts/12' TMUX_PANE_PATH='/home/muly/fressh/apps/mobile'\\''s' mdev open pick",
+				"TMUX_PANE='%34' TMUX_PANE_TTY='/dev/pts/12' TMUX_PANE_PATH='/home/muly/fressh/apps/mobile'\\''s' mdev open detect --json",
 			timeoutMs: 60_000,
 		},
 	]);
