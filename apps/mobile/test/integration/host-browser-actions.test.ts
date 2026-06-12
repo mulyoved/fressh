@@ -120,6 +120,13 @@ void test('parsePrintedOpenUrl accepts a single http or https URL', () => {
 			url: 'https://example.test/app',
 		},
 	);
+	assert.deepEqual(
+		parsePrintedOpenUrl('warning only\nhttps://good.example/path'),
+		{
+			type: 'valid',
+			url: 'https://good.example/path',
+		},
+	);
 	assert.deepEqual(parsePrintedOpenUrl(''), {
 		type: 'invalid',
 		message: 'mdev open did not return a URL.',
@@ -128,6 +135,15 @@ void test('parsePrintedOpenUrl accepts a single http or https URL', () => {
 		type: 'invalid',
 		message: 'mdev open returned an invalid URL.',
 	});
+	assert.deepEqual(
+		parsePrintedOpenUrl(
+			'noise https://bad.example/path\nhttps://good.example/path',
+		),
+		{
+			type: 'invalid',
+			message: 'mdev open returned an invalid URL.',
+		},
+	);
 	assert.deepEqual(parsePrintedOpenUrl('https://example.test/app\nhttps://example.test/other'), {
 		type: 'invalid',
 		message: 'mdev open returned an invalid URL.',

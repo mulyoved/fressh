@@ -164,9 +164,14 @@ export function parsePrintedOpenUrl(output: string): ParsedPrintedOpenUrl {
 		return { type: 'invalid', message: 'mdev open did not return a URL.' };
 	}
 	const parsedUrls: URL[] = [];
+	let hasMalformedUrlLine = false;
 	for (const line of output.split(/\r?\n/)) {
 		const candidate = line.trim();
-		if (!candidate || /\s/.test(candidate)) continue;
+		if (!candidate) continue;
+		if (/\s/.test(candidate)) {
+			if (/https?:\/\//.test(candidate)) hasMalformedUrlLine = true;
+			continue;
+		}
 		let parsed: URL;
 		try {
 			parsed = new URL(candidate);
@@ -174,6 +179,9 @@ export function parsePrintedOpenUrl(output: string): ParsedPrintedOpenUrl {
 			continue;
 		}
 		parsedUrls.push(parsed);
+	}
+	if (hasMalformedUrlLine) {
+		return { type: 'invalid', message: 'mdev open returned an invalid URL.' };
 	}
 	if (parsedUrls.length === 1) {
 		const parsed = parsedUrls[0]!;
