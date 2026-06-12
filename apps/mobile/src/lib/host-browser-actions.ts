@@ -163,6 +163,9 @@ export function parsePrintedOpenUrl(output: string): ParsedPrintedOpenUrl {
 	if (!trimmed) {
 		return { type: 'invalid', message: 'mdev open did not return a URL.' };
 	}
+	if (/\s/.test(trimmed)) {
+		return { type: 'invalid', message: 'mdev open returned an invalid URL.' };
+	}
 	let parsed: URL;
 	try {
 		parsed = new URL(trimmed);

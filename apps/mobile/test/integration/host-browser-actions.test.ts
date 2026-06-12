@@ -119,6 +119,19 @@ void test('parsePrintedOpenUrl accepts a single http or https URL', () => {
 		type: 'invalid',
 		message: 'mdev open returned an invalid URL.',
 	});
+	assert.deepEqual(parsePrintedOpenUrl('https://example.test/app\nextra'), {
+		type: 'invalid',
+		message: 'mdev open returned an invalid URL.',
+	});
+	assert.deepEqual(
+		parsePrintedOpenUrl(
+			'https://example.test/app https://example.test/other',
+		),
+		{
+			type: 'invalid',
+			message: 'mdev open returned an invalid URL.',
+		},
+	);
 	assert.deepEqual(parsePrintedOpenUrl('ftp://example.test'), {
 		type: 'invalid',
 		message: 'mdev open returned a non-http URL.',
