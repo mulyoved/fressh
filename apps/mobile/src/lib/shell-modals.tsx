@@ -1,3 +1,4 @@
+import * as Clipboard from 'expo-clipboard';
 import * as Linking from 'expo-linking';
 import {
 	useCallback,
@@ -13,14 +14,14 @@ import {
 	resolveBrowserActionsPaneContext,
 	resolveBrowserActionsPanePath,
 	resolveBrowserActionsWorkspace,
-	runBrowserActionsDiffityShare,
+	runBrowserActionsDiffityShareWithContext,
 	type BrowserActionsWorkspace,
 } from '@/lib/browser-actions-controller-actions';
 import { cleanupBrowserActionRequests } from '@/lib/browser-actions-request-cleanup';
 import { runDetectedOpenControllerRequest } from '@/lib/detected-open-actions';
+import { showBrowserActionErrorReport } from './browser-action-error-alert';
+import { createBrowserActionErrorReport } from './browser-action-error-report';
 import {
-	buildTmuxWindowConfigGetCommand,
-	buildTmuxWindowConfigSetCommand,
 	getHostBrowserUrlSlotLabel,
 	HOST_BROWSER_NO_CONNECTION_MESSAGE,
 	parseHostBrowserUrlInput,
@@ -30,18 +31,28 @@ import {
 } from './host-browser-actions';
 import { runHostCommandWithBoundary } from './host-command-router';
 import { runHostDiffityOpenRequest } from './host-diffity-open-request';
+import { rootLogger } from './logger';
 import {
 	buildCreateGitHubIssueCommand,
 	buildFeatureRequestSubmittedAlert,
-	buildGitHubRepositoryTargetUrl,
-	buildResolveGitHubRepositoryCommand,
-	parseGitHubRepositoryResolutionOutput,
 	type GitHubRepositoryTarget,
 } from './repo-feature-request';
 import { useRequestId } from './request-id';
+import {
+	createDiffBrowserActionErrorInput,
+	type BrowserActionErrorInput,
+} from './shell-browser-action-error-inputs';
+import {
+	resolveGitHubRepositoryContext,
+	runGitHubTargetOpenRequest,
+} from './shell-github-target-request';
+import { runHostUrlReadRequest } from './shell-host-url-read-request';
+import { runHostUrlSubmitRequest } from './shell-host-url-submit-request';
 import { type DiscoveredSkill } from './skill-discovery';
 import { skillDiscoveryCache } from './skill-discovery-cache-native';
 import { loadSkillSelectorProject } from './skill-selector-loader';
+
+const logger = rootLogger.extend('ShellModals');
 
 export type SimpleModalHandle = {
 	open: boolean;
@@ -737,9 +748,27 @@ export function useBrowserActionsController<TConnection>(
 	const hostDetectedOpenRequestId = useRequestId();
 	const hostDetectedOpenInFlightRef = useRef(false);
 
-	const showError = useCallback((title: string, message: string) => {
-		Alert.alert(title, message);
-	}, []);
+	const showError = useCallback(
+		(input: BrowserActionErrorInput) => {
+			showBrowserActionErrorReport(
+				createBrowserActionErrorReport({
+					...input,
+					connectionPresent: Boolean(connection),
+					tmuxEnabled,
+					tmuxTarget,
+				}),
+				{
+					alert: (title, message, buttons) =>
+						Alert.alert(title, message, buttons),
+					copyText: async (text) => {
+						await Clipboard.setStringAsync(text);
+					},
+					warn: (message, error) => logger.warn(message, error),
+				},
+			);
+		},
+		[connection, tmuxEnabled, tmuxTarget],
+	);
 
 	const runHostBrowserCommand = useCallback(
 		async (command: string, timeoutMs = 30_000) => {
@@ -810,20 +839,18 @@ export function useBrowserActionsController<TConnection>(
 		tmuxTarget,
 	]);
 
+	const resolveCurrentGitHubRepositoryContext = useCallback(async () => {
+		return resolveGitHubRepositoryContext({
+			resolvePanePath: resolveHostBrowserPanePath,
+			runHostBrowserCommand,
+			getErrorMessage,
+		});
+	}, [getErrorMessage, resolveHostBrowserPanePath, runHostBrowserCommand]);
+
 	const resolveCurrentGitHubRepository = useCallback(async () => {
-		const panePath = await resolveHostBrowserPanePath();
-		const output = await runHostBrowserCommand(
-			buildResolveGitHubRepositoryCommand(panePath),
-			10_000,
-		);
-		const repository = parseGitHubRepositoryResolutionOutput(output);
-		if (!repository) {
-			throw new Error(
-				'Could not resolve GitHub repository for current window.',
-			);
-		}
+		const { repository } = await resolveCurrentGitHubRepositoryContext();
 		return repository;
-	}, [resolveHostBrowserPanePath, runHostBrowserCommand]);
+	}, [resolveCurrentGitHubRepositoryContext]);
 
 	const openAndroidUrl = useCallback(
 		async (url: string) => {
@@ -858,34 +885,22 @@ export function useBrowserActionsController<TConnection>(
 		setOpen(true);
 	}, [closeOtherModals, invalidateHostUrlReads, resetHostUrlModal]);
 
-	const close = useCallback(() => {
-		setOpen(false);
-	}, []);
-
 	const handleOpenGitHubTarget = useCallback(
 		(target: GitHubRepositoryTarget) => {
-			const id = browserGitHubTargetRequestId.next();
-			const title =
-				target === 'issues'
-					? 'GitHub Issues failed'
-					: 'GitHub Pull Requests failed';
-			void (async () => {
-				try {
-					const repository = await resolveCurrentGitHubRepository();
-					if (!browserGitHubTargetRequestId.isCurrent(id)) return;
-					const url = buildGitHubRepositoryTargetUrl(repository, target);
-					await openAndroidUrl(url);
-				} catch (err) {
-					if (!browserGitHubTargetRequestId.isCurrent(id)) return;
-					showError(title, getErrorMessage(err));
-				}
-			})();
+			runGitHubTargetOpenRequest({
+				target,
+				requestId: browserGitHubTargetRequestId,
+				resolveRepositoryContext: resolveCurrentGitHubRepositoryContext,
+				openAndroidUrl,
+				showError,
+				getErrorMessage,
+			});
 		},
 		[
 			browserGitHubTargetRequestId,
 			getErrorMessage,
 			openAndroidUrl,
-			resolveCurrentGitHubRepository,
+			resolveCurrentGitHubRepositoryContext,
 			showError,
 		],
 	);
@@ -904,7 +919,7 @@ export function useBrowserActionsController<TConnection>(
 			hostDiffityInFlightRef,
 			hostDiffityRequestId,
 			runDiffityShare: () =>
-				runBrowserActionsDiffityShare({
+				runBrowserActionsDiffityShareWithContext({
 					tmuxEnabled,
 					tmuxTarget,
 					runHostBrowserCommand,
@@ -912,7 +927,14 @@ export function useBrowserActionsController<TConnection>(
 					getErrorMessage,
 				}),
 			openAndroidUrl,
-			showError,
+			showError: (title, message) =>
+				showError({
+					action: 'Diff',
+					title,
+					message,
+				}),
+			showErrorReport: (report) =>
+				showError(createDiffBrowserActionErrorInput(report)),
 			getErrorMessage,
 		});
 	}, [
@@ -935,7 +957,20 @@ export function useBrowserActionsController<TConnection>(
 				resolvePaneContext: resolveHostBrowserPaneContext,
 				runHostBrowserCommand,
 				setOpen,
-				showError,
+				showError: (title, message) =>
+					showError({
+						action: mode === 'pick' ? 'Pick' : 'Open',
+						title,
+						message,
+					}),
+				showErrorReport: (report) =>
+					showError({
+						action: mode === 'pick' ? 'Pick' : 'Open',
+						title: report.title,
+						message: report.message,
+						panePath: report.panePath,
+						command: report.command,
+					}),
 				getErrorMessage,
 			});
 			return result.accepted;
@@ -961,49 +996,19 @@ export function useBrowserActionsController<TConnection>(
 
 	const handleOpenHostUrlSlot = useCallback(
 		(slot: HostBrowserUrlSlot) => {
-			setOpen(false);
-			const id = hostUrlReadRequestId.next();
-			void (async () => {
-				try {
-					const panePath = await resolveHostBrowserPanePath();
-					if (!hostUrlReadRequestId.isCurrent(id)) return;
-					const value = await runHostBrowserCommand(
-						buildTmuxWindowConfigGetCommand(slot, panePath),
-						10_000,
-					);
-					if (!hostUrlReadRequestId.isCurrent(id)) return;
-					const savedUrl = value.trim();
-					if (savedUrl) {
-						const parsed = parseHostBrowserUrlInput(savedUrl);
-						if (parsed.type === 'invalid') {
-							setHostUrlModalState({
-								mode: 'edit',
-								slot,
-								panePath,
-								initialValue: savedUrl,
-							});
-							setHostUrlModalError(parsed.message);
-							return;
-						}
-						if (parsed.type === 'empty') return;
-						await openAndroidUrl(parsed.url);
-						return;
-					}
-					setHostUrlModalError(null);
-					setHostUrlModalState({
-						mode: 'open-missing',
-						slot,
-						panePath,
-						initialValue: '',
-					});
-				} catch (err) {
-					if (!hostUrlReadRequestId.isCurrent(id)) return;
-					showError(
-						`${getHostBrowserUrlSlotLabel(slot)} failed`,
-						getErrorMessage(err),
-					);
-				}
-			})();
+			runHostUrlReadRequest({
+				mode: 'open',
+				slot,
+				requestId: hostUrlReadRequestId,
+				resolvePanePath: resolveHostBrowserPanePath,
+				runHostBrowserCommand,
+				openAndroidUrl,
+				setOpen,
+				setHostUrlModalState,
+				setHostUrlModalError,
+				showError,
+				getErrorMessage,
+			});
 		},
 		[
 			getErrorMessage,
@@ -1017,36 +1022,24 @@ export function useBrowserActionsController<TConnection>(
 
 	const handleEditHostUrlSlot = useCallback(
 		(slot: HostBrowserUrlSlot) => {
-			setOpen(false);
-			const id = hostUrlReadRequestId.next();
-			void (async () => {
-				try {
-					const panePath = await resolveHostBrowserPanePath();
-					if (!hostUrlReadRequestId.isCurrent(id)) return;
-					const value = await runHostBrowserCommand(
-						buildTmuxWindowConfigGetCommand(slot, panePath),
-						10_000,
-					);
-					if (!hostUrlReadRequestId.isCurrent(id)) return;
-					setHostUrlModalError(null);
-					setHostUrlModalState({
-						mode: 'edit',
-						slot,
-						panePath,
-						initialValue: value.trim(),
-					});
-				} catch (err) {
-					if (!hostUrlReadRequestId.isCurrent(id)) return;
-					showError(
-						`Edit ${getHostBrowserUrlSlotLabel(slot)} failed`,
-						getErrorMessage(err),
-					);
-				}
-			})();
+			runHostUrlReadRequest({
+				mode: 'edit',
+				slot,
+				requestId: hostUrlReadRequestId,
+				resolvePanePath: resolveHostBrowserPanePath,
+				runHostBrowserCommand,
+				openAndroidUrl,
+				setOpen,
+				setHostUrlModalState,
+				setHostUrlModalError,
+				showError,
+				getErrorMessage,
+			});
 		},
 		[
 			getErrorMessage,
 			hostUrlReadRequestId,
+			openAndroidUrl,
 			resolveHostBrowserPanePath,
 			runHostBrowserCommand,
 			showError,
@@ -1072,37 +1065,19 @@ export function useBrowserActionsController<TConnection>(
 				setHostUrlModalError(parsed.message);
 				return;
 			}
-			if (hostUrlSubmitInFlightRef.current) return;
-			const id = hostUrlSubmitRequestId.next();
-			hostUrlSubmitInFlightRef.current = true;
-			void (async () => {
-				setHostUrlModalSubmitting(true);
-				setHostUrlModalError(null);
-				try {
-					await runHostBrowserCommand(
-						buildTmuxWindowConfigSetCommand(
-							state.slot,
-							state.panePath,
-							parsed.url,
-						),
-						10_000,
-					);
-					if (!hostUrlSubmitRequestId.isCurrent(id)) return;
-					if (state.mode === 'open-missing') {
-						await openAndroidUrl(parsed.url);
-						if (!hostUrlSubmitRequestId.isCurrent(id)) return;
-					}
-					setHostUrlModalState(null);
-				} catch (err) {
-					if (!hostUrlSubmitRequestId.isCurrent(id)) return;
-					setHostUrlModalError(getErrorMessage(err));
-				} finally {
-					if (hostUrlSubmitRequestId.isCurrent(id)) {
-						hostUrlSubmitInFlightRef.current = false;
-						setHostUrlModalSubmitting(false);
-					}
-				}
-			})();
+			runHostUrlSubmitRequest({
+				state,
+				url: parsed.url,
+				hostUrlSubmitInFlightRef,
+				hostUrlSubmitRequestId,
+				runHostBrowserCommand,
+				openAndroidUrl,
+				setHostUrlModalState,
+				setHostUrlModalSubmitting,
+				setHostUrlModalError,
+				showError,
+				getErrorMessage,
+			});
 		},
 		[
 			getErrorMessage,
@@ -1110,10 +1085,11 @@ export function useBrowserActionsController<TConnection>(
 			hostUrlSubmitRequestId,
 			openAndroidUrl,
 			runHostBrowserCommand,
+			showError,
 		],
 	);
 
-	const invalidateAll = useCallback(() => {
+	const cleanupAllRequests = useCallback(() => {
 		cleanupBrowserActionRequests({
 			hostUrlReadRequestId,
 			hostUrlSubmitRequestId,
@@ -1124,9 +1100,6 @@ export function useBrowserActionsController<TConnection>(
 			hostDetectedOpenRequestId,
 			hostDetectedOpenInFlightRef,
 		});
-		setHostUrlModalState(null);
-		setHostUrlModalSubmitting(false);
-		setHostUrlModalError(null);
 	}, [
 		browserGitHubTargetRequestId,
 		hostDetectedOpenRequestId,
@@ -1135,26 +1108,32 @@ export function useBrowserActionsController<TConnection>(
 		hostUrlSubmitRequestId,
 	]);
 
-	useEffect(() => {
-		return () => {
-			cleanupBrowserActionRequests({
-				hostUrlReadRequestId,
-				hostUrlSubmitRequestId,
-				hostUrlSubmitInFlightRef,
-				browserGitHubTargetRequestId,
-				hostDiffityRequestId,
-				hostDiffityInFlightRef,
-				hostDetectedOpenRequestId,
-				hostDetectedOpenInFlightRef,
-			});
-		};
-	}, [
-		browserGitHubTargetRequestId,
-		hostDetectedOpenRequestId,
-		hostDiffityRequestId,
-		hostUrlReadRequestId,
-		hostUrlSubmitRequestId,
-	]);
+	const invalidateAll = useCallback(() => {
+		cleanupAllRequests();
+		setHostUrlModalState(null);
+		setHostUrlModalSubmitting(false);
+		setHostUrlModalError(null);
+	}, [cleanupAllRequests]);
+
+	const close = useCallback(() => {
+		setOpen(false);
+	}, []);
+
+	const requestSourceRef = useRef({ connection, tmuxEnabled, tmuxTarget });
+	useLayoutEffect(() => {
+		const previous = requestSourceRef.current;
+		if (
+			previous.connection === connection &&
+			previous.tmuxEnabled === tmuxEnabled &&
+			previous.tmuxTarget === tmuxTarget
+		) {
+			return;
+		}
+		requestSourceRef.current = { connection, tmuxEnabled, tmuxTarget };
+		invalidateAll();
+	}, [connection, invalidateAll, tmuxEnabled, tmuxTarget]);
+
+	useEffect(() => cleanupAllRequests, [cleanupAllRequests]);
 
 	const browserActionsProps = useMemo<BrowserActionsModalProps>(
 		() => ({

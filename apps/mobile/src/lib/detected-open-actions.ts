@@ -66,12 +66,20 @@ export type DetectedOpenRequestId = {
 	isCurrent: (requestId: number) => boolean;
 };
 
+export type DetectedOpenErrorReport = {
+	title: string;
+	message: string;
+	panePath?: string;
+	command?: string;
+};
+
 export type RunDetectedOpenControllerRequestDeps =
 	RunDetectedOpenCommandDeps & {
 		inFlightRef: DetectedOpenInFlightRef;
 		requestId: DetectedOpenRequestId;
 		setOpen: (open: boolean) => void;
 		showError: (title: string, message: string) => void;
+		showErrorReport?: (report: DetectedOpenErrorReport) => void;
 		getErrorMessage: (error: unknown) => string;
 	};
 
@@ -166,15 +174,19 @@ export function runDetectedOpenControllerRequest({
 	runHostBrowserCommand,
 	setOpen,
 	showError,
+	showErrorReport,
 	getErrorMessage,
 }: RunDetectedOpenControllerRequestDeps): DetectedOpenControllerRequestResult {
 	if (
 		!tryBeginDetectedOpenRequest({
 			inFlightRef,
 			onBusy: () => {
-				showError(
-					'Open already running',
-					'Wait for the current browser action to finish.',
+				showDetectedOpenError(
+					{ showError, showErrorReport },
+					{
+						title: 'Open already running',
+						message: 'Wait for the current browser action to finish.',
+					},
 				);
 			},
 		})
@@ -184,20 +196,23 @@ export function runDetectedOpenControllerRequest({
 	setOpen(false);
 	const id = requestId.next();
 	const completion = (async () => {
+		let context: TmuxPaneContext | null = null;
+		let command: string | undefined;
 		try {
-			await runDetectedOpenCommand({
-				mode,
-				resolvePaneContext,
-				runHostBrowserCommand: async (command, timeoutMs) => {
-					if (!requestId.isCurrent(id)) return '';
-					return runHostBrowserCommand(command, timeoutMs);
-				},
-			});
+			context = await resolvePaneContext();
+			command = buildMdevOpenCommand(mode, context);
+			if (!requestId.isCurrent(id)) return;
+			await runHostBrowserCommand(command, getDetectedOpenTimeoutMs(mode));
 		} catch (err) {
 			if (!requestId.isCurrent(id)) return;
-			showError(
-				mode === 'pick' ? 'Pick failed' : 'Open failed',
-				getErrorMessage(err),
+			showDetectedOpenError(
+				{ showError, showErrorReport },
+				{
+					title: mode === 'pick' ? 'Pick failed' : 'Open failed',
+					message: getErrorMessage(err),
+					panePath: context?.panePath,
+					command,
+				},
 			);
 		} finally {
 			if (requestId.isCurrent(id)) {
@@ -206,4 +221,21 @@ export function runDetectedOpenControllerRequest({
 		}
 	})();
 	return { accepted: true, completion };
+}
+
+function showDetectedOpenError(
+	{
+		showError,
+		showErrorReport,
+	}: {
+		showError: (title: string, message: string) => void;
+		showErrorReport?: (report: DetectedOpenErrorReport) => void;
+	},
+	report: DetectedOpenErrorReport,
+) {
+	if (showErrorReport) {
+		showErrorReport(report);
+		return;
+	}
+	showError(report.title, report.message);
 }
