@@ -152,8 +152,9 @@ export function buildMdevOpenBridgePrintUrlCommand(
 		'mdev',
 		'open',
 		'bridge',
-		quoteShell(candidateRaw),
 		'--print-url',
+		'--',
+		quoteShell(candidateRaw),
 	].join(' ');
 }
 

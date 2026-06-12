@@ -90,7 +90,15 @@ void test('mdev open print-url command builders shell-quote pane context and can
 			context,
 			"https://example.test/app's",
 		),
-		"TMUX_PANE='%12' TMUX_PANE_TTY='/dev/pts/7' TMUX_PANE_PATH='/home/muly/work repo'\\''s' mdev open bridge 'https://example.test/app'\\''s' --print-url",
+		"TMUX_PANE='%12' TMUX_PANE_TTY='/dev/pts/7' TMUX_PANE_PATH='/home/muly/work repo'\\''s' mdev open bridge --print-url -- 'https://example.test/app'\\''s'",
+	);
+	assert.equal(
+		buildMdevOpenBridgePrintUrlCommand(context, '--print-url'),
+		"TMUX_PANE='%12' TMUX_PANE_TTY='/dev/pts/7' TMUX_PANE_PATH='/home/muly/work repo'\\''s' mdev open bridge --print-url -- '--print-url'",
+	);
+	assert.equal(
+		buildMdevOpenBridgePrintUrlCommand(context, '--emit'),
+		"TMUX_PANE='%12' TMUX_PANE_TTY='/dev/pts/7' TMUX_PANE_PATH='/home/muly/work repo'\\''s' mdev open bridge --print-url -- '--emit'",
 	);
 });
 
@@ -118,18 +126,43 @@ void test('parsePrintedOpenUrl accepts a single http or https URL', () => {
 });
 
 void test('parseDetectedOpenCandidates validates mdev open detect JSON', () => {
+	const remoteUrlCandidate = {
+		kind: 'remote-url',
+		raw: 'https://example.test/app',
+		normalized: 'https://example.test/app',
+		display: 'https://example.test/app',
+		sourceLine: 1,
+		sourceColumn: 6,
+		path: null,
+		line: null,
+		url: 'https://example.test/app',
+	};
+	const localUrlCandidate = {
+		kind: 'local-url',
+		raw: 'http://localhost:5173/app',
+		normalized: 'http://localhost:5173/app',
+		display: 'http://localhost:5173/app',
+		sourceLine: 2,
+		sourceColumn: 1,
+		path: null,
+		line: null,
+		url: 'http://localhost:5173/app',
+	};
+	const fileCandidate = {
+		kind: 'file',
+		raw: 'src/app.ts:12',
+		normalized: '/repo/src/app.ts:12',
+		display: 'src/app.ts:12',
+		sourceLine: 3,
+		sourceColumn: 1,
+		path: '/repo/src/app.ts',
+		line: 12,
+		url: null,
+	};
 	const output = JSON.stringify([
-		{
-			kind: 'remote-url',
-			raw: 'https://example.test/app',
-			normalized: 'https://example.test/app',
-			display: 'https://example.test/app',
-			sourceLine: 1,
-			sourceColumn: 6,
-			path: null,
-			line: null,
-			url: 'https://example.test/app',
-		},
+		remoteUrlCandidate,
+		localUrlCandidate,
+		fileCandidate,
 	]);
 
 	assert.deepEqual(parseDetectedOpenCandidates(output), {
@@ -144,7 +177,29 @@ void test('parseDetectedOpenCandidates validates mdev open detect JSON', () => {
 				line: null,
 				url: 'https://example.test/app',
 			},
+			{
+				kind: 'local-url',
+				raw: 'http://localhost:5173/app',
+				normalized: 'http://localhost:5173/app',
+				display: 'http://localhost:5173/app',
+				path: null,
+				line: null,
+				url: 'http://localhost:5173/app',
+			},
+			{
+				kind: 'file',
+				raw: 'src/app.ts:12',
+				normalized: '/repo/src/app.ts:12',
+				display: 'src/app.ts:12',
+				path: '/repo/src/app.ts',
+				line: 12,
+				url: null,
+			},
 		],
+	});
+	assert.deepEqual(parseDetectedOpenCandidates('[]'), {
+		type: 'valid',
+		candidates: [],
 	});
 	assert.deepEqual(parseDetectedOpenCandidates(''), {
 		type: 'invalid',
@@ -169,6 +224,21 @@ void test('parseDetectedOpenCandidates validates mdev open detect JSON', () => {
 			message: 'mdev open detect returned an invalid candidate.',
 		},
 	);
+	for (const candidate of [
+		null,
+		'not an object',
+		{ ...remoteUrlCandidate, raw: undefined },
+		{ ...remoteUrlCandidate, normalized: undefined },
+		{ ...remoteUrlCandidate, display: undefined },
+		{ ...remoteUrlCandidate, path: 123 },
+		{ ...remoteUrlCandidate, line: '12' },
+		{ ...remoteUrlCandidate, url: 123 },
+	]) {
+		assert.deepEqual(parseDetectedOpenCandidates(JSON.stringify([candidate])), {
+			type: 'invalid',
+			message: 'mdev open detect returned an invalid candidate.',
+		});
+	}
 });
 
 void test('host browser URL slots have user-facing labels', () => {
