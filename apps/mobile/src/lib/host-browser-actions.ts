@@ -163,19 +163,26 @@ export function parsePrintedOpenUrl(output: string): ParsedPrintedOpenUrl {
 	if (!trimmed) {
 		return { type: 'invalid', message: 'mdev open did not return a URL.' };
 	}
-	if (/\s/.test(trimmed)) {
-		return { type: 'invalid', message: 'mdev open returned an invalid URL.' };
+	const parsedUrls: URL[] = [];
+	for (const line of output.split(/\r?\n/)) {
+		const candidate = line.trim();
+		if (!candidate || /\s/.test(candidate)) continue;
+		let parsed: URL;
+		try {
+			parsed = new URL(candidate);
+		} catch {
+			continue;
+		}
+		parsedUrls.push(parsed);
 	}
-	let parsed: URL;
-	try {
-		parsed = new URL(trimmed);
-	} catch {
-		return { type: 'invalid', message: 'mdev open returned an invalid URL.' };
+	if (parsedUrls.length === 1) {
+		const parsed = parsedUrls[0]!;
+		if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+			return { type: 'invalid', message: 'mdev open returned a non-http URL.' };
+		}
+		return { type: 'valid', url: parsed.href };
 	}
-	if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-		return { type: 'invalid', message: 'mdev open returned a non-http URL.' };
-	}
-	return { type: 'valid', url: parsed.href };
+	return { type: 'invalid', message: 'mdev open returned an invalid URL.' };
 }
 
 export function parseDetectedOpenCandidates(

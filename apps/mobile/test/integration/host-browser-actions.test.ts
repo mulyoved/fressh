@@ -111,6 +111,15 @@ void test('parsePrintedOpenUrl accepts a single http or https URL', () => {
 		type: 'valid',
 		url: 'http://localhost:3000/path',
 	});
+	assert.deepEqual(
+		parsePrintedOpenUrl(
+			'warning: tailscale serve already configured\nhttps://example.test/app\n',
+		),
+		{
+			type: 'valid',
+			url: 'https://example.test/app',
+		},
+	);
 	assert.deepEqual(parsePrintedOpenUrl(''), {
 		type: 'invalid',
 		message: 'mdev open did not return a URL.',
@@ -119,7 +128,7 @@ void test('parsePrintedOpenUrl accepts a single http or https URL', () => {
 		type: 'invalid',
 		message: 'mdev open returned an invalid URL.',
 	});
-	assert.deepEqual(parsePrintedOpenUrl('https://example.test/app\nextra'), {
+	assert.deepEqual(parsePrintedOpenUrl('https://example.test/app\nhttps://example.test/other'), {
 		type: 'invalid',
 		message: 'mdev open returned an invalid URL.',
 	});
