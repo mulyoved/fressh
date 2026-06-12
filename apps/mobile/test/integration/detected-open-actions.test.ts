@@ -268,6 +268,122 @@ void test('detected open controller auto mode opens parsed URL and clears in-fli
 	]);
 });
 
+void test('detected open controller auto mode reports invalid printed URL output', async () => {
+	const inFlightRef = { current: false };
+	const openCalls: string[] = [];
+	const commands: { command: string; timeoutMs: number }[] = [];
+	const errors: {
+		title: string;
+		message: string;
+		panePath?: string;
+		command?: string;
+	}[] = [];
+	const result = runDetectedOpenControllerRequest({
+		mode: 'auto',
+		inFlightRef,
+		requestId: createRequestId(),
+		setOpen: () => {},
+		showError: (title, message) => {
+			errors.push({ title, message });
+		},
+		showErrorReport: (report) => {
+			errors.push(report);
+		},
+		getErrorMessage: (error) =>
+			error instanceof Error ? error.message : String(error),
+		openUrl: async (url) => {
+			openCalls.push(url);
+		},
+		setPickerCandidates: () => {
+			throw new Error('setPickerCandidates should not run');
+		},
+		resolvePaneContext: async () => ({
+			paneId: '%9',
+			paneTty: '/dev/pts/9',
+			panePath: '/tmp/project',
+		}),
+		runHostBrowserCommand: async (command, timeoutMs) => {
+			commands.push({ command, timeoutMs });
+			return 'not a url';
+		},
+	});
+
+	assert.equal(result.accepted, true);
+	assert.equal(inFlightRef.current, true);
+	if (result.accepted) await result.completion;
+
+	const expectedCommand =
+		"TMUX_PANE='%9' TMUX_PANE_TTY='/dev/pts/9' TMUX_PANE_PATH='/tmp/project' mdev open auto --print-url";
+	assert.equal(inFlightRef.current, false);
+	assert.deepEqual(openCalls, []);
+	assert.deepEqual(commands, [{ command: expectedCommand, timeoutMs: 30_000 }]);
+	assert.deepEqual(errors, [
+		{
+			title: 'Open failed',
+			message: 'mdev open returned an invalid URL.',
+			panePath: '/tmp/project',
+			command: expectedCommand,
+		},
+	]);
+});
+
+void test('detected open controller auto mode reports openUrl rejection', async () => {
+	const inFlightRef = { current: false };
+	const commands: { command: string; timeoutMs: number }[] = [];
+	const errors: {
+		title: string;
+		message: string;
+		panePath?: string;
+		command?: string;
+	}[] = [];
+	const result = runDetectedOpenControllerRequest({
+		mode: 'auto',
+		inFlightRef,
+		requestId: createRequestId(),
+		setOpen: () => {},
+		showError: (title, message) => {
+			errors.push({ title, message });
+		},
+		showErrorReport: (report) => {
+			errors.push(report);
+		},
+		getErrorMessage: (error) =>
+			error instanceof Error ? error.message : String(error),
+		openUrl: async () => {
+			throw new Error('Android could not open URL');
+		},
+		setPickerCandidates: () => {
+			throw new Error('setPickerCandidates should not run');
+		},
+		resolvePaneContext: async () => ({
+			paneId: '%9',
+			paneTty: '/dev/pts/9',
+			panePath: '/tmp/project',
+		}),
+		runHostBrowserCommand: async (command, timeoutMs) => {
+			commands.push({ command, timeoutMs });
+			return 'https://example.test/app\n';
+		},
+	});
+
+	assert.equal(result.accepted, true);
+	assert.equal(inFlightRef.current, true);
+	if (result.accepted) await result.completion;
+
+	const expectedCommand =
+		"TMUX_PANE='%9' TMUX_PANE_TTY='/dev/pts/9' TMUX_PANE_PATH='/tmp/project' mdev open auto --print-url";
+	assert.equal(inFlightRef.current, false);
+	assert.deepEqual(commands, [{ command: expectedCommand, timeoutMs: 30_000 }]);
+	assert.deepEqual(errors, [
+		{
+			title: 'Open failed',
+			message: 'Android could not open URL',
+			panePath: '/tmp/project',
+			command: expectedCommand,
+		},
+	]);
+});
+
 void test('detected open controller pick mode sets candidates without opening URL', async () => {
 	const inFlightRef = { current: false };
 	const openStates: boolean[] = [];
