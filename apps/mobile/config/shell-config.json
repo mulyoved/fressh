@@ -1,6 +1,6 @@
 {
-	"version": "2026-06-10.1",
-	"updatedAt": "2026-06-10T00:00:00.000Z",
+	"version": "2026-06-12.1",
+	"updatedAt": "2026-06-12T14:32:35.000Z",
 	"defaultKeyboardId": "phone_base",
 	"activeKeyboardIds": [
 		"phone_base",
@@ -728,6 +728,19 @@
 				{
 					"type": "text",
 					"data": "/new"
+				},
+				{
+					"type": "enter"
+				}
+			]
+		},
+		{
+			"type": "preset",
+			"label": "/compact",
+			"steps": [
+				{
+					"type": "text",
+					"data": "/compact"
 				},
 				{
 					"type": "enter"

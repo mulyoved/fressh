@@ -44,6 +44,7 @@ function findPreset(
 void test('bundled command menu exposes the approved Issue 91 tree', () => {
 	assert.deepEqual(commandTree(getBundledShellConfig().commandMenus), [
 		{ label: '/new', type: 'preset' },
+		{ label: '/compact', type: 'preset' },
 		{
 			label: 'superpower',
 			type: 'submenu',
