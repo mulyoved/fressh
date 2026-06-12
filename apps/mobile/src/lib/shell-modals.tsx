@@ -18,7 +18,11 @@ import {
 	type BrowserActionsWorkspace,
 } from '@/lib/browser-actions-controller-actions';
 import { cleanupBrowserActionRequests } from '@/lib/browser-actions-request-cleanup';
-import { runDetectedOpenControllerRequest } from '@/lib/detected-open-actions';
+import {
+	runDetectedOpenControllerRequest,
+	runDetectedOpenPickerSelectionRequest,
+	type DetectedOpenCandidate,
+} from '@/lib/detected-open-actions';
 import { showBrowserActionErrorReport } from './browser-action-error-alert';
 import { createBrowserActionErrorReport } from './browser-action-error-report';
 import {
@@ -683,9 +687,17 @@ export type HostUrlModalProps = {
 	onSubmit: (value: string) => void;
 };
 
+export type DetectedOpenPickerModalProps = {
+	open: boolean;
+	candidates: readonly DetectedOpenCandidate[];
+	onClose: () => void;
+	onSelect: (candidate: DetectedOpenCandidate) => void;
+};
+
 export type BrowserActionsControllerHandle = {
 	browserActionsProps: BrowserActionsModalProps;
 	hostUrlProps: HostUrlModalProps;
+	detectedOpenPickerProps: DetectedOpenPickerModalProps;
 	open: () => void;
 	close: () => void;
 	resolveHostBrowserPaneContext: () => Promise<TmuxPaneContext>;
@@ -738,6 +750,10 @@ export function useBrowserActionsController<TConnection>(
 	const [hostUrlModalError, setHostUrlModalError] = useState<string | null>(
 		null,
 	);
+	const [detectedOpenPickerState, setDetectedOpenPickerState] = useState<{
+		context: TmuxPaneContext;
+		candidates: DetectedOpenCandidate[];
+	} | null>(null);
 
 	const hostUrlReadRequestId = useRequestId();
 	const hostUrlSubmitRequestId = useRequestId();
@@ -958,7 +974,9 @@ export function useBrowserActionsController<TConnection>(
 				runHostBrowserCommand,
 				setOpen,
 				openUrl: openAndroidUrl,
-				setPickerCandidates: () => {},
+				setPickerCandidates: (candidates, context) => {
+					setDetectedOpenPickerState({ candidates, context });
+				},
 				showError: (title, message) =>
 					showError({
 						action: mode === 'pick' ? 'Pick' : 'Open',
@@ -995,6 +1013,38 @@ export function useBrowserActionsController<TConnection>(
 	const handleOpenDetectedPick = useCallback(
 		() => handleOpenDetected('pick'),
 		[handleOpenDetected],
+	);
+
+	const handleCloseDetectedOpenPicker = useCallback(() => {
+		setDetectedOpenPickerState(null);
+	}, []);
+
+	const handleSelectDetectedOpenCandidate = useCallback(
+		(candidate: DetectedOpenCandidate) => {
+			const state = detectedOpenPickerState;
+			if (!state) return;
+			setDetectedOpenPickerState(null);
+			void runDetectedOpenPickerSelectionRequest({
+				candidate,
+				context: state.context,
+				runHostBrowserCommand,
+				openUrl: openAndroidUrl,
+			}).catch((error) => {
+				showError({
+					action: 'Pick',
+					title: 'Pick failed',
+					message: getErrorMessage(error),
+					panePath: state.context.panePath,
+				});
+			});
+		},
+		[
+			detectedOpenPickerState,
+			getErrorMessage,
+			openAndroidUrl,
+			runHostBrowserCommand,
+			showError,
+		],
 	);
 
 	const handleOpenHostUrlSlot = useCallback(
@@ -1116,6 +1166,7 @@ export function useBrowserActionsController<TConnection>(
 		setHostUrlModalState(null);
 		setHostUrlModalSubmitting(false);
 		setHostUrlModalError(null);
+		setDetectedOpenPickerState(null);
 	}, [cleanupAllRequests]);
 
 	const close = useCallback(() => {
@@ -1186,10 +1237,25 @@ export function useBrowserActionsController<TConnection>(
 		],
 	);
 
+	const detectedOpenPickerProps = useMemo<DetectedOpenPickerModalProps>(
+		() => ({
+			open: detectedOpenPickerState != null,
+			candidates: detectedOpenPickerState?.candidates ?? [],
+			onClose: handleCloseDetectedOpenPicker,
+			onSelect: handleSelectDetectedOpenCandidate,
+		}),
+		[
+			detectedOpenPickerState,
+			handleCloseDetectedOpenPicker,
+			handleSelectDetectedOpenCandidate,
+		],
+	);
+
 	return useMemo<BrowserActionsControllerHandle>(
 		() => ({
 			browserActionsProps,
 			hostUrlProps,
+			detectedOpenPickerProps,
 			open: openController,
 			close,
 			resolveHostBrowserPaneContext,
@@ -1203,6 +1269,7 @@ export function useBrowserActionsController<TConnection>(
 		[
 			browserActionsProps,
 			close,
+			detectedOpenPickerProps,
 			hostUrlProps,
 			invalidateAll,
 			invalidateHostUrlReads,
