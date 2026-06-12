@@ -185,6 +185,7 @@ export function parsePrintedOpenUrl(output: string): ParsedPrintedOpenUrl {
 		try {
 			parsed = new URL(candidate);
 		} catch {
+			if (urlPrefixCount === 1) hasMalformedUrlLine = true;
 			continue;
 		}
 		parsedUrls.push(parsed);
