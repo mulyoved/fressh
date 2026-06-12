@@ -127,6 +127,13 @@ void test('parsePrintedOpenUrl accepts a single http or https URL', () => {
 			url: 'https://good.example/path',
 		},
 	);
+	assert.deepEqual(
+		parsePrintedOpenUrl('ftp://example.test\nhttps://good.example/path'),
+		{
+			type: 'valid',
+			url: 'https://good.example/path',
+		},
+	);
 	assert.deepEqual(parsePrintedOpenUrl(''), {
 		type: 'invalid',
 		message: 'mdev open did not return a URL.',

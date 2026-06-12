@@ -163,7 +163,8 @@ export function parsePrintedOpenUrl(output: string): ParsedPrintedOpenUrl {
 	if (!trimmed) {
 		return { type: 'invalid', message: 'mdev open did not return a URL.' };
 	}
-	const parsedUrls: URL[] = [];
+	const parsedHttpUrls: URL[] = [];
+	const parsedNonHttpUrls: URL[] = [];
 	let hasMalformedUrlLine = false;
 	for (const line of output.split(/\r?\n/)) {
 		const candidate = line.trim();
@@ -188,17 +189,24 @@ export function parsePrintedOpenUrl(output: string): ParsedPrintedOpenUrl {
 			if (urlPrefixCount === 1) hasMalformedUrlLine = true;
 			continue;
 		}
-		parsedUrls.push(parsed);
+		if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+			parsedHttpUrls.push(parsed);
+		} else {
+			parsedNonHttpUrls.push(parsed);
+		}
 	}
 	if (hasMalformedUrlLine) {
 		return { type: 'invalid', message: 'mdev open returned an invalid URL.' };
 	}
-	if (parsedUrls.length === 1) {
-		const parsed = parsedUrls[0]!;
-		if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-			return { type: 'invalid', message: 'mdev open returned a non-http URL.' };
-		}
+	if (parsedHttpUrls.length === 1) {
+		const parsed = parsedHttpUrls[0]!;
 		return { type: 'valid', url: parsed.href };
+	}
+	if (parsedHttpUrls.length > 1) {
+		return { type: 'invalid', message: 'mdev open returned an invalid URL.' };
+	}
+	if (parsedNonHttpUrls.length === 1) {
+		return { type: 'invalid', message: 'mdev open returned a non-http URL.' };
 	}
 	return { type: 'invalid', message: 'mdev open returned an invalid URL.' };
 }
