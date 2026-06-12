@@ -9,6 +9,7 @@ export type BrowserActionsRequestCleanupDeps = {
 	hostDiffityInFlightRef: { current: boolean };
 	hostDetectedOpenRequestId: RequestIdHandle;
 	hostDetectedOpenInFlightRef: { current: boolean };
+	hostDetectedOpenPickerSelectionRequestId: RequestIdHandle;
 };
 
 export function cleanupBrowserActionRequests({
@@ -20,6 +21,7 @@ export function cleanupBrowserActionRequests({
 	hostDiffityInFlightRef,
 	hostDetectedOpenRequestId,
 	hostDetectedOpenInFlightRef,
+	hostDetectedOpenPickerSelectionRequestId,
 }: BrowserActionsRequestCleanupDeps): void {
 	hostUrlReadRequestId.invalidate();
 	hostUrlSubmitRequestId.invalidate();
@@ -29,4 +31,5 @@ export function cleanupBrowserActionRequests({
 	hostDiffityInFlightRef.current = false;
 	hostDetectedOpenRequestId.invalidate();
 	hostDetectedOpenInFlightRef.current = false;
+	hostDetectedOpenPickerSelectionRequestId.invalidate();
 }

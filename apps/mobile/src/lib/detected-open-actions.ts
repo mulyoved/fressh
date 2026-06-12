@@ -105,6 +105,18 @@ export type RunDetectedOpenPickerSelectionRequestDeps = {
 	openUrl: (url: string) => Promise<void>;
 };
 
+export type RunGuardedDetectedOpenPickerSelectionRequestDeps =
+	RunDetectedOpenPickerSelectionRequestDeps & {
+		id: number;
+		requestId: DetectedOpenRequestId;
+		getErrorMessage: (error: unknown) => string;
+		showPickError: (report: {
+			title: 'Pick failed';
+			message: string;
+			panePath?: string;
+		}) => void;
+	};
+
 export type DetectedOpenControllerRequestResult =
 	| { accepted: false; completion: null }
 	| { accepted: true; completion: Promise<void> };
@@ -267,6 +279,35 @@ export async function runDetectedOpenPickerSelectionRequest({
 	const parsed = parsePrintedOpenUrl(output);
 	if (parsed.type === 'invalid') throw new Error(parsed.message);
 	await openUrl(parsed.url);
+}
+
+export async function runGuardedDetectedOpenPickerSelectionRequest({
+	context,
+	candidate,
+	runHostBrowserCommand,
+	openUrl,
+	id,
+	requestId,
+	getErrorMessage,
+	showPickError,
+}: RunGuardedDetectedOpenPickerSelectionRequestDeps): Promise<void> {
+	try {
+		const output = await runHostBrowserCommand(
+			buildMdevOpenBridgePrintUrlCommand(context, candidate.raw),
+			getDetectedOpenTimeoutMs('pick'),
+		);
+		const parsed = parsePrintedOpenUrl(output);
+		if (parsed.type === 'invalid') throw new Error(parsed.message);
+		if (!requestId.isCurrent(id)) return;
+		await openUrl(parsed.url);
+	} catch (error) {
+		if (!requestId.isCurrent(id)) return;
+		showPickError({
+			title: 'Pick failed',
+			message: getErrorMessage(error),
+			panePath: context.panePath,
+		});
+	}
 }
 
 function showDetectedOpenError(

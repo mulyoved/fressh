@@ -9,6 +9,7 @@ import {
 	resolveDetectedOpenShortcutMode,
 	runDetectedOpenCallback,
 	runDetectedOpenControllerRequest,
+	runGuardedDetectedOpenPickerSelectionRequest,
 	runDetectedOpenPickerSelectionRequest,
 	tryBeginDetectedOpenRequest,
 	type DetectedOpenCandidate,
@@ -567,6 +568,129 @@ void test('detected open picker selection propagates openUrl rejection', async (
 		}),
 		/Android could not open URL/,
 	);
+});
+
+void test('guarded detected open picker selection ignores stale bridge success', async () => {
+	const requestId = createRequestId();
+	const id = requestId.next();
+	requestId.invalidate();
+	const openedUrls: string[] = [];
+	const errors: { title: string; message: string; panePath?: string }[] = [];
+	const candidate: DetectedOpenCandidate = {
+		kind: 'remote-url',
+		raw: 'https://example.test/app',
+		normalized: 'https://example.test/app',
+		display: 'https://example.test/app',
+		path: null,
+		line: null,
+		url: 'https://example.test/app',
+	};
+
+	await runGuardedDetectedOpenPickerSelectionRequest({
+		id,
+		requestId,
+		context: {
+			paneId: '%9',
+			paneTty: '/dev/pts/9',
+			panePath: '/tmp/project',
+		},
+		candidate,
+		runHostBrowserCommand: async () => 'https://example.test/app\n',
+		openUrl: async (url) => {
+			openedUrls.push(url);
+		},
+		getErrorMessage: (error) =>
+			error instanceof Error ? error.message : String(error),
+		showPickError: (error) => {
+			errors.push(error);
+		},
+	});
+
+	assert.deepEqual(openedUrls, []);
+	assert.deepEqual(errors, []);
+});
+
+void test('guarded detected open picker selection ignores stale bridge rejection', async () => {
+	const requestId = createRequestId();
+	const id = requestId.next();
+	requestId.invalidate();
+	const errors: { title: string; message: string; panePath?: string }[] = [];
+	const candidate: DetectedOpenCandidate = {
+		kind: 'remote-url',
+		raw: 'https://example.test/app',
+		normalized: 'https://example.test/app',
+		display: 'https://example.test/app',
+		path: null,
+		line: null,
+		url: 'https://example.test/app',
+	};
+
+	await runGuardedDetectedOpenPickerSelectionRequest({
+		id,
+		requestId,
+		context: {
+			paneId: '%9',
+			paneTty: '/dev/pts/9',
+			panePath: '/tmp/project',
+		},
+		candidate,
+		runHostBrowserCommand: async () => {
+			throw new Error('old target failed');
+		},
+		openUrl: async () => {
+			throw new Error('openUrl should not run');
+		},
+		getErrorMessage: (error) =>
+			error instanceof Error ? error.message : String(error),
+		showPickError: (error) => {
+			errors.push(error);
+		},
+	});
+
+	assert.deepEqual(errors, []);
+});
+
+void test('guarded detected open picker selection reports current bridge failure with pane path', async () => {
+	const requestId = createRequestId();
+	const id = requestId.next();
+	const errors: { title: string; message: string; panePath?: string }[] = [];
+	const candidate: DetectedOpenCandidate = {
+		kind: 'remote-url',
+		raw: 'https://example.test/app',
+		normalized: 'https://example.test/app',
+		display: 'https://example.test/app',
+		path: null,
+		line: null,
+		url: 'https://example.test/app',
+	};
+
+	await runGuardedDetectedOpenPickerSelectionRequest({
+		id,
+		requestId,
+		context: {
+			paneId: '%9',
+			paneTty: '/dev/pts/9',
+			panePath: '/tmp/project',
+		},
+		candidate,
+		runHostBrowserCommand: async () => 'not a url',
+		openUrl: async () => {
+			throw new Error('openUrl should not run');
+		},
+		getErrorMessage: (error) =>
+			error instanceof Error ? error.message : String(error),
+		showPickError: (error) => {
+			errors.push(error);
+		},
+	});
+
+	assert.deepEqual(errors, [
+		{
+			title: 'Pick failed',
+			message: 'mdev open returned an invalid URL.',
+			panePath: '/tmp/project',
+		},
+	]);
 });
 
 void test('detected open controller rejects busy request without closing modal', () => {

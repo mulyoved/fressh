@@ -16,7 +16,8 @@ void test('browser actions controller exposes detected open picker modal props',
 		source,
 		/const detectedOpenPickerProps = useMemo<DetectedOpenPickerModalProps>/,
 	);
-	assert.match(source, /runDetectedOpenPickerSelectionRequest\(\{/);
+	assert.match(source, /runGuardedDetectedOpenPickerSelectionRequest\(\{/);
+	assert.match(source, /hostDetectedOpenPickerSelectionRequestId\.next\(\)/);
 });
 
 void test('shell detail renders detected open picker modal with browser action props', () => {

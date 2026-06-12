@@ -20,7 +20,7 @@ import {
 import { cleanupBrowserActionRequests } from '@/lib/browser-actions-request-cleanup';
 import {
 	runDetectedOpenControllerRequest,
-	runDetectedOpenPickerSelectionRequest,
+	runGuardedDetectedOpenPickerSelectionRequest,
 	type DetectedOpenCandidate,
 } from '@/lib/detected-open-actions';
 import { showBrowserActionErrorReport } from './browser-action-error-alert';
@@ -763,6 +763,7 @@ export function useBrowserActionsController<TConnection>(
 	const hostDiffityInFlightRef = useRef(false);
 	const hostDetectedOpenRequestId = useRequestId();
 	const hostDetectedOpenInFlightRef = useRef(false);
+	const hostDetectedOpenPickerSelectionRequestId = useRequestId();
 
 	const showError = useCallback(
 		(input: BrowserActionErrorInput) => {
@@ -1023,24 +1024,28 @@ export function useBrowserActionsController<TConnection>(
 		(candidate: DetectedOpenCandidate) => {
 			const state = detectedOpenPickerState;
 			if (!state) return;
+			const id = hostDetectedOpenPickerSelectionRequestId.next();
 			setDetectedOpenPickerState(null);
-			void runDetectedOpenPickerSelectionRequest({
+			void runGuardedDetectedOpenPickerSelectionRequest({
+				id,
+				requestId: hostDetectedOpenPickerSelectionRequestId,
 				candidate,
 				context: state.context,
 				runHostBrowserCommand,
 				openUrl: openAndroidUrl,
-			}).catch((error) => {
-				showError({
-					action: 'Pick',
-					title: 'Pick failed',
-					message: getErrorMessage(error),
-					panePath: state.context.panePath,
-				});
+				getErrorMessage,
+				showPickError: (error) => {
+					showError({
+						action: 'Pick',
+						...error,
+					});
+				},
 			});
 		},
 		[
 			detectedOpenPickerState,
 			getErrorMessage,
+			hostDetectedOpenPickerSelectionRequestId,
 			openAndroidUrl,
 			runHostBrowserCommand,
 			showError,
@@ -1152,9 +1157,11 @@ export function useBrowserActionsController<TConnection>(
 			hostDiffityInFlightRef,
 			hostDetectedOpenRequestId,
 			hostDetectedOpenInFlightRef,
+			hostDetectedOpenPickerSelectionRequestId,
 		});
 	}, [
 		browserGitHubTargetRequestId,
+		hostDetectedOpenPickerSelectionRequestId,
 		hostDetectedOpenRequestId,
 		hostDiffityRequestId,
 		hostUrlReadRequestId,

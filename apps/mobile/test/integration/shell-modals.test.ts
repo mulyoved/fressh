@@ -64,6 +64,9 @@ void test('browser action request cleanup invalidates browser action requests', 
 		hostDiffityInFlightRef: inFlightRefs.hostDiffity,
 		hostDetectedOpenRequestId: requestId('hostDetectedOpen'),
 		hostDetectedOpenInFlightRef: inFlightRefs.hostDetectedOpen,
+		hostDetectedOpenPickerSelectionRequestId: requestId(
+			'hostDetectedOpenPickerSelection',
+		),
 	});
 
 	assert.deepEqual(events, [
@@ -72,6 +75,7 @@ void test('browser action request cleanup invalidates browser action requests', 
 		'invalidate:browserGitHubTarget',
 		'invalidate:hostDiffity',
 		'invalidate:hostDetectedOpen',
+		'invalidate:hostDetectedOpenPickerSelection',
 	]);
 	assert.equal(inFlightRefs.hostUrlSubmit.current, false);
 	assert.equal(inFlightRefs.hostDiffity.current, false);
@@ -1349,6 +1353,7 @@ void test('browser action cleanup suppresses pending host URL submit completion'
 		hostDiffityInFlightRef: { current: true },
 		hostDetectedOpenRequestId: requestId,
 		hostDetectedOpenInFlightRef: { current: true },
+		hostDetectedOpenPickerSelectionRequestId: requestId,
 	});
 	assert.equal(inFlightRef.current, false);
 
@@ -1668,6 +1673,7 @@ void test('browser action cleanup suppresses pending Diffity completion', async 
 		hostDiffityInFlightRef: inFlightRef,
 		hostDetectedOpenRequestId: requestId,
 		hostDetectedOpenInFlightRef: { current: true },
+		hostDetectedOpenPickerSelectionRequestId: requestId,
 	});
 	assert.equal(inFlightRef.current, false);
 
