@@ -24,5 +24,12 @@ export function handleDetectedOpenPickerClose({
 export function getDetectedOpenCandidateSubtitle(
 	candidate: DetectedOpenCandidate,
 ): string {
-	return candidate.kind;
+	switch (candidate.kind) {
+		case 'remote-url':
+			return 'Remote URL';
+		case 'local-url':
+			return 'Local URL';
+		case 'file':
+			return 'File';
+	}
 }

@@ -40,8 +40,8 @@ void test('detected open picker close calls onClose once', () => {
 	assert.deepEqual(calls, ['close']);
 });
 
-void test('detected open picker candidate subtitles match candidate kind', () => {
-	assert.equal(getDetectedOpenCandidateSubtitle(remoteCandidate), 'remote-url');
+void test('detected open picker candidate subtitles are user-facing labels', () => {
+	assert.equal(getDetectedOpenCandidateSubtitle(remoteCandidate), 'Remote URL');
 	assert.equal(
 		getDetectedOpenCandidateSubtitle({
 			...remoteCandidate,
@@ -49,7 +49,7 @@ void test('detected open picker candidate subtitles match candidate kind', () =>
 			raw: 'localhost:3000',
 			display: 'localhost:3000',
 		}),
-		'local-url',
+		'Local URL',
 	);
 	assert.equal(
 		getDetectedOpenCandidateSubtitle({
@@ -60,6 +60,6 @@ void test('detected open picker candidate subtitles match candidate kind', () =>
 			path: '/tmp/project/README.md',
 			url: null,
 		}),
-		'file',
+		'File',
 	);
 });
