@@ -3,7 +3,6 @@ import test from 'node:test';
 
 import {
 	getDetectedOpenCandidateSubtitle,
-	handleDetectedOpenPickerClose,
 	handleDetectedOpenPickerSelect,
 } from '../../src/app/shell/components/detected-open-picker-modal-controller';
 import { type DetectedOpenCandidate } from '../../src/lib/detected-open-actions';
@@ -28,16 +27,6 @@ void test('detected open picker select closes then selects candidate', () => {
 	});
 
 	assert.deepEqual(calls, ['close', 'select:https://example.test/app']);
-});
-
-void test('detected open picker close calls onClose once', () => {
-	const calls: string[] = [];
-
-	handleDetectedOpenPickerClose({
-		onClose: () => calls.push('close'),
-	});
-
-	assert.deepEqual(calls, ['close']);
 });
 
 void test('detected open picker candidate subtitles are user-facing labels', () => {

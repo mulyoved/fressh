@@ -4,7 +4,6 @@ import { type DetectedOpenCandidate } from '@/lib/detected-open-actions';
 import { useTheme } from '@/lib/theme';
 import {
 	getDetectedOpenCandidateSubtitle,
-	handleDetectedOpenPickerClose,
 	handleDetectedOpenPickerSelect,
 } from './detected-open-picker-modal-controller';
 
@@ -23,7 +22,7 @@ export function DetectedOpenPickerModal({
 }) {
 	const theme = useTheme();
 	const close = useCallback(() => {
-		handleDetectedOpenPickerClose({ onClose });
+		onClose();
 	}, [onClose]);
 	const select = useCallback(
 		(candidate: DetectedOpenCandidate) => {

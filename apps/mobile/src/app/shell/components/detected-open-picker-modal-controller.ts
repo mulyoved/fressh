@@ -13,14 +13,6 @@ export function handleDetectedOpenPickerSelect({
 	onSelect(candidate);
 }
 
-export function handleDetectedOpenPickerClose({
-	onClose,
-}: {
-	onClose: () => void;
-}) {
-	onClose();
-}
-
 export function getDetectedOpenCandidateSubtitle(
 	candidate: DetectedOpenCandidate,
 ): string {
