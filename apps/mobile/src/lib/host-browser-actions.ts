@@ -168,8 +168,13 @@ export function parsePrintedOpenUrl(output: string): ParsedPrintedOpenUrl {
 	for (const line of output.split(/\r?\n/)) {
 		const candidate = line.trim();
 		if (!candidate) continue;
+		const urlPrefixCount = candidate.match(/https?:\/\//g)?.length ?? 0;
+		if (urlPrefixCount > 1) {
+			hasMalformedUrlLine = true;
+			continue;
+		}
 		if (/\s/.test(candidate)) {
-			if (/https?:\/\//.test(candidate)) hasMalformedUrlLine = true;
+			if (urlPrefixCount === 1) hasMalformedUrlLine = true;
 			continue;
 		}
 		let parsed: URL;
