@@ -173,6 +173,10 @@ export function parsePrintedOpenUrl(output: string): ParsedPrintedOpenUrl {
 			hasMalformedUrlLine = true;
 			continue;
 		}
+		if (urlPrefixCount === 1 && !candidate.match(/^https?:\/\//)) {
+			hasMalformedUrlLine = true;
+			continue;
+		}
 		if (/\s/.test(candidate)) {
 			if (urlPrefixCount === 1) hasMalformedUrlLine = true;
 			continue;
