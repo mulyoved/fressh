@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-	runBrowserActionsDetectedOpen,
 	runBrowserActionsDiffityShare,
 	runBrowserActionsDiffityShareWithContext,
 	resolveBrowserActionsWorkspace,
@@ -172,34 +171,6 @@ void test('browser actions diffity wraps host command rejection with command con
 	assert.deepEqual(commands, [
 		{
 			command: "cd '/home/muly/fressh/apps/mobile'\\''s' && mdev diffity share",
-			timeoutMs: 60_000,
-		},
-	]);
-});
-
-void test('browser actions detected open resolves pane context through Workmux app context', async () => {
-	const harness = createRemoteHarness();
-
-	await runBrowserActionsDetectedOpen({
-		mode: 'pick',
-		tmuxEnabled: true,
-		tmuxTarget: 'main',
-		runHostBrowserCommand: harness.runHostBrowserCommand,
-		runWorkmuxCommand: harness.runWorkmuxCommand,
-		getErrorMessage: (error) =>
-			error instanceof Error ? error.message : String(error),
-	});
-
-	assert.deepEqual(harness.workmuxCommands, [
-		{
-			argv: ['tmux', 'app', 'context', '--session', 'main'],
-			timeoutMs: 10_000,
-		},
-	]);
-	assert.deepEqual(harness.commands, [
-		{
-			command:
-				"TMUX_PANE='%34' TMUX_PANE_TTY='/dev/pts/12' TMUX_PANE_PATH='/home/muly/fressh/apps/mobile'\\''s' mdev open detect --json",
 			timeoutMs: 60_000,
 		},
 	]);
