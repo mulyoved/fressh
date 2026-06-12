@@ -16,6 +16,7 @@ import {
 	type HostDiffityOpenErrorReport,
 	type HostDiffityShareResult,
 } from '../../src/lib/host-diffity-open-request';
+import { buildResolveGitHubRepositoryCommand } from '../../src/lib/repo-feature-request';
 import { type RequestIdHandle } from '../../src/lib/request-id';
 import {
 	createDiffBrowserActionErrorInput,
@@ -24,6 +25,8 @@ import {
 } from '../../src/lib/shell-browser-action-error-inputs';
 import {
 	GitHubRepositoryResolutionError,
+	redactGitHubRepositoryResolutionOutput,
+	resolveGitHubRepositoryContext,
 	runGitHubTargetOpenRequest,
 } from '../../src/lib/shell-github-target-request';
 import { runHostUrlReadRequest } from '../../src/lib/shell-host-url-read-request';
@@ -293,6 +296,158 @@ void test('GitHub target request suppresses stale errors', async () => {
 	assert.deepEqual(reports, []);
 });
 
+void test('GitHub target request lets newer taps supersede pending opens', async () => {
+	let currentId = 0;
+	const requestId: RequestIdHandle = {
+		next: () => {
+			currentId += 1;
+			return currentId;
+		},
+		isCurrent: (id) => id === currentId,
+		invalidate: () => {
+			currentId += 1;
+		},
+	};
+	const firstResolution = deferred<{
+		repository: string;
+		panePath?: string;
+		command?: string;
+		output?: string;
+	}>();
+	let resolveCalls = 0;
+	const openedUrls: string[] = [];
+	const reports: unknown[] = [];
+
+	runGitHubTargetOpenRequest({
+		target: 'issues',
+		requestId,
+		resolveRepositoryContext: () => {
+			resolveCalls += 1;
+			return firstResolution.promise;
+		},
+		openAndroidUrl: async (url) => {
+			openedUrls.push(url);
+		},
+		showError: (report) => reports.push(report),
+		getErrorMessage: (error) =>
+			error instanceof Error ? error.message : String(error),
+	});
+	runGitHubTargetOpenRequest({
+		target: 'pulls',
+		requestId,
+		resolveRepositoryContext: () => {
+			resolveCalls += 1;
+			return Promise.resolve({ repository: 'owner/repo' });
+		},
+		openAndroidUrl: async (url) => {
+			openedUrls.push(url);
+		},
+		showError: (report) => reports.push(report),
+		getErrorMessage: (error) =>
+			error instanceof Error ? error.message : String(error),
+	});
+
+	await Promise.resolve();
+	await Promise.resolve();
+	assert.equal(resolveCalls, 2);
+	assert.deepEqual(openedUrls, ['https://github.com/owner/repo/pulls']);
+
+	firstResolution.resolve({ repository: 'owner/repo' });
+	await firstResolution.promise;
+	await Promise.resolve();
+	assert.deepEqual(openedUrls, ['https://github.com/owner/repo/pulls']);
+	assert.deepEqual(reports, []);
+});
+
+void test('GitHub target request suppresses stale Android open rejections', async () => {
+	let currentId = 0;
+	const requestId: RequestIdHandle = {
+		next: () => {
+			currentId += 1;
+			return currentId;
+		},
+		isCurrent: (id) => id === currentId,
+		invalidate: () => {
+			currentId += 1;
+		},
+	};
+	const open = deferred<void>();
+	const openedUrls: string[] = [];
+	const reports: unknown[] = [];
+
+	runGitHubTargetOpenRequest({
+		target: 'pulls',
+		requestId,
+		resolveRepositoryContext: async () => ({
+			repository: 'owner/repo',
+			panePath: '/tmp/project',
+			command: 'git remote get-url origin',
+			output: 'owner/repo',
+		}),
+		openAndroidUrl: (url) => {
+			openedUrls.push(url);
+			return open.promise;
+		},
+		showError: (report) => reports.push(report),
+		getErrorMessage: (error) =>
+			error instanceof Error ? error.message : String(error),
+	});
+
+	await Promise.resolve();
+	await Promise.resolve();
+	assert.deepEqual(openedUrls, ['https://github.com/owner/repo/pulls']);
+	requestId.invalidate();
+	open.reject(new Error('old Android open failed'));
+	await open.promise.catch(() => {});
+	await Promise.resolve();
+	assert.deepEqual(reports, []);
+});
+
+void test('GitHub repository resolution output redacts URL credentials', () => {
+	assert.equal(
+		redactGitHubRepositoryResolutionOutput(
+			[
+				'https://user:token@example.test/owner/repo.git',
+				'origin https://x-access-token:ghp_secret@github.com/owner/repo.git?token=secret',
+				'ssh://git@github.com/owner/repo.git',
+				'git@github.com:owner/repo.git',
+			].join('\n'),
+		),
+		[
+			'https://[redacted]@example.test/owner/repo.git',
+			'origin https://[redacted]@github.com/owner/repo.git?token=[redacted]',
+			'ssh://[redacted]@github.com/owner/repo.git',
+			'git@github.com:owner/repo.git',
+		].join('\n'),
+	);
+});
+
+void test('GitHub repository resolution command failures include context', async () => {
+	const panePath = '/tmp/project';
+	const command = buildResolveGitHubRepositoryCommand(panePath);
+
+	await assert.rejects(
+		resolveGitHubRepositoryContext({
+			resolvePanePath: async () => panePath,
+			runHostBrowserCommand: async (receivedCommand, timeoutMs) => {
+				assert.equal(receivedCommand, command);
+				assert.equal(timeoutMs, 10_000);
+				throw new Error('remote command timed out');
+			},
+			getErrorMessage: (error) =>
+				error instanceof Error ? error.message : String(error),
+		}),
+		(error) => {
+			assert.ok(error instanceof GitHubRepositoryResolutionError);
+			assert.equal(error.message, 'remote command timed out');
+			assert.equal(error.panePath, panePath);
+			assert.equal(error.command, command);
+			assert.equal(error.output, undefined);
+			return true;
+		},
+	);
+});
+
 void test('GitHub target request reports repository parse failures with context', async () => {
 	let currentId = 0;
 	const requestId: RequestIdHandle = {
@@ -343,6 +498,60 @@ void test('GitHub target request reports repository parse failures with context'
 			panePath: '/tmp/project',
 			command: 'git remote get-url origin',
 			output: 'not a GitHub remote',
+		},
+	]);
+});
+
+void test('GitHub target request redacts repository parse failure output', async () => {
+	let currentId = 0;
+	const requestId: RequestIdHandle = {
+		next: () => {
+			currentId += 1;
+			return currentId;
+		},
+		isCurrent: (id) => id === currentId,
+		invalidate: () => {
+			currentId += 1;
+		},
+	};
+	const reports: {
+		action: string;
+		title: string;
+		message: string;
+		panePath?: string;
+		command?: string;
+		output?: string;
+	}[] = [];
+
+	runGitHubTargetOpenRequest({
+		target: 'issues',
+		requestId,
+		resolveRepositoryContext: async () => {
+			throw new GitHubRepositoryResolutionError({
+				message: 'Could not resolve GitHub repository for current window.',
+				panePath: '/tmp/project',
+				command: 'git remote get-url origin',
+				output: 'https://user:token@example.test/owner/repo.git?token=secret',
+			});
+		},
+		openAndroidUrl: async () => {
+			throw new Error('should not open without repository');
+		},
+		showError: (report) => reports.push(report),
+		getErrorMessage: (error) =>
+			error instanceof Error ? error.message : String(error),
+	});
+
+	await Promise.resolve();
+	await Promise.resolve();
+	assert.deepEqual(reports, [
+		{
+			action: 'GitHub Issues',
+			title: 'GitHub Issues failed',
+			message: 'Could not resolve GitHub repository for current window.',
+			panePath: '/tmp/project',
+			command: 'git remote get-url origin',
+			output: 'https://[redacted]@example.test/owner/repo.git?token=[redacted]',
 		},
 	]);
 });
@@ -510,6 +719,324 @@ void test('host URL read request reports open read failures with command context
 			command: buildTmuxWindowConfigGetCommand('window-url', '/tmp/project'),
 		},
 	]);
+});
+
+void test('host URL read request opens edit modal with saved value', async () => {
+	let currentId = 0;
+	const requestId: RequestIdHandle = {
+		next: () => {
+			currentId += 1;
+			return currentId;
+		},
+		isCurrent: (id) => id === currentId,
+		invalidate: () => {
+			currentId += 1;
+		},
+	};
+	const modalStates: unknown[] = [];
+	const modalErrors: (string | null)[] = [];
+	const reports: unknown[] = [];
+
+	runHostUrlReadRequest({
+		mode: 'edit',
+		slot: 'window-url',
+		requestId,
+		resolvePanePath: async () => '/tmp/project',
+		runHostBrowserCommand: async () => ' https://example.test/path ',
+		openAndroidUrl: async () => {
+			throw new Error('should not open while editing');
+		},
+		setOpen: () => {},
+		setHostUrlModalState: (state) => modalStates.push(state),
+		setHostUrlModalError: (message) => modalErrors.push(message),
+		showError: (report) => reports.push(report),
+		getErrorMessage: (error) =>
+			error instanceof Error ? error.message : String(error),
+	});
+
+	await Promise.resolve();
+	await Promise.resolve();
+	assert.deepEqual(modalErrors, [null]);
+	assert.deepEqual(modalStates, [
+		{
+			mode: 'edit',
+			slot: 'window-url',
+			panePath: '/tmp/project',
+			initialValue: 'https://example.test/path',
+		},
+	]);
+	assert.deepEqual(reports, []);
+});
+
+void test('host URL read request opens missing URL modal when no saved URL exists', async () => {
+	let currentId = 0;
+	const requestId: RequestIdHandle = {
+		next: () => {
+			currentId += 1;
+			return currentId;
+		},
+		isCurrent: (id) => id === currentId,
+		invalidate: () => {
+			currentId += 1;
+		},
+	};
+	const modalStates: unknown[] = [];
+	const modalErrors: (string | null)[] = [];
+	const openedUrls: string[] = [];
+	const reports: unknown[] = [];
+
+	runHostUrlReadRequest({
+		mode: 'open',
+		slot: 'window-url',
+		requestId,
+		resolvePanePath: async () => '/tmp/project',
+		runHostBrowserCommand: async () => '   ',
+		openAndroidUrl: async (url) => {
+			openedUrls.push(url);
+		},
+		setOpen: () => {},
+		setHostUrlModalState: (state) => modalStates.push(state),
+		setHostUrlModalError: (message) => modalErrors.push(message),
+		showError: (report) => reports.push(report),
+		getErrorMessage: (error) =>
+			error instanceof Error ? error.message : String(error),
+	});
+
+	await Promise.resolve();
+	await Promise.resolve();
+	assert.deepEqual(openedUrls, []);
+	assert.deepEqual(modalErrors, [null]);
+	assert.deepEqual(modalStates, [
+		{
+			mode: 'open-missing',
+			slot: 'window-url',
+			panePath: '/tmp/project',
+			initialValue: '',
+		},
+	]);
+	assert.deepEqual(reports, []);
+});
+
+void test('host URL read request opens edit modal for invalid saved URLs', async () => {
+	let currentId = 0;
+	const requestId: RequestIdHandle = {
+		next: () => {
+			currentId += 1;
+			return currentId;
+		},
+		isCurrent: (id) => id === currentId,
+		invalidate: () => {
+			currentId += 1;
+		},
+	};
+	const modalStates: unknown[] = [];
+	const modalErrors: (string | null)[] = [];
+	const openedUrls: string[] = [];
+	const reports: unknown[] = [];
+
+	runHostUrlReadRequest({
+		mode: 'open',
+		slot: 'window-url',
+		requestId,
+		resolvePanePath: async () => '/tmp/project',
+		runHostBrowserCommand: async () => 'ftp://example.test/file',
+		openAndroidUrl: async (url) => {
+			openedUrls.push(url);
+		},
+		setOpen: () => {},
+		setHostUrlModalState: (state) => modalStates.push(state),
+		setHostUrlModalError: (message) => modalErrors.push(message),
+		showError: (report) => reports.push(report),
+		getErrorMessage: (error) =>
+			error instanceof Error ? error.message : String(error),
+	});
+
+	await Promise.resolve();
+	await Promise.resolve();
+	assert.deepEqual(openedUrls, []);
+	assert.deepEqual(modalStates, [
+		{
+			mode: 'edit',
+			slot: 'window-url',
+			panePath: '/tmp/project',
+			initialValue: 'ftp://example.test/file',
+		},
+	]);
+	assert.deepEqual(modalErrors, ['Enter an http:// or https:// URL.']);
+	assert.deepEqual(reports, []);
+});
+
+void test('host URL read request opens valid saved URLs', async () => {
+	let currentId = 0;
+	const requestId: RequestIdHandle = {
+		next: () => {
+			currentId += 1;
+			return currentId;
+		},
+		isCurrent: (id) => id === currentId,
+		invalidate: () => {
+			currentId += 1;
+		},
+	};
+	const modalStates: unknown[] = [];
+	const modalErrors: (string | null)[] = [];
+	const openedUrls: string[] = [];
+	const reports: unknown[] = [];
+
+	runHostUrlReadRequest({
+		mode: 'open',
+		slot: 'window-url',
+		requestId,
+		resolvePanePath: async () => '/tmp/project',
+		runHostBrowserCommand: async () => 'https://example.test/foo bar',
+		openAndroidUrl: async (url) => {
+			openedUrls.push(url);
+		},
+		setOpen: () => {},
+		setHostUrlModalState: (state) => modalStates.push(state),
+		setHostUrlModalError: (message) => modalErrors.push(message),
+		showError: (report) => reports.push(report),
+		getErrorMessage: (error) =>
+			error instanceof Error ? error.message : String(error),
+	});
+
+	await Promise.resolve();
+	await Promise.resolve();
+	assert.deepEqual(openedUrls, ['https://example.test/foo%20bar']);
+	assert.deepEqual(modalStates, []);
+	assert.deepEqual(modalErrors, []);
+	assert.deepEqual(reports, []);
+});
+
+void test('stale host URL read completion does not update modal state', async () => {
+	let currentId = 0;
+	const requestId: RequestIdHandle = {
+		next: () => {
+			currentId += 1;
+			return currentId;
+		},
+		isCurrent: (id) => id === currentId,
+		invalidate: () => {
+			currentId += 1;
+		},
+	};
+	const read = deferred<string>();
+	const modalStates: unknown[] = [];
+	const modalErrors: (string | null)[] = [];
+	const reports: unknown[] = [];
+
+	runHostUrlReadRequest({
+		mode: 'edit',
+		slot: 'window-url',
+		requestId,
+		resolvePanePath: async () => '/tmp/project',
+		runHostBrowserCommand: () => read.promise,
+		openAndroidUrl: async () => {
+			throw new Error('should not open while editing');
+		},
+		setOpen: () => {},
+		setHostUrlModalState: (state) => modalStates.push(state),
+		setHostUrlModalError: (message) => modalErrors.push(message),
+		showError: (report) => reports.push(report),
+		getErrorMessage: (error) =>
+			error instanceof Error ? error.message : String(error),
+	});
+
+	await Promise.resolve();
+	requestId.invalidate();
+	read.resolve('https://example.test/');
+	await read.promise;
+	await Promise.resolve();
+	assert.deepEqual(modalStates, []);
+	assert.deepEqual(modalErrors, []);
+	assert.deepEqual(reports, []);
+});
+
+void test('stale host URL read rejection does not report old failure', async () => {
+	let currentId = 0;
+	const requestId: RequestIdHandle = {
+		next: () => {
+			currentId += 1;
+			return currentId;
+		},
+		isCurrent: (id) => id === currentId,
+		invalidate: () => {
+			currentId += 1;
+		},
+	};
+	const read = deferred<string>();
+	const modalStates: unknown[] = [];
+	const modalErrors: (string | null)[] = [];
+	const reports: unknown[] = [];
+
+	runHostUrlReadRequest({
+		mode: 'open',
+		slot: 'window-url',
+		requestId,
+		resolvePanePath: async () => '/tmp/project',
+		runHostBrowserCommand: () => read.promise,
+		openAndroidUrl: async () => {
+			throw new Error('should not open after read failure');
+		},
+		setOpen: () => {},
+		setHostUrlModalState: (state) => modalStates.push(state),
+		setHostUrlModalError: (message) => modalErrors.push(message),
+		showError: (report) => reports.push(report),
+		getErrorMessage: (error) =>
+			error instanceof Error ? error.message : String(error),
+	});
+
+	await Promise.resolve();
+	requestId.invalidate();
+	read.reject(new Error('old read failed'));
+	await read.promise.catch(() => {});
+	await Promise.resolve();
+	assert.deepEqual(modalStates, []);
+	assert.deepEqual(modalErrors, []);
+	assert.deepEqual(reports, []);
+});
+
+void test('stale host URL open rejection does not report old failure', async () => {
+	let currentId = 0;
+	const requestId: RequestIdHandle = {
+		next: () => {
+			currentId += 1;
+			return currentId;
+		},
+		isCurrent: (id) => id === currentId,
+		invalidate: () => {
+			currentId += 1;
+		},
+	};
+	const open = deferred<void>();
+	const modalStates: unknown[] = [];
+	const modalErrors: (string | null)[] = [];
+	const reports: unknown[] = [];
+
+	runHostUrlReadRequest({
+		mode: 'open',
+		slot: 'window-url',
+		requestId,
+		resolvePanePath: async () => '/tmp/project',
+		runHostBrowserCommand: async () => 'https://example.test/',
+		openAndroidUrl: () => open.promise,
+		setOpen: () => {},
+		setHostUrlModalState: (state) => modalStates.push(state),
+		setHostUrlModalError: (message) => modalErrors.push(message),
+		showError: (report) => reports.push(report),
+		getErrorMessage: (error) =>
+			error instanceof Error ? error.message : String(error),
+	});
+
+	await Promise.resolve();
+	await Promise.resolve();
+	requestId.invalidate();
+	open.reject(new Error('old open failed'));
+	await open.promise.catch(() => {});
+	await Promise.resolve();
+	assert.deepEqual(modalStates, []);
+	assert.deepEqual(modalErrors, []);
+	assert.deepEqual(reports, []);
 });
 
 void test('host URL submit request reports open-after-save failures as open failures', async () => {
@@ -995,6 +1522,63 @@ void test('stale Diffity completion does not clear newer in-flight request', asy
 	await Promise.resolve();
 	assert.equal(inFlightRef.current, false);
 	assert.deepEqual(openedUrls, ['https://diffity.example/new']);
+	assert.deepEqual(errors, []);
+});
+
+void test('stale Diffity Android open rejection does not report old failure or clear newer request', async () => {
+	let currentId = 0;
+	const requestId: RequestIdHandle = {
+		next: () => {
+			currentId += 1;
+			return currentId;
+		},
+		isCurrent: (id) => id === currentId,
+		invalidate: () => {
+			currentId += 1;
+		},
+	};
+	const inFlightRef = { current: false };
+	const open = deferred<void>();
+	const openedUrls: string[] = [];
+	const errors: HostDiffityOpenErrorReport[] = [];
+
+	assert.equal(
+		runHostDiffityOpenRequest({
+			hostDiffityInFlightRef: inFlightRef,
+			hostDiffityRequestId: requestId,
+			runDiffityShare: async () => ({
+				output: 'created https://diffity.example/old',
+				panePath: '/tmp/project',
+				command: "cd '/tmp/project' && mdev diffity share",
+			}),
+			openAndroidUrl: (url) => {
+				openedUrls.push(url);
+				return open.promise;
+			},
+			showError: (title, message) => {
+				throw new Error(
+					`legacy error callback should not run: ${title} ${message}`,
+				);
+			},
+			showErrorReport: (report) => {
+				errors.push(report);
+			},
+			getErrorMessage: (error) =>
+				error instanceof Error ? error.message : String(error),
+		}),
+		true,
+	);
+	assert.equal(inFlightRef.current, true);
+
+	await Promise.resolve();
+	await Promise.resolve();
+	assert.deepEqual(openedUrls, ['https://diffity.example/old']);
+	requestId.invalidate();
+	inFlightRef.current = true;
+	open.reject(new Error('old Android open failed'));
+	await open.promise.catch(() => {});
+	await Promise.resolve();
+	assert.equal(inFlightRef.current, true);
 	assert.deepEqual(errors, []);
 });
 

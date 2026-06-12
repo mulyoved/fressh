@@ -3,6 +3,7 @@ import type { AlertButton } from 'react-native';
 
 import {
 	formatBrowserActionErrorReport,
+	redactBrowserActionErrorText,
 	type BrowserActionErrorReport,
 } from './browser-action-error-report';
 
@@ -26,20 +27,24 @@ export function showBrowserActionErrorReport(
 	deps: BrowserActionErrorAlertDeps,
 ) {
 	const copyText = formatBrowserActionErrorReport(report);
-	deps.alert(report.title, report.message, [
-		{
-			text: 'Copy Error',
-			onPress: () => {
-				void deps.copyText(copyText).catch((error: unknown) => {
-					deps.warn('copy Browser action error failed', error);
-					deps.alert(
-						'Copy Error failed',
-						`Clipboard copy failed. Error report:\n\n${copyText}`,
-						[{ text: 'OK' }],
-					);
-				});
+	deps.alert(
+		redactBrowserActionErrorText(report.title),
+		redactBrowserActionErrorText(report.message),
+		[
+			{
+				text: 'Copy Error',
+				onPress: () => {
+					void deps.copyText(copyText).catch((error: unknown) => {
+						deps.warn('copy Browser action error failed', error);
+						deps.alert(
+							'Copy Error failed',
+							`Clipboard copy failed. Error report:\n\n${copyText}`,
+							[{ text: 'OK' }],
+						);
+					});
+				},
 			},
-		},
-		{ text: 'OK' },
-	]);
+			{ text: 'OK' },
+		],
+	);
 }

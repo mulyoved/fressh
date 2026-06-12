@@ -79,6 +79,32 @@ void test('browser action error alert copies formatted report when Copy Error is
 	]);
 });
 
+void test('browser action error alert redacts visible title and message', () => {
+	const alerts: {
+		title: string;
+		message: string;
+		buttons: BrowserActionErrorAlertButton[];
+	}[] = [];
+
+	showBrowserActionErrorReport(
+		{
+			...createReport(),
+			title: 'Open https://user:secret@example.test failed',
+			message: 'Authorization: Bearer ghp_secret',
+		},
+		{
+			alert: (title, message, buttons) => {
+				alerts.push({ title, message, buttons });
+			},
+			copyText: async () => {},
+			warn: () => {},
+		},
+	);
+
+	assert.equal(alerts[0]?.title, 'Open https://[redacted]@example.test failed');
+	assert.equal(alerts[0]?.message, 'Authorization: Bearer [redacted]');
+});
+
 void test('browser action error alert logs copy failures without throwing', async () => {
 	let buttons: BrowserActionErrorAlertButton[] = [];
 	const warnings: string[] = [];

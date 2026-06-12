@@ -35,8 +35,6 @@ import { rootLogger } from './logger';
 import {
 	buildCreateGitHubIssueCommand,
 	buildFeatureRequestSubmittedAlert,
-	buildResolveGitHubRepositoryCommand,
-	parseGitHubRepositoryResolutionOutput,
 	type GitHubRepositoryTarget,
 } from './repo-feature-request';
 import { useRequestId } from './request-id';
@@ -45,7 +43,7 @@ import {
 	type BrowserActionErrorInput,
 } from './shell-browser-action-error-inputs';
 import {
-	GitHubRepositoryResolutionError,
+	resolveGitHubRepositoryContext,
 	runGitHubTargetOpenRequest,
 } from './shell-github-target-request';
 import { runHostUrlReadRequest } from './shell-host-url-read-request';
@@ -842,20 +840,12 @@ export function useBrowserActionsController<TConnection>(
 	]);
 
 	const resolveCurrentGitHubRepositoryContext = useCallback(async () => {
-		const panePath = await resolveHostBrowserPanePath();
-		const command = buildResolveGitHubRepositoryCommand(panePath);
-		const output = await runHostBrowserCommand(command, 10_000);
-		const repository = parseGitHubRepositoryResolutionOutput(output);
-		if (!repository) {
-			throw new GitHubRepositoryResolutionError({
-				message: 'Could not resolve GitHub repository for current window.',
-				panePath,
-				command,
-				output,
-			});
-		}
-		return { repository, panePath, command, output };
-	}, [resolveHostBrowserPanePath, runHostBrowserCommand]);
+		return resolveGitHubRepositoryContext({
+			resolvePanePath: resolveHostBrowserPanePath,
+			runHostBrowserCommand,
+			getErrorMessage,
+		});
+	}, [getErrorMessage, resolveHostBrowserPanePath, runHostBrowserCommand]);
 
 	const resolveCurrentGitHubRepository = useCallback(async () => {
 		const { repository } = await resolveCurrentGitHubRepositoryContext();
@@ -894,10 +884,6 @@ export function useBrowserActionsController<TConnection>(
 		resetHostUrlModal();
 		setOpen(true);
 	}, [closeOtherModals, invalidateHostUrlReads, resetHostUrlModal]);
-
-	const close = useCallback(() => {
-		setOpen(false);
-	}, []);
 
 	const handleOpenGitHubTarget = useCallback(
 		(target: GitHubRepositoryTarget) => {
@@ -1103,7 +1089,7 @@ export function useBrowserActionsController<TConnection>(
 		],
 	);
 
-	const invalidateAll = useCallback(() => {
+	const cleanupAllRequests = useCallback(() => {
 		cleanupBrowserActionRequests({
 			hostUrlReadRequestId,
 			hostUrlSubmitRequestId,
@@ -1114,9 +1100,6 @@ export function useBrowserActionsController<TConnection>(
 			hostDetectedOpenRequestId,
 			hostDetectedOpenInFlightRef,
 		});
-		setHostUrlModalState(null);
-		setHostUrlModalSubmitting(false);
-		setHostUrlModalError(null);
 	}, [
 		browserGitHubTargetRequestId,
 		hostDetectedOpenRequestId,
@@ -1125,26 +1108,32 @@ export function useBrowserActionsController<TConnection>(
 		hostUrlSubmitRequestId,
 	]);
 
-	useEffect(() => {
-		return () => {
-			cleanupBrowserActionRequests({
-				hostUrlReadRequestId,
-				hostUrlSubmitRequestId,
-				hostUrlSubmitInFlightRef,
-				browserGitHubTargetRequestId,
-				hostDiffityRequestId,
-				hostDiffityInFlightRef,
-				hostDetectedOpenRequestId,
-				hostDetectedOpenInFlightRef,
-			});
-		};
-	}, [
-		browserGitHubTargetRequestId,
-		hostDetectedOpenRequestId,
-		hostDiffityRequestId,
-		hostUrlReadRequestId,
-		hostUrlSubmitRequestId,
-	]);
+	const invalidateAll = useCallback(() => {
+		cleanupAllRequests();
+		setHostUrlModalState(null);
+		setHostUrlModalSubmitting(false);
+		setHostUrlModalError(null);
+	}, [cleanupAllRequests]);
+
+	const close = useCallback(() => {
+		setOpen(false);
+	}, []);
+
+	const requestSourceRef = useRef({ connection, tmuxEnabled, tmuxTarget });
+	useLayoutEffect(() => {
+		const previous = requestSourceRef.current;
+		if (
+			previous.connection === connection &&
+			previous.tmuxEnabled === tmuxEnabled &&
+			previous.tmuxTarget === tmuxTarget
+		) {
+			return;
+		}
+		requestSourceRef.current = { connection, tmuxEnabled, tmuxTarget };
+		invalidateAll();
+	}, [connection, invalidateAll, tmuxEnabled, tmuxTarget]);
+
+	useEffect(() => cleanupAllRequests, [cleanupAllRequests]);
 
 	const browserActionsProps = useMemo<BrowserActionsModalProps>(
 		() => ({

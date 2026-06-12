@@ -1,5 +1,8 @@
+import { redactBrowserActionErrorText } from './browser-action-error-report';
 import {
 	buildGitHubRepositoryTargetUrl,
+	buildResolveGitHubRepositoryCommand,
+	parseGitHubRepositoryResolutionOutput,
 	type GitHubRepositoryTarget,
 } from './repo-feature-request';
 import { type RequestIdHandle } from './request-id';
@@ -34,6 +37,46 @@ export class GitHubRepositoryResolutionError extends Error {
 		this.command = command;
 		this.output = output;
 	}
+}
+
+export function redactGitHubRepositoryResolutionOutput(output: string): string {
+	return redactBrowserActionErrorText(output);
+}
+
+export async function resolveGitHubRepositoryContext({
+	resolvePanePath,
+	runHostBrowserCommand,
+	getErrorMessage,
+}: {
+	resolvePanePath: () => Promise<string>;
+	runHostBrowserCommand: (
+		command: string,
+		timeoutMs: number,
+	) => Promise<string>;
+	getErrorMessage: (error: unknown) => string;
+}): Promise<GitHubRepositoryResolutionContext> {
+	const panePath = await resolvePanePath();
+	const command = buildResolveGitHubRepositoryCommand(panePath);
+	let output: string;
+	try {
+		output = await runHostBrowserCommand(command, 10_000);
+	} catch (error) {
+		throw new GitHubRepositoryResolutionError({
+			message: getErrorMessage(error),
+			panePath,
+			command,
+		});
+	}
+	const repository = parseGitHubRepositoryResolutionOutput(output);
+	if (!repository) {
+		throw new GitHubRepositoryResolutionError({
+			message: 'Could not resolve GitHub repository for current window.',
+			panePath,
+			command,
+			output,
+		});
+	}
+	return { repository, panePath, command, output };
 }
 
 export function runGitHubTargetOpenRequest({
@@ -78,7 +121,9 @@ export function runGitHubTargetOpenRequest({
 			const output = context?.output ?? resolutionError?.output;
 			if (panePath !== undefined) input.panePath = panePath;
 			if (command !== undefined) input.command = command;
-			if (output !== undefined) input.output = output;
+			if (output !== undefined) {
+				input.output = redactGitHubRepositoryResolutionOutput(output);
+			}
 			if (url !== undefined) input.url = url;
 			showError(input);
 		}

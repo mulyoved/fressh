@@ -115,6 +115,28 @@ void test('browser actions diffity legacy helper returns output string', async (
 	assert.equal(output, 'https://example.test/diff');
 });
 
+void test('browser actions diffity legacy helper preserves host command rejection', async () => {
+	const harness = createRemoteHarness();
+	const commandFailure = new Error('diffity share failed hard');
+
+	await assert.rejects(
+		runBrowserActionsDiffityShare({
+			tmuxEnabled: true,
+			tmuxTarget: 'main',
+			runHostBrowserCommand: async () => {
+				throw commandFailure;
+			},
+			runWorkmuxCommand: harness.runWorkmuxCommand,
+			getErrorMessage: (error) =>
+				error instanceof Error ? error.message : String(error),
+		}),
+		(error) => {
+			assert.equal(error, commandFailure);
+			return true;
+		},
+	);
+});
+
 void test('browser actions diffity wraps host command rejection with command context', async () => {
 	const harness = createRemoteHarness();
 	const commandFailure = new Error('diffity share failed hard');

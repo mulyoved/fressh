@@ -149,8 +149,8 @@ export async function runBrowserActionsDiffityShareWithContext(
 export async function runBrowserActionsDiffityShare(
 	deps: BrowserActionsContextDeps,
 ): Promise<string> {
-	const result = await runBrowserActionsDiffityShareWithContext(deps);
-	return result.output;
+	const panePath = await resolveBrowserActionsPanePath(deps);
+	return deps.runHostBrowserCommand(buildDiffityShareCommand(panePath), 60_000);
 }
 
 export async function runBrowserActionsDetectedOpen({
