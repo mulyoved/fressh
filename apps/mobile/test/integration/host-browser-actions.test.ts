@@ -4,7 +4,6 @@ import {
 	buildDiffityShareCommand,
 	buildMdevOpenAutoPrintUrlCommand,
 	buildMdevOpenBridgePrintUrlCommand,
-	buildMdevOpenCommand,
 	buildMdevOpenDetectJsonCommand,
 	buildTmuxWindowConfigGetCommand,
 	buildTmuxWindowConfigSetCommand,
@@ -48,25 +47,6 @@ void test('host browser mdev command builders shell-quote dynamic values', () =>
 			'https://example.com/app?q=1',
 		),
 		"TMUX_PANE_PATH='/tmp/work repo' mdev tmux url set-value 'dev-web-server-url' 'https://example.com/app?q=1'",
-	);
-});
-
-void test('mdev open command shell-quotes pane context values', () => {
-	assert.equal(
-		buildMdevOpenCommand('auto', {
-			paneId: '%12',
-			paneTty: '/dev/pts/7',
-			panePath: "/home/muly/work repo's",
-		}),
-		"TMUX_PANE='%12' TMUX_PANE_TTY='/dev/pts/7' TMUX_PANE_PATH='/home/muly/work repo'\\''s' mdev open auto",
-	);
-	assert.equal(
-		buildMdevOpenCommand('pick', {
-			paneId: '%12',
-			paneTty: '/dev/pts/7',
-			panePath: '/home/muly/work repo',
-		}),
-		"TMUX_PANE='%12' TMUX_PANE_TTY='/dev/pts/7' TMUX_PANE_PATH='/home/muly/work repo' mdev open pick",
 	);
 });
 

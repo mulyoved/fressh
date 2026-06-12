@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
 	runBrowserActionsDiffityShare,
 	runBrowserActionsDiffityShareWithContext,
+	resolveBrowserActionsPaneContext,
 	resolveBrowserActionsWorkspace,
 } from '../../src/lib/browser-actions-controller-actions';
 import { HostDiffityShareError } from '../../src/lib/host-diffity-open-request';
@@ -174,6 +175,31 @@ void test('browser actions diffity wraps host command rejection with command con
 			timeoutMs: 60_000,
 		},
 	]);
+});
+
+void test('browser actions resolves pane context through Workmux app context', async () => {
+	const harness = createRemoteHarness();
+
+	const paneContext = await resolveBrowserActionsPaneContext({
+		tmuxEnabled: true,
+		tmuxTarget: 'main',
+		runHostBrowserCommand: harness.runHostBrowserCommand,
+		runWorkmuxCommand: harness.runWorkmuxCommand,
+		getErrorMessage: (error) =>
+			error instanceof Error ? error.message : String(error),
+	});
+
+	assert.deepEqual(harness.workmuxCommands, [
+		{
+			argv: ['tmux', 'app', 'context', '--session', 'main'],
+			timeoutMs: 10_000,
+		},
+	]);
+	assert.deepEqual(paneContext, {
+		paneId: '%34',
+		paneTty: '/dev/pts/12',
+		panePath: "/home/muly/fressh/apps/mobile's",
+	});
 });
 
 void test('browser actions resolves workspace through Workmux app context', async () => {

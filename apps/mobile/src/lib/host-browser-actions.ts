@@ -116,13 +116,6 @@ export function buildTmuxWindowConfigSetCommand(
 	return `TMUX_PANE_PATH=${quoteShell(panePath)} mdev tmux url set-value ${quoteShell(slot)} ${quoteShell(url)}`;
 }
 
-export function buildMdevOpenCommand(
-	mode: HostBrowserOpenMode,
-	context: TmuxPaneContext,
-): string {
-	return [formatMdevOpenEnv(context), 'mdev', 'open', mode].join(' ');
-}
-
 export function buildMdevOpenAutoPrintUrlCommand(
 	context: TmuxPaneContext,
 ): string {

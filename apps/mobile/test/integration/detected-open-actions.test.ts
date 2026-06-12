@@ -511,6 +511,64 @@ void test('detected open picker selection opens parsed bridge URL', async () => 
 	]);
 });
 
+void test('detected open picker selection rejects invalid bridge URL output without opening', async () => {
+	const openedUrls: string[] = [];
+	const candidate: DetectedOpenCandidate = {
+		kind: 'remote-url',
+		raw: 'https://example.test/app',
+		normalized: 'https://example.test/app',
+		display: 'https://example.test/app',
+		path: null,
+		line: null,
+		url: 'https://example.test/app',
+	};
+
+	await assert.rejects(
+		runDetectedOpenPickerSelectionRequest({
+			context: {
+				paneId: '%9',
+				paneTty: '/dev/pts/9',
+				panePath: '/tmp/project',
+			},
+			candidate,
+			runHostBrowserCommand: async () => 'not a url',
+			openUrl: async (url) => {
+				openedUrls.push(url);
+			},
+		}),
+		/mdev open returned an invalid URL\./,
+	);
+	assert.deepEqual(openedUrls, []);
+});
+
+void test('detected open picker selection propagates openUrl rejection', async () => {
+	const candidate: DetectedOpenCandidate = {
+		kind: 'remote-url',
+		raw: 'https://example.test/app',
+		normalized: 'https://example.test/app',
+		display: 'https://example.test/app',
+		path: null,
+		line: null,
+		url: 'https://example.test/app',
+	};
+
+	await assert.rejects(
+		runDetectedOpenPickerSelectionRequest({
+			context: {
+				paneId: '%9',
+				paneTty: '/dev/pts/9',
+				panePath: '/tmp/project',
+			},
+			candidate,
+			runHostBrowserCommand: async () => 'https://example.test/app\n',
+			openUrl: async () => {
+				throw new Error('Android could not open URL');
+			},
+		}),
+		/Android could not open URL/,
+	);
+});
+
 void test('detected open controller rejects busy request without closing modal', () => {
 	const result = runDetectedOpenControllerRequest({
 		mode: 'pick',
@@ -613,6 +671,116 @@ void test('detected open controller reports mode-specific failures and clears in
 			},
 		]);
 	}
+});
+
+void test('detected open controller pick mode reports invalid detect output', async () => {
+	const inFlightRef = { current: false };
+	const openedUrls: string[] = [];
+	const pickerSelections: DetectedOpenCandidate[][] = [];
+	const errors: {
+		title: string;
+		message: string;
+		panePath?: string;
+		command?: string;
+	}[] = [];
+	const result = runDetectedOpenControllerRequest({
+		mode: 'pick',
+		inFlightRef,
+		requestId: createRequestId(),
+		setOpen: () => {},
+		showError: (title, message) => {
+			errors.push({ title, message });
+		},
+		showErrorReport: (report) => {
+			errors.push(report);
+		},
+		getErrorMessage: (error) =>
+			error instanceof Error ? error.message : String(error),
+		openUrl: async (url) => {
+			openedUrls.push(url);
+		},
+		setPickerCandidates: (candidates) => {
+			pickerSelections.push(candidates);
+		},
+		resolvePaneContext: async () => ({
+			paneId: '%9',
+			paneTty: '/dev/pts/9',
+			panePath: '/tmp/project',
+		}),
+		runHostBrowserCommand: async () => '{bad json',
+	});
+
+	assert.equal(result.accepted, true);
+	if (result.accepted) await result.completion;
+
+	const expectedCommand =
+		"TMUX_PANE='%9' TMUX_PANE_TTY='/dev/pts/9' TMUX_PANE_PATH='/tmp/project' mdev open detect --json";
+	assert.equal(inFlightRef.current, false);
+	assert.deepEqual(openedUrls, []);
+	assert.deepEqual(pickerSelections, []);
+	assert.deepEqual(errors, [
+		{
+			title: 'Pick failed',
+			message: 'mdev open detect returned invalid JSON.',
+			panePath: '/tmp/project',
+			command: expectedCommand,
+		},
+	]);
+});
+
+void test('detected open controller pick mode reports empty candidate list', async () => {
+	const inFlightRef = { current: false };
+	const openedUrls: string[] = [];
+	const pickerSelections: DetectedOpenCandidate[][] = [];
+	const errors: {
+		title: string;
+		message: string;
+		panePath?: string;
+		command?: string;
+	}[] = [];
+	const result = runDetectedOpenControllerRequest({
+		mode: 'pick',
+		inFlightRef,
+		requestId: createRequestId(),
+		setOpen: () => {},
+		showError: (title, message) => {
+			errors.push({ title, message });
+		},
+		showErrorReport: (report) => {
+			errors.push(report);
+		},
+		getErrorMessage: (error) =>
+			error instanceof Error ? error.message : String(error),
+		openUrl: async (url) => {
+			openedUrls.push(url);
+		},
+		setPickerCandidates: (candidates) => {
+			pickerSelections.push(candidates);
+		},
+		resolvePaneContext: async () => ({
+			paneId: '%9',
+			paneTty: '/dev/pts/9',
+			panePath: '/tmp/project',
+		}),
+		runHostBrowserCommand: async () => '[]',
+	});
+
+	assert.equal(result.accepted, true);
+	if (result.accepted) await result.completion;
+
+	const expectedCommand =
+		"TMUX_PANE='%9' TMUX_PANE_TTY='/dev/pts/9' TMUX_PANE_PATH='/tmp/project' mdev open detect --json";
+	assert.equal(inFlightRef.current, false);
+	assert.deepEqual(openedUrls, []);
+	assert.deepEqual(pickerSelections, []);
+	assert.deepEqual(errors, [
+		{
+			title: 'Pick failed',
+			message: 'mdev open detect returned no candidates.',
+			panePath: '/tmp/project',
+			command: expectedCommand,
+		},
+	]);
 });
 
 void test('detected open controller supports legacy two-argument error callback', async () => {
@@ -755,5 +923,58 @@ void test('detected open controller suppresses stale command rejection', async (
 	if (result.accepted) await result.completion;
 
 	assert.equal(inFlightRef.current, false);
+	assert.deepEqual(errors, []);
+});
+
+void test('detected open controller suppresses stale successful command output', async () => {
+	const inFlightRef = { current: false };
+	const requestId = createRequestId();
+	const openedUrls: string[] = [];
+	const pickerSelections: DetectedOpenCandidate[][] = [];
+	const errors: string[] = [];
+	let resolveCommand: (output: string) => void = () => {
+		throw new Error('runHostBrowserCommand was not started');
+	};
+
+	const result = runDetectedOpenControllerRequest({
+		mode: 'auto',
+		inFlightRef,
+		requestId,
+		setOpen: () => {},
+		showError: (title, message) => {
+			errors.push(`${title}: ${message}`);
+		},
+		showErrorReport: (report) => {
+			errors.push(`${report.title}: ${report.message}`);
+		},
+		getErrorMessage: (error) =>
+			error instanceof Error ? error.message : String(error),
+		openUrl: async (url) => {
+			openedUrls.push(url);
+		},
+		setPickerCandidates: (candidates) => {
+			pickerSelections.push(candidates);
+		},
+		resolvePaneContext: async () => ({
+			paneId: '%9',
+			paneTty: '/dev/pts/9',
+			panePath: '/tmp/project',
+		}),
+		runHostBrowserCommand: async () =>
+			new Promise((resolve) => {
+				resolveCommand = resolve;
+			}),
+	});
+
+	assert.equal(result.accepted, true);
+	await Promise.resolve();
+	requestId.invalidate();
+	inFlightRef.current = false;
+	resolveCommand('https://example.test/app\n');
+	if (result.accepted) await result.completion;
+
+	assert.equal(inFlightRef.current, false);
+	assert.deepEqual(openedUrls, []);
+	assert.deepEqual(pickerSelections, []);
 	assert.deepEqual(errors, []);
 });
