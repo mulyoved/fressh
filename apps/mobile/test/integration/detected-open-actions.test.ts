@@ -580,6 +580,45 @@ void test('detected open picker selection propagates openUrl rejection', async (
 	);
 });
 
+void test('guarded detected open picker selection opens current bridged URL', async () => {
+	const requestId = createRequestId();
+	const id = requestId.next();
+	const openedUrls: string[] = [];
+	const errors: { title: string; message: string; panePath?: string }[] = [];
+	const candidate: DetectedOpenCandidate = {
+		kind: 'remote-url',
+		raw: 'https://example.test/original',
+		normalized: 'https://example.test/original',
+		display: 'https://example.test/original',
+		path: null,
+		line: null,
+		url: 'https://example.test/original',
+	};
+
+	await runGuardedDetectedOpenPickerSelectionRequest({
+		id,
+		requestId,
+		context: {
+			paneId: '%9',
+			paneTty: '/dev/pts/9',
+			panePath: '/tmp/project',
+		},
+		candidate,
+		runHostBrowserCommand: async () => 'https://example.test/bridged\n',
+		openUrl: async (url) => {
+			openedUrls.push(url);
+		},
+		getErrorMessage: (error) =>
+			error instanceof Error ? error.message : String(error),
+		showPickError: (error) => {
+			errors.push(error);
+		},
+	});
+
+	assert.deepEqual(openedUrls, ['https://example.test/bridged']);
+	assert.deepEqual(errors, []);
+});
+
 void test('guarded detected open picker selection ignores stale bridge success', async () => {
 	const requestId = createRequestId();
 	const id = requestId.next();
