@@ -277,6 +277,9 @@ void test('detected open controller starts accepted request and clears in-flight
 		showError: (title, message) => {
 			errors.push(`${title}: ${message}`);
 		},
+		showErrorReport: (report) => {
+			errors.push(`${report.title}: ${report.message}`);
+		},
 		getErrorMessage: (error) =>
 			error instanceof Error ? error.message : String(error),
 		resolvePaneContext: async () => ({
@@ -315,8 +318,13 @@ void test('detected open controller rejects busy request without closing modal',
 			throw new Error('setOpen should not run');
 		},
 		showError: (title, message) => {
-			assert.equal(title, 'Open already running');
-			assert.equal(message, 'Wait for the current browser action to finish.');
+			assert.deepEqual(
+				{ title, message },
+				{
+					title: 'Open already running',
+					message: 'Wait for the current browser action to finish.',
+				},
+			);
 		},
 		getErrorMessage: (error) =>
 			error instanceof Error ? error.message : String(error),
@@ -333,20 +341,38 @@ void test('detected open controller rejects busy request without closing modal',
 
 void test('detected open controller reports mode-specific failures and clears in-flight state', async () => {
 	const cases = [
-		{ mode: 'auto' as const, expected: 'Open failed: remote failed' },
-		{ mode: 'pick' as const, expected: 'Pick failed: remote failed' },
+		{
+			mode: 'auto' as const,
+			expectedTitle: 'Open failed',
+			expectedCommand:
+				"TMUX_PANE='%9' TMUX_PANE_TTY='/dev/pts/9' TMUX_PANE_PATH='/tmp/project' mdev open auto",
+		},
+		{
+			mode: 'pick' as const,
+			expectedTitle: 'Pick failed',
+			expectedCommand:
+				"TMUX_PANE='%9' TMUX_PANE_TTY='/dev/pts/9' TMUX_PANE_PATH='/tmp/project' mdev open pick",
+		},
 	];
 
 	for (const testCase of cases) {
 		const inFlightRef = { current: false };
-		const errors: string[] = [];
+		const errors: {
+			title: string;
+			message: string;
+			panePath?: string;
+			command?: string;
+		}[] = [];
 		const result = runDetectedOpenControllerRequest({
 			mode: testCase.mode,
 			inFlightRef,
 			requestId: createRequestId(),
 			setOpen: () => {},
 			showError: (title, message) => {
-				errors.push(`${title}: ${message}`);
+				errors.push({ title, message });
+			},
+			showErrorReport: (report) => {
+				errors.push(report);
 			},
 			getErrorMessage: (error) =>
 				error instanceof Error ? error.message : String(error),
@@ -364,8 +390,44 @@ void test('detected open controller reports mode-specific failures and clears in
 		if (result.accepted) await result.completion;
 
 		assert.equal(inFlightRef.current, false);
-		assert.deepEqual(errors, [testCase.expected]);
+		assert.deepEqual(errors, [
+			{
+				title: testCase.expectedTitle,
+				message: 'remote failed',
+				panePath: '/tmp/project',
+				command: testCase.expectedCommand,
+			},
+		]);
 	}
+});
+
+void test('detected open controller supports legacy two-argument error callback', async () => {
+	const inFlightRef = { current: false };
+	const errors: string[] = [];
+	const result = runDetectedOpenControllerRequest({
+		mode: 'auto',
+		inFlightRef,
+		requestId: createRequestId(),
+		setOpen: () => {},
+		showError: (title, message) => {
+			errors.push(`${title}: ${message}`);
+		},
+		getErrorMessage: (error) =>
+			error instanceof Error ? error.message : String(error),
+		resolvePaneContext: async () => ({
+			paneId: '%9',
+			paneTty: '/dev/pts/9',
+			panePath: '/tmp/project',
+		}),
+		runHostBrowserCommand: async () => {
+			throw new Error('remote failed');
+		},
+	});
+
+	assert.equal(result.accepted, true);
+	if (result.accepted) await result.completion;
+	assert.deepEqual(errors, ['Open failed: remote failed']);
+	assert.equal(inFlightRef.current, false);
 });
 
 void test('detected open controller suppresses stale request side effects', async () => {
@@ -384,6 +446,9 @@ void test('detected open controller suppresses stale request side effects', asyn
 		setOpen: () => {},
 		showError: (title, message) => {
 			errors.push(`${title}: ${message}`);
+		},
+		showErrorReport: (report) => {
+			errors.push(`${report.title}: ${report.message}`);
 		},
 		getErrorMessage: (error) =>
 			error instanceof Error ? error.message : String(error),
@@ -431,6 +496,9 @@ void test('detected open controller suppresses stale command rejection', async (
 		setOpen: () => {},
 		showError: (title, message) => {
 			errors.push(`${title}: ${message}`);
+		},
+		showErrorReport: (report) => {
+			errors.push(`${report.title}: ${report.message}`);
 		},
 		getErrorMessage: (error) =>
 			error instanceof Error ? error.message : String(error),

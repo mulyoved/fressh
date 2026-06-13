@@ -176,9 +176,10 @@ void test('initial shell config state clears runtime metadata with older version
 
 void test('initial shell config state keeps cached config with newer version and same timestamp', () => {
 	const storage = createMemoryStorage();
+	const newerBundledVersion = `${bundledConfig.version}.1`;
 	const cachedText = JSON.stringify({
 		...bundledConfig,
-		version: '2026-06-10.10',
+		version: newerBundledVersion,
 		updatedAt: bundledConfig.updatedAt,
 	});
 	storage.set('shellConfig.json', cachedText);
@@ -190,7 +191,7 @@ void test('initial shell config state keeps cached config with newer version and
 	});
 
 	assert.equal(state.source, 'cache');
-	assert.equal(state.config.version, '2026-06-10.10');
+	assert.equal(state.config.version, newerBundledVersion);
 	assert.equal(state.lastLoadedAt, '2026-06-10T00:05:00.000Z');
 	assert.equal(storage.getString('shellConfig.json'), cachedText);
 });

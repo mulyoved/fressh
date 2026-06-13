@@ -3,8 +3,10 @@ import test from 'node:test';
 import {
 	runBrowserActionsDetectedOpen,
 	runBrowserActionsDiffityShare,
+	runBrowserActionsDiffityShareWithContext,
 	resolveBrowserActionsWorkspace,
 } from '../../src/lib/browser-actions-controller-actions';
+import { HostDiffityShareError } from '../../src/lib/host-diffity-open-request';
 import {
 	WORKMUX_APP_COMMAND_UPDATE_MESSAGE,
 	type WorkmuxAppContext,
@@ -70,7 +72,7 @@ function createRemoteHarness(options?: {
 void test('browser actions diffity resolves pane path through Workmux app context', async () => {
 	const harness = createRemoteHarness();
 
-	await runBrowserActionsDiffityShare({
+	const result = await runBrowserActionsDiffityShareWithContext({
 		tmuxEnabled: true,
 		tmuxTarget: "main'quoted",
 		runHostBrowserCommand: harness.runHostBrowserCommand,
@@ -79,6 +81,11 @@ void test('browser actions diffity resolves pane path through Workmux app contex
 			error instanceof Error ? error.message : String(error),
 	});
 
+	assert.deepEqual(result, {
+		output: 'https://example.test/diff',
+		panePath: "/home/muly/fressh/apps/mobile's",
+		command: "cd '/home/muly/fressh/apps/mobile'\\''s' && mdev diffity share",
+	});
 	assert.deepEqual(harness.workmuxCommands, [
 		{
 			argv: ['tmux', 'app', 'context', '--session', "main'quoted"],
@@ -86,6 +93,83 @@ void test('browser actions diffity resolves pane path through Workmux app contex
 		},
 	]);
 	assert.deepEqual(harness.commands, [
+		{
+			command: "cd '/home/muly/fressh/apps/mobile'\\''s' && mdev diffity share",
+			timeoutMs: 60_000,
+		},
+	]);
+});
+
+void test('browser actions diffity legacy helper returns output string', async () => {
+	const harness = createRemoteHarness();
+
+	const output = await runBrowserActionsDiffityShare({
+		tmuxEnabled: true,
+		tmuxTarget: "main'quoted",
+		runHostBrowserCommand: harness.runHostBrowserCommand,
+		runWorkmuxCommand: harness.runWorkmuxCommand,
+		getErrorMessage: (error) =>
+			error instanceof Error ? error.message : String(error),
+	});
+
+	assert.equal(output, 'https://example.test/diff');
+});
+
+void test('browser actions diffity legacy helper preserves host command rejection', async () => {
+	const harness = createRemoteHarness();
+	const commandFailure = new Error('diffity share failed hard');
+
+	await assert.rejects(
+		runBrowserActionsDiffityShare({
+			tmuxEnabled: true,
+			tmuxTarget: 'main',
+			runHostBrowserCommand: async () => {
+				throw commandFailure;
+			},
+			runWorkmuxCommand: harness.runWorkmuxCommand,
+			getErrorMessage: (error) =>
+				error instanceof Error ? error.message : String(error),
+		}),
+		(error) => {
+			assert.equal(error, commandFailure);
+			return true;
+		},
+	);
+});
+
+void test('browser actions diffity wraps host command rejection with command context', async () => {
+	const harness = createRemoteHarness();
+	const commandFailure = new Error('diffity share failed hard');
+	const commands: BrowserActionsRemoteCommand[] = [];
+
+	await assert.rejects(
+		runBrowserActionsDiffityShareWithContext({
+			tmuxEnabled: true,
+			tmuxTarget: 'main',
+			runHostBrowserCommand: async (command, timeoutMs) => {
+				commands.push({ command, timeoutMs });
+				throw commandFailure;
+			},
+			runWorkmuxCommand: harness.runWorkmuxCommand,
+			getErrorMessage: (error) =>
+				error instanceof Error ? error.message : String(error),
+		}),
+		(error) => {
+			assert.ok(error instanceof HostDiffityShareError);
+			assert.equal(error.message, 'diffity share failed hard');
+			assert.equal(error.panePath, "/home/muly/fressh/apps/mobile's");
+			assert.equal(
+				error.command,
+				"cd '/home/muly/fressh/apps/mobile'\\''s' && mdev diffity share",
+			);
+			assert.equal(
+				(error as Error & { cause?: unknown }).cause,
+				commandFailure,
+			);
+			return true;
+		},
+	);
+	assert.deepEqual(commands, [
 		{
 			command: "cd '/home/muly/fressh/apps/mobile'\\''s' && mdev diffity share",
 			timeoutMs: 60_000,
@@ -152,7 +236,7 @@ void test('browser actions format old mdev Workmux app context failures', async 
 	});
 
 	await assert.rejects(
-		runBrowserActionsDiffityShare({
+		runBrowserActionsDiffityShareWithContext({
 			tmuxEnabled: true,
 			tmuxTarget: 'main',
 			runHostBrowserCommand: harness.runHostBrowserCommand,
