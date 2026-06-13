@@ -18,7 +18,11 @@ import {
 	type BrowserActionsWorkspace,
 } from '@/lib/browser-actions-controller-actions';
 import { cleanupBrowserActionRequests } from '@/lib/browser-actions-request-cleanup';
-import { runDetectedOpenControllerRequest } from '@/lib/detected-open-actions';
+import {
+	runDetectedOpenControllerRequest,
+	runGuardedDetectedOpenPickerSelectionRequest,
+	type DetectedOpenCandidate,
+} from '@/lib/detected-open-actions';
 import { showBrowserActionErrorReport } from './browser-action-error-alert';
 import { createBrowserActionErrorReport } from './browser-action-error-report';
 import {
@@ -683,9 +687,17 @@ export type HostUrlModalProps = {
 	onSubmit: (value: string) => void;
 };
 
+export type DetectedOpenPickerModalProps = {
+	open: boolean;
+	candidates: readonly DetectedOpenCandidate[];
+	onClose: () => void;
+	onSelect: (candidate: DetectedOpenCandidate) => void;
+};
+
 export type BrowserActionsControllerHandle = {
 	browserActionsProps: BrowserActionsModalProps;
 	hostUrlProps: HostUrlModalProps;
+	detectedOpenPickerProps: DetectedOpenPickerModalProps;
 	open: () => void;
 	close: () => void;
 	resolveHostBrowserPaneContext: () => Promise<TmuxPaneContext>;
@@ -738,6 +750,10 @@ export function useBrowserActionsController<TConnection>(
 	const [hostUrlModalError, setHostUrlModalError] = useState<string | null>(
 		null,
 	);
+	const [detectedOpenPickerState, setDetectedOpenPickerState] = useState<{
+		context: TmuxPaneContext;
+		candidates: DetectedOpenCandidate[];
+	} | null>(null);
 
 	const hostUrlReadRequestId = useRequestId();
 	const hostUrlSubmitRequestId = useRequestId();
@@ -747,6 +763,7 @@ export function useBrowserActionsController<TConnection>(
 	const hostDiffityInFlightRef = useRef(false);
 	const hostDetectedOpenRequestId = useRequestId();
 	const hostDetectedOpenInFlightRef = useRef(false);
+	const hostDetectedOpenPickerSelectionRequestId = useRequestId();
 
 	const showError = useCallback(
 		(input: BrowserActionErrorInput) => {
@@ -878,6 +895,13 @@ export function useBrowserActionsController<TConnection>(
 		setHostUrlModalError(null);
 	}, [hostUrlReadRequestId, hostUrlSubmitRequestId]);
 
+	const resetDetectedOpenRequests = useCallback(() => {
+		hostDetectedOpenRequestId.invalidate();
+		hostDetectedOpenInFlightRef.current = false;
+		hostDetectedOpenPickerSelectionRequestId.invalidate();
+		setDetectedOpenPickerState(null);
+	}, [hostDetectedOpenPickerSelectionRequestId, hostDetectedOpenRequestId]);
+
 	const openController = useCallback(() => {
 		invalidateHostUrlReads();
 		if (!closeOtherModals()) return;
@@ -887,6 +911,7 @@ export function useBrowserActionsController<TConnection>(
 
 	const handleOpenGitHubTarget = useCallback(
 		(target: GitHubRepositoryTarget) => {
+			resetDetectedOpenRequests();
 			runGitHubTargetOpenRequest({
 				target,
 				requestId: browserGitHubTargetRequestId,
@@ -900,6 +925,7 @@ export function useBrowserActionsController<TConnection>(
 			browserGitHubTargetRequestId,
 			getErrorMessage,
 			openAndroidUrl,
+			resetDetectedOpenRequests,
 			resolveCurrentGitHubRepositoryContext,
 			showError,
 		],
@@ -915,6 +941,7 @@ export function useBrowserActionsController<TConnection>(
 	);
 
 	const handleOpenHostDiffity = useCallback(() => {
+		resetDetectedOpenRequests();
 		runHostDiffityOpenRequest({
 			hostDiffityInFlightRef,
 			hostDiffityRequestId,
@@ -941,6 +968,7 @@ export function useBrowserActionsController<TConnection>(
 		getErrorMessage,
 		hostDiffityRequestId,
 		openAndroidUrl,
+		resetDetectedOpenRequests,
 		runHostBrowserCommand,
 		runWorkmuxBrowserCommand,
 		showError,
@@ -950,6 +978,8 @@ export function useBrowserActionsController<TConnection>(
 
 	const handleOpenDetected = useCallback(
 		(mode: HostBrowserOpenMode): boolean => {
+			hostDetectedOpenPickerSelectionRequestId.invalidate();
+			setDetectedOpenPickerState(null);
 			const result = runDetectedOpenControllerRequest({
 				mode,
 				inFlightRef: hostDetectedOpenInFlightRef,
@@ -957,6 +987,10 @@ export function useBrowserActionsController<TConnection>(
 				resolvePaneContext: resolveHostBrowserPaneContext,
 				runHostBrowserCommand,
 				setOpen,
+				openUrl: openAndroidUrl,
+				setPickerCandidates: (candidates, context) => {
+					setDetectedOpenPickerState({ candidates, context });
+				},
 				showError: (title, message) =>
 					showError({
 						action: mode === 'pick' ? 'Pick' : 'Open',
@@ -978,6 +1012,8 @@ export function useBrowserActionsController<TConnection>(
 		[
 			getErrorMessage,
 			hostDetectedOpenRequestId,
+			hostDetectedOpenPickerSelectionRequestId,
+			openAndroidUrl,
 			resolveHostBrowserPaneContext,
 			runHostBrowserCommand,
 			showError,
@@ -994,8 +1030,45 @@ export function useBrowserActionsController<TConnection>(
 		[handleOpenDetected],
 	);
 
+	const handleCloseDetectedOpenPicker = useCallback(() => {
+		setDetectedOpenPickerState(null);
+	}, []);
+
+	const handleSelectDetectedOpenCandidate = useCallback(
+		(candidate: DetectedOpenCandidate) => {
+			const state = detectedOpenPickerState;
+			if (!state) return;
+			const id = hostDetectedOpenPickerSelectionRequestId.next();
+			setDetectedOpenPickerState(null);
+			void runGuardedDetectedOpenPickerSelectionRequest({
+				id,
+				requestId: hostDetectedOpenPickerSelectionRequestId,
+				candidate,
+				context: state.context,
+				runHostBrowserCommand,
+				openUrl: openAndroidUrl,
+				getErrorMessage,
+				showPickError: (error) => {
+					showError({
+						action: 'Pick',
+						...error,
+					});
+				},
+			});
+		},
+		[
+			detectedOpenPickerState,
+			getErrorMessage,
+			hostDetectedOpenPickerSelectionRequestId,
+			openAndroidUrl,
+			runHostBrowserCommand,
+			showError,
+		],
+	);
+
 	const handleOpenHostUrlSlot = useCallback(
 		(slot: HostBrowserUrlSlot) => {
+			resetDetectedOpenRequests();
 			runHostUrlReadRequest({
 				mode: 'open',
 				slot,
@@ -1014,6 +1087,7 @@ export function useBrowserActionsController<TConnection>(
 			getErrorMessage,
 			hostUrlReadRequestId,
 			openAndroidUrl,
+			resetDetectedOpenRequests,
 			resolveHostBrowserPanePath,
 			runHostBrowserCommand,
 			showError,
@@ -1022,6 +1096,7 @@ export function useBrowserActionsController<TConnection>(
 
 	const handleEditHostUrlSlot = useCallback(
 		(slot: HostBrowserUrlSlot) => {
+			resetDetectedOpenRequests();
 			runHostUrlReadRequest({
 				mode: 'edit',
 				slot,
@@ -1040,6 +1115,7 @@ export function useBrowserActionsController<TConnection>(
 			getErrorMessage,
 			hostUrlReadRequestId,
 			openAndroidUrl,
+			resetDetectedOpenRequests,
 			resolveHostBrowserPanePath,
 			runHostBrowserCommand,
 			showError,
@@ -1099,9 +1175,11 @@ export function useBrowserActionsController<TConnection>(
 			hostDiffityInFlightRef,
 			hostDetectedOpenRequestId,
 			hostDetectedOpenInFlightRef,
+			hostDetectedOpenPickerSelectionRequestId,
 		});
 	}, [
 		browserGitHubTargetRequestId,
+		hostDetectedOpenPickerSelectionRequestId,
 		hostDetectedOpenRequestId,
 		hostDiffityRequestId,
 		hostUrlReadRequestId,
@@ -1113,6 +1191,7 @@ export function useBrowserActionsController<TConnection>(
 		setHostUrlModalState(null);
 		setHostUrlModalSubmitting(false);
 		setHostUrlModalError(null);
+		setDetectedOpenPickerState(null);
 	}, [cleanupAllRequests]);
 
 	const close = useCallback(() => {
@@ -1183,10 +1262,25 @@ export function useBrowserActionsController<TConnection>(
 		],
 	);
 
+	const detectedOpenPickerProps = useMemo<DetectedOpenPickerModalProps>(
+		() => ({
+			open: detectedOpenPickerState != null,
+			candidates: detectedOpenPickerState?.candidates ?? [],
+			onClose: handleCloseDetectedOpenPicker,
+			onSelect: handleSelectDetectedOpenCandidate,
+		}),
+		[
+			detectedOpenPickerState,
+			handleCloseDetectedOpenPicker,
+			handleSelectDetectedOpenCandidate,
+		],
+	);
+
 	return useMemo<BrowserActionsControllerHandle>(
 		() => ({
 			browserActionsProps,
 			hostUrlProps,
+			detectedOpenPickerProps,
 			open: openController,
 			close,
 			resolveHostBrowserPaneContext,
@@ -1200,6 +1294,7 @@ export function useBrowserActionsController<TConnection>(
 		[
 			browserActionsProps,
 			close,
+			detectedOpenPickerProps,
 			hostUrlProps,
 			invalidateAll,
 			invalidateHostUrlReads,
