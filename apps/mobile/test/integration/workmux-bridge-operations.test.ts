@@ -198,3 +198,44 @@ void test('rejects blank Codex restart target locally', () => {
 		/Invalid Codex restart target/,
 	);
 });
+
+void test('maps scoped next/prev nav argv to bridge params with scope', () => {
+	assert.deepEqual(
+		buildMdevBridgeOperationFromWorkmuxArgv([
+			'tmux', 'app', 'nav', 'next', '--session', 'main', '--scope', 'visible',
+		]),
+		{
+			operation: 'tmux.app.nav',
+			params: { action: 'next', session: 'main', scope: 'visible' },
+		},
+	);
+	assert.deepEqual(
+		buildMdevBridgeOperationFromWorkmuxArgv([
+			'tmux', 'app', 'nav', 'prev', '--session', 'main', '--scope', 'active',
+		]),
+		{
+			operation: 'tmux.app.nav',
+			params: { action: 'prev', session: 'main', scope: 'active' },
+		},
+	);
+});
+
+void test('rejects scoped nav argv for non next/prev actions', () => {
+	assert.throws(
+		() =>
+			buildMdevBridgeOperationFromWorkmuxArgv([
+				'tmux', 'app', 'nav', 'next-all', '--session', 'main', '--scope', 'all',
+			]),
+		/Unsupported Workmux bridge command/,
+	);
+});
+
+void test('rejects scoped nav argv with an invalid scope', () => {
+	assert.throws(
+		() =>
+			buildMdevBridgeOperationFromWorkmuxArgv([
+				'tmux', 'app', 'nav', 'next', '--session', 'main', '--scope', 'nope',
+			]),
+		/Unsupported Workmux bridge command/,
+	);
+});

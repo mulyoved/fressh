@@ -1,3 +1,5 @@
+import { isWorkmuxNavScope } from './workmux-app-commands';
+
 export type MdevBridgeOperationRequest = {
 	operation: string;
 	params: Record<string, string | number>;
@@ -117,6 +119,22 @@ export function buildMdevBridgeOperationFromWorkmuxArgv(
 				return {
 					operation: WORKMUX_REQUIRED_MDEV_BRIDGE_OPERATIONS[3],
 					params: { action, session: argAt(argv, 5) },
+				};
+			}
+
+			if (
+				argv.length === 8 &&
+				argv[4] === '--session' &&
+				argv[6] === '--scope'
+			) {
+				const action = argAt(argv, 3);
+				// next-all/prev-all are not supported with --scope
+				if (action !== 'next' && action !== 'prev') unsupported(argv);
+				const navScope = argAt(argv, 7);
+				if (!isWorkmuxNavScope(navScope)) unsupported(argv);
+				return {
+					operation: WORKMUX_REQUIRED_MDEV_BRIDGE_OPERATIONS[3],
+					params: { action, session: argAt(argv, 5), scope: navScope },
 				};
 			}
 
