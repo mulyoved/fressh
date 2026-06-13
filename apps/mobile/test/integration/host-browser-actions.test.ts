@@ -66,10 +66,7 @@ void test('mdev open print-url command builders shell-quote pane context and can
 		"TMUX_PANE='%12' TMUX_PANE_TTY='/dev/pts/7' TMUX_PANE_PATH='/home/muly/work repo'\\''s' mdev open detect --json",
 	);
 	assert.equal(
-		buildMdevOpenBridgePrintUrlCommand(
-			context,
-			"https://example.test/app's",
-		),
+		buildMdevOpenBridgePrintUrlCommand(context, "https://example.test/app's"),
 		"TMUX_PANE='%12' TMUX_PANE_TTY='/dev/pts/7' TMUX_PANE_PATH='/home/muly/work repo'\\''s' mdev open bridge --print-url -- 'https://example.test/app'\\''s'",
 	);
 	assert.equal(
@@ -91,6 +88,15 @@ void test('parsePrintedOpenUrl accepts a single http or https URL', () => {
 		type: 'valid',
 		url: 'http://localhost:3000/path',
 	});
+	assert.deepEqual(
+		parsePrintedOpenUrl(
+			'https://example.test/callback?next=https://other.test/path',
+		),
+		{
+			type: 'valid',
+			url: 'https://example.test/callback?next=https://other.test/path',
+		},
+	);
 	assert.deepEqual(
 		parsePrintedOpenUrl(
 			'warning: tailscale serve already configured\nhttps://example.test/app\n',
@@ -148,23 +154,22 @@ void test('parsePrintedOpenUrl accepts a single http or https URL', () => {
 		type: 'invalid',
 		message: 'mdev open returned an invalid URL.',
 	});
-	assert.deepEqual(parsePrintedOpenUrl('https://example.test/app\nhttps://example.test/other'), {
-		type: 'invalid',
-		message: 'mdev open returned an invalid URL.',
-	});
 	assert.deepEqual(
-		parsePrintedOpenUrl(
-			'https://example.test/app https://example.test/other',
-		),
+		parsePrintedOpenUrl('https://example.test/app\nhttps://example.test/other'),
 		{
 			type: 'invalid',
 			message: 'mdev open returned an invalid URL.',
 		},
 	);
 	assert.deepEqual(
-		parsePrintedOpenUrl(
-			'https://good.example/pathhttps://bad.example/other',
-		),
+		parsePrintedOpenUrl('https://example.test/app https://example.test/other'),
+		{
+			type: 'invalid',
+			message: 'mdev open returned an invalid URL.',
+		},
+	);
+	assert.deepEqual(
+		parsePrintedOpenUrl('https://good.example/pathhttps://bad.example/other'),
 		{
 			type: 'invalid',
 			message: 'mdev open returned an invalid URL.',

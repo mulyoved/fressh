@@ -895,6 +895,13 @@ export function useBrowserActionsController<TConnection>(
 		setHostUrlModalError(null);
 	}, [hostUrlReadRequestId, hostUrlSubmitRequestId]);
 
+	const resetDetectedOpenRequests = useCallback(() => {
+		hostDetectedOpenRequestId.invalidate();
+		hostDetectedOpenInFlightRef.current = false;
+		hostDetectedOpenPickerSelectionRequestId.invalidate();
+		setDetectedOpenPickerState(null);
+	}, [hostDetectedOpenPickerSelectionRequestId, hostDetectedOpenRequestId]);
+
 	const openController = useCallback(() => {
 		invalidateHostUrlReads();
 		if (!closeOtherModals()) return;
@@ -904,6 +911,7 @@ export function useBrowserActionsController<TConnection>(
 
 	const handleOpenGitHubTarget = useCallback(
 		(target: GitHubRepositoryTarget) => {
+			resetDetectedOpenRequests();
 			runGitHubTargetOpenRequest({
 				target,
 				requestId: browserGitHubTargetRequestId,
@@ -917,6 +925,7 @@ export function useBrowserActionsController<TConnection>(
 			browserGitHubTargetRequestId,
 			getErrorMessage,
 			openAndroidUrl,
+			resetDetectedOpenRequests,
 			resolveCurrentGitHubRepositoryContext,
 			showError,
 		],
@@ -932,6 +941,7 @@ export function useBrowserActionsController<TConnection>(
 	);
 
 	const handleOpenHostDiffity = useCallback(() => {
+		resetDetectedOpenRequests();
 		runHostDiffityOpenRequest({
 			hostDiffityInFlightRef,
 			hostDiffityRequestId,
@@ -958,6 +968,7 @@ export function useBrowserActionsController<TConnection>(
 		getErrorMessage,
 		hostDiffityRequestId,
 		openAndroidUrl,
+		resetDetectedOpenRequests,
 		runHostBrowserCommand,
 		runWorkmuxBrowserCommand,
 		showError,
@@ -1057,6 +1068,7 @@ export function useBrowserActionsController<TConnection>(
 
 	const handleOpenHostUrlSlot = useCallback(
 		(slot: HostBrowserUrlSlot) => {
+			resetDetectedOpenRequests();
 			runHostUrlReadRequest({
 				mode: 'open',
 				slot,
@@ -1075,6 +1087,7 @@ export function useBrowserActionsController<TConnection>(
 			getErrorMessage,
 			hostUrlReadRequestId,
 			openAndroidUrl,
+			resetDetectedOpenRequests,
 			resolveHostBrowserPanePath,
 			runHostBrowserCommand,
 			showError,
@@ -1083,6 +1096,7 @@ export function useBrowserActionsController<TConnection>(
 
 	const handleEditHostUrlSlot = useCallback(
 		(slot: HostBrowserUrlSlot) => {
+			resetDetectedOpenRequests();
 			runHostUrlReadRequest({
 				mode: 'edit',
 				slot,
@@ -1101,6 +1115,7 @@ export function useBrowserActionsController<TConnection>(
 			getErrorMessage,
 			hostUrlReadRequestId,
 			openAndroidUrl,
+			resetDetectedOpenRequests,
 			resolveHostBrowserPanePath,
 			runHostBrowserCommand,
 			showError,

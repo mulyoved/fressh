@@ -4,8 +4,7 @@ import { pathToFileURL } from 'node:url';
 const APP_ID = 'com.finalapp.vibe2';
 const DEFAULT_FLOW_PATH = 'test/e2e/';
 const DEFAULT_ADB_SERVER_PORT = '5037';
-const APP_DATA_WIPE_CONFIRMATION =
-	'I_UNDERSTAND_THIS_DELETES_PRIVATE_KEYS';
+const APP_DATA_WIPE_CONFIRMATION = 'I_UNDERSTAND_THIS_DELETES_PRIVATE_KEYS';
 
 export type AdbServerTarget = {
 	host: string;
@@ -14,9 +13,11 @@ export type AdbServerTarget = {
 
 export type MaestroE2eEnv = Record<string, string | undefined> & {
 	ADB_SERVER_SOCKET?: string;
+	CI?: string;
 	FRESSH_ALLOW_APP_DATA_WIPE?: string;
 	MAESTRO_E2E_CLEAR_STATE?: string;
 	MAESTRO_E2E_PREP?: string;
+	MAESTRO_E2E_REQUIRE_DEVICE?: string;
 	MAESTRO_HOST?: string;
 };
 
@@ -81,6 +82,21 @@ export function buildMaestroArgs(flowArgs: string[]): string[] {
 	return ['test', ...(flowArgs.length > 0 ? flowArgs : [DEFAULT_FLOW_PATH])];
 }
 
+export function hasConnectedAdbDevice(output: string): boolean {
+	return output.split(/\r?\n/).some((line) => {
+		const trimmed = line.trim();
+		if (!trimmed || trimmed.startsWith('List of devices')) return false;
+		return /^\S+\s+device(?:\s|$)/.test(trimmed);
+	});
+}
+
+export function shouldSkipMissingAdbDevice(env: MaestroE2eEnv): boolean {
+	if (env.CI) return false;
+	if (env.MAESTRO_E2E_REQUIRE_DEVICE === '1') return false;
+	if (env.MAESTRO_E2E_CLEAR_STATE === '1') return false;
+	return true;
+}
+
 export function shouldStartMaestroAdbProxy(
 	resolvedTarget: ResolvedAdbServerTarget | null,
 ): boolean {
@@ -115,6 +131,18 @@ function run(
 	if (result.status === 0) return;
 	if (opts?.optional) return;
 	process.exit(result.status ?? 1);
+}
+
+function hasReachableAdbDevice(
+	adbTargetArgs: string[],
+	env: MaestroE2eEnv,
+): boolean {
+	const result = spawnSync('adb', [...adbTargetArgs, 'devices', '-l'], {
+		encoding: 'utf8',
+		env: env as NodeJS.ProcessEnv,
+	});
+	if (result.status !== 0) return false;
+	return hasConnectedAdbDevice(result.stdout);
 }
 
 export function buildLocalAdbEnv(
@@ -177,6 +205,20 @@ export function runMaestroE2e(
 	const maestroAdbProxy = startMaestroAdbProxy(resolvedTarget);
 
 	try {
+		if (!hasReachableAdbDevice(adbTargetArgs, maestroEnv)) {
+			if (shouldSkipMissingAdbDevice(env)) {
+				console.warn(
+					[
+						'Skipping Maestro e2e: no connected Android device was found.',
+						'Set MAESTRO_E2E_REQUIRE_DEVICE=1 or CI=1 to fail when no device is available.',
+					].join('\n'),
+				);
+				return;
+			}
+			console.error('No connected Android device was found for Maestro e2e.');
+			process.exit(1);
+		}
+
 		if (env.MAESTRO_E2E_CLEAR_STATE === '1') {
 			run('adb', [...adbTargetArgs, 'shell', 'am', 'force-stop', APP_ID], {
 				optional: true,

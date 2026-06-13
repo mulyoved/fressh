@@ -2,10 +2,6 @@ import React, { useCallback } from 'react';
 import { Modal, Pressable, ScrollView, Text, View } from 'react-native';
 import { type DetectedOpenCandidate } from '@/lib/detected-open-actions';
 import { useTheme } from '@/lib/theme';
-import {
-	getDetectedOpenCandidateSubtitle,
-	handleDetectedOpenPickerSelect,
-} from './detected-open-picker-modal-controller';
 
 export function DetectedOpenPickerModal({
 	open,
@@ -26,11 +22,8 @@ export function DetectedOpenPickerModal({
 	}, [onClose]);
 	const select = useCallback(
 		(candidate: DetectedOpenCandidate) => {
-			handleDetectedOpenPickerSelect({
-				candidate,
-				onClose,
-				onSelect,
-			});
+			onClose();
+			onSelect(candidate);
 		},
 		[onClose, onSelect],
 	);
@@ -142,4 +135,17 @@ export function DetectedOpenPickerModal({
 			</Pressable>
 		</Modal>
 	);
+}
+
+function getDetectedOpenCandidateSubtitle(
+	candidate: DetectedOpenCandidate,
+): string {
+	switch (candidate.kind) {
+		case 'remote-url':
+			return 'Remote URL';
+		case 'local-url':
+			return 'Local URL';
+		case 'file':
+			return 'File';
+	}
 }

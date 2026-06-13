@@ -4,7 +4,8 @@ export const HOST_BROWSER_URL_SLOTS = [
 	'storybook-url',
 	'app-url',
 ] as const;
-export const HOST_BROWSER_NO_CONNECTION_MESSAGE = 'No SSH connection available.';
+export const HOST_BROWSER_NO_CONNECTION_MESSAGE =
+	'No SSH connection available.';
 
 export type HostBrowserUrlSlot = (typeof HOST_BROWSER_URL_SLOTS)[number];
 
@@ -162,27 +163,31 @@ export function parsePrintedOpenUrl(output: string): ParsedPrintedOpenUrl {
 	for (const line of output.split(/\r?\n/)) {
 		const candidate = line.trim();
 		if (!candidate) continue;
-		const urlPrefixCount = candidate.match(/https?:\/\//g)?.length ?? 0;
-		if (urlPrefixCount > 1) {
-			hasMalformedUrlLine = true;
-			continue;
-		}
-		if (urlPrefixCount === 1 && !candidate.match(/^https?:\/\//)) {
+		const hasUrlPrefix = /https?:\/\//.test(candidate);
+		const startsWithHttpUrl = /^https?:\/\//.test(candidate);
+		if (hasUrlPrefix && !startsWithHttpUrl) {
 			hasMalformedUrlLine = true;
 			continue;
 		}
 		if (/\s/.test(candidate)) {
-			if (urlPrefixCount === 1) hasMalformedUrlLine = true;
+			if (startsWithHttpUrl) hasMalformedUrlLine = true;
 			continue;
 		}
 		let parsed: URL;
 		try {
 			parsed = new URL(candidate);
 		} catch {
-			if (urlPrefixCount === 1) hasMalformedUrlLine = true;
+			if (startsWithHttpUrl) hasMalformedUrlLine = true;
 			continue;
 		}
 		if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+			const structuralUrlPart = candidate.split(/[?#]/, 1)[0] ?? '';
+			const structuralUrlPrefixCount =
+				structuralUrlPart.match(/https?:\/\//g)?.length ?? 0;
+			if (structuralUrlPrefixCount > 1) {
+				hasMalformedUrlLine = true;
+				continue;
+			}
 			parsedHttpUrls.push(parsed);
 		} else {
 			parsedNonHttpUrls.push(parsed);
@@ -242,7 +247,9 @@ export function parseDetectedOpenCandidates(
 	return { type: 'valid', candidates };
 }
 
-function parseDetectedOpenCandidate(value: unknown): DetectedOpenCandidate | null {
+function parseDetectedOpenCandidate(
+	value: unknown,
+): DetectedOpenCandidate | null {
 	if (!value || typeof value !== 'object') return null;
 	const record = value as Record<string, unknown>;
 	if (

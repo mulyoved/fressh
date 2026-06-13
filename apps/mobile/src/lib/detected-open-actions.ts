@@ -95,18 +95,22 @@ export type RunDetectedOpenControllerRequestDeps =
 		getErrorMessage: (error: unknown) => string;
 	};
 
-export type RunDetectedOpenPickerSelectionRequestDeps = {
+type ResolveDetectedOpenPickerSelectionUrlDeps = {
 	context: TmuxPaneContext;
 	candidate: DetectedOpenCandidate;
 	runHostBrowserCommand: (
 		command: string,
 		timeoutMs: number,
 	) => Promise<string>;
-	openUrl: (url: string) => Promise<void>;
 };
 
+type DetectedOpenPickerSelectionRequestDeps =
+	ResolveDetectedOpenPickerSelectionUrlDeps & {
+		openUrl: (url: string) => Promise<void>;
+	};
+
 export type RunGuardedDetectedOpenPickerSelectionRequestDeps =
-	RunDetectedOpenPickerSelectionRequestDeps & {
+	DetectedOpenPickerSelectionRequestDeps & {
 		id: number;
 		requestId: DetectedOpenRequestId;
 		getErrorMessage: (error: unknown) => string;
@@ -266,20 +270,6 @@ export function runDetectedOpenControllerRequest({
 	return { accepted: true, completion };
 }
 
-export async function runDetectedOpenPickerSelectionRequest({
-	context,
-	candidate,
-	runHostBrowserCommand,
-	openUrl,
-}: RunDetectedOpenPickerSelectionRequestDeps): Promise<void> {
-	const url = await resolveDetectedOpenPickerSelectionUrl({
-		context,
-		candidate,
-		runHostBrowserCommand,
-	});
-	await openUrl(url);
-}
-
 export async function runGuardedDetectedOpenPickerSelectionRequest({
 	context,
 	candidate,
@@ -312,10 +302,7 @@ async function resolveDetectedOpenPickerSelectionUrl({
 	context,
 	candidate,
 	runHostBrowserCommand,
-}: Pick<
-	RunDetectedOpenPickerSelectionRequestDeps,
-	'context' | 'candidate' | 'runHostBrowserCommand'
->): Promise<string> {
+}: ResolveDetectedOpenPickerSelectionUrlDeps): Promise<string> {
 	const output = await runHostBrowserCommand(
 		buildMdevOpenBridgePrintUrlCommand(context, candidate.raw),
 		getDetectedOpenTimeoutMs('pick'),

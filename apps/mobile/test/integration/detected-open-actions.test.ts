@@ -10,7 +10,6 @@ import {
 	runDetectedOpenCallback,
 	runDetectedOpenControllerRequest,
 	runGuardedDetectedOpenPickerSelectionRequest,
-	runDetectedOpenPickerSelectionRequest,
 	tryBeginDetectedOpenRequest,
 	type DetectedOpenCandidate,
 } from '../../src/lib/detected-open-actions';
@@ -483,9 +482,12 @@ void test('detected open controller pick mode sets candidates without opening UR
 	]);
 });
 
-void test('detected open picker selection opens parsed bridge URL', async () => {
+void test('guarded detected open picker selection opens current bridged URL', async () => {
+	const requestId = createRequestId();
+	const id = requestId.next();
 	const commands: { command: string; timeoutMs: number }[] = [];
 	const openedUrls: string[] = [];
+	const errors: { title: string; message: string; panePath?: string }[] = [];
 	const candidate: DetectedOpenCandidate = {
 		kind: 'file',
 		raw: '--print-url',
@@ -494,105 +496,6 @@ void test('detected open picker selection opens parsed bridge URL', async () => 
 		path: '/tmp/project/--print-url',
 		line: null,
 		url: null,
-	};
-
-	await runDetectedOpenPickerSelectionRequest({
-		context: {
-			paneId: '%9',
-			paneTty: '/dev/pts/9',
-			panePath: '/tmp/project',
-		},
-		candidate,
-		runHostBrowserCommand: async (command, timeoutMs) => {
-			commands.push({ command, timeoutMs });
-			return 'https://example.test/file\n';
-		},
-		openUrl: async (url) => {
-			openedUrls.push(url);
-		},
-	});
-
-	assert.deepEqual(openedUrls, ['https://example.test/file']);
-	assert.deepEqual(commands, [
-		{
-			command:
-				"TMUX_PANE='%9' TMUX_PANE_TTY='/dev/pts/9' TMUX_PANE_PATH='/tmp/project' mdev open bridge --print-url -- '--print-url'",
-			timeoutMs: 60_000,
-		},
-	]);
-});
-
-void test('detected open picker selection rejects invalid bridge URL output without opening', async () => {
-	const openedUrls: string[] = [];
-	const candidate: DetectedOpenCandidate = {
-		kind: 'remote-url',
-		raw: 'https://example.test/app',
-		normalized: 'https://example.test/app',
-		display: 'https://example.test/app',
-		path: null,
-		line: null,
-		url: 'https://example.test/app',
-	};
-
-	await assert.rejects(
-		runDetectedOpenPickerSelectionRequest({
-			context: {
-				paneId: '%9',
-				paneTty: '/dev/pts/9',
-				panePath: '/tmp/project',
-			},
-			candidate,
-			runHostBrowserCommand: async () => 'not a url',
-			openUrl: async (url) => {
-				openedUrls.push(url);
-			},
-		}),
-		/mdev open returned an invalid URL\./,
-	);
-	assert.deepEqual(openedUrls, []);
-});
-
-void test('detected open picker selection propagates openUrl rejection', async () => {
-	const candidate: DetectedOpenCandidate = {
-		kind: 'remote-url',
-		raw: 'https://example.test/app',
-		normalized: 'https://example.test/app',
-		display: 'https://example.test/app',
-		path: null,
-		line: null,
-		url: 'https://example.test/app',
-	};
-
-	await assert.rejects(
-		runDetectedOpenPickerSelectionRequest({
-			context: {
-				paneId: '%9',
-				paneTty: '/dev/pts/9',
-				panePath: '/tmp/project',
-			},
-			candidate,
-			runHostBrowserCommand: async () => 'https://example.test/app\n',
-			openUrl: async () => {
-				throw new Error('Android could not open URL');
-			},
-		}),
-		/Android could not open URL/,
-	);
-});
-
-void test('guarded detected open picker selection opens current bridged URL', async () => {
-	const requestId = createRequestId();
-	const id = requestId.next();
-	const openedUrls: string[] = [];
-	const errors: { title: string; message: string; panePath?: string }[] = [];
-	const candidate: DetectedOpenCandidate = {
-		kind: 'remote-url',
-		raw: 'https://example.test/original',
-		normalized: 'https://example.test/original',
-		display: 'https://example.test/original',
-		path: null,
-		line: null,
-		url: 'https://example.test/original',
 	};
 
 	await runGuardedDetectedOpenPickerSelectionRequest({
@@ -604,7 +507,10 @@ void test('guarded detected open picker selection opens current bridged URL', as
 			panePath: '/tmp/project',
 		},
 		candidate,
-		runHostBrowserCommand: async () => 'https://example.test/bridged\n',
+		runHostBrowserCommand: async (command, timeoutMs) => {
+			commands.push({ command, timeoutMs });
+			return 'https://example.test/bridged\n';
+		},
 		openUrl: async (url) => {
 			openedUrls.push(url);
 		},
@@ -617,6 +523,13 @@ void test('guarded detected open picker selection opens current bridged URL', as
 
 	assert.deepEqual(openedUrls, ['https://example.test/bridged']);
 	assert.deepEqual(errors, []);
+	assert.deepEqual(commands, [
+		{
+			command:
+				"TMUX_PANE='%9' TMUX_PANE_TTY='/dev/pts/9' TMUX_PANE_PATH='/tmp/project' mdev open bridge --print-url -- '--print-url'",
+			timeoutMs: 60_000,
+		},
+	]);
 });
 
 void test('guarded detected open picker selection ignores stale bridge success', async () => {
