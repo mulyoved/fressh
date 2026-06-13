@@ -18,6 +18,19 @@ void test('browser actions controller exposes detected open picker modal props',
 	);
 	assert.match(source, /runGuardedDetectedOpenPickerSelectionRequest\(\{/);
 	assert.match(source, /hostDetectedOpenPickerSelectionRequestId\.next\(\)/);
+	const handleOpenDetectedIndex = source.indexOf('const handleOpenDetected');
+	const pickerInvalidationIndex = source.indexOf(
+		'hostDetectedOpenPickerSelectionRequestId.invalidate();',
+		handleOpenDetectedIndex,
+	);
+	const controllerRequestIndex = source.indexOf(
+		'const result = runDetectedOpenControllerRequest({',
+		handleOpenDetectedIndex,
+	);
+	assert.notEqual(handleOpenDetectedIndex, -1);
+	assert.notEqual(pickerInvalidationIndex, -1);
+	assert.notEqual(controllerRequestIndex, -1);
+	assert.ok(pickerInvalidationIndex < controllerRequestIndex);
 });
 
 void test('shell detail renders detected open picker modal with browser action props', () => {

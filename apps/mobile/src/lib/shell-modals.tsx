@@ -967,6 +967,7 @@ export function useBrowserActionsController<TConnection>(
 
 	const handleOpenDetected = useCallback(
 		(mode: HostBrowserOpenMode): boolean => {
+			hostDetectedOpenPickerSelectionRequestId.invalidate();
 			const result = runDetectedOpenControllerRequest({
 				mode,
 				inFlightRef: hostDetectedOpenInFlightRef,
@@ -999,6 +1000,7 @@ export function useBrowserActionsController<TConnection>(
 		[
 			getErrorMessage,
 			hostDetectedOpenRequestId,
+			hostDetectedOpenPickerSelectionRequestId,
 			openAndroidUrl,
 			resolveHostBrowserPaneContext,
 			runHostBrowserCommand,
