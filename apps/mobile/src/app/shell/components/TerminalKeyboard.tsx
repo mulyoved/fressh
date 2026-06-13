@@ -29,6 +29,8 @@ import {
 	type ModifierKey,
 } from '@/lib/shell-config';
 import { useTheme } from '@/lib/theme';
+import { type WorkmuxNavScope } from '@/lib/workmux-app-commands';
+import { WorkmuxScopeToggleKey } from './WorkmuxScopeToggleKey';
 
 type LongPressPopupState = {
 	slot: KeyboardSlot;
@@ -201,12 +203,14 @@ export function TerminalKeyboard({
 	onSlotPress,
 	selectionModeEnabled,
 	onCopySelection,
+	navScope = 'active',
 }: {
 	keyboard: KeyboardDefinition | null;
 	modifierKeysActive: ModifierKey[];
 	onSlotPress: (slot: KeyboardExecutableItem) => void;
 	selectionModeEnabled: boolean;
 	onCopySelection: () => void;
+	navScope?: WorkmuxNavScope;
 }) {
 	const theme = useTheme();
 	// Fixed key height keeps all rows visually consistent even when some keys
@@ -557,6 +561,20 @@ export function TerminalKeyboard({
 					/>,
 				);
 				col += 1;
+				continue;
+			}
+
+			if (slot.type === 'action' && slot.actionId === 'WORKMUX_CYCLE_NAV_SCOPE') {
+				cells.push(
+					<WorkmuxScopeToggleKey
+						key={`slot-${rowIndex}-${col}`}
+						scope={navScope}
+						span={span}
+						keyHeight={keyHeight}
+						onPress={() => onSlotPress(slot)}
+					/>,
+				);
+				col += span;
 				continue;
 			}
 
