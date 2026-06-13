@@ -14,6 +14,8 @@ export const WORKMUX_REQUIRED_MDEV_BRIDGE_OPERATIONS = [
 	`${TMUX_SCOPE}.nav`,
 ] as const;
 
+export const CODEX_RESTART_BRIDGE_OPERATION = 'codex.restart' as const;
+
 const WORKMUX_APP_NAV_ACTIONS = new Set([
 	'next',
 	'prev',
@@ -37,6 +39,23 @@ function isSafeNonNegativeIntegerText(value: string): boolean {
 function parseSelectIndex(value: string, argv: string[]): number {
 	if (!isSafeNonNegativeIntegerText(value)) unsupported(argv);
 	return Number(value);
+}
+
+function requireNonEmptyText(value: string, message: string): string {
+	const trimmed = value.trim();
+	if (!trimmed) throw new Error(message);
+	return trimmed;
+}
+
+export function buildCodexRestartBridgeOperation(
+	target: string,
+): MdevBridgeOperationRequest {
+	return {
+		operation: CODEX_RESTART_BRIDGE_OPERATION,
+		params: {
+			target: requireNonEmptyText(target, 'Invalid Codex restart target'),
+		},
+	};
 }
 
 export function buildMdevBridgeOperationFromWorkmuxArgv(

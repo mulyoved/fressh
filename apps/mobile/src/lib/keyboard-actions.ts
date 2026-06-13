@@ -66,6 +66,7 @@ export const KNOWN_ACTION_IDS = [
 	...KEYBOARD_TARGET_ACTION_IDS,
 	'TOGGLE_COMMAND_MENU',
 	'FIT_TERMINAL_TO_DEVICE',
+	'RESTART_CODEX',
 	'REFLOW_TERMINAL',
 	'OPEN_COMMANDER',
 	'OPEN_SKILL_SELECTOR',
@@ -247,6 +248,7 @@ export type ActionContext = {
 	copySelection: () => void;
 	toggleCommandMenu?: () => void;
 	fitTerminalToDevice?: () => Promise<void> | void;
+	restartCodex?: () => Promise<void> | void;
 	openCommander?: () => void;
 	openSkillSelector?: () => void;
 	openBrowserActions?: () => void;
@@ -374,6 +376,10 @@ export async function runAction(
 		case 'FIT_TERMINAL_TO_DEVICE':
 		case 'REFLOW_TERMINAL': {
 			await context.fitTerminalToDevice?.();
+			return;
+		}
+		case 'RESTART_CODEX': {
+			await context.restartCodex?.();
 			return;
 		}
 		case 'OPEN_COMMANDER': {

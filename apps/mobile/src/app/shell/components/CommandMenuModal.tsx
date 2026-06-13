@@ -3,6 +3,7 @@ import { Modal, Pressable, ScrollView, Text, View } from 'react-native';
 import { dispatchCommandMenuSelection } from '@/lib/command-menu-selection';
 import { type ActionId } from '@/lib/keyboard-actions';
 import {
+	type CommandBridgeEntry,
 	type CommandMenu,
 	type CommandMenuEntry,
 	type CommandPreset,
@@ -19,6 +20,7 @@ export function CommandMenuModal({
 	onClose,
 	onSelect,
 	onAction,
+	onBridge,
 }: {
 	open: boolean;
 	entries: CommandMenuEntry[];
@@ -26,6 +28,7 @@ export function CommandMenuModal({
 	onClose: () => void;
 	onSelect: (preset: CommandPreset) => void;
 	onAction: (actionId: ActionId) => void;
+	onBridge: (entry: CommandBridgeEntry) => void;
 }) {
 	const theme = useTheme();
 	const [menuStack, setMenuStack] = useState<CommandMenu[]>([]);
@@ -68,6 +71,7 @@ export function CommandMenuModal({
 			},
 			onClose: handleClose,
 			onAction,
+			onBridge,
 		});
 	};
 

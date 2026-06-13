@@ -54,6 +54,43 @@ function extractRunBrowserActionsWorkmuxCommandBlock(source: string): string {
 	return source.slice(callbackStart, callbackEnd);
 }
 
+function extractHandleRestartCodexBlock(source: string): string {
+	const callbackStart = source.indexOf(
+		'const handleRestartCodex = useCallback',
+	);
+	assert.notEqual(callbackStart, -1);
+	const callbackEnd = source.indexOf(
+		'const actionContext = useMemo',
+		callbackStart,
+	);
+	assert.notEqual(callbackEnd, -1);
+	return source.slice(callbackStart, callbackEnd);
+}
+
+function extractActionContextBlock(source: string): string {
+	const contextStart = source.indexOf('const actionContext = useMemo');
+	assert.notEqual(contextStart, -1);
+	const contextEnd = source.indexOf(
+		'const handleAction = useCallback',
+		contextStart,
+	);
+	assert.notEqual(contextEnd, -1);
+	return source.slice(contextStart, contextEnd);
+}
+
+function extractHandleCommandBridgeEntryBlock(source: string): string {
+	const callbackStart = source.indexOf(
+		'const handleCommandBridgeEntry = useCallback',
+	);
+	assert.notEqual(callbackStart, -1);
+	const callbackEnd = source.indexOf(
+		'const handleAction = useCallback',
+		callbackStart,
+	);
+	assert.notEqual(callbackEnd, -1);
+	return source.slice(callbackStart, callbackEnd);
+}
+
 void describe('shell detail Workmux control channel wiring', () => {
 	void test('routes shell scrollback through WorkmuxControlChannel instead of one-shot mdev scroll commands', () => {
 		const source = readFileSync(detailSourcePath, 'utf8');
@@ -114,7 +151,10 @@ void describe('shell detail Workmux control channel wiring', () => {
 			source,
 			/import \{[^}]*configureScrollTraceEnabled[^}]*isScrollTraceEnabled[^}]*\} from '@\/lib\/scroll-trace'/s,
 		);
-		assert.match(source, /const scrollTraceEnabled\s*=\s*isConfiguredScrollTraceEnabled\(\)/);
+		assert.match(
+			source,
+			/const scrollTraceEnabled\s*=\s*isConfiguredScrollTraceEnabled\(\)/,
+		);
 		assert.match(source, /configureScrollTraceEnabled\(scrollTraceEnabled\)/);
 		assert.match(source, /scrollTraceEnabled,\s*debug:\s*__DEV__/);
 		assert.doesNotMatch(source, /debugTelemetry:\s*__DEV__/);
@@ -147,5 +187,76 @@ void describe('shell detail Workmux control channel wiring', () => {
 			effectBlock,
 			/\[\s*agentConnectionId[\s\S]*runBrowserActionsWorkmuxCommand[\s\S]*\]/,
 		);
+	});
+
+	void test('wires bridge-backed Codex restart through WorkmuxControlChannel operation', () => {
+		const source = readFileSync(detailSourcePath, 'utf8');
+		const block = extractHandleRestartCodexBlock(source);
+		const actionContextBlock = extractActionContextBlock(source);
+
+		assert.match(
+			source,
+			/import \{ restartCodexWithBridge \} from '@\/lib\/codex-restart'/,
+		);
+		assert.match(actionContextBlock, /restartCodex:\s*handleRestartCodex/);
+		assert.match(block, /restartCodexWithBridge\(\{/);
+		assert.match(
+			block,
+			/const workmuxControlChannelSnapshot\s*=\s*workmuxControlChannelRef\.current/,
+		);
+		assert.match(block, /workmuxControlChannelSnapshot\.command/);
+		assert.match(block, /workmuxControlChannelSnapshot\.operation/);
+		assert.doesNotMatch(
+			block,
+			/workmuxControlChannelRef\.current\.(?:command|operation)/,
+		);
+		assert.doesNotMatch(
+			block,
+			/sendBytesRaw|pasteClipboard|runCommandPreset|TextEncoder|sendTextRaw|sendCommandStep/,
+		);
+		assert.doesNotMatch(block, /mdev codex restart/);
+	});
+
+	void test('guards Codex restart against duplicate and stale UI requests', () => {
+		const source = readFileSync(detailSourcePath, 'utf8');
+		const block = extractHandleRestartCodexBlock(source);
+
+		assert.match(
+			source,
+			/const invalidateCodexRestartRequests\s*=\s*useCallback/,
+		);
+		assert.match(source, /codexRestartGenerationRef\.current \+= 1/);
+		assert.match(block, /if \(codexRestartInFlightRef\.current\) return/);
+		assert.match(block, /codexRestartInFlightRef\.current = true/);
+		assert.match(
+			block,
+			/finally\s*\{\s*codexRestartInFlightRef\.current = false;\s*\}/,
+		);
+		assert.match(block, /const isCurrentRestart\s*=\s*\(\) =>/);
+		assert.match(block, /Codex restart superseded/);
+		assert.match(block, /Codex restart failed after becoming stale/);
+		assert.match(source, /invalidateCodexRestartRequests\(\);/);
+		const invalidationBlock = source.slice(
+			source.indexOf('const invalidateCodexRestartRequests = useCallback'),
+			source.indexOf('const exitSelectionMode = useCallback'),
+		);
+		assert.doesNotMatch(
+			invalidationBlock,
+			/codexRestartInFlightRef\.current = false/,
+		);
+	});
+
+	void test('passes bridge handler into CommandMenuModal', () => {
+		const source = readFileSync(detailSourcePath, 'utf8');
+		const block = extractHandleCommandBridgeEntryBlock(source);
+
+		assert.match(source, /const handleCommandBridgeEntry\s*=\s*useCallback/);
+		assert.match(block, /case 'codex\.restart':/);
+		assert.match(
+			block,
+			/void handleRestartCodex\(\{ timeoutMs: entry\.timeoutMs \}\)/,
+		);
+		assert.match(block, /logger\.warn\('Unhandled command bridge operation'/);
+		assert.match(source, /onBridge=\{handleCommandBridgeEntry\}/);
 	});
 });

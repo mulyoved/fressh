@@ -118,6 +118,76 @@ void test('WorkmuxControlChannel.command rejects missing connection locally with
 	assert.deepEqual(bridge.calls, []);
 });
 
+void test('WorkmuxControlChannel.operation routes structured bridge operations, preserving timeout', async () => {
+	const bridge = createRecordingBridgeClient();
+	const channel = createWorkmuxControlChannel({
+		connection: createFakeConnection(),
+		bridgeClient: bridge.bridgeClient,
+	});
+
+	const result = await channel.operation(
+		{ operation: 'codex.restart', params: { target: 'main:@12' } },
+		{ timeoutMs: 4321 },
+	);
+
+	assert.deepEqual(result, { success: true, output: 'ok\n' });
+	assert.deepEqual(bridge.calls, [
+		{
+			operation: 'codex.restart',
+			params: { target: 'main:@12' },
+			timeoutMs: 4321,
+		},
+	]);
+});
+
+void test('WorkmuxControlChannel.operation uses default bridge timeout', async () => {
+	const bridge = createRecordingBridgeClient();
+	const channel = createWorkmuxControlChannel({
+		connection: createFakeConnection(),
+		bridgeClient: bridge.bridgeClient,
+	});
+
+	await channel.operation({
+		operation: 'codex.restart',
+		params: { target: 'main:@12' },
+	});
+
+	assert.deepEqual(bridge.calls, [
+		{
+			operation: 'codex.restart',
+			params: { target: 'main:@12' },
+			timeoutMs: 10_000,
+		},
+	]);
+});
+
+void test('WorkmuxControlChannel.operation rejects missing connection locally', async () => {
+	const bridge = createRecordingBridgeClient();
+	const channel = createWorkmuxControlChannel({
+		connection: null,
+		bridgeClient: bridge.bridgeClient,
+		directTmuxTransport: {
+			send: async () => {
+				throw new Error('DirectMux transport should not be used');
+			},
+			dispose: async () => {},
+		},
+	});
+
+	assert.deepEqual(
+		await channel.operation({
+			operation: 'codex.restart',
+			params: { target: 'main:@12' },
+		}),
+		{
+			success: false,
+			output: '',
+			error: 'No SSH connection available.',
+		},
+	);
+	assert.deepEqual(bridge.calls, []);
+});
+
 void test('WorkmuxControlChannel.command rejects unsupported argv locally without bridge', async () => {
 	const bridge = createRecordingBridgeClient();
 	const channel = createWorkmuxControlChannel({
@@ -244,6 +314,33 @@ void test('WorkmuxControlChannel rejects commands after dispose', async () => {
 		output: '',
 		error: 'Workmux control channel disposed.',
 	});
+	assert.deepEqual(bridge.calls, []);
+});
+
+void test('WorkmuxControlChannel rejects structured operations after dispose', async () => {
+	const bridge = createRecordingBridgeClient();
+	const channel = createWorkmuxControlChannel({
+		connection: createFakeConnection(),
+		bridgeClient: bridge.bridgeClient,
+		directTmuxTransport: {
+			send: async () => true,
+			dispose: async () => {},
+		},
+	});
+
+	await channel.dispose();
+
+	assert.deepEqual(
+		await channel.operation({
+			operation: 'codex.restart',
+			params: { target: 'main:@12' },
+		}),
+		{
+			success: false,
+			output: '',
+			error: 'Workmux control channel disposed.',
+		},
+	);
 	assert.deepEqual(bridge.calls, []);
 });
 

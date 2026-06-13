@@ -25,20 +25,28 @@ function commandTree(entries: CommandMenuEntry[]): CommandTreeNode[] {
 	});
 }
 
-function findPreset(
+function findEntry(
 	entries: CommandMenuEntry[],
 	path: readonly string[],
-): CommandPreset {
+): CommandMenuEntry {
 	const [head, ...tail] = path;
 	assert.ok(head);
 	const entry = entries.find((candidate) => candidate.label === head);
 	assert.ok(entry, `Missing command menu entry ${path.join(' > ')}`);
 	if (tail.length === 0) {
-		assert.equal(entry.type, 'preset');
 		return entry;
 	}
 	assert.equal(entry.type, 'submenu');
-	return findPreset(entry.entries, tail);
+	return findEntry(entry.entries, tail);
+}
+
+function findPreset(
+	entries: CommandMenuEntry[],
+	path: readonly string[],
+): CommandPreset {
+	const entry = findEntry(entries, path);
+	assert.equal(entry.type, 'preset');
+	return entry;
 }
 
 void test('bundled command menu exposes the approved Issue 91 tree', () => {
@@ -101,7 +109,7 @@ void test('bundled command menu exposes the approved Issue 91 tree', () => {
 				{ label: 'Close Workspace', type: 'preset' },
 				{ label: 'Rename Workspace', type: 'preset' },
 				{ label: 'codex auth refresh', type: 'preset' },
-				{ label: 'restart codex', type: 'preset' },
+				{ label: 'restart codex', type: 'bridge' },
 			],
 		},
 		{
@@ -161,7 +169,7 @@ void test('mdev workspace presets run existing tmux workspace commands', () => {
 	});
 });
 
-void test('mdev codex presets expose auth refresh and restart commands', () => {
+void test('mdev codex entries expose auth refresh preset and bridge-backed restart', () => {
 	const commandMenus = getBundledShellConfig().commandMenus;
 	const mdev = commandMenus.find(
 		(entry) => entry.type === 'submenu' && entry.label === 'mdev',
@@ -181,16 +189,11 @@ void test('mdev codex presets expose auth refresh and restart commands', () => {
 			{ type: 'enter' },
 		],
 	});
-	assert.deepEqual(findPreset(commandMenus, ['mdev', 'restart codex']), {
-		type: 'preset',
+	assert.deepEqual(findEntry(commandMenus, ['mdev', 'restart codex']), {
+		type: 'bridge',
 		label: 'restart codex',
-		steps: [
-			{
-				type: 'text',
-				data: `mdev codex restart "$(mdev tmux app context --session main | sed -n 's/.*"target":"\\([^"]*\\)".*/\\1/p')"`,
-			},
-			{ type: 'enter' },
-		],
+		operation: 'codex.restart',
+		timeoutMs: 10_000,
 	});
 });
 

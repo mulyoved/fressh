@@ -286,3 +286,64 @@ void test('runtime shell config rejects unsupported command menu action ids', ()
 
 	assert.throws(() => parseShellConfigData(config), /NOT_A_REAL_ACTION/);
 });
+
+void test('runtime shell config accepts command menu bridge entries', () => {
+	const config = JSON.parse(bundledConfigText) as Record<string, unknown>;
+	config.commandMenus = [
+		{
+			type: 'bridge',
+			label: 'restart codex',
+			operation: 'codex.restart',
+			timeoutMs: 10_000,
+		},
+	];
+
+	const parsed = parseShellConfigData(config);
+
+	assert.deepEqual(parsed.commandMenus, [
+		{
+			type: 'bridge',
+			label: 'restart codex',
+			operation: 'codex.restart',
+			timeoutMs: 10_000,
+		},
+	]);
+});
+
+void test('runtime shell config rejects unsupported command menu bridge operations', () => {
+	const config = JSON.parse(bundledConfigText) as Record<string, unknown>;
+	config.commandMenus = [
+		{
+			type: 'submenu',
+			label: 'mdev',
+			entries: [
+				{
+					type: 'bridge',
+					label: 'Broken',
+					operation: 'host.shell',
+				},
+			],
+		},
+	];
+
+	assert.throws(
+		() => parseShellConfigData(config),
+		/Unsupported command menu bridge operation host\.shell/,
+	);
+});
+
+void test('runtime shell config rejects invalid command menu bridge timeouts', () => {
+	for (const timeoutMs of [0, -1, 1.5, '1000']) {
+		const config = JSON.parse(bundledConfigText) as Record<string, unknown>;
+		config.commandMenus = [
+			{
+				type: 'bridge',
+				label: 'restart codex',
+				operation: 'codex.restart',
+				timeoutMs,
+			},
+		];
+
+		assert.throws(() => parseShellConfigData(config), /timeoutMs/);
+	}
+});

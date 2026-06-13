@@ -156,6 +156,37 @@ void test('fit terminal action delegates to the action context', async () => {
 	);
 });
 
+void test('restart Codex action delegates to the action context', async () => {
+	let restarted = 0;
+	let sentBytes = 0;
+	let pastedClipboard = 0;
+
+	await runAction('RESTART_CODEX', {
+		availableKeyboardIds: new Set(),
+		selectKeyboard: () => {},
+		rotateKeyboard: () => {},
+		openConfigurator: () => {},
+		sendBytes: () => {
+			sentBytes += 1;
+			throw new Error('RESTART_CODEX should not write terminal bytes');
+		},
+		pasteClipboard: async () => {
+			pastedClipboard += 1;
+			throw new Error('RESTART_CODEX should not paste clipboard text');
+		},
+		copySelection: () => {},
+		restartCodex: async () => {
+			restarted += 1;
+		},
+	} as Parameters<typeof runAction>[1]);
+
+	assert.equal(restarted, 1);
+	assert.equal(sentBytes, 0);
+	assert.equal(pastedClipboard, 0);
+	assert.equal(KNOWN_ACTION_IDS.includes('RESTART_CODEX'), true);
+	assert.equal(CONFIG_SUPPORTED_ACTION_IDS.includes('RESTART_CODEX'), true);
+});
+
 void test('legacy reflow terminal action aliases terminal fit', async () => {
 	let fitted = 0;
 
