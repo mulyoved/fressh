@@ -21,6 +21,18 @@ for (const entry of PINNED_FEATURE_REQUEST_REPOS) {
 	}
 }
 
+export type FeatureRequestTargetSelection =
+	| { kind: 'current' }
+	| { kind: 'pinned'; repository: string };
+
+export function selectFeatureRequestRepository(
+	selection: FeatureRequestTargetSelection,
+	autoResolvedRepository: string | null,
+): string | null {
+	if (selection.kind === 'pinned') return selection.repository;
+	return autoResolvedRepository;
+}
+
 export function parseGitHubRepositoryRemoteUrl(
 	remoteUrl: string,
 ): string | null {

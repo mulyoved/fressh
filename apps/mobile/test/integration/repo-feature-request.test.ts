@@ -10,6 +10,8 @@ import {
 	parseGitHubRepositoryRemoteUrl,
 	parseGitHubRepositoryResolutionOutput,
 	PINNED_FEATURE_REQUEST_REPOS,
+	selectFeatureRequestRepository,
+	type FeatureRequestTargetSelection,
 } from '../../src/lib/repo-feature-request';
 
 void test('parseGitHubRepositoryRemoteUrl extracts owner and repo from common GitHub remotes', () => {
@@ -158,4 +160,29 @@ void test('PINNED_FEATURE_REQUEST_REPOS entries are valid owner/repo slugs', () 
 	for (const entry of PINNED_FEATURE_REQUEST_REPOS) {
 		assert.match(entry.repository, pattern, entry.label);
 	}
+});
+
+void test('selectFeatureRequestRepository returns the auto-resolved slug when Current is selected', () => {
+	const selection: FeatureRequestTargetSelection = { kind: 'current' };
+	assert.equal(
+		selectFeatureRequestRepository(selection, 'mulyoved/skills'),
+		'mulyoved/skills',
+	);
+});
+
+void test('selectFeatureRequestRepository returns null when Current is selected and not yet resolved', () => {
+	const selection: FeatureRequestTargetSelection = { kind: 'current' };
+	assert.equal(selectFeatureRequestRepository(selection, null), null);
+});
+
+void test('selectFeatureRequestRepository returns the pinned slug regardless of the auto-resolved value', () => {
+	const selection: FeatureRequestTargetSelection = {
+		kind: 'pinned',
+		repository: 'cube-9/cube9',
+	};
+	assert.equal(
+		selectFeatureRequestRepository(selection, 'mulyoved/skills'),
+		'cube-9/cube9',
+	);
+	assert.equal(selectFeatureRequestRepository(selection, null), 'cube-9/cube9');
 });
