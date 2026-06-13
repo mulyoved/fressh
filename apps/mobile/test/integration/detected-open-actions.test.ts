@@ -29,6 +29,16 @@ function createRequestId() {
 	};
 }
 
+const deferred = <T>() => {
+	let resolve!: (value: T | PromiseLike<T>) => void;
+	let reject!: (reason?: unknown) => void;
+	const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+		resolve = resolvePromise;
+		reject = rejectPromise;
+	});
+	return { promise, resolve, reject };
+};
+
 void test('detected open timeout is 30 seconds for auto mode', () => {
 	assert.equal(getDetectedOpenTimeoutMs('auto'), 30_000);
 });
@@ -691,6 +701,94 @@ void test('guarded detected open picker selection reports current bridge failure
 			panePath: '/tmp/project',
 		},
 	]);
+});
+
+void test('guarded detected open picker selection reports current openUrl rejection with pane path', async () => {
+	const requestId = createRequestId();
+	const id = requestId.next();
+	const errors: { title: string; message: string; panePath?: string }[] = [];
+	const candidate: DetectedOpenCandidate = {
+		kind: 'remote-url',
+		raw: 'https://example.test/app',
+		normalized: 'https://example.test/app',
+		display: 'https://example.test/app',
+		path: null,
+		line: null,
+		url: 'https://example.test/app',
+	};
+
+	await runGuardedDetectedOpenPickerSelectionRequest({
+		id,
+		requestId,
+		context: {
+			paneId: '%9',
+			paneTty: '/dev/pts/9',
+			panePath: '/tmp/project',
+		},
+		candidate,
+		runHostBrowserCommand: async () => 'https://example.test/app\n',
+		openUrl: async () => {
+			throw new Error('Android could not open URL');
+		},
+		getErrorMessage: (error) =>
+			error instanceof Error ? error.message : String(error),
+		showPickError: (error) => {
+			errors.push(error);
+		},
+	});
+
+	assert.deepEqual(errors, [
+		{
+			title: 'Pick failed',
+			message: 'Android could not open URL',
+			panePath: '/tmp/project',
+		},
+	]);
+});
+
+void test('guarded detected open picker selection ignores stale pending openUrl rejection', async () => {
+	const requestId = createRequestId();
+	const id = requestId.next();
+	const openStarted = deferred<void>();
+	const openBlock = deferred<void>();
+	const errors: { title: string; message: string; panePath?: string }[] = [];
+	const candidate: DetectedOpenCandidate = {
+		kind: 'remote-url',
+		raw: 'https://example.test/app',
+		normalized: 'https://example.test/app',
+		display: 'https://example.test/app',
+		path: null,
+		line: null,
+		url: 'https://example.test/app',
+	};
+
+	const completion = runGuardedDetectedOpenPickerSelectionRequest({
+		id,
+		requestId,
+		context: {
+			paneId: '%9',
+			paneTty: '/dev/pts/9',
+			panePath: '/tmp/project',
+		},
+		candidate,
+		runHostBrowserCommand: async () => 'https://example.test/app\n',
+		openUrl: async () => {
+			openStarted.resolve();
+			return openBlock.promise;
+		},
+		getErrorMessage: (error) =>
+			error instanceof Error ? error.message : String(error),
+		showPickError: (error) => {
+			errors.push(error);
+		},
+	});
+
+	await openStarted.promise;
+	requestId.invalidate();
+	openBlock.reject(new Error('Android could not open URL'));
+	await completion;
+
+	assert.deepEqual(errors, []);
 });
 
 void test('detected open controller rejects busy request without closing modal', () => {

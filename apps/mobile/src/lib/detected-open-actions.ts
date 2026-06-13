@@ -272,13 +272,12 @@ export async function runDetectedOpenPickerSelectionRequest({
 	runHostBrowserCommand,
 	openUrl,
 }: RunDetectedOpenPickerSelectionRequestDeps): Promise<void> {
-	const output = await runHostBrowserCommand(
-		buildMdevOpenBridgePrintUrlCommand(context, candidate.raw),
-		getDetectedOpenTimeoutMs('pick'),
-	);
-	const parsed = parsePrintedOpenUrl(output);
-	if (parsed.type === 'invalid') throw new Error(parsed.message);
-	await openUrl(parsed.url);
+	const url = await resolveDetectedOpenPickerSelectionUrl({
+		context,
+		candidate,
+		runHostBrowserCommand,
+	});
+	await openUrl(url);
 }
 
 export async function runGuardedDetectedOpenPickerSelectionRequest({
@@ -292,14 +291,13 @@ export async function runGuardedDetectedOpenPickerSelectionRequest({
 	showPickError,
 }: RunGuardedDetectedOpenPickerSelectionRequestDeps): Promise<void> {
 	try {
-		const output = await runHostBrowserCommand(
-			buildMdevOpenBridgePrintUrlCommand(context, candidate.raw),
-			getDetectedOpenTimeoutMs('pick'),
-		);
-		const parsed = parsePrintedOpenUrl(output);
-		if (parsed.type === 'invalid') throw new Error(parsed.message);
+		const url = await resolveDetectedOpenPickerSelectionUrl({
+			context,
+			candidate,
+			runHostBrowserCommand,
+		});
 		if (!requestId.isCurrent(id)) return;
-		await openUrl(parsed.url);
+		await openUrl(url);
 	} catch (error) {
 		if (!requestId.isCurrent(id)) return;
 		showPickError({
@@ -308,6 +306,23 @@ export async function runGuardedDetectedOpenPickerSelectionRequest({
 			panePath: context.panePath,
 		});
 	}
+}
+
+async function resolveDetectedOpenPickerSelectionUrl({
+	context,
+	candidate,
+	runHostBrowserCommand,
+}: Pick<
+	RunDetectedOpenPickerSelectionRequestDeps,
+	'context' | 'candidate' | 'runHostBrowserCommand'
+>): Promise<string> {
+	const output = await runHostBrowserCommand(
+		buildMdevOpenBridgePrintUrlCommand(context, candidate.raw),
+		getDetectedOpenTimeoutMs('pick'),
+	);
+	const parsed = parsePrintedOpenUrl(output);
+	if (parsed.type === 'invalid') throw new Error(parsed.message);
+	return parsed.url;
 }
 
 function showDetectedOpenError(
