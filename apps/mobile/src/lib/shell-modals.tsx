@@ -411,7 +411,7 @@ export type FeatureRequestModalProps = {
 	isResolvingTarget: boolean;
 	error: string | undefined;
 	onClose: () => boolean;
-	onSubmit: (description: string) => Promise<void>;
+	onSubmit: (description: string, repository: string) => Promise<void>;
 };
 
 export type FeatureRequestControllerHandle = {
@@ -524,14 +524,14 @@ export function useFeatureRequestController<TConnection>(
 	]);
 
 	const submit = useCallback(
-		async (description: string) => {
+		async (description: string, repository: string) => {
 			if (submitInFlightRef.current) return;
 			const id = submitRequestId.next();
 			if (!connection) {
 				setError('No SSH connection available');
 				return;
 			}
-			if (!targetRepository) {
+			if (!repository) {
 				setError('Could not resolve GitHub repository for current window.');
 				return;
 			}
@@ -543,7 +543,7 @@ export function useFeatureRequestController<TConnection>(
 
 			const command = buildCreateGitHubIssueCommand({
 				description,
-				repository: targetRepository,
+				repository,
 			});
 
 			try {
@@ -602,7 +602,6 @@ export function useFeatureRequestController<TConnection>(
 			logger,
 			reset,
 			submitRequestId,
-			targetRepository,
 		],
 	);
 

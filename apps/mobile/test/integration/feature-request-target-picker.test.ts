@@ -65,3 +65,25 @@ void test('FeatureRequestModal uses canSubmitFeatureRequest and forwards reposit
 		/onSubmit\(description\.trim\(\), effectiveRepository\)/,
 	);
 });
+
+const shellModalsPath = join(process.cwd(), 'src/lib/shell-modals.tsx');
+
+void test('FeatureRequestModalProps.onSubmit accepts description and repository', () => {
+	const source = readFileSync(shellModalsPath, 'utf8');
+	assert.match(
+		source,
+		/onSubmit: \(description: string, repository: string\) => Promise<void>;/,
+	);
+});
+
+void test('useFeatureRequestController.submit forwards repository into buildCreateGitHubIssueCommand', () => {
+	const source = readFileSync(shellModalsPath, 'utf8');
+	assert.match(
+		source,
+		/async \(description: string, repository: string\) => \{/,
+	);
+	assert.match(
+		source,
+		/buildCreateGitHubIssueCommand\(\{\s*description,\s*repository,\s*\}\)/,
+	);
+});
