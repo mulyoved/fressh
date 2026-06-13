@@ -33,6 +33,30 @@ export function selectFeatureRequestRepository(
 	return autoResolvedRepository;
 }
 
+export type CanSubmitFeatureRequestInput = {
+	description: string;
+	selection: FeatureRequestTargetSelection;
+	autoResolvedRepository: string | null;
+	isSubmitting: boolean;
+	isResolvingCurrent: boolean;
+};
+
+export function canSubmitFeatureRequest(
+	input: CanSubmitFeatureRequestInput,
+): boolean {
+	if (input.description.trim().length === 0) return false;
+	if (input.isSubmitting) return false;
+	const effectiveRepository = selectFeatureRequestRepository(
+		input.selection,
+		input.autoResolvedRepository,
+	);
+	if (effectiveRepository == null) return false;
+	if (input.selection.kind === 'current' && input.isResolvingCurrent) {
+		return false;
+	}
+	return true;
+}
+
 export function parseGitHubRepositoryRemoteUrl(
 	remoteUrl: string,
 ): string | null {

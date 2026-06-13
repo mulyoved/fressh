@@ -6,6 +6,7 @@ import {
 	buildFeatureRequestSubmittedAlert,
 	buildGitHubRepositoryTargetUrl,
 	buildResolveGitHubRepositoryCommand,
+	canSubmitFeatureRequest,
 	isGitHubRepositoryTarget,
 	parseGitHubRepositoryRemoteUrl,
 	parseGitHubRepositoryResolutionOutput,
@@ -185,4 +186,82 @@ void test('selectFeatureRequestRepository returns the pinned slug regardless of 
 		'cube-9/cube9',
 	);
 	assert.equal(selectFeatureRequestRepository(selection, null), 'cube-9/cube9');
+});
+
+void test('canSubmitFeatureRequest requires a non-empty trimmed description', () => {
+	assert.equal(
+		canSubmitFeatureRequest({
+			description: '   ',
+			selection: { kind: 'pinned', repository: 'cube-9/cube9' },
+			autoResolvedRepository: 'mulyoved/skills',
+			isSubmitting: false,
+			isResolvingCurrent: false,
+		}),
+		false,
+	);
+});
+
+void test('canSubmitFeatureRequest is false while submitting', () => {
+	assert.equal(
+		canSubmitFeatureRequest({
+			description: 'add feature',
+			selection: { kind: 'pinned', repository: 'cube-9/cube9' },
+			autoResolvedRepository: 'mulyoved/skills',
+			isSubmitting: true,
+			isResolvingCurrent: false,
+		}),
+		false,
+	);
+});
+
+void test('canSubmitFeatureRequest blocks Current selection while auto-resolve is running', () => {
+	assert.equal(
+		canSubmitFeatureRequest({
+			description: 'add feature',
+			selection: { kind: 'current' },
+			autoResolvedRepository: null,
+			isSubmitting: false,
+			isResolvingCurrent: true,
+		}),
+		false,
+	);
+});
+
+void test('canSubmitFeatureRequest blocks Current selection when auto-resolve failed', () => {
+	assert.equal(
+		canSubmitFeatureRequest({
+			description: 'add feature',
+			selection: { kind: 'current' },
+			autoResolvedRepository: null,
+			isSubmitting: false,
+			isResolvingCurrent: false,
+		}),
+		false,
+	);
+});
+
+void test('canSubmitFeatureRequest allows Current selection once auto-resolve succeeded', () => {
+	assert.equal(
+		canSubmitFeatureRequest({
+			description: 'add feature',
+			selection: { kind: 'current' },
+			autoResolvedRepository: 'mulyoved/skills',
+			isSubmitting: false,
+			isResolvingCurrent: false,
+		}),
+		true,
+	);
+});
+
+void test('canSubmitFeatureRequest allows pinned selection even while auto-resolve is unresolved', () => {
+	assert.equal(
+		canSubmitFeatureRequest({
+			description: 'add feature',
+			selection: { kind: 'pinned', repository: 'cube-9/cube9' },
+			autoResolvedRepository: null,
+			isSubmitting: false,
+			isResolvingCurrent: true,
+		}),
+		true,
+	);
 });
