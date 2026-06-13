@@ -968,6 +968,7 @@ export function useBrowserActionsController<TConnection>(
 	const handleOpenDetected = useCallback(
 		(mode: HostBrowserOpenMode): boolean => {
 			hostDetectedOpenPickerSelectionRequestId.invalidate();
+			setDetectedOpenPickerState(null);
 			const result = runDetectedOpenControllerRequest({
 				mode,
 				inFlightRef: hostDetectedOpenInFlightRef,
