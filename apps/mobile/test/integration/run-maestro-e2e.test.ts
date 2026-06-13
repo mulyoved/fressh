@@ -8,9 +8,11 @@ import {
 	buildMaestroArgs,
 	buildMaestroEnv,
 	getAppDataWipeError,
+	hasConnectedAdbDevice,
 	parseAdbServerSocket,
 	parseMaestroHost,
 	resolveAdbServerTarget,
+	shouldSkipMissingAdbDevice,
 	shouldStartMaestroAdbProxy,
 } from '../../scripts/run-maestro-e2e';
 
@@ -116,6 +118,35 @@ void test('Maestro command does not pass an unsupported host flag', () => {
 	assert.equal(buildMaestroArgs([]).includes('--host'), false);
 });
 
+void test('ADB device detection requires a connected device state', () => {
+	assert.equal(hasConnectedAdbDevice('List of devices attached\n\n'), false);
+	assert.equal(
+		hasConnectedAdbDevice(
+			'List of devices attached\nemulator-5554 offline product:sdk\n',
+		),
+		false,
+	);
+	assert.equal(
+		hasConnectedAdbDevice(
+			'List of devices attached\nR5CW12345 device product:gts11 model:Tab_S11\n',
+		),
+		true,
+	);
+});
+
+void test('local e2e skips missing devices only when not explicitly required', () => {
+	assert.equal(shouldSkipMissingAdbDevice({}), true);
+	assert.equal(shouldSkipMissingAdbDevice({ CI: 'true' }), false);
+	assert.equal(
+		shouldSkipMissingAdbDevice({ MAESTRO_E2E_REQUIRE_DEVICE: '1' }),
+		false,
+	);
+	assert.equal(
+		shouldSkipMissingAdbDevice({ MAESTRO_E2E_CLEAR_STATE: '1' }),
+		false,
+	);
+});
+
 void test('default package e2e script preserves app data', () => {
 	assert.doesNotMatch(
 		packageJson.scripts?.['test:e2e'] ?? '',
@@ -143,8 +174,7 @@ void test('clear-state request with explicit confirmation is allowed', () => {
 	assert.equal(
 		getAppDataWipeError({
 			MAESTRO_E2E_CLEAR_STATE: '1',
-			FRESSH_ALLOW_APP_DATA_WIPE:
-				'I_UNDERSTAND_THIS_DELETES_PRIVATE_KEYS',
+			FRESSH_ALLOW_APP_DATA_WIPE: 'I_UNDERSTAND_THIS_DELETES_PRIVATE_KEYS',
 		}),
 		null,
 	);

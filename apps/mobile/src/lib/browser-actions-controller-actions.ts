@@ -1,9 +1,8 @@
-import { runDetectedOpenCommand } from '@/lib/detected-open-actions';
 import {
 	buildDiffityShareCommand,
-	type HostBrowserOpenMode,
 	type TmuxPaneContext,
 } from './host-browser-actions';
+import { HostDiffityShareError } from './host-diffity-open-request';
 import {
 	buildWorkmuxAppContextArgv,
 	formatWorkmuxAppBoundaryFailureMessage,
@@ -29,13 +28,16 @@ export type BrowserActionsContextDeps = {
 	getErrorMessage: (error: unknown) => string;
 };
 
-export type BrowserActionsDetectedOpenDeps = BrowserActionsContextDeps & {
-	mode: HostBrowserOpenMode;
-};
 export type BrowserActionsWorkspace = Pick<
 	WorkmuxAppContext,
 	'panePath' | 'projectRoot' | 'projectName'
 >;
+
+export type BrowserActionsDiffityShareResult = {
+	output: string;
+	panePath: string;
+	command: string;
+};
 
 function getSessionName(tmuxTarget: string): string {
 	return tmuxTarget.trim() || 'main';
@@ -116,20 +118,32 @@ export async function resolveBrowserActionsPaneContext(
 	}
 }
 
+export async function runBrowserActionsDiffityShareWithContext(
+	deps: BrowserActionsContextDeps,
+): Promise<BrowserActionsDiffityShareResult> {
+	const panePath = await resolveBrowserActionsPanePath(deps);
+	const command = buildDiffityShareCommand(panePath);
+	let output: string;
+	try {
+		output = await deps.runHostBrowserCommand(command, 60_000);
+	} catch (error) {
+		throw new HostDiffityShareError({
+			message: deps.getErrorMessage(error),
+			panePath,
+			command,
+			cause: error,
+		});
+	}
+	return {
+		output,
+		panePath,
+		command,
+	};
+}
+
 export async function runBrowserActionsDiffityShare(
 	deps: BrowserActionsContextDeps,
 ): Promise<string> {
 	const panePath = await resolveBrowserActionsPanePath(deps);
 	return deps.runHostBrowserCommand(buildDiffityShareCommand(panePath), 60_000);
-}
-
-export async function runBrowserActionsDetectedOpen({
-	mode,
-	...deps
-}: BrowserActionsDetectedOpenDeps): Promise<void> {
-	await runDetectedOpenCommand({
-		mode,
-		resolvePaneContext: () => resolveBrowserActionsPaneContext(deps),
-		runHostBrowserCommand: deps.runHostBrowserCommand,
-	});
 }
