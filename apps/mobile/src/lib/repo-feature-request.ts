@@ -2,6 +2,25 @@ import { quoteShell } from '@/lib/host-browser-actions';
 
 const githubRepositoryPattern = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 
+export type PinnedFeatureRequestRepo = {
+	label: string;
+	repository: string;
+};
+
+export const PINNED_FEATURE_REQUEST_REPOS: readonly PinnedFeatureRequestRepo[] = [
+	{ label: 'Cube9', repository: 'cube-9/cube9' },
+	{ label: 'Fresh', repository: 'mulyoved/fressh' },
+	{ label: 'Pro Skills', repository: 'mulyoved/skills' },
+] as const;
+
+for (const entry of PINNED_FEATURE_REQUEST_REPOS) {
+	if (!githubRepositoryPattern.test(entry.repository)) {
+		throw new Error(
+			`Invalid pinned feature request repository: ${entry.repository}`,
+		);
+	}
+}
+
 export function parseGitHubRepositoryRemoteUrl(
 	remoteUrl: string,
 ): string | null {

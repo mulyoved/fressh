@@ -9,6 +9,7 @@ import {
 	isGitHubRepositoryTarget,
 	parseGitHubRepositoryRemoteUrl,
 	parseGitHubRepositoryResolutionOutput,
+	PINNED_FEATURE_REQUEST_REPOS,
 } from '../../src/lib/repo-feature-request';
 
 void test('parseGitHubRepositoryRemoteUrl extracts owner and repo from common GitHub remotes', () => {
@@ -136,4 +137,25 @@ void test('buildFeatureRequestSubmittedAlert tolerates trailing slash on issue U
 		alert.message,
 		'Your request has been created:\nhttps://github.com/owner/repo/issues/42/',
 	);
+});
+
+void test('PINNED_FEATURE_REQUEST_REPOS lists the three target projects in order', () => {
+	assert.deepEqual(
+		PINNED_FEATURE_REQUEST_REPOS.map((entry) => ({
+			label: entry.label,
+			repository: entry.repository,
+		})),
+		[
+			{ label: 'Cube9', repository: 'cube-9/cube9' },
+			{ label: 'Fresh', repository: 'mulyoved/fressh' },
+			{ label: 'Pro Skills', repository: 'mulyoved/skills' },
+		],
+	);
+});
+
+void test('PINNED_FEATURE_REQUEST_REPOS entries are valid owner/repo slugs', () => {
+	const pattern = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+	for (const entry of PINNED_FEATURE_REQUEST_REPOS) {
+		assert.match(entry.repository, pattern, entry.label);
+	}
 });
