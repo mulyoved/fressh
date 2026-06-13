@@ -2,6 +2,61 @@ import { quoteShell } from '@/lib/host-browser-actions';
 
 const githubRepositoryPattern = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 
+export type PinnedFeatureRequestRepo = {
+	label: string;
+	repository: string;
+};
+
+export const PINNED_FEATURE_REQUEST_REPOS: readonly PinnedFeatureRequestRepo[] = [
+	{ label: 'Cube9', repository: 'cube-9/cube9' },
+	{ label: 'Fresh', repository: 'mulyoved/fressh' },
+	{ label: 'Pro Skills', repository: 'mulyoved/skills' },
+] as const;
+
+for (const entry of PINNED_FEATURE_REQUEST_REPOS) {
+	if (!githubRepositoryPattern.test(entry.repository)) {
+		throw new Error(
+			`Invalid pinned feature request repository: ${entry.repository}`,
+		);
+	}
+}
+
+export type FeatureRequestTargetSelection =
+	| { kind: 'current' }
+	| { kind: 'pinned'; repository: string };
+
+export function selectFeatureRequestRepository(
+	selection: FeatureRequestTargetSelection,
+	autoResolvedRepository: string | null,
+): string | null {
+	if (selection.kind === 'pinned') return selection.repository;
+	return autoResolvedRepository;
+}
+
+export type CanSubmitFeatureRequestInput = {
+	description: string;
+	selection: FeatureRequestTargetSelection;
+	autoResolvedRepository: string | null;
+	isSubmitting: boolean;
+	isResolvingCurrent: boolean;
+};
+
+export function canSubmitFeatureRequest(
+	input: CanSubmitFeatureRequestInput,
+): boolean {
+	if (input.description.trim().length === 0) return false;
+	if (input.isSubmitting) return false;
+	const effectiveRepository = selectFeatureRequestRepository(
+		input.selection,
+		input.autoResolvedRepository,
+	);
+	if (effectiveRepository == null) return false;
+	if (input.selection.kind === 'current' && input.isResolvingCurrent) {
+		return false;
+	}
+	return true;
+}
+
 export function parseGitHubRepositoryRemoteUrl(
 	remoteUrl: string,
 ): string | null {

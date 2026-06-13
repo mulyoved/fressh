@@ -10,6 +10,13 @@ import {
 	TextInput,
 	View,
 } from 'react-native';
+import { Picker } from '@react-native-picker/picker';
+import {
+	canSubmitFeatureRequest,
+	PINNED_FEATURE_REQUEST_REPOS,
+	selectFeatureRequestRepository,
+	type FeatureRequestTargetSelection,
+} from '@/lib/repo-feature-request';
 import { useTheme } from '@/lib/theme';
 
 export function FeatureRequestModal({
@@ -25,7 +32,7 @@ export function FeatureRequestModal({
 	open: boolean;
 	bottomOffset: number;
 	onClose: () => boolean | void;
-	onSubmit: (description: string) => void;
+	onSubmit: (description: string, repository: string) => void;
 	targetRepository?: string | null;
 	isResolvingTarget?: boolean;
 	isSubmitting?: boolean;
@@ -33,11 +40,15 @@ export function FeatureRequestModal({
 }) {
 	const theme = useTheme();
 	const [description, setDescription] = useState('');
+	const [selection, setSelection] = useState<FeatureRequestTargetSelection>({
+		kind: 'current',
+	});
 
 	useEffect(() => {
 		if (!open) {
-			// eslint-disable-next-line @eslint-react/hooks-extra/no-direct-set-state-in-use-effect -- Reset draft text when parent closes the modal.
+			// eslint-disable-next-line @eslint-react/hooks-extra/no-direct-set-state-in-use-effect -- Reset draft text and selection when parent closes the modal.
 			setDescription('');
+			setSelection({ kind: 'current' });
 		}
 	}, [open]);
 
@@ -46,18 +57,44 @@ export function FeatureRequestModal({
 		const didClose = onClose();
 		if (didClose === false) return;
 		setDescription('');
+		setSelection({ kind: 'current' });
 	}, [isSubmitting, onClose]);
 
-	const handleSubmit = useCallback(() => {
-		if (!description.trim() || isSubmitting) return;
-		onSubmit(description.trim());
-	}, [description, isSubmitting, onSubmit]);
+	const effectiveRepository = selectFeatureRequestRepository(
+		selection,
+		targetRepository ?? null,
+	);
 
-	const canSubmit =
-		description.trim().length > 0 &&
-		!isSubmitting &&
-		!isResolvingTarget &&
-		targetRepository != null;
+	const handleSubmit = useCallback(() => {
+		if (!effectiveRepository) return;
+		if (!description.trim() || isSubmitting) return;
+		onSubmit(description.trim(), effectiveRepository);
+	}, [description, effectiveRepository, isSubmitting, onSubmit]);
+
+	const canSubmit = canSubmitFeatureRequest({
+		description,
+		selection,
+		autoResolvedRepository: targetRepository ?? null,
+		isSubmitting,
+		isResolvingCurrent: isResolvingTarget,
+	});
+
+	const pickerValue =
+		selection.kind === 'pinned' ? selection.repository : 'current';
+
+	const handlePickerChange = useCallback((value: string) => {
+		if (value === 'current') {
+			setSelection({ kind: 'current' });
+		} else {
+			setSelection({ kind: 'pinned', repository: value });
+		}
+	}, []);
+
+	const currentItemLabel = isResolvingTarget
+		? 'Current — Resolving…'
+		: targetRepository
+			? `Current — ${targetRepository}`
+			: 'Current — Unavailable';
 
 	return (
 		<Modal
@@ -145,20 +182,45 @@ export function FeatureRequestModal({
 									marginBottom: 6,
 								}}
 							>
-								Description
+								Target
 							</Text>
+							<View
+								style={{
+									borderWidth: 1,
+									borderColor: theme.colors.border,
+									backgroundColor: theme.colors.inputBackground,
+									borderRadius: 10,
+									marginBottom: 16,
+									overflow: 'hidden',
+								}}
+							>
+								<Picker
+									mode="dropdown"
+									selectedValue={pickerValue}
+									onValueChange={handlePickerChange}
+									enabled={!isSubmitting}
+									dropdownIconColor={theme.colors.textSecondary}
+									style={{ color: theme.colors.textPrimary }}
+								>
+									<Picker.Item label={currentItemLabel} value="current" />
+									{PINNED_FEATURE_REQUEST_REPOS.map((entry) => (
+										<Picker.Item
+											key={entry.repository}
+											label={`${entry.label} — ${entry.repository}`}
+											value={entry.repository}
+										/>
+									))}
+								</Picker>
+							</View>
 							<Text
 								style={{
 									color: theme.colors.textSecondary,
-									fontSize: 12,
-									marginBottom: 8,
+									fontSize: 14,
+									fontWeight: '600',
+									marginBottom: 6,
 								}}
 							>
-								{isResolvingTarget
-									? 'Resolving target repository...'
-									: targetRepository
-										? `Target: ${targetRepository}`
-										: 'Target repository unavailable.'}
+								Description
 							</Text>
 							<TextInput
 								value={description}
@@ -237,7 +299,8 @@ export function FeatureRequestModal({
 									justifyContent: 'center',
 								}}
 							>
-								{(isSubmitting || isResolvingTarget) && (
+								{(isSubmitting ||
+									(selection.kind === 'current' && isResolvingTarget)) && (
 									<ActivityIndicator
 										size="small"
 										color={theme.colors.buttonTextOnPrimary}
@@ -254,7 +317,7 @@ export function FeatureRequestModal({
 								>
 									{isSubmitting
 										? 'Submitting...'
-										: isResolvingTarget
+										: selection.kind === 'current' && isResolvingTarget
 											? 'Resolving repository...'
 											: 'Submit Feature Request'}
 								</Text>
