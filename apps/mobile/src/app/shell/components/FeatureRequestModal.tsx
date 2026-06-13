@@ -10,7 +10,14 @@ import {
 	TextInput,
 	View,
 } from 'react-native';
+import {
+	canSubmitFeatureRequest,
+	PINNED_FEATURE_REQUEST_REPOS,
+	selectFeatureRequestRepository,
+	type FeatureRequestTargetSelection,
+} from '@/lib/repo-feature-request';
 import { useTheme } from '@/lib/theme';
+import { FeatureRequestTargetPicker } from './FeatureRequestTargetPicker';
 
 export function FeatureRequestModal({
 	open,
@@ -25,7 +32,7 @@ export function FeatureRequestModal({
 	open: boolean;
 	bottomOffset: number;
 	onClose: () => boolean | void;
-	onSubmit: (description: string) => void;
+	onSubmit: (description: string, repository: string) => void;
 	targetRepository?: string | null;
 	isResolvingTarget?: boolean;
 	isSubmitting?: boolean;
@@ -33,11 +40,17 @@ export function FeatureRequestModal({
 }) {
 	const theme = useTheme();
 	const [description, setDescription] = useState('');
+	const [selection, setSelection] = useState<FeatureRequestTargetSelection>({
+		kind: 'current',
+	});
+	const [pickerOpen, setPickerOpen] = useState(false);
 
 	useEffect(() => {
 		if (!open) {
-			// eslint-disable-next-line @eslint-react/hooks-extra/no-direct-set-state-in-use-effect -- Reset draft text when parent closes the modal.
+			// eslint-disable-next-line @eslint-react/hooks-extra/no-direct-set-state-in-use-effect -- Reset draft text and selection when parent closes the modal.
 			setDescription('');
+			setSelection({ kind: 'current' });
+			setPickerOpen(false);
 		}
 	}, [open]);
 
@@ -46,18 +59,59 @@ export function FeatureRequestModal({
 		const didClose = onClose();
 		if (didClose === false) return;
 		setDescription('');
+		setSelection({ kind: 'current' });
+		setPickerOpen(false);
 	}, [isSubmitting, onClose]);
 
-	const handleSubmit = useCallback(() => {
-		if (!description.trim() || isSubmitting) return;
-		onSubmit(description.trim());
-	}, [description, isSubmitting, onSubmit]);
+	const effectiveRepository = selectFeatureRequestRepository(
+		selection,
+		targetRepository ?? null,
+	);
 
-	const canSubmit =
-		description.trim().length > 0 &&
-		!isSubmitting &&
-		!isResolvingTarget &&
-		targetRepository != null;
+	const handleSubmit = useCallback(() => {
+		if (!effectiveRepository) return;
+		if (!description.trim() || isSubmitting) return;
+		onSubmit(description.trim(), effectiveRepository);
+	}, [description, effectiveRepository, isSubmitting, onSubmit]);
+
+	const canSubmit = canSubmitFeatureRequest({
+		description,
+		selection,
+		autoResolvedRepository: targetRepository ?? null,
+		isSubmitting,
+		isResolvingCurrent: isResolvingTarget,
+	});
+
+	const targetRowLabel =
+		selection.kind === 'pinned'
+			? (PINNED_FEATURE_REQUEST_REPOS.find(
+					(entry) => entry.repository === selection.repository,
+				)?.label ?? selection.repository)
+			: 'Current';
+
+	const targetRowSlug =
+		selection.kind === 'pinned'
+			? selection.repository
+			: isResolvingTarget
+				? 'Resolving…'
+				: (targetRepository ?? 'Unavailable');
+
+	const openPicker = useCallback(() => {
+		if (isSubmitting) return;
+		setPickerOpen(true);
+	}, [isSubmitting]);
+
+	const closePicker = useCallback(() => {
+		setPickerOpen(false);
+	}, []);
+
+	const handlePickerSelect = useCallback(
+		(next: FeatureRequestTargetSelection) => {
+			setSelection(next);
+			setPickerOpen(false);
+		},
+		[],
+	);
 
 	return (
 		<Modal
@@ -145,20 +199,66 @@ export function FeatureRequestModal({
 									marginBottom: 6,
 								}}
 							>
-								Description
+								Target
 							</Text>
+							<Pressable
+								accessibilityRole="button"
+								onPress={openPicker}
+								disabled={isSubmitting}
+								style={{
+									flexDirection: 'row',
+									alignItems: 'center',
+									justifyContent: 'space-between',
+									borderWidth: 1,
+									borderColor: theme.colors.border,
+									backgroundColor: theme.colors.inputBackground,
+									borderRadius: 10,
+									paddingHorizontal: 12,
+									paddingVertical: 10,
+									marginBottom: 16,
+								}}
+							>
+								<View style={{ flex: 1, marginRight: 8 }}>
+									<Text
+										numberOfLines={1}
+										style={{
+											color: theme.colors.textPrimary,
+											fontSize: 14,
+											fontWeight: '600',
+										}}
+									>
+										{targetRowLabel}
+									</Text>
+									<Text
+										numberOfLines={1}
+										style={{
+											color: theme.colors.textSecondary,
+											fontSize: 12,
+											marginTop: 2,
+										}}
+									>
+										{targetRowSlug}
+									</Text>
+								</View>
+								<Text
+									style={{
+										color: theme.colors.textSecondary,
+										fontSize: 14,
+										fontWeight: '700',
+									}}
+								>
+									▾
+								</Text>
+							</Pressable>
 							<Text
 								style={{
 									color: theme.colors.textSecondary,
-									fontSize: 12,
-									marginBottom: 8,
+									fontSize: 14,
+									fontWeight: '600',
+									marginBottom: 6,
 								}}
 							>
-								{isResolvingTarget
-									? 'Resolving target repository...'
-									: targetRepository
-										? `Target: ${targetRepository}`
-										: 'Target repository unavailable.'}
+								Description
 							</Text>
 							<TextInput
 								value={description}
@@ -237,7 +337,8 @@ export function FeatureRequestModal({
 									justifyContent: 'center',
 								}}
 							>
-								{(isSubmitting || isResolvingTarget) && (
+								{(isSubmitting ||
+									(selection.kind === 'current' && isResolvingTarget)) && (
 									<ActivityIndicator
 										size="small"
 										color={theme.colors.buttonTextOnPrimary}
@@ -254,7 +355,7 @@ export function FeatureRequestModal({
 								>
 									{isSubmitting
 										? 'Submitting...'
-										: isResolvingTarget
+										: selection.kind === 'current' && isResolvingTarget
 											? 'Resolving repository...'
 											: 'Submit Feature Request'}
 								</Text>
@@ -263,6 +364,16 @@ export function FeatureRequestModal({
 					</View>
 				</KeyboardAvoidingView>
 			</Pressable>
+			<FeatureRequestTargetPicker
+				open={pickerOpen}
+				bottomOffset={bottomOffset}
+				currentRepository={targetRepository ?? null}
+				isResolvingCurrent={isResolvingTarget}
+				selection={selection}
+				pinned={PINNED_FEATURE_REQUEST_REPOS}
+				onClose={closePicker}
+				onSelect={handlePickerSelect}
+			/>
 		</Modal>
 	);
 }
