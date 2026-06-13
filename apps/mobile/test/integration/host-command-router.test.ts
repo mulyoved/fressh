@@ -87,6 +87,31 @@ void test('runHostCommandWithBoundary preserves side channel for non-Workmux com
 	assert.deepEqual(calls, ['side:git remote get-url origin:20000']);
 });
 
+void test('runHostCommandWithBoundary does not emit debug fetches for side-channel commands', async () => {
+	const originalFetch = globalThis.fetch;
+	let fetchCalls = 0;
+	globalThis.fetch = (async () => {
+		fetchCalls += 1;
+		return new Response(null, { status: 204 });
+	}) as typeof fetch;
+	try {
+		const output = await runHostCommandWithBoundary({
+			connection: { id: 'conn' },
+			command: 'git status',
+			timeoutMs: 20_000,
+			executeSideChannelCommand: async () => ({
+				success: true,
+				output: 'clean\n',
+			}),
+		});
+
+		assert.equal(output, 'clean');
+		assert.equal(fetchCalls, 0);
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
+});
+
 void test('runHostCommandWithBoundary tells users to update mdev for old Workmux command failures', async () => {
 	await assert.rejects(
 		runHostCommandWithBoundary({

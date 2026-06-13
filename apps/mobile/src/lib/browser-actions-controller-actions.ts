@@ -1,7 +1,5 @@
-import { runDetectedOpenCommand } from '@/lib/detected-open-actions';
 import {
 	buildDiffityShareCommand,
-	type HostBrowserOpenMode,
 	type TmuxPaneContext,
 } from './host-browser-actions';
 import { HostDiffityShareError } from './host-diffity-open-request';
@@ -30,9 +28,6 @@ export type BrowserActionsContextDeps = {
 	getErrorMessage: (error: unknown) => string;
 };
 
-export type BrowserActionsDetectedOpenDeps = BrowserActionsContextDeps & {
-	mode: HostBrowserOpenMode;
-};
 export type BrowserActionsWorkspace = Pick<
 	WorkmuxAppContext,
 	'panePath' | 'projectRoot' | 'projectName'
@@ -151,15 +146,4 @@ export async function runBrowserActionsDiffityShare(
 ): Promise<string> {
 	const panePath = await resolveBrowserActionsPanePath(deps);
 	return deps.runHostBrowserCommand(buildDiffityShareCommand(panePath), 60_000);
-}
-
-export async function runBrowserActionsDetectedOpen({
-	mode,
-	...deps
-}: BrowserActionsDetectedOpenDeps): Promise<void> {
-	await runDetectedOpenCommand({
-		mode,
-		resolvePaneContext: () => resolveBrowserActionsPaneContext(deps),
-		runHostBrowserCommand: deps.runHostBrowserCommand,
-	});
 }

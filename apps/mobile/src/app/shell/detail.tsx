@@ -171,6 +171,7 @@ import {
 import { BrowserActionsModal } from './components/BrowserActionsModal';
 import { CommandMenuModal } from './components/CommandMenuModal';
 import { ConfigureModal } from './components/ConfigureModal';
+import { DetectedOpenPickerModal } from './components/DetectedOpenPickerModal';
 import { FeatureRequestModal } from './components/FeatureRequestModal';
 import { HostUrlModal } from './components/HostUrlModal';
 import { SkillSelectorModal } from './components/SkillSelectorModal';
@@ -3227,6 +3228,10 @@ function ShellDetail() {
 				<BrowserActionsModal
 					bottomOffset={Platform.OS === 'android' ? insets.bottom + 24 : 24}
 					{...browserActions.browserActionsProps}
+				/>
+				<DetectedOpenPickerModal
+					bottomOffset={Platform.OS === 'android' ? insets.bottom + 24 : 24}
+					{...browserActions.detectedOpenPickerProps}
 				/>
 				<TerminalCommanderModal
 					open={commanderModal.open}
