@@ -114,19 +114,20 @@ export function FeatureRequestModal({
 	);
 
 	return (
-		<Modal
-			transparent
-			visible={open}
-			animationType="slide"
-			onRequestClose={handleClose}
-		>
-			<Pressable
-				onPress={handleClose}
-				style={{
-					flex: 1,
-					backgroundColor: theme.colors.overlay,
-				}}
+		<>
+			<Modal
+				transparent
+				visible={open}
+				animationType="slide"
+				onRequestClose={handleClose}
 			>
+				<Pressable
+					onPress={handleClose}
+					style={{
+						flex: 1,
+						backgroundColor: theme.colors.overlay,
+					}}
+				>
 				<KeyboardAvoidingView
 					behavior={Platform.OS === 'ios' ? 'padding' : undefined}
 					style={{
@@ -364,6 +365,7 @@ export function FeatureRequestModal({
 					</View>
 				</KeyboardAvoidingView>
 			</Pressable>
+		</Modal>
 			<FeatureRequestTargetPicker
 				open={pickerOpen}
 				bottomOffset={bottomOffset}
@@ -374,6 +376,6 @@ export function FeatureRequestModal({
 				onClose={closePicker}
 				onSelect={handlePickerSelect}
 			/>
-		</Modal>
+		</>
 	);
 }
