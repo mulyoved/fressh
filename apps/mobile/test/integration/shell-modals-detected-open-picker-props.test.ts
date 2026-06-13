@@ -10,8 +10,14 @@ void test('browser actions controller exposes detected open picker modal props',
 	const source = readFileSync(shellModalsSourcePath, 'utf8');
 
 	assert.match(source, /export type DetectedOpenPickerModalProps = \{/);
-	assert.match(source, /detectedOpenPickerProps: DetectedOpenPickerModalProps;/);
-	assert.match(source, /setDetectedOpenPickerState\(\{ candidates, context \}\);/);
+	assert.match(
+		source,
+		/detectedOpenPickerProps: DetectedOpenPickerModalProps;/,
+	);
+	assert.match(
+		source,
+		/setDetectedOpenPickerState\(\{ candidates, context \}\);/,
+	);
 	assert.match(
 		source,
 		/const detectedOpenPickerProps = useMemo<DetectedOpenPickerModalProps>/,
