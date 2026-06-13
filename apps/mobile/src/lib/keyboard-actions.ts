@@ -11,6 +11,7 @@ import {
 	formatWorkmuxAppCommandFailureMessage,
 	type WorkmuxFocusTarget,
 	type WorkmuxNavAction,
+	type WorkmuxNavScope,
 } from '@/lib/workmux-app-commands';
 
 // Action IDs emitted by runtime config are handled here at runtime.
@@ -65,6 +66,7 @@ export const KNOWN_ACTION_IDS = [
 	'OPEN_KEYBOARD_SETTINGS',
 	...KEYBOARD_TARGET_ACTION_IDS,
 	'TOGGLE_COMMAND_MENU',
+	'WORKMUX_CYCLE_NAV_SCOPE',
 	'FIT_TERMINAL_TO_DEVICE',
 	'RESTART_CODEX',
 	'REFLOW_TERMINAL',
@@ -128,12 +130,14 @@ export type WorkmuxKeyboardCommandRunner = {
 export function createWorkmuxKeyboardCommandRunner({
 	isTmuxEnabled,
 	getSessionName,
+	getNavScope,
 	runWorkmuxCommand,
 	showFailure,
 	getErrorMessage,
 }: {
 	isTmuxEnabled: () => boolean;
 	getSessionName: () => string;
+	getNavScope?: () => WorkmuxNavScope;
 	runWorkmuxCommand: (argv: string[], timeoutMs: number) => Promise<unknown>;
 	showFailure: (message: string) => void;
 	getErrorMessage: (error: unknown) => string;
@@ -163,11 +167,21 @@ export function createWorkmuxKeyboardCommandRunner({
 				throw new Error(WORKMUX_KEYBOARD_COMMAND_DISABLED_MESSAGE);
 			}
 			const sessionName = getSessionName().trim() || 'main';
+			const navScope =
+				command.type === 'nav' &&
+				(command.action === 'next' || command.action === 'prev')
+					? getNavScope?.()
+					: undefined;
 			const argv =
 				command.type === 'focus'
 					? buildWorkmuxAppFocusArgv(sessionName, command.target)
 					: command.type === 'nav'
-						? buildWorkmuxAppNavArgv(sessionName, command.action)
+						? buildWorkmuxAppNavArgv(
+								sessionName,
+								command.action,
+								undefined,
+								navScope,
+							)
 						: buildWorkmuxStatusCycleArgv(sessionName);
 			await runWorkmuxCommand(argv, 10_000);
 			return commandGeneration === generation
@@ -247,6 +261,7 @@ export type ActionContext = {
 	pasteClipboard: () => Promise<void>;
 	copySelection: () => void;
 	toggleCommandMenu?: () => void;
+	cycleNavScope?: () => void;
 	fitTerminalToDevice?: () => Promise<void> | void;
 	restartCodex?: () => Promise<void> | void;
 	openCommander?: () => void;
@@ -371,6 +386,10 @@ export async function runAction(
 		}
 		case 'TOGGLE_COMMAND_MENU': {
 			context.toggleCommandMenu?.();
+			return;
+		}
+		case 'WORKMUX_CYCLE_NAV_SCOPE': {
+			context.cycleNavScope?.();
 			return;
 		}
 		case 'FIT_TERMINAL_TO_DEVICE':
