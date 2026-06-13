@@ -3,58 +3,70 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
 
-const sourcePath = join(
-	process.cwd(),
-	'src/app/shell/components/FeatureRequestTargetPicker.tsx',
-);
-
-void test('FeatureRequestTargetPicker exports the picker component', () => {
-	const source = readFileSync(sourcePath, 'utf8');
-	assert.match(source, /export function FeatureRequestTargetPicker\(/);
-});
-
-void test('FeatureRequestTargetPicker renders the Current row and iterates pinned entries', () => {
-	const source = readFileSync(sourcePath, 'utf8');
-	assert.match(source, /onSelect\(\{ kind: 'current' \}\)/);
-	assert.match(source, /pinned\.map\(\(/);
-	assert.match(
-		source,
-		/onSelect\(\{ kind: 'pinned', repository: entry\.repository \}\)/,
-	);
-});
-
-void test('FeatureRequestTargetPicker shows Resolving and Unavailable states for Current', () => {
-	const source = readFileSync(sourcePath, 'utf8');
-	assert.match(source, /Resolving/);
-	assert.match(source, /Unavailable/);
-});
-
-void test('FeatureRequestTargetPicker threads bottomOffset for keyboard avoidance', () => {
-	const source = readFileSync(sourcePath, 'utf8');
-	assert.match(source, /bottomOffset/);
-});
-
 const modalPath = join(
 	process.cwd(),
 	'src/app/shell/components/FeatureRequestModal.tsx',
 );
 
-void test('FeatureRequestModal renders FeatureRequestTargetPicker with pinned list', () => {
+const shellModalsPath = join(process.cwd(), 'src/lib/shell-modals.tsx');
+
+void test('FeatureRequestModal imports Picker from @react-native-picker/picker', () => {
 	const source = readFileSync(modalPath, 'utf8');
-	assert.match(source, /import \{ FeatureRequestTargetPicker \}/);
-	assert.match(source, /<FeatureRequestTargetPicker/);
-	assert.match(source, /pinned=\{PINNED_FEATURE_REQUEST_REPOS\}/);
+	assert.match(
+		source,
+		/import \{ Picker \} from '@react-native-picker\/picker';/,
+	);
+});
+
+void test('FeatureRequestModal renders a Picker bound to selection state', () => {
+	const source = readFileSync(modalPath, 'utf8');
+	assert.match(source, /<Picker/);
+	assert.match(source, /selectedValue=\{pickerValue\}/);
+	assert.match(source, /onValueChange=\{handlePickerChange\}/);
+	assert.match(source, /enabled=\{!isSubmitting\}/);
+});
+
+void test('FeatureRequestModal emits the Current Picker.Item with the dynamic label', () => {
+	const source = readFileSync(modalPath, 'utf8');
+	assert.match(
+		source,
+		/<Picker\.Item label=\{currentItemLabel\} value="current" \/>/,
+	);
+	assert.match(source, /'Current — Resolving…'/);
+	assert.match(source, /'Current — Unavailable'/);
+	assert.match(source, /`Current — \$\{targetRepository\}`/);
+});
+
+void test('FeatureRequestModal maps PINNED_FEATURE_REQUEST_REPOS into Picker.Items', () => {
+	const source = readFileSync(modalPath, 'utf8');
+	assert.match(source, /PINNED_FEATURE_REQUEST_REPOS\.map\(\(entry\)/);
+	assert.match(source, /value=\{entry\.repository\}/);
+	assert.match(
+		source,
+		/label=\{`\$\{entry\.label\} — \$\{entry\.repository\}`\}/,
+	);
 });
 
 void test('FeatureRequestModal owns selection state defaulting to current', () => {
 	const source = readFileSync(modalPath, 'utf8');
-	// useState<FeatureRequestTargetSelection>({ kind: 'current' }) — tolerant of
-	// the multi-line formatting prettier produces around the generic.
 	assert.match(
 		source,
 		/useState<FeatureRequestTargetSelection>\(\s*\{\s*kind:\s*'current',?\s*\}\s*\)/,
 	);
 	assert.match(source, /setSelection\(\{ kind: 'current' \}\);/);
+});
+
+void test('FeatureRequestModal derives pickerValue and handlePickerChange from selection', () => {
+	const source = readFileSync(modalPath, 'utf8');
+	assert.match(
+		source,
+		/const pickerValue =\s*selection\.kind === 'pinned' \? selection\.repository : 'current';/,
+	);
+	assert.match(
+		source,
+		/const handlePickerChange = useCallback\(\(value: string\) => \{/,
+	);
+	assert.match(source, /setSelection\(\{ kind: 'pinned', repository: value \}\);/);
 });
 
 void test('FeatureRequestModal uses canSubmitFeatureRequest and forwards repository on submit', () => {
@@ -66,7 +78,10 @@ void test('FeatureRequestModal uses canSubmitFeatureRequest and forwards reposit
 	);
 });
 
-const shellModalsPath = join(process.cwd(), 'src/lib/shell-modals.tsx');
+void test('FeatureRequestModal no longer imports FeatureRequestTargetPicker', () => {
+	const source = readFileSync(modalPath, 'utf8');
+	assert.doesNotMatch(source, /FeatureRequestTargetPicker/);
+});
 
 void test('FeatureRequestModalProps.onSubmit accepts description and repository', () => {
 	const source = readFileSync(shellModalsPath, 'utf8');

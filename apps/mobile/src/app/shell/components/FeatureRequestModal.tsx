@@ -10,6 +10,7 @@ import {
 	TextInput,
 	View,
 } from 'react-native';
+import { Picker } from '@react-native-picker/picker';
 import {
 	canSubmitFeatureRequest,
 	PINNED_FEATURE_REQUEST_REPOS,
@@ -17,7 +18,6 @@ import {
 	type FeatureRequestTargetSelection,
 } from '@/lib/repo-feature-request';
 import { useTheme } from '@/lib/theme';
-import { FeatureRequestTargetPicker } from './FeatureRequestTargetPicker';
 
 export function FeatureRequestModal({
 	open,
@@ -43,14 +43,12 @@ export function FeatureRequestModal({
 	const [selection, setSelection] = useState<FeatureRequestTargetSelection>({
 		kind: 'current',
 	});
-	const [pickerOpen, setPickerOpen] = useState(false);
 
 	useEffect(() => {
 		if (!open) {
 			// eslint-disable-next-line @eslint-react/hooks-extra/no-direct-set-state-in-use-effect -- Reset draft text and selection when parent closes the modal.
 			setDescription('');
 			setSelection({ kind: 'current' });
-			setPickerOpen(false);
 		}
 	}, [open]);
 
@@ -60,7 +58,6 @@ export function FeatureRequestModal({
 		if (didClose === false) return;
 		setDescription('');
 		setSelection({ kind: 'current' });
-		setPickerOpen(false);
 	}, [isSubmitting, onClose]);
 
 	const effectiveRepository = selectFeatureRequestRepository(
@@ -82,52 +79,37 @@ export function FeatureRequestModal({
 		isResolvingCurrent: isResolvingTarget,
 	});
 
-	const targetRowLabel =
-		selection.kind === 'pinned'
-			? (PINNED_FEATURE_REQUEST_REPOS.find(
-					(entry) => entry.repository === selection.repository,
-				)?.label ?? selection.repository)
-			: 'Current';
+	const pickerValue =
+		selection.kind === 'pinned' ? selection.repository : 'current';
 
-	const targetRowSlug =
-		selection.kind === 'pinned'
-			? selection.repository
-			: isResolvingTarget
-				? 'Resolving…'
-				: (targetRepository ?? 'Unavailable');
-
-	const openPicker = useCallback(() => {
-		if (isSubmitting) return;
-		setPickerOpen(true);
-	}, [isSubmitting]);
-
-	const closePicker = useCallback(() => {
-		setPickerOpen(false);
+	const handlePickerChange = useCallback((value: string) => {
+		if (value === 'current') {
+			setSelection({ kind: 'current' });
+		} else {
+			setSelection({ kind: 'pinned', repository: value });
+		}
 	}, []);
 
-	const handlePickerSelect = useCallback(
-		(next: FeatureRequestTargetSelection) => {
-			setSelection(next);
-			setPickerOpen(false);
-		},
-		[],
-	);
+	const currentItemLabel = isResolvingTarget
+		? 'Current — Resolving…'
+		: targetRepository
+			? `Current — ${targetRepository}`
+			: 'Current — Unavailable';
 
 	return (
-		<>
-			<Modal
-				transparent
-				visible={open}
-				animationType="slide"
-				onRequestClose={handleClose}
+		<Modal
+			transparent
+			visible={open}
+			animationType="slide"
+			onRequestClose={handleClose}
+		>
+			<Pressable
+				onPress={handleClose}
+				style={{
+					flex: 1,
+					backgroundColor: theme.colors.overlay,
+				}}
 			>
-				<Pressable
-					onPress={handleClose}
-					style={{
-						flex: 1,
-						backgroundColor: theme.colors.overlay,
-					}}
-				>
 				<KeyboardAvoidingView
 					behavior={Platform.OS === 'ios' ? 'padding' : undefined}
 					style={{
@@ -202,55 +184,33 @@ export function FeatureRequestModal({
 							>
 								Target
 							</Text>
-							<Pressable
-								accessibilityRole="button"
-								onPress={openPicker}
-								disabled={isSubmitting}
+							<View
 								style={{
-									flexDirection: 'row',
-									alignItems: 'center',
-									justifyContent: 'space-between',
 									borderWidth: 1,
 									borderColor: theme.colors.border,
 									backgroundColor: theme.colors.inputBackground,
 									borderRadius: 10,
-									paddingHorizontal: 12,
-									paddingVertical: 10,
 									marginBottom: 16,
+									overflow: 'hidden',
 								}}
 							>
-								<View style={{ flex: 1, marginRight: 8 }}>
-									<Text
-										numberOfLines={1}
-										style={{
-											color: theme.colors.textPrimary,
-											fontSize: 14,
-											fontWeight: '600',
-										}}
-									>
-										{targetRowLabel}
-									</Text>
-									<Text
-										numberOfLines={1}
-										style={{
-											color: theme.colors.textSecondary,
-											fontSize: 12,
-											marginTop: 2,
-										}}
-									>
-										{targetRowSlug}
-									</Text>
-								</View>
-								<Text
-									style={{
-										color: theme.colors.textSecondary,
-										fontSize: 14,
-										fontWeight: '700',
-									}}
+								<Picker
+									selectedValue={pickerValue}
+									onValueChange={handlePickerChange}
+									enabled={!isSubmitting}
+									dropdownIconColor={theme.colors.textSecondary}
+									style={{ color: theme.colors.textPrimary }}
 								>
-									▾
-								</Text>
-							</Pressable>
+									<Picker.Item label={currentItemLabel} value="current" />
+									{PINNED_FEATURE_REQUEST_REPOS.map((entry) => (
+										<Picker.Item
+											key={entry.repository}
+											label={`${entry.label} — ${entry.repository}`}
+											value={entry.repository}
+										/>
+									))}
+								</Picker>
+							</View>
 							<Text
 								style={{
 									color: theme.colors.textSecondary,
@@ -366,16 +326,5 @@ export function FeatureRequestModal({
 				</KeyboardAvoidingView>
 			</Pressable>
 		</Modal>
-			<FeatureRequestTargetPicker
-				open={pickerOpen}
-				bottomOffset={bottomOffset}
-				currentRepository={targetRepository ?? null}
-				isResolvingCurrent={isResolvingTarget}
-				selection={selection}
-				pinned={PINNED_FEATURE_REQUEST_REPOS}
-				onClose={closePicker}
-				onSelect={handlePickerSelect}
-			/>
-		</>
 	);
 }
