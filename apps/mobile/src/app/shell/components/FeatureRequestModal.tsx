@@ -195,6 +195,7 @@ export function FeatureRequestModal({
 								}}
 							>
 								<Picker
+									mode="dropdown"
 									selectedValue={pickerValue}
 									onValueChange={handlePickerChange}
 									enabled={!isSubmitting}
