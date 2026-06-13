@@ -1,6 +1,6 @@
 {
-	"version": "2026-06-13.1",
-	"updatedAt": "2026-06-13T05:39:52.000Z",
+	"version": "2026-06-14.1",
+	"updatedAt": "2026-06-14T08:00:00.000Z",
 	"defaultKeyboardId": "phone_base",
 	"activeKeyboardIds": [
 		"phone_base",
@@ -412,14 +412,8 @@
 					},
 					{
 						"type": "action",
-						"actionId": "WORKMUX_NAV_PREV_ALL",
-						"label": "Previous All",
-						"icon": null
-					},
-					{
-						"type": "action",
 						"actionId": "WORKMUX_NAV_PREV",
-						"label": "Previous",
+						"label": "Prev",
 						"icon": null
 					},
 					{
@@ -430,10 +424,12 @@
 					},
 					{
 						"type": "action",
-						"actionId": "WORKMUX_NAV_NEXT_ALL",
-						"label": "Next All",
-						"icon": null
+						"actionId": "WORKMUX_CYCLE_NAV_SCOPE",
+						"label": "Scope",
+						"icon": null,
+						"span": 2
 					},
+					null,
 					{
 						"type": "macro",
 						"macroId": "cmd_continue",
@@ -457,18 +453,8 @@
 					null,
 					null,
 					null,
-					{
-						"type": "action",
-						"actionId": "WORKMUX_NAV_PREV_ALL",
-						"label": "Prev all",
-						"icon": null
-					},
-					{
-						"type": "action",
-						"actionId": "WORKMUX_NAV_NEXT_ALL",
-						"label": "Next all",
-						"icon": null
-					},
+					null,
+					null,
 					null
 				]
 			]
@@ -514,7 +500,7 @@
 					{
 						"type": "action",
 						"actionId": "WORKMUX_NAV_PREV",
-						"label": "Previous",
+						"label": "Prev",
 						"icon": null
 					},
 					{
@@ -525,16 +511,12 @@
 					},
 					{
 						"type": "action",
-						"actionId": "WORKMUX_NAV_PREV_ALL",
-						"label": "Previous All",
-						"icon": null
+						"actionId": "WORKMUX_CYCLE_NAV_SCOPE",
+						"label": "Scope",
+						"icon": null,
+						"span": 2
 					},
-					{
-						"type": "action",
-						"actionId": "WORKMUX_NAV_NEXT_ALL",
-						"label": "Next All",
-						"icon": null
-					},
+					null,
 					{
 						"type": "action",
 						"actionId": "CYCLE_WORKMUX_STATUS",

@@ -6,6 +6,34 @@ import {
 	parseShellConfigData,
 } from '../../src/lib/shell-config';
 
+// Mirrors TerminalKeyboard's grid walk: a slot with span>1 consumes the
+// following array entries, so a real slot placed right after a span-2 slot is
+// never rendered. Returns the identifiers of slots that actually render.
+function renderedSlotKeys(
+	row: ReturnType<typeof getBundledShellConfig>['keyboards'][number]['grid'][number],
+): string[] {
+	const keys: string[] = [];
+	let col = 0;
+	while (col < row.length) {
+		const slot = row[col];
+		const span =
+			slot && typeof slot.span === 'number' && slot.span > 1
+				? Math.min(slot.span, row.length - col)
+				: 1;
+		if (slot) {
+			keys.push(
+				slot.type === 'action'
+					? slot.actionId
+					: slot.type === 'macro'
+						? `macro:${slot.macroId}`
+						: slot.type,
+			);
+		}
+		col += slot ? span : 1;
+	}
+	return keys;
+}
+
 void test('phone base keyboard exposes a continue command key between approve and shift-tab', () => {
 	const config = getBundledShellConfig();
 	const phoneBaseKeyboard = config.keyboards.find(
@@ -578,20 +606,7 @@ void test('advanced keyboard omits consolidated host URL setter actions', () => 
 		null,
 		null,
 	]);
-	assert.deepEqual(advancedKeyboard.grid[2]?.slice(7, 9), [
-		{
-			type: 'action',
-			actionId: 'WORKMUX_NAV_PREV_ALL',
-			label: 'Prev all',
-			icon: null,
-		},
-		{
-			type: 'action',
-			actionId: 'WORKMUX_NAV_NEXT_ALL',
-			label: 'Next all',
-			icon: null,
-		},
-	]);
+	assert.deepEqual(advancedKeyboard.grid[2]?.slice(7, 9), [null, null]);
 
 	const advancedActionIds = advancedKeyboard.grid.flatMap((row) =>
 		row.flatMap((item) => (item?.type === 'action' ? [item.actionId] : [])),
@@ -601,4 +616,56 @@ void test('advanced keyboard omits consolidated host URL setter actions', () => 
 	assert.equal(advancedActionIds.includes('EDIT_HOST_URL_DEV_SERVER'), false);
 	assert.equal(advancedActionIds.includes('EDIT_HOST_URL_STORYBOOK'), false);
 	assert.equal(advancedActionIds.includes('EDIT_HOST_URL_APP'), false);
+	assert.equal(advancedActionIds.includes('WORKMUX_NAV_PREV_ALL'), false);
+	assert.equal(advancedActionIds.includes('WORKMUX_NAV_NEXT_ALL'), false);
+});
+
+void test('advanced keyboard uses the consolidated scope-toggle nav cluster', () => {
+	const config = getBundledShellConfig();
+	const advanced = config.keyboards.find((k) => k.id === 'advanced_keyboard');
+	assert.ok(advanced);
+	const navRow = advanced.grid[1] ?? [];
+	const navActionIds = navRow.flatMap((slot) =>
+		slot?.type === 'action' ? [slot.actionId] : [],
+	);
+	assert.ok(navActionIds.includes('WORKMUX_NAV_PREV'));
+	assert.ok(navActionIds.includes('WORKMUX_NAV_NEXT'));
+	assert.ok(navActionIds.includes('WORKMUX_CYCLE_NAV_SCOPE'));
+	assert.equal(navActionIds.includes('WORKMUX_NAV_PREV_ALL'), false);
+	assert.equal(navActionIds.includes('WORKMUX_NAV_NEXT_ALL'), false);
+	const scopeSlot = navRow.find(
+		(slot) =>
+			slot?.type === 'action' && slot.actionId === 'WORKMUX_CYCLE_NAV_SCOPE',
+	);
+	assert.equal(scopeSlot?.span, 2);
+	const advancedRendered = renderedSlotKeys(advanced.grid[1] ?? []);
+	assert.ok(advancedRendered.includes('WORKMUX_CYCLE_NAV_SCOPE'));
+	assert.ok(
+		advancedRendered.includes('macro:cmd_continue'),
+		'cmd_continue must still render after the span-2 scope toggle',
+	);
+});
+
+void test('tmux keyboard uses the consolidated scope-toggle nav cluster', () => {
+	const config = getBundledShellConfig();
+	const tmux = config.keyboards.find((k) => k.id === 'tmux_keyboard');
+	assert.ok(tmux);
+	const navActionIds = (tmux.grid[0] ?? []).flatMap((slot) =>
+		slot?.type === 'action' ? [slot.actionId] : [],
+	);
+	assert.ok(navActionIds.includes('WORKMUX_NAV_PREV'));
+	assert.ok(navActionIds.includes('WORKMUX_NAV_NEXT'));
+	assert.ok(navActionIds.includes('WORKMUX_CYCLE_NAV_SCOPE'));
+	assert.equal(navActionIds.includes('WORKMUX_NAV_PREV_ALL'), false);
+	assert.equal(navActionIds.includes('WORKMUX_NAV_NEXT_ALL'), false);
+	const tmuxScopeSlot = (tmux.grid[0] ?? []).find(
+		(slot) => slot?.type === 'action' && slot.actionId === 'WORKMUX_CYCLE_NAV_SCOPE',
+	);
+	assert.equal(tmuxScopeSlot?.span, 2);
+	const tmuxRendered = renderedSlotKeys(tmux.grid[0] ?? []);
+	assert.ok(tmuxRendered.includes('WORKMUX_CYCLE_NAV_SCOPE'));
+	assert.ok(
+		tmuxRendered.includes('CYCLE_WORKMUX_STATUS'),
+		'Status must still render after the span-2 scope toggle',
+	);
 });
