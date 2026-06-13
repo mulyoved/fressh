@@ -133,6 +133,7 @@ import {
 	createTmuxScrollbackLocalExitRequest,
 	resetTmuxScrollbackLocalExitRequests,
 } from '@/lib/tmux-scrollback-local-exit';
+import { preferences } from '@/lib/preferences';
 import { queryClient } from '@/lib/utils';
 import {
 	canStartWisprTextEntryAutomation,
@@ -618,6 +619,8 @@ function ShellDetail() {
 		() => new Set(activeKeyboardIds),
 		[activeKeyboardIds],
 	);
+
+	const [navScope] = preferences.workmuxNavScope.useWorkmuxNavScopePref();
 
 	useEffect(() => {
 		shellConfigRef.current = shellConfig;
@@ -2407,6 +2410,7 @@ function ShellDetail() {
 			createWorkmuxKeyboardCommandRunner({
 				isTmuxEnabled: () => workmuxKeyboardTmuxEnabledRef.current,
 				getSessionName: () => workmuxKeyboardTmuxTargetRef.current,
+				getNavScope: () => preferences.workmuxNavScope.get(),
 				runWorkmuxCommand: async (argv, timeoutMs) => {
 					const result = await workmuxControlChannelRef.current.command(argv, {
 						timeoutMs,
@@ -2573,6 +2577,9 @@ function ShellDetail() {
 			},
 			editHostUrlSlot: browserActions.browserActionsProps.onEditUrlSlot,
 			runWorkmuxKeyboardCommand,
+			cycleNavScope: () => {
+				preferences.workmuxNavScope.cycle();
+			},
 		}),
 		[
 			availableKeyboardIds,
@@ -3309,6 +3316,7 @@ function ShellDetail() {
 					onSlotPress={handleSlotPress}
 					selectionModeEnabled={selectionModeEnabled}
 					onCopySelection={handleCopySelection}
+					navScope={navScope}
 				/>
 				<CommandMenuModal
 					open={commandMenuModal.open}
