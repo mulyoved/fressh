@@ -65,6 +65,7 @@ import {
 	runAction,
 	type ActionContext,
 	type ActionId,
+	type RunActionOptions,
 	type WorkmuxKeyboardCommand,
 } from '@/lib/keyboard-actions';
 import { runMacro } from '@/lib/keyboard-runtime';
@@ -159,6 +160,7 @@ import {
 	type WorkmuxControlChannel,
 } from '@/lib/workmux-control-channel';
 import { getWorkmuxAttachErrorCopy } from '@/lib/workmux-copy';
+import { getWorkmuxNavScopeOverride } from '@/lib/work-key-long-press-options';
 import { createTmuxScrollbackLineAccumulator } from '@/lib/workmux-scrollback-batch';
 import {
 	createWorkmuxScrollbackCommandExecutor,
@@ -2618,8 +2620,8 @@ function ShellDetail() {
 	);
 
 	const handleAction = useCallback(
-		(actionId: ActionId) => {
-			void runAction(actionId, actionContext);
+		(actionId: ActionId, options?: RunActionOptions) => {
+			void runAction(actionId, actionContext, options);
 		},
 		[actionContext],
 	);
@@ -2673,7 +2675,9 @@ function ShellDetail() {
 					break;
 				}
 				case 'action':
-					handleAction(slot.actionId);
+					handleAction(slot.actionId, {
+						workmuxNavScopeOverride: getWorkmuxNavScopeOverride(slot),
+					});
 					break;
 				default:
 					break;
