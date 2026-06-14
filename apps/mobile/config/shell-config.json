@@ -1,6 +1,6 @@
 {
-	"version": "2026-06-13.1",
-	"updatedAt": "2026-06-13T05:39:52.000Z",
+	"version": "2026-06-14.2",
+	"updatedAt": "2026-06-14T12:00:00.000Z",
 	"defaultKeyboardId": "phone_base",
 	"activeKeyboardIds": [
 		"phone_base",
@@ -111,26 +111,32 @@
 							"options": [
 								{
 									"type": "action",
-									"actionId": "WORKMUX_NAV_NEXT",
-									"label": "Next work",
-									"icon": null
-								},
-								{
-									"type": "action",
 									"actionId": "WORKMUX_NAV_PREV",
-									"label": "Prev work",
+									"label": "Prev",
 									"icon": null
 								},
 								{
 									"type": "action",
-									"actionId": "WORKMUX_NAV_NEXT_ALL",
-									"label": "Next all",
+									"actionId": "WORKMUX_NAV_NEXT",
+									"label": "Next",
 									"icon": null
 								},
 								{
 									"type": "action",
-									"actionId": "WORKMUX_NAV_PREV_ALL",
-									"label": "Prev all",
+									"actionId": "WORKMUX_NAV_SCOPE_ACTIVE",
+									"label": "Active",
+									"icon": null
+								},
+								{
+									"type": "action",
+									"actionId": "WORKMUX_NAV_SCOPE_VISIBLE",
+									"label": "+Busy",
+									"icon": null
+								},
+								{
+									"type": "action",
+									"actionId": "WORKMUX_NAV_SCOPE_ALL",
+									"label": "All",
 									"icon": null
 								}
 							]
@@ -457,18 +463,8 @@
 					null,
 					null,
 					null,
-					{
-						"type": "action",
-						"actionId": "WORKMUX_NAV_PREV_ALL",
-						"label": "Prev all",
-						"icon": null
-					},
-					{
-						"type": "action",
-						"actionId": "WORKMUX_NAV_NEXT_ALL",
-						"label": "Next all",
-						"icon": null
-					},
+					null,
+					null,
 					null
 				]
 			]

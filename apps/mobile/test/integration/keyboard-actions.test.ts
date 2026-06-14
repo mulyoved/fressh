@@ -792,6 +792,108 @@ void test('Workmux status cycle suppresses stale failures after invalidation', a
 	assert.deepEqual(failures, []);
 });
 
+void test('Workmux keyboard runner appends scope for next/prev only', async () => {
+	const argvCalls: { argv: string[]; timeoutMs: number }[] = [];
+	const runner = createWorkmuxKeyboardCommandRunner({
+		isTmuxEnabled: () => true,
+		getSessionName: () => 'main',
+		getNavScope: () => 'visible',
+		runWorkmuxCommand: async (argv, timeoutMs) => {
+			argvCalls.push({ argv, timeoutMs });
+		},
+		showFailure: () => {},
+		getErrorMessage: (error) =>
+			error instanceof Error ? error.message : String(error),
+	});
+
+	await runner.run({ type: 'nav', action: 'next' });
+	await runner.run({ type: 'nav', action: 'prev' });
+	await runner.run({ type: 'nav', action: 'next-all' });
+	await runner.run({ type: 'nav', action: 'prev-all' });
+
+	assert.deepEqual(argvCalls, [
+		{
+			argv: ['tmux', 'app', 'nav', 'next', '--session', 'main', '--scope', 'visible'],
+			timeoutMs: 10_000,
+		},
+		{
+			argv: ['tmux', 'app', 'nav', 'prev', '--session', 'main', '--scope', 'visible'],
+			timeoutMs: 10_000,
+		},
+		{
+			argv: ['tmux', 'app', 'nav', 'next-all', '--session', 'main'],
+			timeoutMs: 10_000,
+		},
+		{
+			argv: ['tmux', 'app', 'nav', 'prev-all', '--session', 'main'],
+			timeoutMs: 10_000,
+		},
+	]);
+});
+
+void test('Workmux keyboard runner omits scope when getNavScope is not provided', async () => {
+	const argvCalls: { argv: string[]; timeoutMs: number }[] = [];
+	const runner = createWorkmuxKeyboardCommandRunner({
+		isTmuxEnabled: () => true,
+		getSessionName: () => 'main',
+		runWorkmuxCommand: async (argv, timeoutMs) => {
+			argvCalls.push({ argv, timeoutMs });
+		},
+		showFailure: () => {},
+		getErrorMessage: (error) =>
+			error instanceof Error ? error.message : String(error),
+	});
+
+	await runner.run({ type: 'nav', action: 'next' });
+	await runner.run({ type: 'nav', action: 'prev' });
+
+	assert.deepEqual(argvCalls, [
+		{ argv: ['tmux', 'app', 'nav', 'next', '--session', 'main'], timeoutMs: 10_000 },
+		{ argv: ['tmux', 'app', 'nav', 'prev', '--session', 'main'], timeoutMs: 10_000 },
+	]);
+});
+
+void test('WORKMUX_NAV_SCOPE_* set the sticky scope and send no remote command', async () => {
+	const setScopes: string[] = [];
+	let remoteSends = 0;
+	const context = {
+		availableKeyboardIds: new Set(),
+		selectKeyboard: () => {},
+		rotateKeyboard: () => {},
+		openConfigurator: () => {},
+		sendBytes: () => {},
+		pasteClipboard: async () => {},
+		copySelection: () => {},
+		setNavScope: (scope: 'active' | 'visible' | 'all') => {
+			setScopes.push(scope);
+		},
+		runWorkmuxKeyboardCommand: async () => {
+			remoteSends += 1;
+			return { status: 'handled' };
+		},
+	} as Parameters<typeof runAction>[1];
+
+	await runAction('WORKMUX_NAV_SCOPE_ACTIVE', context);
+	await runAction('WORKMUX_NAV_SCOPE_VISIBLE', context);
+	await runAction('WORKMUX_NAV_SCOPE_ALL', context);
+
+	assert.deepEqual(setScopes, ['active', 'visible', 'all']);
+	assert.equal(remoteSends, 0);
+});
+
+void test('WORKMUX_NAV_SCOPE_* are known, config-supported actions', () => {
+	for (const id of [
+		'WORKMUX_NAV_SCOPE_ACTIVE',
+		'WORKMUX_NAV_SCOPE_VISIBLE',
+		'WORKMUX_NAV_SCOPE_ALL',
+	] as const) {
+		assert.equal(
+			KNOWN_ACTION_IDS.includes(id as (typeof KNOWN_ACTION_IDS)[number]),
+			true,
+		);
+	}
+});
+
 void test('Workmux keyboard command runner preserves local failures and maps remote failures', async () => {
 	const failures: string[] = [];
 	let tmuxEnabled = false;

@@ -43,6 +43,7 @@ mnt/*
 .direnv/
 .cache/
 .worktrees/
+.superpowers/
 
 # Local backups & artifacts
 backup.json

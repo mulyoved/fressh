@@ -52,6 +52,18 @@ export type WorkmuxNavAction =
 	| 'prev-all'
 	| 'select';
 
+export type WorkmuxNavScope = 'active' | 'visible' | 'all';
+
+export const WORKMUX_NAV_SCOPE_VALUES = [
+	'active',
+	'visible',
+	'all',
+] as const satisfies readonly WorkmuxNavScope[];
+
+export function isWorkmuxNavScope(value: string): value is WorkmuxNavScope {
+	return (WORKMUX_NAV_SCOPE_VALUES as readonly string[]).includes(value);
+}
+
 type JsonRecord = Record<string, unknown>;
 
 export function isWorkmuxAppCommand(command: string): boolean {
@@ -203,7 +215,9 @@ function isMdevCommandToken(index: number, tokens: string[]): boolean {
 		case 'focus':
 			return index === 5;
 		case 'nav':
-			return tokens[4] === 'select' ? index === 6 : index === 5;
+			return tokens[4] === 'select'
+				? index === 6
+				: index === 5 || index === 7;
 		default:
 			return false;
 	}
@@ -347,8 +361,12 @@ export function buildWorkmuxAppNavArgv(
 	sessionName: string,
 	action: WorkmuxNavAction,
 	index?: number,
+	scope?: WorkmuxNavScope,
 ): string[] {
 	if (action === 'select') {
+		if (scope !== undefined) {
+			throw new Error(`Unexpected Workmux nav scope for action: ${action}`);
+		}
 		if (index === undefined) {
 			throw new Error('Missing Workmux nav select index');
 		}
@@ -370,7 +388,11 @@ export function buildWorkmuxAppNavArgv(
 		throw new Error(`Unexpected Workmux nav index for action: ${action}`);
 	}
 
-	return [
+	if (scope !== undefined && action !== 'next' && action !== 'prev') {
+		throw new Error(`Unexpected Workmux nav scope for action: ${action}`);
+	}
+
+	const argv = [
 		'tmux',
 		'app',
 		'nav',
@@ -378,15 +400,18 @@ export function buildWorkmuxAppNavArgv(
 		'--session',
 		normalizeSessionName(sessionName),
 	];
+
+	return scope === undefined ? argv : [...argv, '--scope', scope];
 }
 
 export function buildWorkmuxAppNavCommand(
 	sessionName: string,
 	action: WorkmuxNavAction,
 	index?: number,
+	scope?: WorkmuxNavScope,
 ): string {
 	return buildMdevCommandFromArgv(
-		buildWorkmuxAppNavArgv(sessionName, action, index),
+		buildWorkmuxAppNavArgv(sessionName, action, index, scope),
 	);
 }
 

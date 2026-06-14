@@ -1,5 +1,9 @@
 import { MMKV, useMMKVBoolean, useMMKVString } from 'react-native-mmkv';
 import { type ThemeName } from './theme';
+import {
+	isWorkmuxNavScope,
+	type WorkmuxNavScope,
+} from './workmux-app-commands';
 
 const storage = new MMKV({ id: 'settings' });
 
@@ -102,6 +106,35 @@ export const preferences = {
 				preferences.shellListViewMode._resolve(mode),
 				(mode: 'flat' | 'grouped') => {
 					setMode(mode);
+				},
+			] as const;
+		},
+	},
+	workmuxNavScope: {
+		_key: 'workmuxNavScope',
+		_resolve: (rawScope: string | undefined): WorkmuxNavScope =>
+			rawScope !== undefined && isWorkmuxNavScope(rawScope)
+				? rawScope
+				: 'active',
+		get: (): WorkmuxNavScope =>
+			preferences.workmuxNavScope._resolve(
+				storage.getString(preferences.workmuxNavScope._key),
+			),
+		set: (scope: WorkmuxNavScope) => {
+			storage.set(preferences.workmuxNavScope._key, scope);
+		},
+		useWorkmuxNavScopePref: (): [
+			WorkmuxNavScope,
+			(scope: WorkmuxNavScope) => void,
+		] => {
+			const [scope, setScope] = useMMKVString(
+				preferences.workmuxNavScope._key,
+				storage,
+			);
+			return [
+				preferences.workmuxNavScope._resolve(scope),
+				(next: WorkmuxNavScope) => {
+					setScope(next);
 				},
 			] as const;
 		},

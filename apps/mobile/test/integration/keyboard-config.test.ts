@@ -257,26 +257,32 @@ void test('phone base keyboard exposes role and workspace navigation controls', 
 			options: [
 				{
 					type: 'action',
-					actionId: 'WORKMUX_NAV_NEXT',
-					label: 'Next work',
-					icon: null,
-				},
-				{
-					type: 'action',
 					actionId: 'WORKMUX_NAV_PREV',
-					label: 'Prev work',
+					label: 'Prev',
 					icon: null,
 				},
 				{
 					type: 'action',
-					actionId: 'WORKMUX_NAV_NEXT_ALL',
-					label: 'Next all',
+					actionId: 'WORKMUX_NAV_NEXT',
+					label: 'Next',
 					icon: null,
 				},
 				{
 					type: 'action',
-					actionId: 'WORKMUX_NAV_PREV_ALL',
-					label: 'Prev all',
+					actionId: 'WORKMUX_NAV_SCOPE_ACTIVE',
+					label: 'Active',
+					icon: null,
+				},
+				{
+					type: 'action',
+					actionId: 'WORKMUX_NAV_SCOPE_VISIBLE',
+					label: '+Busy',
+					icon: null,
+				},
+				{
+					type: 'action',
+					actionId: 'WORKMUX_NAV_SCOPE_ALL',
+					label: 'All',
 					icon: null,
 				},
 			],
@@ -578,20 +584,7 @@ void test('advanced keyboard omits consolidated host URL setter actions', () => 
 		null,
 		null,
 	]);
-	assert.deepEqual(advancedKeyboard.grid[2]?.slice(7, 9), [
-		{
-			type: 'action',
-			actionId: 'WORKMUX_NAV_PREV_ALL',
-			label: 'Prev all',
-			icon: null,
-		},
-		{
-			type: 'action',
-			actionId: 'WORKMUX_NAV_NEXT_ALL',
-			label: 'Next all',
-			icon: null,
-		},
-	]);
+	assert.deepEqual(advancedKeyboard.grid[2]?.slice(7, 9), [null, null]);
 
 	const advancedActionIds = advancedKeyboard.grid.flatMap((row) =>
 		row.flatMap((item) => (item?.type === 'action' ? [item.actionId] : [])),
@@ -601,4 +594,56 @@ void test('advanced keyboard omits consolidated host URL setter actions', () => 
 	assert.equal(advancedActionIds.includes('EDIT_HOST_URL_DEV_SERVER'), false);
 	assert.equal(advancedActionIds.includes('EDIT_HOST_URL_STORYBOOK'), false);
 	assert.equal(advancedActionIds.includes('EDIT_HOST_URL_APP'), false);
+});
+
+void test('phone base Work key long-press sets the nav scope', () => {
+	const config = getBundledShellConfig();
+	const phoneBase = config.keyboards.find((k) => k.id === 'phone_base');
+	assert.ok(phoneBase);
+	const workSlot = phoneBase.grid[0]?.[6];
+	assert.equal(workSlot?.type, 'action');
+	if (workSlot?.type !== 'action') return;
+	assert.equal(workSlot.actionId, 'WORKMUX_NAV_NEXT');
+	const optionActionIds = (workSlot.longPress?.options ?? []).flatMap((option) =>
+		option.type === 'action' ? [option.actionId] : [],
+	);
+	assert.ok(optionActionIds.includes('WORKMUX_NAV_PREV'));
+	assert.ok(optionActionIds.includes('WORKMUX_NAV_NEXT'));
+	assert.ok(optionActionIds.includes('WORKMUX_NAV_SCOPE_ACTIVE'));
+	assert.ok(optionActionIds.includes('WORKMUX_NAV_SCOPE_VISIBLE'));
+	assert.ok(optionActionIds.includes('WORKMUX_NAV_SCOPE_ALL'));
+});
+
+void test('no keyboard uses the removed scope-toggle key', () => {
+	const config = getBundledShellConfig();
+	const actionIds = config.keyboards.flatMap((keyboard) =>
+		keyboard.grid.flatMap((row) =>
+			row.flatMap((slot) => {
+				const options = slot?.longPress?.options ?? [];
+				return [slot, ...options].flatMap((entry) =>
+					entry?.type === 'action' ? [entry.actionId] : [],
+				);
+			}),
+		),
+	);
+	assert.equal(actionIds.includes('WORKMUX_CYCLE_NAV_SCOPE'), false);
+});
+
+void test('advanced and tmux keyboards keep the four window-nav buttons', () => {
+	const config = getBundledShellConfig();
+	for (const id of ['advanced_keyboard', 'tmux_keyboard']) {
+		const keyboard = config.keyboards.find((k) => k.id === id);
+		assert.ok(keyboard, id);
+		const navActionIds = keyboard.grid.flatMap((row) =>
+			row.flatMap((slot) =>
+				slot?.type === 'action' && slot.actionId.startsWith('WORKMUX_NAV_')
+					? [slot.actionId]
+					: [],
+			),
+		);
+		assert.ok(navActionIds.includes('WORKMUX_NAV_PREV'), id);
+		assert.ok(navActionIds.includes('WORKMUX_NAV_NEXT'), id);
+		assert.ok(navActionIds.includes('WORKMUX_NAV_PREV_ALL'), id);
+		assert.ok(navActionIds.includes('WORKMUX_NAV_NEXT_ALL'), id);
+	}
 });

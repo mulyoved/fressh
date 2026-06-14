@@ -76,6 +76,28 @@ void test('WorkmuxControlChannel.command routes mapped argv through bridge opera
 	]);
 });
 
+void test('WorkmuxControlChannel.command routes scoped nav argv through bridge operations, preserving timeout', async () => {
+	const bridge = createRecordingBridgeClient();
+	const channel = createWorkmuxControlChannel({
+		connection: createFakeConnection(),
+		bridgeClient: bridge.bridgeClient,
+	});
+
+	const result = await channel.command(
+		['tmux', 'app', 'nav', 'next', '--session', 'main', '--scope', 'visible'],
+		{ timeoutMs: 1234 },
+	);
+
+	assert.deepEqual(result, { success: true, output: 'ok\n' });
+	assert.deepEqual(bridge.calls, [
+		{
+			operation: 'tmux.app.nav',
+			params: { action: 'next', session: 'main', scope: 'visible' },
+			timeoutMs: 1234,
+		},
+	]);
+});
+
 void test('WorkmuxControlChannel.command uses default bridge timeout', async () => {
 	const bridge = createRecordingBridgeClient();
 	const channel = createWorkmuxControlChannel({

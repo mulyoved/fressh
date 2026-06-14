@@ -22,6 +22,7 @@ import {
 	buildWorkmuxStatusCycleCommand,
 	formatWorkmuxAppCommandFailureMessage,
 	isWorkmuxAppCommand,
+	isWorkmuxNavScope,
 	isWorkmuxScrollAlreadyInactiveFailureMessage,
 	parseWorkmuxAppCommandArgv,
 	parseWorkmuxAppContextOutput,
@@ -595,6 +596,50 @@ void test('workmux app parsers reject non-string optional fields', () => {
 			/Invalid Workmux app window/,
 		);
 	}
+});
+
+void test('buildWorkmuxAppNavArgv appends --scope for next/prev', () => {
+	assert.deepEqual(
+		buildWorkmuxAppNavArgv('main', 'next', undefined, 'visible'),
+		['tmux', 'app', 'nav', 'next', '--session', 'main', '--scope', 'visible'],
+	);
+	assert.deepEqual(
+		buildWorkmuxAppNavArgv('main', 'prev', undefined, 'active'),
+		['tmux', 'app', 'nav', 'prev', '--session', 'main', '--scope', 'active'],
+	);
+});
+
+void test('buildWorkmuxAppNavArgv omits --scope when scope is undefined', () => {
+	assert.deepEqual(buildWorkmuxAppNavArgv('main', 'next-all'), [
+		'tmux', 'app', 'nav', 'next-all', '--session', 'main',
+	]);
+});
+
+void test('buildWorkmuxAppNavArgv rejects scope on non next/prev actions', () => {
+	assert.throws(
+		() => buildWorkmuxAppNavArgv('main', 'next-all', undefined, 'all'),
+		/Unexpected Workmux nav scope/,
+	);
+	assert.throws(
+		() => buildWorkmuxAppNavArgv('main', 'prev-all', undefined, 'all'),
+		/Unexpected Workmux nav scope/,
+	);
+	assert.throws(
+		() => buildWorkmuxAppNavArgv('main', 'select', 0, 'visible'),
+		/Unexpected Workmux nav scope/,
+	);
+});
+
+void test('buildWorkmuxAppNavCommand keeps flags unquoted and values quoted', () => {
+	assert.equal(
+		buildWorkmuxAppNavCommand('main', 'next', undefined, 'visible'),
+		"mdev tmux app nav 'next' --session 'main' --scope 'visible'",
+	);
+});
+
+void test('isWorkmuxNavScope guards scope strings', () => {
+	assert.equal(isWorkmuxNavScope('visible'), true);
+	assert.equal(isWorkmuxNavScope('nope'), false);
 });
 
 void test('workmux app update message is explicit', () => {
