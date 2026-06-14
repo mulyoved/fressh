@@ -5,6 +5,7 @@ import {
 	getBundledShellConfig,
 	parseShellConfigData,
 } from '../../src/lib/shell-config';
+import { getWorkKeyLongPressOptions } from '../../src/lib/work-key-long-press-options';
 
 void test('phone base keyboard exposes a continue command key between approve and shift-tab', () => {
 	const config = getBundledShellConfig();
@@ -247,7 +248,9 @@ void test('phone base keyboard exposes role and workspace navigation controls', 
 		},
 	});
 
-	assert.deepEqual(phoneBaseKeyboard.grid[0]?.[6], {
+	const workKeySlot = phoneBaseKeyboard.grid[0]?.[6];
+	assert.ok(workKeySlot);
+	assert.deepEqual(workKeySlot, {
 		type: 'action',
 		actionId: 'WORKMUX_NAV_NEXT',
 		label: 'Work',
@@ -288,6 +291,41 @@ void test('phone base keyboard exposes role and workspace navigation controls', 
 			],
 		},
 	});
+
+	const expectedDynamicOptionsByScope = [
+		{
+			scope: 'active' as const,
+			labels: ['Prev Active', 'Prev +Busy', 'Next +Busy'],
+		},
+		{
+			scope: 'visible' as const,
+			labels: ['Prev +Busy', 'Prev All', 'Next All'],
+		},
+		{
+			scope: 'all' as const,
+			labels: ['Prev All', 'Prev All', 'Next All'],
+		},
+	];
+
+	for (const { scope, labels } of expectedDynamicOptionsByScope) {
+		const resolvedOptions = getWorkKeyLongPressOptions(workKeySlot, scope);
+		assert.ok(resolvedOptions);
+		assert.deepEqual(
+			resolvedOptions.slice(0, 3).map((option) => option.label),
+			labels,
+		);
+		assert.deepEqual(
+			resolvedOptions.slice(3).map((option) => ({
+				label: option.label,
+				icon: option.icon,
+			})),
+			[
+				{ label: 'Active', icon: null },
+				{ label: '+Busy', icon: null },
+				{ label: 'All', icon: null },
+			],
+		);
+	}
 
 	const phoneBaseMacros = config.macrosByKeyboardId.phone_base ?? [];
 	assert.equal(
