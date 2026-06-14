@@ -30,11 +30,11 @@ import {
 import { useTheme } from '@/lib/theme';
 import {
 	getWorkKeyLongPressOptions,
-	getWorkmuxLongPressScopeBadge,
 	WORKMUX_NAV_SCOPE_BADGE_LABEL,
 	type ResolvedKeyboardLongPressOption,
 } from '@/lib/work-key-long-press-options';
 import { type WorkmuxNavScope } from '@/lib/workmux-app-commands';
+import { TerminalKeyboardLongPressPopup } from './TerminalKeyboardLongPressPopup';
 
 type LongPressPopupState = {
 	slot: KeyboardSlot;
@@ -277,6 +277,8 @@ export function TerminalKeyboard({
 	const keyboardBoundsRef = useRef<LongPressKeyboardBounds | null>(null);
 	const keyboardWidthRef = useRef(0);
 	const longPressPopupRef = useRef<LongPressPopupState | null>(null);
+	const navScopeRef = useRef(navScope);
+	navScopeRef.current = navScope;
 	const [longPressPopup, setLongPressPopup] =
 		useState<LongPressPopupState | null>(null);
 	const iconOnlyLabels = useMemo(
@@ -393,7 +395,8 @@ export function TerminalKeyboard({
 	const openLongPressPopup = useCallback(
 		(slot: KeyboardSlot, keyRef: React.RefObject<View | null>) => {
 			const options =
-				getWorkKeyLongPressOptions(slot, navScope) ?? slot.longPress?.options;
+				getWorkKeyLongPressOptions(slot, navScopeRef.current) ??
+				slot.longPress?.options;
 			if (!options?.length) return;
 
 			clearRepeat();
@@ -434,7 +437,7 @@ export function TerminalKeyboard({
 				setLongPressPopup(nextPopup);
 			});
 		},
-		[clearRepeat, navScope, updateKeyboardRootMetrics],
+		[clearRepeat, updateKeyboardRootMetrics],
 	);
 
 	const startLongPressGesture = useCallback(
@@ -676,93 +679,11 @@ export function TerminalKeyboard({
 		>
 			{rows}
 			{longPressPopup ? (
-				<View
-					pointerEvents="none"
-					style={{
-						position: 'absolute',
-						left: longPressPopup.layout.left,
-						top: longPressPopup.layout.top,
-						width: longPressPopup.layout.width,
-						height: longPressPopup.layout.height,
-						flexDirection: 'row',
-						borderRadius: 8,
-						borderWidth: 1,
-						borderColor: theme.colors.borderStrong,
-						backgroundColor: theme.colors.surface,
-						overflow: 'hidden',
-						shadowColor: '#000',
-						shadowOpacity: 0.25,
-						shadowRadius: 8,
-						shadowOffset: { width: 0, height: 3 },
-						elevation: 6,
-					}}
-				>
-					{longPressPopup.options.map((option, index) => {
-						const OptionIcon = resolveLucideIcon(option.icon);
-						const highlighted = longPressPopup.highlightedIndex === index;
-						const scopeBadge = getWorkmuxLongPressScopeBadge(option);
-						const optionScope =
-							option.type === 'action'
-								? NAV_SCOPE_ACTION_TO_SCOPE[option.actionId]
-								: undefined;
-						const isCurrentScope =
-							optionScope !== undefined && optionScope === navScope;
-						return (
-							<View
-								key={`${option.type}-${option.label}-${index.toString()}`}
-								style={{
-									width: longPressPopup.layout.optionWidth,
-									alignItems: 'center',
-									justifyContent: 'center',
-									paddingHorizontal: 6,
-									backgroundColor: highlighted
-										? theme.colors.primary
-										: isCurrentScope
-											? theme.colors.border
-											: 'transparent',
-								}}
-							>
-								{scopeBadge ? (
-									<View
-										style={{
-											position: 'absolute',
-											top: 4,
-											left: 4,
-											paddingHorizontal: 3,
-											borderRadius: 4,
-											backgroundColor: theme.colors.primary,
-										}}
-									>
-										<Text
-											style={{
-												color: theme.colors.textPrimary,
-												fontSize: 8,
-												lineHeight: 10,
-												fontWeight: '700',
-											}}
-										>
-											{WORKMUX_NAV_SCOPE_BADGE_LABEL[scopeBadge]}
-										</Text>
-									</View>
-								) : null}
-								{OptionIcon ? (
-									<OptionIcon color={theme.colors.textPrimary} size={16} />
-								) : null}
-								<Text
-									numberOfLines={1}
-									style={{
-										color: theme.colors.textPrimary,
-										fontSize: 10,
-										lineHeight: 12,
-										marginTop: OptionIcon ? 2 : 0,
-									}}
-								>
-									{option.label}
-								</Text>
-							</View>
-						);
-					})}
-				</View>
+				<TerminalKeyboardLongPressPopup
+					popup={longPressPopup}
+					navScope={navScope}
+					theme={theme}
+				/>
 			) : null}
 		</View>
 	);

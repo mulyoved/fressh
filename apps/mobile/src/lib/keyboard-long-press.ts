@@ -25,6 +25,7 @@ export type LongPressKeyboardBounds = {
 
 const horizontalMargin = 6;
 const optionWidth = 86;
+const minOptionWidth = 52;
 const popupHeight = 44;
 const popupGap = 10;
 
@@ -45,7 +46,21 @@ export function getLongPressPopupLayout({
 	anchorWidth: number;
 	optionCount: number;
 }): LongPressPopupLayout {
-	const width = Math.max(optionWidth, optionCount * optionWidth);
+	const availableWidth = Math.max(
+		minOptionWidth,
+		keyboardWidth - horizontalMargin * 2,
+	);
+	const resolvedOptionWidth =
+		optionCount > 0
+			? Math.max(
+					minOptionWidth,
+					Math.min(optionWidth, availableWidth / optionCount),
+				)
+			: optionWidth;
+	const width = Math.max(
+		resolvedOptionWidth,
+		optionCount * resolvedOptionWidth,
+	);
 	const centeredLeft = anchorX + anchorWidth / 2 - width / 2;
 	const maxLeft = Math.max(
 		horizontalMargin,
@@ -57,7 +72,7 @@ export function getLongPressPopupLayout({
 		top: Math.max(horizontalMargin, anchorY - popupHeight - popupGap),
 		width,
 		height: popupHeight,
-		optionWidth,
+		optionWidth: resolvedOptionWidth,
 	};
 }
 
