@@ -72,6 +72,7 @@ import { runMacro } from '@/lib/keyboard-runtime';
 import { rootLogger } from '@/lib/logger';
 import { resolveLucideIcon } from '@/lib/lucide-utils';
 import { OrderedWriter } from '@/lib/ordered-writer';
+import { preferences } from '@/lib/preferences';
 import {
 	configureScrollTraceEnabled,
 	emitScrollTrace,
@@ -134,7 +135,6 @@ import {
 	createTmuxScrollbackLocalExitRequest,
 	resetTmuxScrollbackLocalExitRequests,
 } from '@/lib/tmux-scrollback-local-exit';
-import { preferences } from '@/lib/preferences';
 import { queryClient } from '@/lib/utils';
 import {
 	canStartWisprTextEntryAutomation,
@@ -154,13 +154,13 @@ import {
 	type WisprTextEditorAvailability,
 } from '@/lib/wispr-automation';
 import { wisprAutomationNative } from '@/lib/wispr-automation-native';
+import { getWorkmuxNavScopeOverride } from '@/lib/work-key-long-press-options';
 import {
 	createWorkmuxControlChannel,
 	disposeWorkmuxControlChannelAfterCleanup,
 	type WorkmuxControlChannel,
 } from '@/lib/workmux-control-channel';
 import { getWorkmuxAttachErrorCopy } from '@/lib/workmux-copy';
-import { getWorkmuxNavScopeOverride } from '@/lib/work-key-long-press-options';
 import { createTmuxScrollbackLineAccumulator } from '@/lib/workmux-scrollback-batch';
 import {
 	createWorkmuxScrollbackCommandExecutor,
