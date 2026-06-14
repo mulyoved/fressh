@@ -30,6 +30,31 @@ type TerminalKeyboardLongPressGestureForOpen = {
 	longPressFired: boolean;
 };
 
+export function activateTerminalKeyboardLongPressMount({
+	isMountedRef,
+}: {
+	isMountedRef: CurrentRef<boolean>;
+}) {
+	isMountedRef.current = true;
+}
+
+export function deactivateTerminalKeyboardLongPressMount({
+	isMountedRef,
+	longPressGenerationRef,
+	longPressGestureRef,
+	clearPopup,
+}: {
+	isMountedRef: CurrentRef<boolean>;
+	longPressGenerationRef: CurrentRef<number>;
+	longPressGestureRef: CurrentRef<TerminalKeyboardLongPressGestureForOpen | null>;
+	clearPopup: () => void;
+}) {
+	isMountedRef.current = false;
+	longPressGenerationRef.current += 1;
+	longPressGestureRef.current = null;
+	clearPopup();
+}
+
 export function buildTerminalKeyboardLongPressPopup({
 	slot,
 	getNavScope,

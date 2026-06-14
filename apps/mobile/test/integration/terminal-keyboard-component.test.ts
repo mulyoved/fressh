@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+	activateTerminalKeyboardLongPressMount,
 	buildTerminalKeyboardLongPressPopup,
 	createTerminalKeyboardLongPressMeasureCallback,
+	deactivateTerminalKeyboardLongPressMount,
 	type TerminalKeyboardLongPressPopupState,
 } from '../../src/app/shell/components/TerminalKeyboardLongPressController';
 import { getTerminalKeyboardLongPressPopupItems } from '../../src/app/shell/components/TerminalKeyboardLongPressPopupModel';
@@ -124,6 +126,17 @@ void test('TerminalKeyboard measured open callback resumes after mount ref is re
 	const keyRef = { current: null };
 	const generation = 4;
 	const isMountedRef = { current: false };
+	const longPressGenerationRef = { current: generation - 1 };
+	const longPressGestureRef = {
+		current: null as {
+			slot: typeof workSlot;
+			keyRef: typeof keyRef;
+			generation: number;
+			currentPageX: number;
+			currentPageY: number;
+			longPressFired: boolean;
+		} | null,
+	};
 	const openedPopups: TerminalKeyboardLongPressPopupState[] = [];
 	const createOpenMeasuredKeyPopup = () =>
 		createTerminalKeyboardLongPressMeasureCallback({
@@ -131,17 +144,8 @@ void test('TerminalKeyboard measured open callback resumes after mount ref is re
 			keyRef,
 			generation,
 			isMountedRef,
-			longPressGenerationRef: { current: generation },
-			longPressGestureRef: {
-				current: {
-					slot: workSlot,
-					keyRef,
-					generation,
-					currentPageX: 240,
-					currentPageY: 130,
-					longPressFired: true,
-				},
-			},
+			longPressGenerationRef,
+			longPressGestureRef,
 			keyboardRootWindowRef: { current: { x: 0, y: 0 } },
 			keyboardBoundsRef: {
 				current: { left: 0, top: 0, width: 525, height: 180 },
@@ -156,11 +160,33 @@ void test('TerminalKeyboard measured open callback resumes after mount ref is re
 	createOpenMeasuredKeyPopup()(200, 120, 80);
 	assert.equal(openedPopups.length, 0);
 
-	isMountedRef.current = true;
+	activateTerminalKeyboardLongPressMount({ isMountedRef });
+	longPressGenerationRef.current = generation;
+	longPressGestureRef.current = {
+		slot: workSlot,
+		keyRef,
+		generation,
+		currentPageX: 240,
+		currentPageY: 130,
+		longPressFired: true,
+	};
 	createOpenMeasuredKeyPopup()(200, 120, 80);
 	assert.equal(openedPopups.length, 1);
 	assert.deepEqual(
 		openedPopups[0]!.options.slice(0, 3).map((option) => option.label),
 		['Prev +Busy', 'Prev All', 'Next All'],
 	);
+
+	deactivateTerminalKeyboardLongPressMount({
+		isMountedRef,
+		longPressGenerationRef,
+		longPressGestureRef,
+		clearPopup: () => {
+			openedPopups.length = 0;
+		},
+	});
+	assert.equal(isMountedRef.current, false);
+	assert.equal(longPressGenerationRef.current, generation + 1);
+	assert.equal(longPressGestureRef.current, null);
+	assert.equal(openedPopups.length, 0);
 });

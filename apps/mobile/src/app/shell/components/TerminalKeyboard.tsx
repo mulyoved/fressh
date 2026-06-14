@@ -32,7 +32,9 @@ import {
 } from '@/lib/work-key-long-press-options';
 import { type WorkmuxNavScope } from '@/lib/workmux-app-commands';
 import {
+	activateTerminalKeyboardLongPressMount,
 	createTerminalKeyboardLongPressMeasureCallback,
+	deactivateTerminalKeyboardLongPressMount,
 	type TerminalKeyboardLongPressPopupState,
 } from './TerminalKeyboardLongPressController';
 import { TerminalKeyboardLongPressPopup } from './TerminalKeyboardLongPressPopup';
@@ -327,12 +329,16 @@ export function TerminalKeyboard({
 
 	useEffect(
 		() => {
-			isMountedRef.current = true;
+			activateTerminalKeyboardLongPressMount({ isMountedRef });
 			return () => {
-				isMountedRef.current = false;
-				longPressGenerationRef.current += 1;
-				longPressGestureRef.current = null;
-				longPressPopupRef.current = null;
+				deactivateTerminalKeyboardLongPressMount({
+					isMountedRef,
+					longPressGenerationRef,
+					longPressGestureRef,
+					clearPopup: () => {
+						longPressPopupRef.current = null;
+					},
+				});
 				clearRepeat();
 				clearLongPressTimer();
 			};
