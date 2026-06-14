@@ -1,9 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildTerminalKeyboardLongPressPopup } from '../../src/app/shell/components/TerminalKeyboardLongPressController';
+import {
+	buildTerminalKeyboardLongPressPopup,
+	createTerminalKeyboardLongPressMeasureCallback,
+	type TerminalKeyboardLongPressPopupState,
+} from '../../src/app/shell/components/TerminalKeyboardLongPressController';
 import { getTerminalKeyboardLongPressPopupItems } from '../../src/app/shell/components/TerminalKeyboardLongPressPopupModel';
 import { getLongPressPopupLayout } from '../../src/lib/keyboard-long-press';
 import { getWorkKeyLongPressOptions } from '../../src/lib/work-key-long-press-options';
+import { type WorkmuxNavScope } from '../../src/lib/workmux-app-commands';
 import { createWorkNavigationSlot } from './helpers/work-key-fixtures';
 
 const workSlot = createWorkNavigationSlot();
@@ -44,8 +49,8 @@ void test('Work long-press popup items render dynamic visible-scope labels and b
 	);
 });
 
-void test('Work long-press open path uses latest nav scope at popup build time', () => {
-	let currentNavScope: 'active' | 'visible' = 'active';
+void test('Work long-press popup builder uses latest nav scope callback value', () => {
+	let currentNavScope: WorkmuxNavScope = 'active';
 	const getNavScope = () => currentNavScope;
 	const openAfterLongPressDelay = () => buildTerminalKeyboardLongPressPopup({
 		slot: workSlot,
@@ -65,6 +70,52 @@ void test('Work long-press open path uses latest nav scope at popup build time',
 	assert.ok(popup);
 	assert.deepEqual(
 		popup.options.slice(0, 3).map((option) => option.label),
+		['Prev +Busy', 'Prev All', 'Next All'],
+	);
+});
+
+void test('TerminalKeyboard measured open callback reads latest nav scope ref', () => {
+	const keyRef = { current: null };
+	const generation = 2;
+	const navScopeRef: { current: WorkmuxNavScope } = { current: 'active' };
+	const openedPopupRef: {
+		current: TerminalKeyboardLongPressPopupState | null;
+	} = { current: null };
+
+	const openMeasuredKeyPopup = createTerminalKeyboardLongPressMeasureCallback({
+		slot: workSlot,
+		keyRef,
+		generation,
+		isMountedRef: { current: true },
+		longPressGenerationRef: { current: generation },
+		longPressGestureRef: {
+			current: {
+				slot: workSlot,
+				keyRef,
+				generation,
+				currentPageX: 240,
+				currentPageY: 130,
+				longPressFired: true,
+			},
+		},
+		keyboardRootWindowRef: { current: { x: 0, y: 0 } },
+		keyboardBoundsRef: {
+			current: { left: 0, top: 0, width: 525, height: 180 },
+		},
+		keyboardWidthRef: { current: 525 },
+		navScopeRef,
+		setLongPressPopup: (popup) => {
+			openedPopupRef.current = popup;
+		},
+	});
+
+	navScopeRef.current = 'visible';
+	openMeasuredKeyPopup(200, 120, 80);
+
+	const openedPopup = openedPopupRef.current;
+	assert.ok(openedPopup);
+	assert.deepEqual(
+		openedPopup.options.slice(0, 3).map((option) => option.label),
 		['Prev +Busy', 'Prev All', 'Next All'],
 	);
 });

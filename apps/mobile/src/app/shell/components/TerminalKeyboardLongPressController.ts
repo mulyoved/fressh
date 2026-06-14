@@ -17,6 +17,19 @@ export type TerminalKeyboardLongPressPopupState = {
 	highlightedIndex: number | null;
 };
 
+type CurrentRef<T> = {
+	current: T;
+};
+
+type TerminalKeyboardLongPressGestureForOpen = {
+	slot: KeyboardSlot;
+	keyRef: object;
+	generation: number;
+	currentPageX: number;
+	currentPageY: number;
+	longPressFired: boolean;
+};
+
 export function buildTerminalKeyboardLongPressPopup({
 	slot,
 	getNavScope,
@@ -60,5 +73,67 @@ export function buildTerminalKeyboardLongPressPopup({
 			localY: pointerLocalY,
 			previousIndex: null,
 		}),
+	};
+}
+
+export function createTerminalKeyboardLongPressMeasureCallback({
+	slot,
+	keyRef,
+	generation,
+	isMountedRef,
+	longPressGenerationRef,
+	longPressGestureRef,
+	keyboardRootWindowRef,
+	keyboardBoundsRef,
+	keyboardWidthRef,
+	navScopeRef,
+	setLongPressPopup,
+}: {
+	slot: KeyboardSlot;
+	keyRef: object;
+	generation: number;
+	isMountedRef: CurrentRef<boolean>;
+	longPressGenerationRef: CurrentRef<number>;
+	longPressGestureRef: CurrentRef<TerminalKeyboardLongPressGestureForOpen | null>;
+	keyboardRootWindowRef: CurrentRef<{ x: number; y: number }>;
+	keyboardBoundsRef: CurrentRef<LongPressKeyboardBounds | null>;
+	keyboardWidthRef: CurrentRef<number>;
+	navScopeRef: CurrentRef<WorkmuxNavScope>;
+	setLongPressPopup: (popup: TerminalKeyboardLongPressPopupState) => void;
+}) {
+	return (x: number, y: number, width: number) => {
+		if (!isMountedRef.current || longPressGenerationRef.current !== generation) {
+			return;
+		}
+		const gesture = longPressGestureRef.current;
+		if (
+			!gesture ||
+			gesture.generation !== generation ||
+			gesture.slot !== slot ||
+			gesture.keyRef !== keyRef ||
+			!gesture.longPressFired
+		) {
+			return;
+		}
+		const root = keyboardRootWindowRef.current;
+		const nextPopup = buildTerminalKeyboardLongPressPopup({
+			slot,
+			getNavScope: () => navScopeRef.current,
+			keyboardWidth: keyboardWidthRef.current,
+			keyboardBounds: keyboardBoundsRef.current,
+			anchorX: x - root.x,
+			anchorY: y - root.y,
+			anchorWidth: width,
+			pointerLocalX: gesture.currentPageX - root.x,
+			pointerLocalY: gesture.currentPageY - root.y,
+		});
+		if (
+			!nextPopup ||
+			!isMountedRef.current ||
+			longPressGenerationRef.current !== generation
+		) {
+			return;
+		}
+		setLongPressPopup(nextPopup);
 	};
 }

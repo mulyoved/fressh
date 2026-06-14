@@ -32,7 +32,7 @@ import {
 } from '@/lib/work-key-long-press-options';
 import { type WorkmuxNavScope } from '@/lib/workmux-app-commands';
 import {
-	buildTerminalKeyboardLongPressPopup,
+	createTerminalKeyboardLongPressMeasureCallback,
 	type TerminalKeyboardLongPressPopupState,
 } from './TerminalKeyboardLongPressController';
 import { TerminalKeyboardLongPressPopup } from './TerminalKeyboardLongPressPopup';
@@ -399,45 +399,24 @@ export function TerminalKeyboard({
 		) => {
 			clearRepeat();
 			updateKeyboardRootMetrics();
-			keyRef.current?.measureInWindow((x, y, width) => {
-				if (
-					!isMountedRef.current ||
-					longPressGenerationRef.current !== generation
-				) {
-					return;
-				}
-				const gesture = longPressGestureRef.current;
-				if (
-					!gesture ||
-					gesture.generation !== generation ||
-					gesture.slot !== slot ||
-					gesture.keyRef !== keyRef ||
-					!gesture.longPressFired
-				) {
-					return;
-				}
-				const root = keyboardRootWindowRef.current;
-				const nextPopup = buildTerminalKeyboardLongPressPopup({
+			keyRef.current?.measureInWindow(
+				createTerminalKeyboardLongPressMeasureCallback({
 					slot,
-					getNavScope: () => navScopeRef.current,
-					keyboardWidth: keyboardWidthRef.current,
-					keyboardBounds: keyboardBoundsRef.current,
-					anchorX: x - root.x,
-					anchorY: y - root.y,
-					anchorWidth: width,
-					pointerLocalX: gesture.currentPageX - root.x,
-					pointerLocalY: gesture.currentPageY - root.y,
-				});
-				if (
-					!nextPopup ||
-					!isMountedRef.current ||
-					longPressGenerationRef.current !== generation
-				) {
-					return;
-				}
-				longPressPopupRef.current = nextPopup;
-				setLongPressPopup(nextPopup);
-			});
+					keyRef,
+					generation,
+					isMountedRef,
+					longPressGenerationRef,
+					longPressGestureRef,
+					keyboardRootWindowRef,
+					keyboardBoundsRef,
+					keyboardWidthRef,
+					navScopeRef,
+					setLongPressPopup: (nextPopup) => {
+						longPressPopupRef.current = nextPopup;
+						setLongPressPopup(nextPopup);
+					},
+				}),
+			);
 		},
 		[clearRepeat, updateKeyboardRootMetrics],
 	);
