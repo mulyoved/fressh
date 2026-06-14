@@ -59,6 +59,7 @@ import {
 	isFocusedActiveRequestCurrent,
 	shouldShowFocusedActiveFeedback,
 } from '@/lib/focused-active-request';
+import { getKeyboardActionRunOptions } from '@/lib/keyboard-action-run-options';
 import {
 	HANDLE_DEV_SERVER_URL,
 	createWorkmuxKeyboardCommandRunner,
@@ -154,7 +155,6 @@ import {
 	type WisprTextEditorAvailability,
 } from '@/lib/wispr-automation';
 import { wisprAutomationNative } from '@/lib/wispr-automation-native';
-import { getWorkmuxNavScopeOverride } from '@/lib/work-key-long-press-options';
 import {
 	createWorkmuxControlChannel,
 	disposeWorkmuxControlChannelAfterCleanup,
@@ -2675,9 +2675,7 @@ function ShellDetail() {
 					break;
 				}
 				case 'action':
-					handleAction(slot.actionId, {
-						workmuxNavScopeOverride: getWorkmuxNavScopeOverride(slot),
-					});
+					handleAction(slot.actionId, getKeyboardActionRunOptions(slot));
 					break;
 				default:
 					break;

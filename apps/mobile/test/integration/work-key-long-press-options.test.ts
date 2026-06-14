@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { getKeyboardActionRunOptions } from '../../src/lib/keyboard-action-run-options';
 import {
 	type KeyboardLongPressOption,
 	type KeyboardSlot,
@@ -169,6 +170,18 @@ void test('Work key options for visible mode include previous busy and widened a
 			badge: null,
 		},
 	]);
+});
+
+void test('keyboard action run options forward Work long-press scope metadata', () => {
+	const options = getWorkKeyLongPressOptions(workSlot, 'visible');
+	assert.ok(options);
+
+	assert.deepEqual(getKeyboardActionRunOptions(options[1]!), {
+		workmuxNavScopeOverride: 'all',
+	});
+	assert.deepEqual(getKeyboardActionRunOptions(options[3]!), {
+		workmuxNavScopeOverride: undefined,
+	});
 });
 
 void test('Work key options for all mode repeat all for widened nav', () => {

@@ -163,6 +163,42 @@ void test('TerminalKeyboard measured open callback reads latest nav scope ref', 
 	);
 });
 
+void test('TerminalKeyboard measured open callback ignores stale generation while mounted', () => {
+	const keyRef = { current: null };
+	const generation = 3;
+	const openedPopups: TerminalKeyboardLongPressPopupState[] = [];
+	const openMeasuredKeyPopup = createTerminalKeyboardLongPressMeasureCallback({
+		slot: workSlot,
+		keyRef,
+		generation,
+		isMountedRef: { current: true },
+		longPressGenerationRef: { current: generation + 1 },
+		longPressGestureRef: {
+			current: {
+				slot: workSlot,
+				keyRef,
+				generation,
+				currentPageX: 240,
+				currentPageY: 130,
+				longPressFired: true,
+			},
+		},
+		keyboardRootWindowRef: { current: { x: 0, y: 0 } },
+		keyboardBoundsRef: {
+			current: { left: 0, top: 0, width: 525, height: 180 },
+		},
+		keyboardWidthRef: { current: 525 },
+		navScopeRef: { current: 'visible' },
+		setLongPressPopup: (popup) => {
+			openedPopups.push(popup);
+		},
+	});
+
+	openMeasuredKeyPopup(200, 120, 80);
+
+	assert.deepEqual(openedPopups, []);
+});
+
 void test('TerminalKeyboard measured open callback resumes after mount ref is restored', () => {
 	const keyRef = { current: null };
 	const generation = 4;
