@@ -76,6 +76,47 @@ void test('Work long-press popup builder uses latest nav scope callback value', 
 	);
 });
 
+void test('long-press popup builder preserves configured non-Work options', () => {
+	const popup = buildTerminalKeyboardLongPressPopup({
+		slot: {
+			type: 'bytes',
+			bytes: [27, 91, 68],
+			label: 'ARROW_LEFT',
+			icon: 'ArrowLeft',
+			longPress: {
+				options: [
+					{
+						type: 'bytes',
+						bytes: [27, 91, 53, 126],
+						label: 'PAGE_UP',
+						icon: 'ChevronsUp',
+					},
+					{
+						type: 'action',
+						actionId: 'WORKMUX_NAV_PREV_ALL',
+						label: 'Prev all',
+						icon: null,
+					},
+				],
+			},
+		},
+		getNavScope: () => 'visible',
+		keyboardWidth: 360,
+		keyboardBounds: { left: 0, top: 0, width: 360, height: 180 },
+		anchorX: 120,
+		anchorY: 120,
+		anchorWidth: 48,
+		pointerLocalX: 140,
+		pointerLocalY: 130,
+	});
+
+	assert.ok(popup);
+	assert.deepEqual(
+		popup.options.map((option) => option.label),
+		['PAGE_UP', 'Prev all'],
+	);
+});
+
 void test('TerminalKeyboard measured open callback reads latest nav scope ref', () => {
 	const keyRef = { current: null };
 	const generation = 2;
