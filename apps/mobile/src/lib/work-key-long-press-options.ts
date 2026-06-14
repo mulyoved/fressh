@@ -2,7 +2,10 @@ import {
 	type KeyboardLongPressOption,
 	type KeyboardSlot,
 } from '@/lib/shell-config';
-import { type WorkmuxNavScope } from '@/lib/workmux-app-commands';
+import {
+	isWorkmuxNavScope,
+	type WorkmuxNavScope,
+} from '@/lib/workmux-app-commands';
 
 const WORKMUX_NAV_SCOPE_OVERRIDE_KEY = 'workmuxNavScopeOverride';
 const WORKMUX_LONG_PRESS_SCOPE_BADGE_KEY = 'workmuxLongPressScopeBadge';
@@ -48,8 +51,6 @@ export function isWorkKeyNavSlot(slot: KeyboardSlot): boolean {
 		slot.type === 'action' &&
 		slot.actionId === 'WORKMUX_NAV_NEXT' &&
 		slot.label === 'Work' &&
-		slot.icon === 'AppWindow' &&
-		slot.span === 2 &&
 		hasRequiredScopeOptions(slot)
 	);
 }
@@ -75,14 +76,16 @@ export function getWorkmuxNavScopeOverride(
 	option: KeyboardLongPressOption,
 ): WorkmuxNavScope | undefined {
 	const override = getMetadataValue(option, WORKMUX_NAV_SCOPE_OVERRIDE_KEY);
-	return isWorkmuxNavScopeValue(override) ? override : undefined;
+	return typeof override === 'string' && isWorkmuxNavScope(override)
+		? override
+		: undefined;
 }
 
 export function getWorkmuxLongPressScopeBadge(
 	option: KeyboardLongPressOption,
 ): WorkmuxNavScope | null {
 	const badge = getMetadataValue(option, WORKMUX_LONG_PRESS_SCOPE_BADGE_KEY);
-	return isWorkmuxNavScopeValue(badge) ? badge : null;
+	return typeof badge === 'string' && isWorkmuxNavScope(badge) ? badge : null;
 }
 
 function createScopedNavOption(
@@ -129,8 +132,4 @@ function getMetadataValue(
 	key: typeof WORKMUX_NAV_SCOPE_OVERRIDE_KEY | typeof WORKMUX_LONG_PRESS_SCOPE_BADGE_KEY,
 ): unknown {
 	return (option as Record<string, unknown>)[key];
-}
-
-function isWorkmuxNavScopeValue(value: unknown): value is WorkmuxNavScope {
-	return value === 'active' || value === 'visible' || value === 'all';
 }

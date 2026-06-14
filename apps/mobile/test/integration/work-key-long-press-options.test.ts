@@ -72,7 +72,7 @@ void test('widenWorkmuxNavScope caps the mode ladder at all', () => {
 	assert.equal(widenWorkmuxNavScope('all'), 'all');
 });
 
-void test('isWorkKeyNavSlot only matches the actual Work nav slot shape', () => {
+void test('isWorkKeyNavSlot matches the Work nav behavior and ignores presentation', () => {
 	assert.equal(isWorkKeyNavSlot(workSlot), true);
 	assert.equal(
 		isWorkKeyNavSlot({
@@ -87,6 +87,14 @@ void test('isWorkKeyNavSlot only matches the actual Work nav slot shape', () => 
 			actionId: 'WORKMUX_NAV_PREV',
 		}),
 		false,
+	);
+	assert.equal(
+		isWorkKeyNavSlot({
+			...workSlot,
+			icon: null,
+			span: 1,
+		}),
+		true,
 	);
 });
 
