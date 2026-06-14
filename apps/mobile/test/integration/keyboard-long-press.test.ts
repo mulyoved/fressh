@@ -92,6 +92,30 @@ void test('keyboard-bounded hit testing can select the last shrunken option', ()
 	);
 });
 
+void test('keyboard-bounded hit testing can select the last fractional-width option', () => {
+	const layout = getLongPressPopupLayout({
+		keyboardWidth: 525,
+		anchorX: 220,
+		anchorY: 200,
+		anchorWidth: 80,
+		optionCount: 7,
+	});
+	const keyboardBounds = { left: 0, top: 100, width: 525, height: 180 };
+
+	assert.equal(layout.left, 6);
+	assert.equal(layout.width, 513);
+	assert.equal(layout.optionWidth, 513 / 7);
+	assert.equal(
+		getLongPressKeyboardBoundedOptionIndex({
+			layout,
+			keyboardBounds,
+			localX: 524,
+			localY: 240,
+		}),
+		6,
+	);
+});
+
 void test('long press hit testing returns selected option or null outside popup', () => {
 	const layout = {
 		left: 74,

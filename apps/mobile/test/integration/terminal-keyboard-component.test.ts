@@ -1,51 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { buildTerminalKeyboardLongPressPopup } from '../../src/app/shell/components/TerminalKeyboardLongPressController';
 import { getTerminalKeyboardLongPressPopupItems } from '../../src/app/shell/components/TerminalKeyboardLongPressPopupModel';
 import { getLongPressPopupLayout } from '../../src/lib/keyboard-long-press';
-import { type KeyboardSlot } from '../../src/lib/shell-config';
 import { getWorkKeyLongPressOptions } from '../../src/lib/work-key-long-press-options';
+import { createWorkNavigationSlot } from './helpers/work-key-fixtures';
 
-const workSlot: KeyboardSlot = {
-	type: 'action',
-	actionId: 'WORKMUX_NAV_NEXT',
-	label: 'Work',
-	icon: 'AppWindow',
-	span: 2,
-	longPress: {
-		options: [
-			{
-				type: 'action',
-				actionId: 'WORKMUX_NAV_PREV',
-				label: 'Prev',
-				icon: null,
-			},
-			{
-				type: 'action',
-				actionId: 'WORKMUX_NAV_NEXT',
-				label: 'Next',
-				icon: null,
-			},
-			{
-				type: 'action',
-				actionId: 'WORKMUX_NAV_SCOPE_ACTIVE',
-				label: 'Active',
-				icon: null,
-			},
-			{
-				type: 'action',
-				actionId: 'WORKMUX_NAV_SCOPE_VISIBLE',
-				label: '+Busy',
-				icon: null,
-			},
-			{
-				type: 'action',
-				actionId: 'WORKMUX_NAV_SCOPE_ALL',
-				label: 'All',
-				icon: null,
-			},
-		],
-	},
-};
+const workSlot = createWorkNavigationSlot();
 
 void test('Work long-press popup items render dynamic visible-scope labels and badges', () => {
 	const options = getWorkKeyLongPressOptions(workSlot, 'visible');
@@ -80,5 +41,30 @@ void test('Work long-press popup items render dynamic visible-scope labels and b
 			{ label: '+Busy', badgeLabel: null, isCurrentScope: true },
 			{ label: 'All', badgeLabel: null, isCurrentScope: false },
 		],
+	);
+});
+
+void test('Work long-press open path uses latest nav scope at popup build time', () => {
+	let currentNavScope: 'active' | 'visible' = 'active';
+	const getNavScope = () => currentNavScope;
+	const openAfterLongPressDelay = () => buildTerminalKeyboardLongPressPopup({
+		slot: workSlot,
+		getNavScope,
+		keyboardWidth: 525,
+		keyboardBounds: { left: 0, top: 0, width: 525, height: 180 },
+		anchorX: 200,
+		anchorY: 120,
+		anchorWidth: 80,
+		pointerLocalX: 240,
+		pointerLocalY: 130,
+	});
+
+	currentNavScope = 'visible';
+	const popup = openAfterLongPressDelay();
+
+	assert.ok(popup);
+	assert.deepEqual(
+		popup.options.slice(0, 3).map((option) => option.label),
+		['Prev +Busy', 'Prev All', 'Next All'],
 	);
 });

@@ -14,11 +14,9 @@ import {
 } from 'react-native';
 import {
 	getLongPressMoveState,
-	getLongPressPopupLayout,
 	getLongPressReleaseDecision,
 	getLongPressTrackedOptionIndex,
 	type LongPressKeyboardBounds,
-	type LongPressPopupLayout,
 } from '@/lib/keyboard-long-press';
 import { resolveLucideIcon } from '@/lib/lucide-utils';
 import {
@@ -29,23 +27,20 @@ import {
 } from '@/lib/shell-config';
 import { useTheme } from '@/lib/theme';
 import {
-	getWorkKeyLongPressOptions,
 	getWorkmuxScopeForActionId,
 	WORKMUX_NAV_SCOPE_BADGE_LABEL,
-	type ResolvedKeyboardLongPressOption,
 } from '@/lib/work-key-long-press-options';
 import { type WorkmuxNavScope } from '@/lib/workmux-app-commands';
+import {
+	buildTerminalKeyboardLongPressPopup,
+	type TerminalKeyboardLongPressPopupState,
+} from './TerminalKeyboardLongPressController';
 import { TerminalKeyboardLongPressPopup } from './TerminalKeyboardLongPressPopup';
-
-type LongPressPopupState = {
-	options: readonly ResolvedKeyboardLongPressOption[];
-	layout: LongPressPopupLayout;
-	highlightedIndex: number | null;
-};
 
 type LongPressGestureState = {
 	slot: KeyboardSlot;
 	keyRef: React.RefObject<View | null>;
+	generation: number;
 	startPageX: number;
 	startPageY: number;
 	currentPageX: number;
@@ -265,16 +260,19 @@ export function TerminalKeyboard({
 	const longPressTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
 		null,
 	);
+	const isMountedRef = useRef(true);
+	const longPressGenerationRef = useRef(0);
 	const longPressGestureRef = useRef<LongPressGestureState | null>(null);
 	const keyboardRootRef = useRef<View | null>(null);
 	const keyboardRootWindowRef = useRef({ x: 0, y: 0 });
 	const keyboardBoundsRef = useRef<LongPressKeyboardBounds | null>(null);
 	const keyboardWidthRef = useRef(0);
-	const longPressPopupRef = useRef<LongPressPopupState | null>(null);
+	const longPressPopupRef =
+		useRef<TerminalKeyboardLongPressPopupState | null>(null);
 	const navScopeRef = useRef(navScope);
 	navScopeRef.current = navScope;
 	const [longPressPopup, setLongPressPopup] =
-		useState<LongPressPopupState | null>(null);
+		useState<TerminalKeyboardLongPressPopupState | null>(null);
 	const iconOnlyLabels = useMemo(
 		() =>
 			new Set([
@@ -329,6 +327,10 @@ export function TerminalKeyboard({
 
 	useEffect(
 		() => () => {
+			isMountedRef.current = false;
+			longPressGenerationRef.current += 1;
+			longPressGestureRef.current = null;
+			longPressPopupRef.current = null;
 			clearRepeat();
 			clearLongPressTimer();
 		},
@@ -337,11 +339,14 @@ export function TerminalKeyboard({
 
 	const closeLongPressPopup = useCallback(() => {
 		longPressPopupRef.current = null;
-		setLongPressPopup(null);
+		if (isMountedRef.current) {
+			setLongPressPopup(null);
+		}
 	}, []);
 
 	const updateKeyboardRootMetrics = useCallback(() => {
 		keyboardRootRef.current?.measureInWindow((x, y, width, height) => {
+			if (!isMountedRef.current) return;
 			keyboardRootWindowRef.current = { x, y };
 			keyboardBoundsRef.current =
 				width > 0 && height > 0 ? { left: 0, top: 0, width, height } : null;
@@ -387,18 +392,24 @@ export function TerminalKeyboard({
 	);
 
 	const openLongPressPopup = useCallback(
-		(slot: KeyboardSlot, keyRef: React.RefObject<View | null>) => {
-			const options =
-				getWorkKeyLongPressOptions(slot, navScopeRef.current) ??
-				slot.longPress?.options;
-			if (!options?.length) return;
-
+		(
+			slot: KeyboardSlot,
+			keyRef: React.RefObject<View | null>,
+			generation: number,
+		) => {
 			clearRepeat();
 			updateKeyboardRootMetrics();
 			keyRef.current?.measureInWindow((x, y, width) => {
+				if (
+					!isMountedRef.current ||
+					longPressGenerationRef.current !== generation
+				) {
+					return;
+				}
 				const gesture = longPressGestureRef.current;
 				if (
 					!gesture ||
+					gesture.generation !== generation ||
 					gesture.slot !== slot ||
 					gesture.keyRef !== keyRef ||
 					!gesture.longPressFired
@@ -406,26 +417,24 @@ export function TerminalKeyboard({
 					return;
 				}
 				const root = keyboardRootWindowRef.current;
-				const layout = getLongPressPopupLayout({
+				const nextPopup = buildTerminalKeyboardLongPressPopup({
+					slot,
+					getNavScope: () => navScopeRef.current,
 					keyboardWidth: keyboardWidthRef.current,
+					keyboardBounds: keyboardBoundsRef.current,
 					anchorX: x - root.x,
 					anchorY: y - root.y,
 					anchorWidth: width,
-					optionCount: options.length,
+					pointerLocalX: gesture.currentPageX - root.x,
+					pointerLocalY: gesture.currentPageY - root.y,
 				});
-				const localX = gesture.currentPageX - root.x;
-				const localY = gesture.currentPageY - root.y;
-				const nextPopup = {
-					options,
-					layout,
-					highlightedIndex: getLongPressTrackedOptionIndex({
-						layout,
-						keyboardBounds: keyboardBoundsRef.current,
-						localX,
-						localY,
-						previousIndex: null,
-					}),
-				};
+				if (
+					!nextPopup ||
+					!isMountedRef.current ||
+					longPressGenerationRef.current !== generation
+				) {
+					return;
+				}
 				longPressPopupRef.current = nextPopup;
 				setLongPressPopup(nextPopup);
 			});
@@ -441,9 +450,12 @@ export function TerminalKeyboard({
 		) => {
 			clearLongPressTimer();
 			closeLongPressPopup();
+			const generation = longPressGenerationRef.current + 1;
+			longPressGenerationRef.current = generation;
 			longPressGestureRef.current = {
 				slot,
 				keyRef,
+				generation,
 				startPageX: event.nativeEvent.pageX,
 				startPageY: event.nativeEvent.pageY,
 				currentPageX: event.nativeEvent.pageX,
@@ -453,11 +465,16 @@ export function TerminalKeyboard({
 			};
 			longPressTimeoutRef.current = setTimeout(() => {
 				const current = longPressGestureRef.current;
-				if (!current || current.slot !== slot || current.keyRef !== keyRef) {
+				if (
+					!current ||
+					current.generation !== generation ||
+					current.slot !== slot ||
+					current.keyRef !== keyRef
+				) {
 					return;
 				}
 				current.longPressFired = true;
-				openLongPressPopup(slot, keyRef);
+				openLongPressPopup(slot, keyRef, generation);
 			}, longPressDelayMs);
 		},
 		[
@@ -501,6 +518,7 @@ export function TerminalKeyboard({
 			event: GestureResponderEvent,
 		) => {
 			const gesture = longPressGestureRef.current;
+			longPressGenerationRef.current += 1;
 			longPressGestureRef.current = null;
 			clearLongPressTimer();
 
@@ -550,6 +568,7 @@ export function TerminalKeyboard({
 	);
 
 	const cancelLongPressGesture = useCallback(() => {
+		longPressGenerationRef.current += 1;
 		longPressGestureRef.current = null;
 		clearLongPressTimer();
 		closeLongPressPopup();

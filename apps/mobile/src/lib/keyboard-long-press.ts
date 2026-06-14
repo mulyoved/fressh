@@ -33,6 +33,11 @@ function clamp(value: number, min: number, max: number): number {
 	return Math.min(Math.max(value, min), max);
 }
 
+function getLongPressOptionCount(layout: LongPressPopupLayout): number {
+	if (layout.optionWidth <= 0) return 0;
+	return Math.max(0, Math.round(layout.width / layout.optionWidth));
+}
+
 export function getLongPressPopupLayout({
 	keyboardWidth,
 	anchorX,
@@ -95,7 +100,7 @@ export function getLongPressOptionIndexAtPoint({
 	}
 
 	const index = Math.floor((localX - layout.left) / layout.optionWidth);
-	const optionCount = Math.floor(layout.width / layout.optionWidth);
+	const optionCount = getLongPressOptionCount(layout);
 	return index >= 0 && index < optionCount ? index : null;
 }
 
@@ -106,7 +111,7 @@ export function getLongPressOptionIndexAtX({
 	layout: LongPressPopupLayout;
 	localX: number;
 }): number | null {
-	const optionCount = Math.floor(layout.width / layout.optionWidth);
+	const optionCount = getLongPressOptionCount(layout);
 	if (optionCount <= 0) return null;
 
 	const rawIndex = Math.floor((localX - layout.left) / layout.optionWidth);
