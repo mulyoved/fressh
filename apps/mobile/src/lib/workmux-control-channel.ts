@@ -75,6 +75,40 @@ function failureResult(error: string): WorkmuxControlCommandResult {
 	return { success: false, output: '', error };
 }
 
+function isUnrecognizedScopeError(result: WorkmuxControlCommandResult): boolean {
+	return (
+		!result.success &&
+		typeof result.error === 'string' &&
+		/Unrecognized key.*scope/.test(result.error)
+	);
+}
+
+function buildLegacyScopedNavFallback(
+	request: MdevBridgeOperationRequest,
+): MdevBridgeOperationRequest | null {
+	if (request.operation !== WORKMUX_REQUIRED_MDEV_BRIDGE_OPERATIONS[3]) return null;
+	const { action, session, scope } = request.params;
+	if (
+		(action !== 'next' && action !== 'prev') ||
+		typeof session !== 'string' ||
+		typeof scope !== 'string'
+	) {
+		return null;
+	}
+	return {
+		operation: request.operation,
+		params: {
+			action:
+				scope === 'all'
+					? action === 'next'
+						? 'next-all'
+						: 'prev-all'
+					: action,
+			session,
+		},
+	};
+}
+
 export function createWorkmuxControlChannel({
 	connection,
 	bridgeClient,
@@ -145,10 +179,14 @@ export function createWorkmuxControlChannel({
 				return Promise.resolve(failureResult('No SSH connection available.'));
 			}
 			try {
-				return runBridgeOperation(
-					buildMdevBridgeOperationFromWorkmuxArgv(argv),
-					options,
-				);
+				const request = buildMdevBridgeOperationFromWorkmuxArgv(argv);
+				return runBridgeOperation(request, options).then((result) => {
+					const fallbackRequest = buildLegacyScopedNavFallback(request);
+					if (!fallbackRequest || !isUnrecognizedScopeError(result)) {
+						return result;
+					}
+					return runBridgeOperation(fallbackRequest, options);
+				});
 			} catch (error) {
 				return Promise.resolve(
 					failureResult(error instanceof Error ? error.message : String(error)),

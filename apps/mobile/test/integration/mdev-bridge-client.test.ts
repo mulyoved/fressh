@@ -647,6 +647,42 @@ void test('post-start request timeout closes the bridge stream', async () => {
 	assert.equal(fixture.closeOptions[0]?.signal instanceof AbortSignal, true);
 });
 
+void test('structured operation errors return the bridge error message', async () => {
+	const fixture = createBridgeFixture();
+	const client = createMdevBridgeClient({
+		connection: fixture.connection,
+		requiredOperations: ['op.one'],
+		requestTimeoutMs: 100,
+	});
+
+	const resultPromise = client.runOperation({
+		operation: 'op.one',
+		params: {},
+	});
+	await nextTick();
+	fixture.emitJson(helloResponse());
+	await nextTick();
+	fixture.emitJson({
+		id: 'mdev-bridge-2',
+		ok: false,
+		type: 'operation',
+		operation: 'op.one',
+		error: {
+			code: 'VALIDATION_ERROR',
+			message: 'index: Invalid input: expected number, received undefined',
+		},
+		exitCode: 64,
+	});
+
+	assert.deepEqual(await resultPromise, {
+		success: false,
+		output: '',
+		error: 'index: Invalid input: expected number, received undefined',
+	});
+	await nextTick();
+	assert.equal(fixture.closeOptions.length, 0);
+});
+
 void test('operation serialization failure closes stream and preserves failed state', async () => {
 	const fixture = createBridgeFixture();
 	const client = createMdevBridgeClient({

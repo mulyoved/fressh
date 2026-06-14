@@ -206,12 +206,12 @@ void test('parseDetectedOpenCandidates validates mdev open detect JSON', () => {
 	};
 	const fileCandidate = {
 		kind: 'file',
-		raw: 'src/app.ts:12',
-		normalized: '/repo/src/app.ts:12',
-		display: 'src/app.ts:12',
+		raw: 'src/routes/[id].tsx:12',
+		normalized: '/repo/src/routes/[id].tsx:12',
+		display: 'src/routes/[id].tsx:12',
 		sourceLine: 3,
 		sourceColumn: 1,
-		path: '/repo/src/app.ts',
+		path: '/repo/src/routes/[id].tsx',
 		line: 12,
 		url: null,
 	};
@@ -244,15 +244,59 @@ void test('parseDetectedOpenCandidates validates mdev open detect JSON', () => {
 			},
 			{
 				kind: 'file',
-				raw: 'src/app.ts:12',
-				normalized: '/repo/src/app.ts:12',
-				display: 'src/app.ts:12',
-				path: '/repo/src/app.ts',
+				raw: 'src/routes/[id].tsx:12',
+				normalized: '/repo/src/routes/[id].tsx:12',
+				display: 'src/routes/[id].tsx:12',
+				path: '/repo/src/routes/[id].tsx',
 				line: 12,
 				url: null,
 			},
 		],
 	});
+	assert.deepEqual(
+		parseDetectedOpenCandidates(
+			[
+				'[WARN] interactive shell echoed the command first',
+				"prompt$ TMUX_PANE='%83' TMUX_PANE_TTY='/dev/pts/107'",
+				"TMUX_PANE_PATH='/home/muly/BadgerVaultAI' mdev open detect --json",
+				output,
+				'EXIT_CODE:0',
+				'prompt$',
+			].join('\n'),
+		),
+		{
+			type: 'valid',
+			candidates: [
+				{
+					kind: 'remote-url',
+					raw: 'https://example.test/app',
+					normalized: 'https://example.test/app',
+					display: 'https://example.test/app',
+					path: null,
+					line: null,
+					url: 'https://example.test/app',
+				},
+				{
+					kind: 'local-url',
+					raw: 'http://localhost:5173/app',
+					normalized: 'http://localhost:5173/app',
+					display: 'http://localhost:5173/app',
+					path: null,
+					line: null,
+					url: 'http://localhost:5173/app',
+				},
+				{
+					kind: 'file',
+					raw: 'src/routes/[id].tsx:12',
+					normalized: '/repo/src/routes/[id].tsx:12',
+					display: 'src/routes/[id].tsx:12',
+					path: '/repo/src/routes/[id].tsx',
+					line: 12,
+					url: null,
+				},
+			],
+		},
+	);
 	assert.deepEqual(parseDetectedOpenCandidates('[]'), {
 		type: 'valid',
 		candidates: [],

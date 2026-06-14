@@ -218,23 +218,21 @@ export function parseDetectedOpenCandidates(
 			message: 'mdev open detect did not return JSON.',
 		};
 	}
-	let parsed: unknown;
-	try {
-		parsed = JSON.parse(output);
-	} catch {
+	const parsed = parseDetectedOpenCandidatesJson(output);
+	if (!parsed.ok) {
 		return {
 			type: 'invalid',
 			message: 'mdev open detect returned invalid JSON.',
 		};
 	}
-	if (!Array.isArray(parsed)) {
+	if (!Array.isArray(parsed.value)) {
 		return {
 			type: 'invalid',
 			message: 'mdev open detect returned an unexpected payload.',
 		};
 	}
 	const candidates: DetectedOpenCandidate[] = [];
-	for (const item of parsed) {
+	for (const item of parsed.value) {
 		const candidate = parseDetectedOpenCandidate(item);
 		if (!candidate) {
 			return {
@@ -245,6 +243,64 @@ export function parseDetectedOpenCandidates(
 		candidates.push(candidate);
 	}
 	return { type: 'valid', candidates };
+}
+
+function parseDetectedOpenCandidatesJson(
+	output: string,
+): { ok: true; value: unknown } | { ok: false } {
+	try {
+		return { ok: true, value: JSON.parse(output) };
+	} catch {
+		const embeddedArray = parseEmbeddedJsonArray(output);
+		if (embeddedArray.found) return { ok: true, value: embeddedArray.value };
+		return { ok: false };
+	}
+}
+
+function parseEmbeddedJsonArray(
+	output: string,
+): { found: true; value: unknown[] } | { found: false } {
+	for (
+		let start = output.indexOf('[');
+		start >= 0;
+		start = output.indexOf('[', start + 1)
+	) {
+		let depth = 0;
+		let inString = false;
+		let escaping = false;
+		for (let index = start; index < output.length; index += 1) {
+			const char = output[index];
+			if (inString) {
+				if (escaping) {
+					escaping = false;
+				} else if (char === '\\') {
+					escaping = true;
+				} else if (char === '"') {
+					inString = false;
+				}
+				continue;
+			}
+			if (char === '"') {
+				inString = true;
+				continue;
+			}
+			if (char === '[') {
+				depth += 1;
+				continue;
+			}
+			if (char !== ']') continue;
+			depth -= 1;
+			if (depth !== 0) continue;
+			try {
+				const parsed = JSON.parse(output.slice(start, index + 1));
+				if (Array.isArray(parsed)) return { found: true, value: parsed };
+			} catch {
+				// Keep scanning; prompt/log lines can also contain bracketed text.
+			}
+			break;
+		}
+	}
+	return { found: false };
 }
 
 function parseDetectedOpenCandidate(

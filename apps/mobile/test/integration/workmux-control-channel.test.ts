@@ -54,6 +54,31 @@ function createRecordingBridgeClient(
 	return { bridgeClient, calls, getDisposeCount: () => disposeCount };
 }
 
+function createSequencedBridgeClient(results: WorkmuxControlCommandResult[]) {
+	const calls: {
+		operation: string;
+		params: Record<string, unknown>;
+		timeoutMs?: number;
+	}[] = [];
+	let disposeCount = 0;
+	const bridgeClient: MdevBridgeClient = {
+		runOperation: async (input) => {
+			calls.push(input);
+			return (
+				results.shift() ?? {
+					success: false,
+					output: '',
+					error: 'Unexpected bridge call',
+				}
+			);
+		},
+		dispose: async () => {
+			disposeCount += 1;
+		},
+	};
+	return { bridgeClient, calls, getDisposeCount: () => disposeCount };
+}
+
 void test('WorkmuxControlChannel.command routes mapped argv through bridge operations, preserving timeout', async () => {
 	const bridge = createRecordingBridgeClient();
 	const channel = createWorkmuxControlChannel({
@@ -93,6 +118,66 @@ void test('WorkmuxControlChannel.command routes scoped nav argv through bridge o
 		{
 			operation: 'tmux.app.nav',
 			params: { action: 'next', session: 'main', scope: 'visible' },
+			timeoutMs: 1234,
+		},
+	]);
+});
+
+void test('WorkmuxControlChannel.command retries scoped nav without scope for older bridges', async () => {
+	const bridge = createSequencedBridgeClient([
+		{ success: false, output: '', error: 'Unrecognized key: "scope"' },
+		{ success: true, output: 'ok\n' },
+	]);
+	const channel = createWorkmuxControlChannel({
+		connection: createFakeConnection(),
+		bridgeClient: bridge.bridgeClient,
+	});
+
+	const result = await channel.command(
+		['tmux', 'app', 'nav', 'next', '--session', 'main', '--scope', 'visible'],
+		{ timeoutMs: 1234 },
+	);
+
+	assert.deepEqual(result, { success: true, output: 'ok\n' });
+	assert.deepEqual(bridge.calls, [
+		{
+			operation: 'tmux.app.nav',
+			params: { action: 'next', session: 'main', scope: 'visible' },
+			timeoutMs: 1234,
+		},
+		{
+			operation: 'tmux.app.nav',
+			params: { action: 'next', session: 'main' },
+			timeoutMs: 1234,
+		},
+	]);
+});
+
+void test('WorkmuxControlChannel.command retries all-scope nav as legacy all-window nav for older bridges', async () => {
+	const bridge = createSequencedBridgeClient([
+		{ success: false, output: '', error: 'Unrecognized key: "scope"' },
+		{ success: true, output: 'ok\n' },
+	]);
+	const channel = createWorkmuxControlChannel({
+		connection: createFakeConnection(),
+		bridgeClient: bridge.bridgeClient,
+	});
+
+	const result = await channel.command(
+		['tmux', 'app', 'nav', 'prev', '--session', 'main', '--scope', 'all'],
+		{ timeoutMs: 1234 },
+	);
+
+	assert.deepEqual(result, { success: true, output: 'ok\n' });
+	assert.deepEqual(bridge.calls, [
+		{
+			operation: 'tmux.app.nav',
+			params: { action: 'prev', session: 'main', scope: 'all' },
+			timeoutMs: 1234,
+		},
+		{
+			operation: 'tmux.app.nav',
+			params: { action: 'prev-all', session: 'main' },
 			timeoutMs: 1234,
 		},
 	]);

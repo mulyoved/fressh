@@ -208,10 +208,20 @@ function validateOperationResponse(
 			fatal: false,
 		};
 	}
-	if (response.ok === false && typeof response.error === 'string') {
-		return { result: errorResult(response.error), fatal: false };
+	if (response.ok === false) {
+		const message = bridgeErrorMessage(response.error);
+		if (message) {
+			return { result: errorResult(message), fatal: false };
+		}
 	}
 	return fatalResult(MDEV_BRIDGE_PROTOCOL_ERROR);
+}
+
+function bridgeErrorMessage(error: unknown): string | null {
+	if (typeof error === 'string') return error;
+	if (!isRecord(error)) return null;
+	if (typeof error.message === 'string') return error.message;
+	return null;
 }
 
 export function createMdevBridgeClient({

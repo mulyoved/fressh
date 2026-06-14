@@ -125,7 +125,8 @@ export async function executeSideChannelCommandCore({
 	const decoder = new TextDecoder();
 	const deadlineMs = Date.now() + timeoutMs;
 
-	// Unique marker to detect command completion
+	// Unique markers delimit command output from interactive shell echo.
+	const startMarker = `__SIDE_CHANNEL_START_${Date.now()}__`;
 	const endMarker = `__SIDE_CHANNEL_DONE_${Date.now()}__`;
 
 	logger.debug('Starting side-channel shell for command execution');
@@ -182,8 +183,17 @@ export async function executeSideChannelCommandCore({
 			{ cursor: { mode: 'live' } },
 		);
 
-		// Send the command followed by exit code capture and end marker.
-		const fullCommand = `${command}; __EC__=$?; echo "${endMarker}"; echo "EXIT_CODE:$__EC__"\n`;
+		// Send the command surrounded by markers. Interactive ptys may echo the
+		// command across wrapped lines, so completion parsing must not rely on
+		// dropping a fixed first line.
+		const fullCommand =
+			[
+				`printf '%s\\n' '${startMarker}'`,
+				command,
+				'__EC__=$?',
+				`printf '%s\\n' '${endMarker}'`,
+				`printf 'EXIT_CODE:%s\\n' "$__EC__"`,
+			].join('; ') + '\n';
 		const encodedCommand = encoder.encode(fullCommand);
 		await withTimeout(
 			sideShell.sendData(encodedCommand.buffer as ArrayBuffer, {
@@ -198,6 +208,7 @@ export async function executeSideChannelCommandCore({
 		const result = await withTimeout(
 			waitForMarker(
 				outputChunks,
+				startMarker,
 				endMarker,
 				decoder,
 				() => completed,
@@ -241,7 +252,8 @@ export async function executeSideChannelCommandCore({
 
 async function waitForMarker(
 	chunks: ArrayBuffer[],
-	marker: string,
+	startMarker: string,
+	endMarker: string,
 	decoder: TextDecoder,
 	isCompleted: () => boolean,
 	onCleanup: (cleanup: () => void) => void,
@@ -272,13 +284,23 @@ async function waitForMarker(
 			}
 
 			const output = decoder.decode(combined);
-			const markerLineRegex = new RegExp(`^${marker}\\s*$`, 'm');
+			const markerLineRegex = new RegExp(`^${endMarker}\\s*$`, 'm');
 			if (markerLineRegex.test(output)) {
 				const lines = output.split('\n');
-				const markerLineIndex = lines.findIndex(
-					(line) => line.trim() === marker,
+				const endMarkerLineIndex = lines.findIndex(
+					(line) => line.trim() === endMarker,
 				);
-				const relevantLines = lines.slice(1, markerLineIndex);
+				let startMarkerLineIndex = -1;
+				for (let index = endMarkerLineIndex - 1; index >= 0; index -= 1) {
+					if (lines[index]?.trim() === startMarker) {
+						startMarkerLineIndex = index;
+						break;
+					}
+				}
+				const relevantLines =
+					startMarkerLineIndex >= 0
+						? lines.slice(startMarkerLineIndex + 1, endMarkerLineIndex)
+						: lines.slice(1, endMarkerLineIndex);
 				const cleanOutput = relevantLines.join('\n').trim();
 				const exitCodeMatch = output.match(/EXIT_CODE:(\d+)/);
 				const exitCode =

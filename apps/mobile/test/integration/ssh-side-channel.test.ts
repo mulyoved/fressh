@@ -69,6 +69,13 @@ class FakeSideShell {
 		return 1n;
 	}
 
+	emit(text: string) {
+		this.listener?.({
+			stream: 'stdout',
+			bytes: encoder.encode(text).buffer as ArrayBuffer,
+		});
+	}
+
 	removeListener(listenerId: bigint) {
 		this.removedListenerId = listenerId;
 		this.options.remove?.();
@@ -83,11 +90,7 @@ class FakeSideShell {
 		const command = decoder.decode(bytes);
 		const marker = command.match(/__SIDE_CHANNEL_DONE_\d+__/)?.[0];
 		if (!marker) throw new Error('missing marker');
-		this.listener?.({
-			stream: 'stdout',
-			bytes: encoder.encode(`${command}hello\n${marker}\nEXIT_CODE:0\n`)
-				.buffer as ArrayBuffer,
-		});
+		this.emit(`${command}hello\n${marker}\nEXIT_CODE:0\n`);
 	}
 
 	async close(opts?: { signal?: AbortSignal }) {
@@ -137,6 +140,49 @@ void test('executeSideChannelCommand captures output and closes the side shell',
 	assert.equal(shell.closed, true);
 	assert.equal(shell.sendSignal instanceof AbortSignal, true);
 	assert.equal(shell.closeSignal instanceof AbortSignal, true);
+});
+
+void test('executeSideChannelCommand ignores wrapped command echo before output', async () => {
+	let shell!: FakeSideShell;
+	shell = new FakeSideShell({
+		send: async (bytes) => {
+			const sentCommand = decoder.decode(bytes);
+			const startMarker = sentCommand.match(/__SIDE_CHANNEL_START_\d+__/)?.[0];
+			const endMarker = sentCommand.match(/__SIDE_CHANNEL_DONE_\d+__/)?.[0];
+			if (!endMarker) throw new Error('missing end marker');
+			const payload =
+				'[{"kind":"remote-url","raw":"https://example.test","normalized":"https://example.test","display":"https://example.test","sourceLine":1,"sourceColumn":1,"path":null,"line":null,"url":"https://example.test"}]';
+			shell.emit(
+				[
+					'prompt$ TMUX_PANE=%83 TMUX_PANE_TTY=/dev/pts/107',
+					'TMUX_PANE_PATH=/home/muly/BadgerVaultAI mdev open detect --json',
+					startMarker,
+					payload,
+					endMarker,
+					'EXIT_CODE:0',
+					'',
+				]
+					.filter((line): line is string => line !== undefined)
+					.join('\n'),
+			);
+		},
+	});
+
+	const result = await executeSideChannelCommandCore({
+		connection: { startShell: async () => shell },
+		command:
+			"TMUX_PANE='%83' TMUX_PANE_TTY='/dev/pts/107' TMUX_PANE_PATH='/home/muly/BadgerVaultAI' mdev open detect --json",
+		timeoutMs: 500,
+		logger: noopLogger,
+	});
+
+	assert.deepEqual(result, {
+		success: true,
+		output:
+			'[{"kind":"remote-url","raw":"https://example.test","normalized":"https://example.test","display":"https://example.test","sourceLine":1,"sourceColumn":1,"path":null,"line":null,"url":"https://example.test"}]',
+		error: undefined,
+		issueUrl: undefined,
+	});
 });
 
 void test('executeSideChannelCommand rejects a hanging shell start', async () => {
