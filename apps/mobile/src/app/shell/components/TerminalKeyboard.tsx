@@ -326,13 +326,16 @@ export function TerminalKeyboard({
 	);
 
 	useEffect(
-		() => () => {
-			isMountedRef.current = false;
-			longPressGenerationRef.current += 1;
-			longPressGestureRef.current = null;
-			longPressPopupRef.current = null;
-			clearRepeat();
-			clearLongPressTimer();
+		() => {
+			isMountedRef.current = true;
+			return () => {
+				isMountedRef.current = false;
+				longPressGenerationRef.current += 1;
+				longPressGestureRef.current = null;
+				longPressPopupRef.current = null;
+				clearRepeat();
+				clearLongPressTimer();
+			};
 		},
 		[clearLongPressTimer, clearRepeat],
 	);

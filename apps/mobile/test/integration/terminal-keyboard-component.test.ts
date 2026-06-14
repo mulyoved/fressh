@@ -119,3 +119,48 @@ void test('TerminalKeyboard measured open callback reads latest nav scope ref', 
 		['Prev +Busy', 'Prev All', 'Next All'],
 	);
 });
+
+void test('TerminalKeyboard measured open callback resumes after mount ref is restored', () => {
+	const keyRef = { current: null };
+	const generation = 4;
+	const isMountedRef = { current: false };
+	const openedPopups: TerminalKeyboardLongPressPopupState[] = [];
+	const createOpenMeasuredKeyPopup = () =>
+		createTerminalKeyboardLongPressMeasureCallback({
+			slot: workSlot,
+			keyRef,
+			generation,
+			isMountedRef,
+			longPressGenerationRef: { current: generation },
+			longPressGestureRef: {
+				current: {
+					slot: workSlot,
+					keyRef,
+					generation,
+					currentPageX: 240,
+					currentPageY: 130,
+					longPressFired: true,
+				},
+			},
+			keyboardRootWindowRef: { current: { x: 0, y: 0 } },
+			keyboardBoundsRef: {
+				current: { left: 0, top: 0, width: 525, height: 180 },
+			},
+			keyboardWidthRef: { current: 525 },
+			navScopeRef: { current: 'visible' },
+			setLongPressPopup: (popup) => {
+				openedPopups.push(popup);
+			},
+		});
+
+	createOpenMeasuredKeyPopup()(200, 120, 80);
+	assert.equal(openedPopups.length, 0);
+
+	isMountedRef.current = true;
+	createOpenMeasuredKeyPopup()(200, 120, 80);
+	assert.equal(openedPopups.length, 1);
+	assert.deepEqual(
+		openedPopups[0]!.options.slice(0, 3).map((option) => option.label),
+		['Prev +Busy', 'Prev All', 'Next All'],
+	);
+});
