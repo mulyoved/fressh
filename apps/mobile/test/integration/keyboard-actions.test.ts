@@ -471,6 +471,65 @@ void test('Workmux keyboard runner uses required argv command transport', async 
 	]);
 });
 
+void test('Workmux keyboard runner prefers explicit one-shot nav scope over stored scope', async () => {
+	const argvCalls: { argv: string[]; timeoutMs: number }[] = [];
+	const runner = createWorkmuxKeyboardCommandRunner({
+		isTmuxEnabled: () => true,
+		getSessionName: () => 'main',
+		getNavScope: () => 'visible',
+		runWorkmuxCommand: async (argv, timeoutMs) => {
+			argvCalls.push({ argv, timeoutMs });
+		},
+		showFailure: () => {},
+		getErrorMessage: (error) =>
+			error instanceof Error ? error.message : String(error),
+	});
+
+	assert.deepEqual(
+		await runner.run({ type: 'nav', action: 'prev', scope: 'all' }),
+		{ status: 'handled' },
+	);
+	assert.deepEqual(argvCalls, [
+		{
+			argv: [
+				'tmux',
+				'app',
+				'nav',
+				'prev',
+				'--session',
+				'main',
+				'--scope',
+				'all',
+			],
+			timeoutMs: 10_000,
+		},
+	]);
+});
+
+void test('runAction forwards one-shot nav scope metadata to Workmux commands', async () => {
+	const commands: WorkmuxKeyboardCommand[] = [];
+
+	await runAction(
+		'WORKMUX_NAV_PREV',
+		{
+			availableKeyboardIds: new Set(),
+			selectKeyboard: () => {},
+			rotateKeyboard: () => {},
+			openConfigurator: () => {},
+			sendBytes: () => {},
+			pasteClipboard: async () => {},
+			copySelection: () => {},
+			runWorkmuxKeyboardCommand: async (command: WorkmuxKeyboardCommand) => {
+				commands.push(command);
+				return { status: 'handled' };
+			},
+		} as Parameters<typeof runAction>[1],
+		{ workmuxNavScopeOverride: 'all' },
+	);
+
+	assert.deepEqual(commands, [{ type: 'nav', action: 'prev', scope: 'all' }]);
+});
+
 void test('Workmux status cycle uses required argv command transport', async () => {
 	const argvCalls: { argv: string[]; timeoutMs: number }[] = [];
 	const runner = createWorkmuxKeyboardCommandRunner({
