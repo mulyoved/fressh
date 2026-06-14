@@ -2,7 +2,6 @@ import { MMKV, useMMKVBoolean, useMMKVString } from 'react-native-mmkv';
 import { type ThemeName } from './theme';
 import {
 	isWorkmuxNavScope,
-	nextWorkmuxNavScope,
 	type WorkmuxNavScope,
 } from './workmux-app-commands';
 
@@ -124,17 +123,13 @@ export const preferences = {
 		set: (scope: WorkmuxNavScope) => {
 			storage.set(preferences.workmuxNavScope._key, scope);
 		},
-		cycle: (): WorkmuxNavScope => {
-			const next = nextWorkmuxNavScope(preferences.workmuxNavScope.get());
-			preferences.workmuxNavScope.set(next);
-			return next;
-		},
 		useWorkmuxNavScopePref: (): [
 			WorkmuxNavScope,
 			(scope: WorkmuxNavScope) => void,
 		] => {
 			const [scope, setScope] = useMMKVString(
 				preferences.workmuxNavScope._key,
+				storage,
 			);
 			return [
 				preferences.workmuxNavScope._resolve(scope),

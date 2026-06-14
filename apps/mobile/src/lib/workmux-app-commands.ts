@@ -64,13 +64,6 @@ export function isWorkmuxNavScope(value: string): value is WorkmuxNavScope {
 	return (WORKMUX_NAV_SCOPE_VALUES as readonly string[]).includes(value);
 }
 
-export function nextWorkmuxNavScope(current: WorkmuxNavScope): WorkmuxNavScope {
-	const index = WORKMUX_NAV_SCOPE_VALUES.indexOf(current);
-	return WORKMUX_NAV_SCOPE_VALUES[
-		(index + 1) % WORKMUX_NAV_SCOPE_VALUES.length
-	] as WorkmuxNavScope;
-}
-
 type JsonRecord = Record<string, unknown>;
 
 export function isWorkmuxAppCommand(command: string): boolean {

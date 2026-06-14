@@ -853,10 +853,10 @@ void test('Workmux keyboard runner omits scope when getNavScope is not provided'
 	]);
 });
 
-void test('WORKMUX_CYCLE_NAV_SCOPE cycles local scope and sends no remote command', async () => {
-	let cycles = 0;
+void test('WORKMUX_NAV_SCOPE_* set the sticky scope and send no remote command', async () => {
+	const setScopes: string[] = [];
 	let remoteSends = 0;
-	await runAction('WORKMUX_CYCLE_NAV_SCOPE', {
+	const context = {
 		availableKeyboardIds: new Set(),
 		selectKeyboard: () => {},
 		rotateKeyboard: () => {},
@@ -864,26 +864,34 @@ void test('WORKMUX_CYCLE_NAV_SCOPE cycles local scope and sends no remote comman
 		sendBytes: () => {},
 		pasteClipboard: async () => {},
 		copySelection: () => {},
-		cycleNavScope: () => {
-			cycles += 1;
+		setNavScope: (scope: 'active' | 'visible' | 'all') => {
+			setScopes.push(scope);
 		},
 		runWorkmuxKeyboardCommand: async () => {
 			remoteSends += 1;
 			return { status: 'handled' };
 		},
-	} as Parameters<typeof runAction>[1]);
+	} as Parameters<typeof runAction>[1];
 
-	assert.equal(cycles, 1);
+	await runAction('WORKMUX_NAV_SCOPE_ACTIVE', context);
+	await runAction('WORKMUX_NAV_SCOPE_VISIBLE', context);
+	await runAction('WORKMUX_NAV_SCOPE_ALL', context);
+
+	assert.deepEqual(setScopes, ['active', 'visible', 'all']);
 	assert.equal(remoteSends, 0);
 });
 
-void test('WORKMUX_CYCLE_NAV_SCOPE is a known, config-supported action', () => {
-	assert.equal(
-		KNOWN_ACTION_IDS.includes(
-			'WORKMUX_CYCLE_NAV_SCOPE' as (typeof KNOWN_ACTION_IDS)[number],
-		),
-		true,
-	);
+void test('WORKMUX_NAV_SCOPE_* are known, config-supported actions', () => {
+	for (const id of [
+		'WORKMUX_NAV_SCOPE_ACTIVE',
+		'WORKMUX_NAV_SCOPE_VISIBLE',
+		'WORKMUX_NAV_SCOPE_ALL',
+	] as const) {
+		assert.equal(
+			KNOWN_ACTION_IDS.includes(id as (typeof KNOWN_ACTION_IDS)[number]),
+			true,
+		);
+	}
 });
 
 void test('Workmux keyboard command runner preserves local failures and maps remote failures', async () => {

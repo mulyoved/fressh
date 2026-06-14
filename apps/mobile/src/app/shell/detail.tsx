@@ -2577,8 +2577,8 @@ function ShellDetail() {
 			},
 			editHostUrlSlot: browserActions.browserActionsProps.onEditUrlSlot,
 			runWorkmuxKeyboardCommand,
-			cycleNavScope: () => {
-				preferences.workmuxNavScope.cycle();
+			setNavScope: (scope) => {
+				preferences.workmuxNavScope.set(scope);
 			},
 		}),
 		[

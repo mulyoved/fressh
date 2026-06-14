@@ -30,7 +30,6 @@ import {
 } from '@/lib/shell-config';
 import { useTheme } from '@/lib/theme';
 import { type WorkmuxNavScope } from '@/lib/workmux-app-commands';
-import { WorkmuxScopeToggleKey } from './WorkmuxScopeToggleKey';
 
 type LongPressPopupState = {
 	slot: KeyboardSlot;
@@ -52,6 +51,28 @@ type LongPressGestureState = {
 
 type KeyboardTheme = ReturnType<typeof useTheme>;
 
+const NAV_SCOPE_ACTION_TO_SCOPE: Record<string, WorkmuxNavScope> = {
+	WORKMUX_NAV_SCOPE_ACTIVE: 'active',
+	WORKMUX_NAV_SCOPE_VISIBLE: 'visible',
+	WORKMUX_NAV_SCOPE_ALL: 'all',
+};
+
+const SCOPE_BADGE_LABEL: Record<WorkmuxNavScope, string> = {
+	active: 'A',
+	visible: '+B',
+	all: '∀',
+};
+
+function slotHasNavScopeOptions(slot: KeyboardSlot): boolean {
+	return Boolean(
+		slot.longPress?.options.some(
+			(option) =>
+				option.type === 'action' &&
+				NAV_SCOPE_ACTION_TO_SCOPE[option.actionId] !== undefined,
+		),
+	);
+}
+
 function TerminalKeyboardKey({
 	slot,
 	span,
@@ -62,6 +83,7 @@ function TerminalKeyboardKey({
 	effectiveIconName,
 	modifierActive,
 	hasLongPressOptions,
+	scopeBadge,
 	isRepeatable,
 	isSelectionCopySlot,
 	onSlotPress,
@@ -83,6 +105,7 @@ function TerminalKeyboardKey({
 	effectiveIconName: string | null;
 	modifierActive: boolean;
 	hasLongPressOptions: boolean;
+	scopeBadge: WorkmuxNavScope | null;
 	isRepeatable: boolean;
 	isSelectionCopySlot: boolean;
 	onSlotPress: (slot: KeyboardExecutableItem) => void;
@@ -151,6 +174,29 @@ function TerminalKeyboardKey({
 						opacity: 0.75,
 					}}
 				/>
+			) : null}
+			{scopeBadge ? (
+				<View
+					style={{
+						position: 'absolute',
+						top: 3,
+						left: 4,
+						paddingHorizontal: 3,
+						borderRadius: 4,
+						backgroundColor: theme.colors.primary,
+					}}
+				>
+					<Text
+						style={{
+							color: theme.colors.textPrimary,
+							fontSize: 8,
+							lineHeight: 10,
+							fontWeight: '700',
+						}}
+					>
+						{SCOPE_BADGE_LABEL[scopeBadge]}
+					</Text>
+				</View>
 			) : null}
 		</>
 	);
@@ -564,20 +610,6 @@ export function TerminalKeyboard({
 				continue;
 			}
 
-			if (slot.type === 'action' && slot.actionId === 'WORKMUX_CYCLE_NAV_SCOPE') {
-				cells.push(
-					<WorkmuxScopeToggleKey
-						key={`slot-${rowIndex}-${col}`}
-						scope={navScope}
-						span={span}
-						keyHeight={keyHeight}
-						onPress={() => onSlotPress(slot)}
-					/>,
-				);
-				col += span;
-				continue;
-			}
-
 			const isSelectionCopySlot =
 				selectionModeEnabled &&
 				slot.type === 'action' &&
@@ -587,6 +619,7 @@ export function TerminalKeyboard({
 			const modifierActive =
 				slot.type === 'modifier' && modifierKeysActive.includes(slot.modifier);
 			const hasLongPressOptions = Boolean(slot.longPress?.options.length);
+			const scopeBadge = slotHasNavScopeOptions(slot) ? navScope : null;
 			const isRepeatable =
 				!hasLongPressOptions &&
 				slot.type === 'bytes' &&
@@ -604,6 +637,7 @@ export function TerminalKeyboard({
 					effectiveIconName={effectiveIconName}
 					modifierActive={modifierActive}
 					hasLongPressOptions={hasLongPressOptions}
+					scopeBadge={scopeBadge}
 					isRepeatable={isRepeatable}
 					isSelectionCopySlot={isSelectionCopySlot}
 					onSlotPress={onSlotPress}
@@ -666,6 +700,12 @@ export function TerminalKeyboard({
 					{longPressPopup.options.map((option, index) => {
 						const OptionIcon = resolveLucideIcon(option.icon);
 						const highlighted = longPressPopup.highlightedIndex === index;
+						const optionScope =
+							option.type === 'action'
+								? NAV_SCOPE_ACTION_TO_SCOPE[option.actionId]
+								: undefined;
+						const isCurrentScope =
+							optionScope !== undefined && optionScope === navScope;
 						return (
 							<View
 								key={`${option.type}-${option.label}-${index.toString()}`}
@@ -676,7 +716,9 @@ export function TerminalKeyboard({
 									paddingHorizontal: 6,
 									backgroundColor: highlighted
 										? theme.colors.primary
-										: 'transparent',
+										: isCurrentScope
+											? theme.colors.border
+											: 'transparent',
 								}}
 							>
 								{OptionIcon ? (

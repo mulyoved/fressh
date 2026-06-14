@@ -6,34 +6,6 @@ import {
 	parseShellConfigData,
 } from '../../src/lib/shell-config';
 
-// Mirrors TerminalKeyboard's grid walk: a slot with span>1 consumes the
-// following array entries, so a real slot placed right after a span-2 slot is
-// never rendered. Returns the identifiers of slots that actually render.
-function renderedSlotKeys(
-	row: ReturnType<typeof getBundledShellConfig>['keyboards'][number]['grid'][number],
-): string[] {
-	const keys: string[] = [];
-	let col = 0;
-	while (col < row.length) {
-		const slot = row[col];
-		const span =
-			slot && typeof slot.span === 'number' && slot.span > 1
-				? Math.min(slot.span, row.length - col)
-				: 1;
-		if (slot) {
-			keys.push(
-				slot.type === 'action'
-					? slot.actionId
-					: slot.type === 'macro'
-						? `macro:${slot.macroId}`
-						: slot.type,
-			);
-		}
-		col += slot ? span : 1;
-	}
-	return keys;
-}
-
 void test('phone base keyboard exposes a continue command key between approve and shift-tab', () => {
 	const config = getBundledShellConfig();
 	const phoneBaseKeyboard = config.keyboards.find(
@@ -285,26 +257,32 @@ void test('phone base keyboard exposes role and workspace navigation controls', 
 			options: [
 				{
 					type: 'action',
-					actionId: 'WORKMUX_NAV_NEXT',
-					label: 'Next work',
-					icon: null,
-				},
-				{
-					type: 'action',
 					actionId: 'WORKMUX_NAV_PREV',
-					label: 'Prev work',
+					label: 'Prev',
 					icon: null,
 				},
 				{
 					type: 'action',
-					actionId: 'WORKMUX_NAV_NEXT_ALL',
-					label: 'Next all',
+					actionId: 'WORKMUX_NAV_NEXT',
+					label: 'Next',
 					icon: null,
 				},
 				{
 					type: 'action',
-					actionId: 'WORKMUX_NAV_PREV_ALL',
-					label: 'Prev all',
+					actionId: 'WORKMUX_NAV_SCOPE_ACTIVE',
+					label: 'Active',
+					icon: null,
+				},
+				{
+					type: 'action',
+					actionId: 'WORKMUX_NAV_SCOPE_VISIBLE',
+					label: '+Busy',
+					icon: null,
+				},
+				{
+					type: 'action',
+					actionId: 'WORKMUX_NAV_SCOPE_ALL',
+					label: 'All',
 					icon: null,
 				},
 			],
@@ -616,56 +594,56 @@ void test('advanced keyboard omits consolidated host URL setter actions', () => 
 	assert.equal(advancedActionIds.includes('EDIT_HOST_URL_DEV_SERVER'), false);
 	assert.equal(advancedActionIds.includes('EDIT_HOST_URL_STORYBOOK'), false);
 	assert.equal(advancedActionIds.includes('EDIT_HOST_URL_APP'), false);
-	assert.equal(advancedActionIds.includes('WORKMUX_NAV_PREV_ALL'), false);
-	assert.equal(advancedActionIds.includes('WORKMUX_NAV_NEXT_ALL'), false);
 });
 
-void test('advanced keyboard uses the consolidated scope-toggle nav cluster', () => {
+void test('phone base Work key long-press sets the nav scope', () => {
 	const config = getBundledShellConfig();
-	const advanced = config.keyboards.find((k) => k.id === 'advanced_keyboard');
-	assert.ok(advanced);
-	const navRow = advanced.grid[1] ?? [];
-	const navActionIds = navRow.flatMap((slot) =>
-		slot?.type === 'action' ? [slot.actionId] : [],
+	const phoneBase = config.keyboards.find((k) => k.id === 'phone_base');
+	assert.ok(phoneBase);
+	const workSlot = phoneBase.grid[0]?.[6];
+	assert.equal(workSlot?.type, 'action');
+	if (workSlot?.type !== 'action') return;
+	assert.equal(workSlot.actionId, 'WORKMUX_NAV_NEXT');
+	const optionActionIds = (workSlot.longPress?.options ?? []).flatMap((option) =>
+		option.type === 'action' ? [option.actionId] : [],
 	);
-	assert.ok(navActionIds.includes('WORKMUX_NAV_PREV'));
-	assert.ok(navActionIds.includes('WORKMUX_NAV_NEXT'));
-	assert.ok(navActionIds.includes('WORKMUX_CYCLE_NAV_SCOPE'));
-	assert.equal(navActionIds.includes('WORKMUX_NAV_PREV_ALL'), false);
-	assert.equal(navActionIds.includes('WORKMUX_NAV_NEXT_ALL'), false);
-	const scopeSlot = navRow.find(
-		(slot) =>
-			slot?.type === 'action' && slot.actionId === 'WORKMUX_CYCLE_NAV_SCOPE',
-	);
-	assert.equal(scopeSlot?.span, 2);
-	const advancedRendered = renderedSlotKeys(advanced.grid[1] ?? []);
-	assert.ok(advancedRendered.includes('WORKMUX_CYCLE_NAV_SCOPE'));
-	assert.ok(
-		advancedRendered.includes('macro:cmd_continue'),
-		'cmd_continue must still render after the span-2 scope toggle',
-	);
+	assert.ok(optionActionIds.includes('WORKMUX_NAV_PREV'));
+	assert.ok(optionActionIds.includes('WORKMUX_NAV_NEXT'));
+	assert.ok(optionActionIds.includes('WORKMUX_NAV_SCOPE_ACTIVE'));
+	assert.ok(optionActionIds.includes('WORKMUX_NAV_SCOPE_VISIBLE'));
+	assert.ok(optionActionIds.includes('WORKMUX_NAV_SCOPE_ALL'));
 });
 
-void test('tmux keyboard uses the consolidated scope-toggle nav cluster', () => {
+void test('no keyboard uses the removed scope-toggle key', () => {
 	const config = getBundledShellConfig();
-	const tmux = config.keyboards.find((k) => k.id === 'tmux_keyboard');
-	assert.ok(tmux);
-	const navActionIds = (tmux.grid[0] ?? []).flatMap((slot) =>
-		slot?.type === 'action' ? [slot.actionId] : [],
+	const actionIds = config.keyboards.flatMap((keyboard) =>
+		keyboard.grid.flatMap((row) =>
+			row.flatMap((slot) => {
+				const options = slot?.longPress?.options ?? [];
+				return [slot, ...options].flatMap((entry) =>
+					entry?.type === 'action' ? [entry.actionId] : [],
+				);
+			}),
+		),
 	);
-	assert.ok(navActionIds.includes('WORKMUX_NAV_PREV'));
-	assert.ok(navActionIds.includes('WORKMUX_NAV_NEXT'));
-	assert.ok(navActionIds.includes('WORKMUX_CYCLE_NAV_SCOPE'));
-	assert.equal(navActionIds.includes('WORKMUX_NAV_PREV_ALL'), false);
-	assert.equal(navActionIds.includes('WORKMUX_NAV_NEXT_ALL'), false);
-	const tmuxScopeSlot = (tmux.grid[0] ?? []).find(
-		(slot) => slot?.type === 'action' && slot.actionId === 'WORKMUX_CYCLE_NAV_SCOPE',
-	);
-	assert.equal(tmuxScopeSlot?.span, 2);
-	const tmuxRendered = renderedSlotKeys(tmux.grid[0] ?? []);
-	assert.ok(tmuxRendered.includes('WORKMUX_CYCLE_NAV_SCOPE'));
-	assert.ok(
-		tmuxRendered.includes('CYCLE_WORKMUX_STATUS'),
-		'Status must still render after the span-2 scope toggle',
-	);
+	assert.equal(actionIds.includes('WORKMUX_CYCLE_NAV_SCOPE'), false);
+});
+
+void test('advanced and tmux keyboards keep the four window-nav buttons', () => {
+	const config = getBundledShellConfig();
+	for (const id of ['advanced_keyboard', 'tmux_keyboard']) {
+		const keyboard = config.keyboards.find((k) => k.id === id);
+		assert.ok(keyboard, id);
+		const navActionIds = keyboard.grid.flatMap((row) =>
+			row.flatMap((slot) =>
+				slot?.type === 'action' && slot.actionId.startsWith('WORKMUX_NAV_')
+					? [slot.actionId]
+					: [],
+			),
+		);
+		assert.ok(navActionIds.includes('WORKMUX_NAV_PREV'), id);
+		assert.ok(navActionIds.includes('WORKMUX_NAV_NEXT'), id);
+		assert.ok(navActionIds.includes('WORKMUX_NAV_PREV_ALL'), id);
+		assert.ok(navActionIds.includes('WORKMUX_NAV_NEXT_ALL'), id);
+	}
 });

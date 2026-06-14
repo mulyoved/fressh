@@ -24,7 +24,6 @@ import {
 	isWorkmuxAppCommand,
 	isWorkmuxNavScope,
 	isWorkmuxScrollAlreadyInactiveFailureMessage,
-	nextWorkmuxNavScope,
 	parseWorkmuxAppCommandArgv,
 	parseWorkmuxAppContextOutput,
 	parseWorkmuxAppWindowOutput,
@@ -636,12 +635,6 @@ void test('buildWorkmuxAppNavCommand keeps flags unquoted and values quoted', ()
 		buildWorkmuxAppNavCommand('main', 'next', undefined, 'visible'),
 		"mdev tmux app nav 'next' --session 'main' --scope 'visible'",
 	);
-});
-
-void test('nextWorkmuxNavScope rotates active -> visible -> all -> active', () => {
-	assert.equal(nextWorkmuxNavScope('active'), 'visible');
-	assert.equal(nextWorkmuxNavScope('visible'), 'all');
-	assert.equal(nextWorkmuxNavScope('all'), 'active');
 });
 
 void test('isWorkmuxNavScope guards scope strings', () => {

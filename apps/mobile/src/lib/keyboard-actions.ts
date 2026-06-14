@@ -66,7 +66,9 @@ export const KNOWN_ACTION_IDS = [
 	'OPEN_KEYBOARD_SETTINGS',
 	...KEYBOARD_TARGET_ACTION_IDS,
 	'TOGGLE_COMMAND_MENU',
-	'WORKMUX_CYCLE_NAV_SCOPE',
+	'WORKMUX_NAV_SCOPE_ACTIVE',
+	'WORKMUX_NAV_SCOPE_VISIBLE',
+	'WORKMUX_NAV_SCOPE_ALL',
 	'FIT_TERMINAL_TO_DEVICE',
 	'RESTART_CODEX',
 	'REFLOW_TERMINAL',
@@ -261,7 +263,7 @@ export type ActionContext = {
 	pasteClipboard: () => Promise<void>;
 	copySelection: () => void;
 	toggleCommandMenu?: () => void;
-	cycleNavScope?: () => void;
+	setNavScope?: (scope: WorkmuxNavScope) => void;
 	fitTerminalToDevice?: () => Promise<void> | void;
 	restartCodex?: () => Promise<void> | void;
 	openCommander?: () => void;
@@ -388,8 +390,16 @@ export async function runAction(
 			context.toggleCommandMenu?.();
 			return;
 		}
-		case 'WORKMUX_CYCLE_NAV_SCOPE': {
-			context.cycleNavScope?.();
+		case 'WORKMUX_NAV_SCOPE_ACTIVE': {
+			context.setNavScope?.('active');
+			return;
+		}
+		case 'WORKMUX_NAV_SCOPE_VISIBLE': {
+			context.setNavScope?.('visible');
+			return;
+		}
+		case 'WORKMUX_NAV_SCOPE_ALL': {
+			context.setNavScope?.('all');
 			return;
 		}
 		case 'FIT_TERMINAL_TO_DEVICE':
