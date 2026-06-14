@@ -49,7 +49,8 @@ export function isWorkKeyNavSlot(slot: KeyboardSlot): boolean {
 		slot.actionId === 'WORKMUX_NAV_NEXT' &&
 		slot.label === 'Work' &&
 		slot.icon === 'AppWindow' &&
-		slot.span === 2
+		slot.span === 2 &&
+		hasRequiredScopeOptions(slot)
 	);
 }
 
@@ -108,6 +109,18 @@ function getConfiguredScopeOptions(
 	return options.filter(
 		(option): option is ResolvedKeyboardLongPressOption =>
 			option.type === 'action' && scopeActionIds.has(option.actionId),
+	);
+}
+
+function hasRequiredScopeOptions(slot: KeyboardSlot): boolean {
+	const configuredScopeActionIds = new Set(
+		(slot.longPress?.options ?? [])
+			.filter((option) => option.type === 'action')
+			.map((option) => option.actionId),
+	);
+
+	return WORKMUX_NAV_SCOPE_ACTION_IDS.every((actionId) =>
+		configuredScopeActionIds.has(actionId),
 	);
 }
 

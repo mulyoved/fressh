@@ -90,6 +90,22 @@ void test('isWorkKeyNavSlot only matches the actual Work nav slot shape', () => 
 	);
 });
 
+void test('Work-shaped slots missing required scope setters do not resolve dynamic options', () => {
+	const partialScopeWorkSlot: KeyboardSlot = {
+		...workSlot,
+		longPress: {
+			options: workSlot.longPress!.options.filter(
+				(option) =>
+					option.type !== 'action' ||
+					option.actionId !== 'WORKMUX_NAV_SCOPE_ALL',
+			),
+		},
+	};
+
+	assert.equal(isWorkKeyNavSlot(partialScopeWorkSlot), false);
+	assert.equal(getWorkKeyLongPressOptions(partialScopeWorkSlot, 'active'), null);
+});
+
 void test('Work key options for active mode include previous active and widened busy nav', () => {
 	const options = getWorkKeyLongPressOptions(workSlot, 'active');
 	assert.ok(options);
