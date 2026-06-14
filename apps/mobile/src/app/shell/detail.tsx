@@ -59,7 +59,7 @@ import {
 	isFocusedActiveRequestCurrent,
 	shouldShowFocusedActiveFeedback,
 } from '@/lib/focused-active-request';
-import { getKeyboardActionRunOptions } from '@/lib/keyboard-action-run-options';
+import { runKeyboardActionSlot } from '@/lib/keyboard-action-run-options';
 import {
 	HANDLE_DEV_SERVER_URL,
 	createWorkmuxKeyboardCommandRunner,
@@ -2675,7 +2675,7 @@ function ShellDetail() {
 					break;
 				}
 				case 'action':
-					handleAction(slot.actionId, getKeyboardActionRunOptions(slot));
+					runKeyboardActionSlot(slot, handleAction);
 					break;
 				default:
 					break;

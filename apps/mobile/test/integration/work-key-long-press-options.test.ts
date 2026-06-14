@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { getKeyboardActionRunOptions } from '../../src/lib/keyboard-action-run-options';
+import {
+	getKeyboardActionRunOptions,
+	runKeyboardActionSlot,
+} from '../../src/lib/keyboard-action-run-options';
 import {
 	type KeyboardLongPressOption,
 	type KeyboardSlot,
@@ -182,6 +185,28 @@ void test('keyboard action run options forward Work long-press scope metadata', 
 	assert.deepEqual(getKeyboardActionRunOptions(options[3]!), {
 		workmuxNavScopeOverride: undefined,
 	});
+});
+
+void test('keyboard action slot runner forwards action id and Work scope metadata together', () => {
+	const options = getWorkKeyLongPressOptions(workSlot, 'visible');
+	assert.ok(options);
+	const option = options[1]!;
+	assert.equal(option.type, 'action');
+	const handled: { actionId: string; override: unknown }[] = [];
+
+	runKeyboardActionSlot(option, (actionId, runOptions) => {
+		handled.push({
+			actionId,
+			override: runOptions.workmuxNavScopeOverride,
+		});
+	});
+
+	assert.deepEqual(handled, [
+		{
+			actionId: 'WORKMUX_NAV_PREV',
+			override: 'all',
+		},
+	]);
 });
 
 void test('Work key options for all mode repeat all for widened nav', () => {
