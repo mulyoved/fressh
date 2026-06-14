@@ -1,8 +1,8 @@
 import React from 'react';
 import { Text, View } from 'react-native';
 import { resolveLucideIcon } from '@/lib/lucide-utils';
-import type { AppTheme } from '@/lib/theme';
-import type { WorkmuxNavScope } from '@/lib/workmux-app-commands';
+import { type AppTheme } from '@/lib/theme';
+import { type WorkmuxNavScope } from '@/lib/workmux-app-commands';
 import {
 	getTerminalKeyboardLongPressPopupItems,
 	type LongPressPopupRenderState,

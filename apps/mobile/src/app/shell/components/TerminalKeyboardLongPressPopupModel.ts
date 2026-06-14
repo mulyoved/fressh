@@ -1,15 +1,13 @@
-import type { LongPressPopupLayout } from '@/lib/keyboard-long-press';
-import type { KeyboardSlot } from '@/lib/shell-config';
+import { type LongPressPopupLayout } from '@/lib/keyboard-long-press';
 import {
 	getWorkmuxLongPressScopeBadge,
 	getWorkmuxScopeForActionId,
 	WORKMUX_NAV_SCOPE_BADGE_LABEL,
 	type ResolvedKeyboardLongPressOption,
 } from '@/lib/work-key-long-press-options';
-import type { WorkmuxNavScope } from '@/lib/workmux-app-commands';
+import { type WorkmuxNavScope } from '@/lib/workmux-app-commands';
 
 export type LongPressPopupRenderState = {
-	slot: KeyboardSlot;
 	options: readonly ResolvedKeyboardLongPressOption[];
 	layout: LongPressPopupLayout;
 	highlightedIndex: number | null;
@@ -17,7 +15,6 @@ export type LongPressPopupRenderState = {
 
 export type TerminalKeyboardLongPressPopupItem = {
 	key: string;
-	option: ResolvedKeyboardLongPressOption;
 	label: string;
 	icon: string | null;
 	width: number;
@@ -42,7 +39,6 @@ export function getTerminalKeyboardLongPressPopupItems({
 
 		return {
 			key: `${option.type}-${option.label}-${index.toString()}`,
-			option,
 			label: option.label,
 			icon: option.icon,
 			width: popup.layout.optionWidth,

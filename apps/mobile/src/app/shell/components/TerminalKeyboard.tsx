@@ -38,7 +38,6 @@ import { type WorkmuxNavScope } from '@/lib/workmux-app-commands';
 import { TerminalKeyboardLongPressPopup } from './TerminalKeyboardLongPressPopup';
 
 type LongPressPopupState = {
-	slot: KeyboardSlot;
 	options: readonly ResolvedKeyboardLongPressOption[];
 	layout: LongPressPopupLayout;
 	highlightedIndex: number | null;
@@ -417,7 +416,6 @@ export function TerminalKeyboard({
 				const localX = gesture.currentPageX - root.x;
 				const localY = gesture.currentPageY - root.y;
 				const nextPopup = {
-					slot,
 					options,
 					layout,
 					highlightedIndex: getLongPressTrackedOptionIndex({

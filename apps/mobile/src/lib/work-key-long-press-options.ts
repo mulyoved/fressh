@@ -42,7 +42,10 @@ const WORKMUX_NAV_SCOPE_ACTION_IDS = Object.keys(
 export function getWorkmuxScopeForActionId(
 	actionId: string,
 ): WorkmuxNavScope | null {
-	return actionId in WORKMUX_SCOPE_BY_ACTION_ID
+	return Object.prototype.hasOwnProperty.call(
+		WORKMUX_SCOPE_BY_ACTION_ID,
+		actionId,
+	)
 		? WORKMUX_SCOPE_BY_ACTION_ID[actionId as WorkmuxScopeActionId]
 		: null;
 }

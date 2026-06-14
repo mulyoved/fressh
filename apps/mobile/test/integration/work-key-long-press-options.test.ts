@@ -79,6 +79,7 @@ void test('getWorkmuxScopeForActionId resolves only scope setter actions', () =>
 	assert.equal(getWorkmuxScopeForActionId('WORKMUX_NAV_SCOPE_ALL'), 'all');
 	assert.equal(getWorkmuxScopeForActionId('WORKMUX_NAV_NEXT'), null);
 	assert.equal(getWorkmuxScopeForActionId('OPEN_ADVANCED_KEYBOARD'), null);
+	assert.equal(getWorkmuxScopeForActionId('toString'), null);
 });
 
 void test('isWorkKeyNavSlot matches the Work nav behavior and ignores presentation', () => {

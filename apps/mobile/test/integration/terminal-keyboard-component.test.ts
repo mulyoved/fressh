@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { getTerminalKeyboardLongPressPopupItems } from '../../src/app/shell/components/TerminalKeyboardLongPressPopupModel';
 import { getLongPressPopupLayout } from '../../src/lib/keyboard-long-press';
 import { type KeyboardSlot } from '../../src/lib/shell-config';
 import { getWorkKeyLongPressOptions } from '../../src/lib/work-key-long-press-options';
-import { getTerminalKeyboardLongPressPopupItems } from '../../src/app/shell/components/TerminalKeyboardLongPressPopupModel';
 
 const workSlot: KeyboardSlot = {
 	type: 'action',
@@ -53,7 +53,6 @@ void test('Work long-press popup items render dynamic visible-scope labels and b
 
 	const items = getTerminalKeyboardLongPressPopupItems({
 		popup: {
-			slot: workSlot,
 			options,
 			layout: getLongPressPopupLayout({
 				keyboardWidth: 360,
