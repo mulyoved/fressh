@@ -24,16 +24,21 @@ import { resolveLucideIcon } from '@/lib/lucide-utils';
 import {
 	type KeyboardDefinition,
 	type KeyboardExecutableItem,
-	type KeyboardLongPressOption,
 	type KeyboardSlot,
 	type ModifierKey,
 } from '@/lib/shell-config';
 import { useTheme } from '@/lib/theme';
+import {
+	getWorkKeyLongPressOptions,
+	getWorkmuxLongPressScopeBadge,
+	WORKMUX_NAV_SCOPE_BADGE_LABEL,
+	type ResolvedKeyboardLongPressOption,
+} from '@/lib/work-key-long-press-options';
 import { type WorkmuxNavScope } from '@/lib/workmux-app-commands';
 
 type LongPressPopupState = {
 	slot: KeyboardSlot;
-	options: readonly KeyboardLongPressOption[];
+	options: readonly ResolvedKeyboardLongPressOption[];
 	layout: LongPressPopupLayout;
 	highlightedIndex: number | null;
 };
@@ -55,12 +60,6 @@ const NAV_SCOPE_ACTION_TO_SCOPE: Record<string, WorkmuxNavScope> = {
 	WORKMUX_NAV_SCOPE_ACTIVE: 'active',
 	WORKMUX_NAV_SCOPE_VISIBLE: 'visible',
 	WORKMUX_NAV_SCOPE_ALL: 'all',
-};
-
-const SCOPE_BADGE_LABEL: Record<WorkmuxNavScope, string> = {
-	active: 'A',
-	visible: '+B',
-	all: '∀',
 };
 
 function slotHasNavScopeOptions(slot: KeyboardSlot): boolean {
@@ -194,7 +193,7 @@ function TerminalKeyboardKey({
 							fontWeight: '700',
 						}}
 					>
-						{SCOPE_BADGE_LABEL[scopeBadge]}
+						{WORKMUX_NAV_SCOPE_BADGE_LABEL[scopeBadge]}
 					</Text>
 				</View>
 			) : null}
@@ -393,7 +392,8 @@ export function TerminalKeyboard({
 
 	const openLongPressPopup = useCallback(
 		(slot: KeyboardSlot, keyRef: React.RefObject<View | null>) => {
-			const options = slot.longPress?.options;
+			const options =
+				getWorkKeyLongPressOptions(slot, navScope) ?? slot.longPress?.options;
 			if (!options?.length) return;
 
 			clearRepeat();
@@ -434,7 +434,7 @@ export function TerminalKeyboard({
 				setLongPressPopup(nextPopup);
 			});
 		},
-		[clearRepeat, updateKeyboardRootMetrics],
+		[clearRepeat, navScope, updateKeyboardRootMetrics],
 	);
 
 	const startLongPressGesture = useCallback(
@@ -700,6 +700,7 @@ export function TerminalKeyboard({
 					{longPressPopup.options.map((option, index) => {
 						const OptionIcon = resolveLucideIcon(option.icon);
 						const highlighted = longPressPopup.highlightedIndex === index;
+						const scopeBadge = getWorkmuxLongPressScopeBadge(option);
 						const optionScope =
 							option.type === 'action'
 								? NAV_SCOPE_ACTION_TO_SCOPE[option.actionId]
@@ -721,6 +722,29 @@ export function TerminalKeyboard({
 											: 'transparent',
 								}}
 							>
+								{scopeBadge ? (
+									<View
+										style={{
+											position: 'absolute',
+											top: 4,
+											left: 4,
+											paddingHorizontal: 3,
+											borderRadius: 4,
+											backgroundColor: theme.colors.primary,
+										}}
+									>
+										<Text
+											style={{
+												color: theme.colors.textPrimary,
+												fontSize: 8,
+												lineHeight: 10,
+												fontWeight: '700',
+											}}
+										>
+											{WORKMUX_NAV_SCOPE_BADGE_LABEL[scopeBadge]}
+										</Text>
+									</View>
+								) : null}
 								{OptionIcon ? (
 									<OptionIcon color={theme.colors.textPrimary} size={16} />
 								) : null}
