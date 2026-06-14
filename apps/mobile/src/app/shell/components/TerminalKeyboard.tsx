@@ -30,6 +30,7 @@ import {
 import { useTheme } from '@/lib/theme';
 import {
 	getWorkKeyLongPressOptions,
+	getWorkmuxScopeForActionId,
 	WORKMUX_NAV_SCOPE_BADGE_LABEL,
 	type ResolvedKeyboardLongPressOption,
 } from '@/lib/work-key-long-press-options';
@@ -56,18 +57,12 @@ type LongPressGestureState = {
 
 type KeyboardTheme = ReturnType<typeof useTheme>;
 
-const NAV_SCOPE_ACTION_TO_SCOPE: Record<string, WorkmuxNavScope> = {
-	WORKMUX_NAV_SCOPE_ACTIVE: 'active',
-	WORKMUX_NAV_SCOPE_VISIBLE: 'visible',
-	WORKMUX_NAV_SCOPE_ALL: 'all',
-};
-
 function slotHasNavScopeOptions(slot: KeyboardSlot): boolean {
 	return Boolean(
 		slot.longPress?.options.some(
 			(option) =>
 				option.type === 'action' &&
-				NAV_SCOPE_ACTION_TO_SCOPE[option.actionId] !== undefined,
+				getWorkmuxScopeForActionId(option.actionId) !== null,
 		),
 	);
 }

@@ -1,28 +1,12 @@
 import React from 'react';
 import { Text, View } from 'react-native';
-import type { LongPressPopupLayout } from '@/lib/keyboard-long-press';
 import { resolveLucideIcon } from '@/lib/lucide-utils';
-import type { KeyboardSlot } from '@/lib/shell-config';
 import type { AppTheme } from '@/lib/theme';
-import {
-	getWorkmuxLongPressScopeBadge,
-	WORKMUX_NAV_SCOPE_BADGE_LABEL,
-	type ResolvedKeyboardLongPressOption,
-} from '@/lib/work-key-long-press-options';
 import type { WorkmuxNavScope } from '@/lib/workmux-app-commands';
-
-type LongPressPopupRenderState = {
-	slot: KeyboardSlot;
-	options: readonly ResolvedKeyboardLongPressOption[];
-	layout: LongPressPopupLayout;
-	highlightedIndex: number | null;
-};
-
-const NAV_SCOPE_ACTION_TO_SCOPE: Record<string, WorkmuxNavScope> = {
-	WORKMUX_NAV_SCOPE_ACTIVE: 'active',
-	WORKMUX_NAV_SCOPE_VISIBLE: 'visible',
-	WORKMUX_NAV_SCOPE_ALL: 'all',
-};
+import {
+	getTerminalKeyboardLongPressPopupItems,
+	type LongPressPopupRenderState,
+} from './TerminalKeyboardLongPressPopupModel';
 
 export function TerminalKeyboardLongPressPopup({
 	popup,
@@ -33,6 +17,8 @@ export function TerminalKeyboardLongPressPopup({
 	navScope: WorkmuxNavScope;
 	theme: AppTheme;
 }) {
+	const items = getTerminalKeyboardLongPressPopupItems({ popup, navScope });
+
 	return (
 		<View
 			pointerEvents="none"
@@ -55,32 +41,24 @@ export function TerminalKeyboardLongPressPopup({
 				elevation: 6,
 			}}
 		>
-			{popup.options.map((option, index) => {
-				const OptionIcon = resolveLucideIcon(option.icon);
-				const highlighted = popup.highlightedIndex === index;
-				const scopeBadge = getWorkmuxLongPressScopeBadge(option);
-				const optionScope =
-					option.type === 'action'
-						? NAV_SCOPE_ACTION_TO_SCOPE[option.actionId]
-						: undefined;
-				const isCurrentScope =
-					optionScope !== undefined && optionScope === navScope;
+			{items.map((item) => {
+				const OptionIcon = resolveLucideIcon(item.icon);
 				return (
 					<View
-						key={`${option.type}-${option.label}-${index.toString()}`}
+						key={item.key}
 						style={{
-							width: popup.layout.optionWidth,
+							width: item.width,
 							alignItems: 'center',
 							justifyContent: 'center',
 							paddingHorizontal: 6,
-							backgroundColor: highlighted
+							backgroundColor: item.highlighted
 								? theme.colors.primary
-								: isCurrentScope
+								: item.isCurrentScope
 									? theme.colors.border
 									: 'transparent',
 						}}
 					>
-						{scopeBadge ? (
+						{item.badgeLabel ? (
 							<View
 								style={{
 									position: 'absolute',
@@ -99,7 +77,7 @@ export function TerminalKeyboardLongPressPopup({
 										fontWeight: '700',
 									}}
 								>
-									{WORKMUX_NAV_SCOPE_BADGE_LABEL[scopeBadge]}
+									{item.badgeLabel}
 								</Text>
 							</View>
 						) : null}
@@ -115,7 +93,7 @@ export function TerminalKeyboardLongPressPopup({
 								marginTop: OptionIcon ? 2 : 0,
 							}}
 						>
-							{option.label}
+							{item.label}
 						</Text>
 					</View>
 				);

@@ -27,16 +27,25 @@ export type ResolvedKeyboardLongPressOption = KeyboardLongPressOption & {
 	readonly [WORKMUX_LONG_PRESS_SCOPE_BADGE_KEY]?: WorkmuxNavScope;
 };
 
-type WorkmuxScopeActionId =
-	| 'WORKMUX_NAV_SCOPE_ACTIVE'
-	| 'WORKMUX_NAV_SCOPE_VISIBLE'
-	| 'WORKMUX_NAV_SCOPE_ALL';
+const WORKMUX_SCOPE_BY_ACTION_ID = {
+	WORKMUX_NAV_SCOPE_ACTIVE: 'active',
+	WORKMUX_NAV_SCOPE_VISIBLE: 'visible',
+	WORKMUX_NAV_SCOPE_ALL: 'all',
+} as const satisfies Record<string, WorkmuxNavScope>;
 
-const WORKMUX_NAV_SCOPE_ACTION_IDS: readonly WorkmuxScopeActionId[] = [
-	'WORKMUX_NAV_SCOPE_ACTIVE',
-	'WORKMUX_NAV_SCOPE_VISIBLE',
-	'WORKMUX_NAV_SCOPE_ALL',
-];
+type WorkmuxScopeActionId = keyof typeof WORKMUX_SCOPE_BY_ACTION_ID;
+
+const WORKMUX_NAV_SCOPE_ACTION_IDS = Object.keys(
+	WORKMUX_SCOPE_BY_ACTION_ID,
+) as WorkmuxScopeActionId[];
+
+export function getWorkmuxScopeForActionId(
+	actionId: string,
+): WorkmuxNavScope | null {
+	return actionId in WORKMUX_SCOPE_BY_ACTION_ID
+		? WORKMUX_SCOPE_BY_ACTION_ID[actionId as WorkmuxScopeActionId]
+		: null;
+}
 
 export function widenWorkmuxNavScope(
 	navScope: WorkmuxNavScope,
@@ -111,7 +120,9 @@ function getConfiguredScopeOptions(
 
 	return options.filter(
 		(option): option is ResolvedKeyboardLongPressOption =>
-			option.type === 'action' && scopeActionIds.has(option.actionId),
+			option.type === 'action' &&
+			scopeActionIds.has(option.actionId) &&
+			getWorkmuxScopeForActionId(option.actionId) !== null,
 	);
 }
 

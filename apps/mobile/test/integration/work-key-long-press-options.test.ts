@@ -8,6 +8,7 @@ import {
 	getWorkKeyLongPressOptions,
 	getWorkmuxLongPressScopeBadge,
 	getWorkmuxNavScopeOverride,
+	getWorkmuxScopeForActionId,
 	isWorkKeyNavSlot,
 	widenWorkmuxNavScope,
 } from '../../src/lib/work-key-long-press-options';
@@ -70,6 +71,14 @@ void test('widenWorkmuxNavScope caps the mode ladder at all', () => {
 	assert.equal(widenWorkmuxNavScope('active'), 'visible');
 	assert.equal(widenWorkmuxNavScope('visible'), 'all');
 	assert.equal(widenWorkmuxNavScope('all'), 'all');
+});
+
+void test('getWorkmuxScopeForActionId resolves only scope setter actions', () => {
+	assert.equal(getWorkmuxScopeForActionId('WORKMUX_NAV_SCOPE_ACTIVE'), 'active');
+	assert.equal(getWorkmuxScopeForActionId('WORKMUX_NAV_SCOPE_VISIBLE'), 'visible');
+	assert.equal(getWorkmuxScopeForActionId('WORKMUX_NAV_SCOPE_ALL'), 'all');
+	assert.equal(getWorkmuxScopeForActionId('WORKMUX_NAV_NEXT'), null);
+	assert.equal(getWorkmuxScopeForActionId('OPEN_ADVANCED_KEYBOARD'), null);
 });
 
 void test('isWorkKeyNavSlot matches the Work nav behavior and ignores presentation', () => {
