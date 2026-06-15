@@ -108,7 +108,7 @@ function createScopedNavOption(
 	return {
 		type: 'action',
 		actionId,
-		label: `${directionLabel} ${WORKMUX_NAV_SCOPE_LABEL[navScope]}`,
+		label: directionLabel,
 		icon: null,
 		[WORKMUX_NAV_SCOPE_OVERRIDE_KEY]: navScope,
 		[WORKMUX_LONG_PRESS_SCOPE_BADGE_KEY]: navScope,

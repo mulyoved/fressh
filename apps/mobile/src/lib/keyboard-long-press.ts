@@ -71,10 +71,14 @@ export function getLongPressPopupLayout({
 		horizontalMargin,
 		keyboardWidth - width - horizontalMargin,
 	);
+	const aboveAnchorTop = anchorY - popupHeight - popupGap;
 
 	return {
 		left: clamp(centeredLeft, horizontalMargin, maxLeft),
-		top: Math.max(horizontalMargin, anchorY - popupHeight - popupGap),
+		top:
+			aboveAnchorTop >= horizontalMargin
+				? aboveAnchorTop
+				: -(popupHeight + popupGap),
 		width,
 		height: popupHeight,
 		optionWidth: resolvedOptionWidth,
@@ -129,6 +133,13 @@ export function getLongPressKeyboardBoundedOptionIndex({
 	localX: number;
 	localY: number;
 }): number | null {
+	const popupOptionIndex = getLongPressOptionIndexAtPoint({
+		layout,
+		localX,
+		localY,
+	});
+	if (popupOptionIndex != null) return popupOptionIndex;
+
 	if (
 		localX < keyboardBounds.left ||
 		localX >= keyboardBounds.left + keyboardBounds.width ||

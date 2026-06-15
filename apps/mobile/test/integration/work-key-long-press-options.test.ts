@@ -95,19 +95,19 @@ void test('Work key options for active mode include previous active and widened 
 	assert.deepEqual(summarize(options), [
 		{
 			actionId: 'WORKMUX_NAV_PREV',
-			label: 'Prev Active',
+			label: 'Prev',
 			override: 'active',
 			badge: 'active',
 		},
 		{
 			actionId: 'WORKMUX_NAV_PREV',
-			label: 'Prev +Busy',
+			label: 'Prev',
 			override: 'visible',
 			badge: 'visible',
 		},
 		{
 			actionId: 'WORKMUX_NAV_NEXT',
-			label: 'Next +Busy',
+			label: 'Next',
 			override: 'visible',
 			badge: 'visible',
 		},
@@ -138,19 +138,19 @@ void test('Work key options for visible mode include previous busy and widened a
 	assert.deepEqual(summarize(options), [
 		{
 			actionId: 'WORKMUX_NAV_PREV',
-			label: 'Prev +Busy',
+			label: 'Prev',
 			override: 'visible',
 			badge: 'visible',
 		},
 		{
 			actionId: 'WORKMUX_NAV_PREV',
-			label: 'Prev All',
+			label: 'Prev',
 			override: 'all',
 			badge: 'all',
 		},
 		{
 			actionId: 'WORKMUX_NAV_NEXT',
-			label: 'Next All',
+			label: 'Next',
 			override: 'all',
 			badge: 'all',
 		},
@@ -215,19 +215,19 @@ void test('Work key options for all mode repeat all for widened nav', () => {
 	assert.deepEqual(summarize(options), [
 		{
 			actionId: 'WORKMUX_NAV_PREV',
-			label: 'Prev All',
+			label: 'Prev',
 			override: 'all',
 			badge: 'all',
 		},
 		{
 			actionId: 'WORKMUX_NAV_PREV',
-			label: 'Prev All',
+			label: 'Prev',
 			override: 'all',
 			badge: 'all',
 		},
 		{
 			actionId: 'WORKMUX_NAV_NEXT',
-			label: 'Next All',
+			label: 'Next',
 			override: 'all',
 			badge: 'all',
 		},

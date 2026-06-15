@@ -295,15 +295,15 @@ void test('phone base keyboard exposes role and workspace navigation controls', 
 	const expectedDynamicOptionsByScope = [
 		{
 			scope: 'active' as const,
-			labels: ['Prev Active', 'Prev +Busy', 'Next +Busy'],
+			labels: ['Prev', 'Prev', 'Next'],
 		},
 		{
 			scope: 'visible' as const,
-			labels: ['Prev +Busy', 'Prev All', 'Next All'],
+			labels: ['Prev', 'Prev', 'Next'],
 		},
 		{
 			scope: 'all' as const,
-			labels: ['Prev All', 'Prev All', 'Next All'],
+			labels: ['Prev', 'Prev', 'Next'],
 		},
 	];
 

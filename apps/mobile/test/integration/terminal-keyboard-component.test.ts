@@ -41,9 +41,9 @@ void test('Work long-press popup items render dynamic visible-scope labels and b
 			isCurrentScope: item.isCurrentScope,
 		})),
 		[
-			{ label: 'Prev +Busy', badgeLabel: '+B', isCurrentScope: false },
-			{ label: 'Prev All', badgeLabel: '\u2200', isCurrentScope: false },
-			{ label: 'Next All', badgeLabel: '\u2200', isCurrentScope: false },
+			{ label: 'Prev', badgeLabel: '+B', isCurrentScope: false },
+			{ label: 'Prev', badgeLabel: '\u2200', isCurrentScope: false },
+			{ label: 'Next', badgeLabel: '\u2200', isCurrentScope: false },
 			{ label: 'Active', badgeLabel: null, isCurrentScope: false },
 			{ label: '+Busy', badgeLabel: null, isCurrentScope: true },
 			{ label: 'All', badgeLabel: null, isCurrentScope: false },
@@ -72,7 +72,7 @@ void test('Work long-press popup builder uses latest nav scope callback value', 
 	assert.ok(popup);
 	assert.deepEqual(
 		popup.options.slice(0, 3).map((option) => option.label),
-		['Prev +Busy', 'Prev All', 'Next All'],
+		['Prev', 'Prev', 'Next'],
 	);
 });
 
@@ -159,7 +159,7 @@ void test('TerminalKeyboard measured open callback reads latest nav scope ref', 
 	assert.ok(openedPopup);
 	assert.deepEqual(
 		openedPopup.options.slice(0, 3).map((option) => option.label),
-		['Prev +Busy', 'Prev All', 'Next All'],
+		['Prev', 'Prev', 'Next'],
 	);
 });
 
@@ -251,7 +251,7 @@ void test('TerminalKeyboard measured open callback resumes after mount ref is re
 	assert.equal(openedPopups.length, 1);
 	assert.deepEqual(
 		openedPopups[0]!.options.slice(0, 3).map((option) => option.label),
-		['Prev +Busy', 'Prev All', 'Next All'],
+		['Prev', 'Prev', 'Next'],
 	);
 
 	deactivateTerminalKeyboardLongPressMount({
