@@ -570,15 +570,14 @@ export const createTouchScrollController = ({
 			activePointerId = event.pointerId;
 			startX = event.clientX;
 			startY = event.clientY;
-				lastY = startY;
-				lastMoveTs = event.timeStamp;
-				state = 'Tracking';
-				pinLocalViewportToBottom();
-				emitTelemetry(
-					`touch-scroll down state=${state} ${getLocalScrollDiagnostics()}`,
-					{ force: true },
-				);
-			};
+			lastY = startY;
+			lastMoveTs = event.timeStamp;
+			state = 'Tracking';
+			emitTelemetry(
+				`touch-scroll down state=${state} ${getLocalScrollDiagnostics()}`,
+				{ force: true },
+			);
+		};
 
 		const onPointerMove = (event: PointerEvent) => {
 			if (!enabled) return;
