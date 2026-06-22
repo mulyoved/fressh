@@ -826,6 +826,7 @@ void test('touch scroll keeps local xterm viewport pinned to bottom during remot
 		timeStamp: 100,
 	});
 	controller.handleEnterAck(1);
+	const callsBeforePointerUp = scrollToBottomCalls;
 	dispatchPointerEvent(root, 'pointerup', {
 		pointerId: 1,
 		clientX: 40,
@@ -833,6 +834,7 @@ void test('touch scroll keeps local xterm viewport pinned to bottom during remot
 		timeStamp: 120,
 	});
 
+	assert.equal(scrollToBottomCalls, callsBeforePointerUp + 1);
 	assert.ok(
 		scrollToBottomCalls >= 3,
 		`expected bottom pinning during down/move/up, got ${scrollToBottomCalls}`,
