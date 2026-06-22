@@ -684,6 +684,7 @@ export const createTouchScrollController = ({
 			if (activePointerId !== event.pointerId) return;
 			pointerIsDown = false;
 			releasePointerCapture();
+			const wasScrolling = state === 'Scrolling';
 
 			if (state === 'Scrolling') {
 				if (scrollbackEnterState === 'on') {
@@ -697,7 +698,9 @@ export const createTouchScrollController = ({
 					state = scrollbackActive ? 'ScrollbackActive' : 'Idle';
 				}
 
+			if (wasScrolling) {
 				pinLocalViewportToBottom();
+			}
 				emitTelemetry(
 					`touch-scroll up state=${state} ${getLocalScrollDiagnostics()}`,
 					{ force: true },

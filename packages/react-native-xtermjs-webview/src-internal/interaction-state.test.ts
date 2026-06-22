@@ -733,6 +733,51 @@ void test('touch scroll pointerdown does not pin local xterm before scroll owns 
 	assert.equal(scrollToBottomCalls, 0);
 });
 
+void test('touch scroll no-slop pointerup does not pin local xterm before scroll owns gesture', (t) => {
+	installDomGlobals(t);
+
+	const root = new FakeElement('div');
+	root.setBoundingClientRect({
+		width: 320,
+		height: 200,
+		right: 320,
+		bottom: 200,
+	});
+
+	let scrollToBottomCalls = 0;
+	const controller = createTouchScrollController({
+		term: createTouchScrollTermWithBottomPin(root, () => {
+			scrollToBottomCalls += 1;
+		}) as never,
+		root: root as never,
+		instanceId: 'instance-1',
+		sendToRn: () => {},
+		isSelectionModeEnabled: () => false,
+		cancelLongPress() {},
+	});
+
+	controller.setConfig({
+		enabled: true,
+		slopPx: 8,
+		pxPerLine: 10,
+	});
+
+	dispatchPointerEvent(root, 'pointerdown', {
+		pointerId: 1,
+		clientX: 40,
+		clientY: 40,
+		timeStamp: 0,
+	});
+	dispatchPointerEvent(root, 'pointerup', {
+		pointerId: 1,
+		clientX: 40,
+		clientY: 40,
+		timeStamp: 100,
+	});
+
+	assert.equal(scrollToBottomCalls, 0);
+});
+
 void test('touch scroll keeps local xterm viewport pinned to bottom during remote scroll', (t) => {
 	installDomGlobals(t);
 
