@@ -533,13 +533,24 @@ export const createTouchScrollController = ({
 
 	const cancelTrackingForSelectionMode = () => {
 		const previousPhase = scrollbackPhase;
+		const shouldPreserveActiveScrollback =
+			scrollbackActive && scrollbackEnterState === 'on';
 		clearPendingEnterRequest();
-		scrollbackEnterState = 'off';
 		resetPendingScroll();
 		releasePointerCapture();
 		resetPointerTracking();
-		state = 'Idle';
-		if (scrollbackActive) {
+		if (shouldPreserveActiveScrollback) {
+			state = 'ScrollbackActive';
+			if (previousPhase !== 'active') {
+				emitScrollbackMode(true, 'active');
+			} else {
+				scrollbackPhase = 'active';
+			}
+		} else {
+			state = 'Idle';
+			scrollbackEnterState = 'off';
+		}
+		if (scrollbackActive && !shouldPreserveActiveScrollback) {
 			emitScrollbackMode(false, previousPhase);
 		}
 		updateDebugOverlay({ force: true });
@@ -570,24 +581,23 @@ export const createTouchScrollController = ({
 			activePointerId = event.pointerId;
 			startX = event.clientX;
 			startY = event.clientY;
-				lastY = startY;
-				lastMoveTs = event.timeStamp;
-				state = 'Tracking';
-				pinLocalViewportToBottom();
-				emitTelemetry(
-					`touch-scroll down state=${state} ${getLocalScrollDiagnostics()}`,
-					{ force: true },
-				);
-			};
+			lastY = startY;
+			lastMoveTs = event.timeStamp;
+			state = 'Tracking';
+			emitTelemetry(
+				`touch-scroll down state=${state} ${getLocalScrollDiagnostics()}`,
+				{ force: true },
+			);
+		};
 
 		const onPointerMove = (event: PointerEvent) => {
 			if (!enabled) return;
+			if (activePointerId !== event.pointerId) return;
+			if (!pointerIsDown) return;
 			if (isSelectionModeEnabled()) {
 				cancelTrackingForSelectionMode();
 				return;
 			}
-			if (activePointerId !== event.pointerId) return;
-			if (!pointerIsDown) return;
 
 			const cfg = getActiveConfig();
 			if (!cfg) return;
@@ -678,13 +688,14 @@ export const createTouchScrollController = ({
 		};
 
 		const onPointerUp = (event: PointerEvent) => {
+			if (activePointerId !== event.pointerId) return;
 			if (isSelectionModeEnabled()) {
 				cancelTrackingForSelectionMode();
 				return;
 			}
-			if (activePointerId !== event.pointerId) return;
 			pointerIsDown = false;
 			releasePointerCapture();
+			const wasScrolling = state === 'Scrolling';
 
 			if (state === 'Scrolling') {
 				if (scrollbackEnterState === 'on') {
@@ -698,7 +709,9 @@ export const createTouchScrollController = ({
 					state = scrollbackActive ? 'ScrollbackActive' : 'Idle';
 				}
 
+			if (wasScrolling) {
 				pinLocalViewportToBottom();
+			}
 				emitTelemetry(
 					`touch-scroll up state=${state} ${getLocalScrollDiagnostics()}`,
 					{ force: true },
@@ -707,11 +720,11 @@ export const createTouchScrollController = ({
 			};
 
 		const onPointerCancel = (event: PointerEvent) => {
+			if (activePointerId !== event.pointerId) return;
 			if (isSelectionModeEnabled()) {
 				cancelTrackingForSelectionMode();
 				return;
 			}
-			if (activePointerId !== event.pointerId) return;
 			const requestId = pendingEnterRequestId ?? undefined;
 			pointerIsDown = false;
 			releasePointerCapture();

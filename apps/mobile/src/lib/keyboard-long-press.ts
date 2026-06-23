@@ -25,11 +25,17 @@ export type LongPressKeyboardBounds = {
 
 const horizontalMargin = 6;
 const optionWidth = 86;
+const minOptionWidth = 52;
 const popupHeight = 44;
 const popupGap = 10;
 
 function clamp(value: number, min: number, max: number): number {
 	return Math.min(Math.max(value, min), max);
+}
+
+function getLongPressOptionCount(layout: LongPressPopupLayout): number {
+	if (layout.optionWidth <= 0) return 0;
+	return Math.max(0, Math.round(layout.width / layout.optionWidth));
 }
 
 export function getLongPressPopupLayout({
@@ -45,19 +51,37 @@ export function getLongPressPopupLayout({
 	anchorWidth: number;
 	optionCount: number;
 }): LongPressPopupLayout {
-	const width = Math.max(optionWidth, optionCount * optionWidth);
+	const availableWidth = Math.max(
+		minOptionWidth,
+		keyboardWidth - horizontalMargin * 2,
+	);
+	const resolvedOptionWidth =
+		optionCount > 0
+			? Math.max(
+					minOptionWidth,
+					Math.min(optionWidth, availableWidth / optionCount),
+				)
+			: optionWidth;
+	const width = Math.max(
+		resolvedOptionWidth,
+		optionCount * resolvedOptionWidth,
+	);
 	const centeredLeft = anchorX + anchorWidth / 2 - width / 2;
 	const maxLeft = Math.max(
 		horizontalMargin,
 		keyboardWidth - width - horizontalMargin,
 	);
+	const aboveAnchorTop = anchorY - popupHeight - popupGap;
 
 	return {
 		left: clamp(centeredLeft, horizontalMargin, maxLeft),
-		top: Math.max(horizontalMargin, anchorY - popupHeight - popupGap),
+		top:
+			aboveAnchorTop >= horizontalMargin
+				? aboveAnchorTop
+				: -(popupHeight + popupGap),
 		width,
 		height: popupHeight,
-		optionWidth,
+		optionWidth: resolvedOptionWidth,
 	};
 }
 
@@ -80,7 +104,7 @@ export function getLongPressOptionIndexAtPoint({
 	}
 
 	const index = Math.floor((localX - layout.left) / layout.optionWidth);
-	const optionCount = Math.floor(layout.width / layout.optionWidth);
+	const optionCount = getLongPressOptionCount(layout);
 	return index >= 0 && index < optionCount ? index : null;
 }
 
@@ -91,7 +115,7 @@ export function getLongPressOptionIndexAtX({
 	layout: LongPressPopupLayout;
 	localX: number;
 }): number | null {
-	const optionCount = Math.floor(layout.width / layout.optionWidth);
+	const optionCount = getLongPressOptionCount(layout);
 	if (optionCount <= 0) return null;
 
 	const rawIndex = Math.floor((localX - layout.left) / layout.optionWidth);
@@ -109,6 +133,13 @@ export function getLongPressKeyboardBoundedOptionIndex({
 	localX: number;
 	localY: number;
 }): number | null {
+	const popupOptionIndex = getLongPressOptionIndexAtPoint({
+		layout,
+		localX,
+		localY,
+	});
+	if (popupOptionIndex != null) return popupOptionIndex;
+
 	if (
 		localX < keyboardBounds.left ||
 		localX >= keyboardBounds.left + keyboardBounds.width ||

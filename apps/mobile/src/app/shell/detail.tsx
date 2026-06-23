@@ -59,18 +59,21 @@ import {
 	isFocusedActiveRequestCurrent,
 	shouldShowFocusedActiveFeedback,
 } from '@/lib/focused-active-request';
+import { runKeyboardActionSlot } from '@/lib/keyboard-action-run-options';
 import {
 	HANDLE_DEV_SERVER_URL,
 	createWorkmuxKeyboardCommandRunner,
 	runAction,
 	type ActionContext,
 	type ActionId,
+	type RunActionOptions,
 	type WorkmuxKeyboardCommand,
 } from '@/lib/keyboard-actions';
 import { runMacro } from '@/lib/keyboard-runtime';
 import { rootLogger } from '@/lib/logger';
 import { resolveLucideIcon } from '@/lib/lucide-utils';
 import { OrderedWriter } from '@/lib/ordered-writer';
+import { preferences } from '@/lib/preferences';
 import {
 	configureScrollTraceEnabled,
 	emitScrollTrace,
@@ -133,7 +136,6 @@ import {
 	createTmuxScrollbackLocalExitRequest,
 	resetTmuxScrollbackLocalExitRequests,
 } from '@/lib/tmux-scrollback-local-exit';
-import { preferences } from '@/lib/preferences';
 import { queryClient } from '@/lib/utils';
 import {
 	canStartWisprTextEntryAutomation,
@@ -2618,8 +2620,8 @@ function ShellDetail() {
 	);
 
 	const handleAction = useCallback(
-		(actionId: ActionId) => {
-			void runAction(actionId, actionContext);
+		(actionId: ActionId, options?: RunActionOptions) => {
+			void runAction(actionId, actionContext, options);
 		},
 		[actionContext],
 	);
@@ -2673,7 +2675,7 @@ function ShellDetail() {
 					break;
 				}
 				case 'action':
-					handleAction(slot.actionId);
+					runKeyboardActionSlot(slot, handleAction);
 					break;
 				default:
 					break;

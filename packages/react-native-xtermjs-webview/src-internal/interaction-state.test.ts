@@ -341,8 +341,13 @@ const createTouchScrollTermWithBottomPin = (
 const createSelectionTerm = (
 	element: FakeElement,
 	screenElement: FakeElement,
+	getCoords: (event: { clientX: number; clientY: number }) => [
+		number,
+		number,
+	] = () => [1, 1],
 ) =>
 	({
+		rows: 24,
 		element,
 		options: {
 			disableStdin: false,
@@ -356,7 +361,7 @@ const createSelectionTerm = (
 		_core: {
 			_screenElement: screenElement,
 			_mouseService: {
-				getCoords: () => [1, 1] as [number, number],
+				getCoords,
 			},
 			_bufferService: {
 				cols: 80,
@@ -374,6 +379,8 @@ const createSelectionTerm = (
 				clearSelection() {},
 				refresh() {},
 				_model: {
+					selectionStart: undefined as [number, number] | undefined,
+					selectionEnd: undefined as [number, number] | undefined,
 					selectionStartLength: 0,
 					clearSelection() {},
 				},
@@ -455,6 +462,478 @@ void test('touch scroll cancels pending scrollback entry when selection mode tak
 		{ active: true, phase: 'dragging' },
 		{ active: false, phase: 'dragging' },
 	]);
+});
+
+void test('touch scroll preserves active scrollback when selection starts from scrolled view', (t) => {
+	installDomGlobals(t);
+
+	const root = new FakeElement('div');
+	root.setBoundingClientRect({
+		width: 320,
+		height: 200,
+		right: 320,
+		bottom: 200,
+	});
+
+	const messages: BridgeInboundDraftMessage[] = [];
+	let selectionModeEnabled = false;
+	const controller = createTouchScrollController({
+		term: createTouchScrollTerm(root) as never,
+		root: root as never,
+		instanceId: 'instance-1',
+		sendToRn: (message) => {
+			messages.push(message);
+		},
+		isSelectionModeEnabled: () => selectionModeEnabled,
+		cancelLongPress() {},
+	});
+
+	controller.setConfig({ enabled: true, slopPx: 8, pxPerLine: 10 });
+
+	dispatchPointerEvent(root, 'pointerdown', {
+		pointerId: 1,
+		clientX: 40,
+		clientY: 40,
+		timeStamp: 0,
+	});
+	dispatchPointerEvent(root, 'pointermove', {
+		pointerId: 1,
+		clientX: 40,
+		clientY: 64,
+		timeStamp: 16,
+	});
+	controller.handleEnterAck(1);
+	dispatchPointerEvent(root, 'pointerup', {
+		pointerId: 1,
+		clientX: 40,
+		clientY: 64,
+		timeStamp: 24,
+	});
+
+	dispatchPointerEvent(root, 'pointerdown', {
+		pointerId: 2,
+		clientX: 80,
+		clientY: 80,
+		timeStamp: 100,
+	});
+	selectionModeEnabled = true;
+	dispatchPointerEvent(root, 'pointermove', {
+		pointerId: 2,
+		clientX: 81,
+		clientY: 81,
+		timeStamp: 620,
+	});
+	dispatchPointerEvent(root, 'pointerup', {
+		pointerId: 2,
+		clientX: 81,
+		clientY: 81,
+		timeStamp: 640,
+	});
+
+	const scrollbackTransitions = messages
+		.filter(
+			(
+				message,
+			): message is Extract<
+				BridgeInboundDraftMessage,
+				{ type: 'scrollbackModeChanged' }
+			> => message.type === 'scrollbackModeChanged',
+		)
+		.map(({ active, phase }) => ({ active, phase }));
+
+	assert.deepEqual(scrollbackTransitions, [
+		{ active: true, phase: 'dragging' },
+		{ active: true, phase: 'active' },
+	]);
+});
+
+void test('touch scroll preserves active scrollback and drops queued scroll when selection starts mid-drag', async (t) => {
+	installDomGlobals(t);
+
+	const root = new FakeElement('div');
+	root.setBoundingClientRect({
+		width: 320,
+		height: 200,
+		right: 320,
+		bottom: 200,
+	});
+
+	const messages: BridgeInboundDraftMessage[] = [];
+	let selectionModeEnabled = false;
+	const controller = createTouchScrollController({
+		term: createTouchScrollTerm(root, 25) as never,
+		root: root as never,
+		instanceId: 'instance-1',
+		sendToRn: (message) => {
+			messages.push(message);
+		},
+		isSelectionModeEnabled: () => selectionModeEnabled,
+		cancelLongPress() {},
+	});
+
+	controller.setConfig({
+		enabled: true,
+		slopPx: 0,
+		pxPerLine: 1,
+		coalesceMs: 25,
+		minFlushMs: 25,
+		maxFlushMs: 25,
+		velocityMultiplierEnabled: false,
+		backlogMultiplierEnabled: false,
+	});
+
+	dispatchPointerEvent(root, 'pointerdown', {
+		pointerId: 1,
+		clientX: 40,
+		clientY: 40,
+		timeStamp: 0,
+	});
+	dispatchPointerEvent(root, 'pointermove', {
+		pointerId: 1,
+		clientX: 40,
+		clientY: 140,
+		timeStamp: 100,
+	});
+	controller.handleEnterAck(1);
+
+	const scrollBatchCountBeforeSelection = messages.filter(
+		(message) => message.type === 'scrollbackBatch',
+	).length;
+
+	selectionModeEnabled = true;
+	dispatchPointerEvent(root, 'pointermove', {
+		pointerId: 1,
+		clientX: 40,
+		clientY: 180,
+		timeStamp: 120,
+	});
+	dispatchPointerEvent(root, 'pointerup', {
+		pointerId: 1,
+		clientX: 40,
+		clientY: 180,
+		timeStamp: 140,
+	});
+
+	await new Promise((resolve) => setTimeout(resolve, 35));
+
+	const scrollBatchCountAfterSelection = messages.filter(
+		(message) => message.type === 'scrollbackBatch',
+	).length;
+	const scrollbackTransitions = messages
+		.filter(
+			(
+				message,
+			): message is Extract<
+				BridgeInboundDraftMessage,
+				{ type: 'scrollbackModeChanged' }
+			> => message.type === 'scrollbackModeChanged',
+		)
+		.map(({ active, phase }) => ({ active, phase }));
+
+	assert.equal(
+		scrollBatchCountAfterSelection,
+		scrollBatchCountBeforeSelection,
+	);
+	assert.deepEqual(scrollbackTransitions, [
+		{ active: true, phase: 'dragging' },
+		{ active: true, phase: 'active' },
+	]);
+});
+
+void test('selection handle drag past bottom emits selection-owned scrollback batch', (t) => {
+	installDomGlobals(t);
+
+	const root = new FakeElement('div');
+	const screen = new FakeElement('div');
+	screen.className = 'xterm-screen';
+	root.appendChild(screen);
+	root.setBoundingClientRect({
+		left: 0,
+		top: 0,
+		width: 320,
+		height: 200,
+		right: 320,
+		bottom: 200,
+	});
+	screen.setBoundingClientRect({
+		left: 0,
+		top: 0,
+		width: 320,
+		height: 200,
+		right: 320,
+		bottom: 200,
+	});
+
+	const term = createSelectionTerm(root, screen);
+	const selectionModel = term._core._selectionService._model as {
+		selectionStart?: [number, number];
+		selectionEnd?: [number, number];
+	};
+	selectionModel.selectionStart = [1, 1];
+	selectionModel.selectionEnd = [3, 1];
+
+	const messages: BridgeInboundDraftMessage[] = [];
+	const selectionHandles = createSelectionHandles({
+		term: term as never,
+		instanceId: 'instance-1',
+		sendToRn: (message) => {
+			messages.push(message);
+		},
+	});
+
+	selectionHandles.applySelectionMode(true, { force: true });
+	selectionHandles.renderSelectionHandles();
+
+	const endHandle = root.children.find(
+		(child) =>
+			child.className === 'fressh-selection-handle' &&
+			child.dataset.glyph === 'end',
+	);
+	assert.ok(endHandle);
+
+	dispatchPointerEvent(endHandle, 'pointerdown', {
+		pointerId: 2,
+		clientX: 32,
+		clientY: 190,
+		timeStamp: 0,
+	});
+	dispatchPointerEvent(endHandle, 'pointermove', {
+		pointerId: 2,
+		clientX: 32,
+		clientY: 500,
+		timeStamp: 80,
+	});
+
+	const scrollBatch = messages.find(
+		(
+			message,
+		): message is Extract<BridgeInboundDraftMessage, { type: 'scrollbackBatch' }> =>
+			message.type === 'scrollbackBatch',
+	);
+
+	assert.equal(scrollBatch?.direction, 'down');
+	assert.equal(scrollBatch?.pages, 0);
+	assert.equal(scrollBatch?.lines, 1);
+	assert.equal(scrollBatch?.pageStep, 23);
+	assert.equal(scrollBatch?.instanceId, 'instance-1');
+	assert.equal(scrollBatch?.source, 'selection-handle');
+	assert.equal(
+		messages.some((message) => message.type === 'scrollbackModeChanged'),
+		false,
+	);
+});
+
+void test('selection handle drag restores native xterm viewport scroll', (t) => {
+	installDomGlobals(t);
+
+	const root = new FakeElement('div');
+	const viewport = new FakeElement('div');
+	const screen = new FakeElement('div');
+	viewport.className = 'xterm-viewport';
+	screen.className = 'xterm-screen';
+	viewport.scrollTop = 120;
+	viewport.scrollHeight = 500;
+	viewport.clientHeight = 200;
+	viewport.appendChild(screen);
+	root.appendChild(viewport);
+	root.setBoundingClientRect({
+		left: 0,
+		top: 0,
+		width: 320,
+		height: 200,
+		right: 320,
+		bottom: 200,
+	});
+	screen.setBoundingClientRect({
+		left: 0,
+		top: 0,
+		width: 320,
+		height: 200,
+		right: 320,
+		bottom: 200,
+	});
+
+	const term = createSelectionTerm(root, screen, ({ clientX, clientY }) => [
+		Math.floor(clientX / 10) + 1,
+		Math.floor(clientY / 20) + 1,
+	]);
+	const selectionModel = term._core._selectionService._model as {
+		selectionStart?: [number, number];
+		selectionEnd?: [number, number];
+	};
+	selectionModel.selectionStart = [1, 1];
+	selectionModel.selectionEnd = [3, 1];
+
+	const selectionHandles = createSelectionHandles({
+		term: term as never,
+		instanceId: 'instance-1',
+		sendToRn: () => {},
+	});
+
+	selectionHandles.applySelectionMode(true, { force: true });
+	selectionHandles.renderSelectionHandles();
+
+	const endHandle = root.children.find(
+		(child) =>
+			child.className === 'fressh-selection-handle' &&
+			child.dataset.glyph === 'end',
+	);
+	assert.ok(endHandle);
+
+	dispatchPointerEvent(endHandle, 'pointerdown', {
+		pointerId: 6,
+		clientX: 32,
+		clientY: 40,
+		timeStamp: 0,
+	});
+	viewport.scrollTop = 80;
+	dispatchPointerEvent(endHandle, 'pointermove', {
+		pointerId: 6,
+		clientX: 32,
+		clientY: 100,
+		timeStamp: 80,
+	});
+
+	assert.equal(viewport.scrollTop, 120);
+});
+
+void test('selection start handle keeps word-selection end anchor when selectionEnd is missing', (t) => {
+	installDomGlobals(t);
+
+	const root = new FakeElement('div');
+	const screen = new FakeElement('div');
+	screen.className = 'xterm-screen';
+	root.appendChild(screen);
+	root.setBoundingClientRect({
+		left: 0,
+		top: 0,
+		width: 320,
+		height: 200,
+		right: 320,
+		bottom: 200,
+	});
+	screen.setBoundingClientRect({
+		left: 0,
+		top: 0,
+		width: 320,
+		height: 200,
+		right: 320,
+		bottom: 200,
+	});
+
+	const term = createSelectionTerm(root, screen, ({ clientX, clientY }) => [
+		Math.floor(clientX / 10) + 1,
+		Math.floor(clientY / 20) + 1,
+	]);
+	const selectionModel = term._core._selectionService._model as {
+		selectionStart?: [number, number];
+		selectionEnd?: [number, number];
+		selectionStartLength: number;
+	};
+	selectionModel.selectionStart = [2, 1];
+	selectionModel.selectionEnd = undefined;
+	selectionModel.selectionStartLength = 4;
+
+	const messages: BridgeInboundDraftMessage[] = [];
+	const selectionHandles = createSelectionHandles({
+		term: term as never,
+		instanceId: 'instance-1',
+		sendToRn: (message) => {
+			messages.push(message);
+		},
+	});
+
+	selectionHandles.applySelectionMode(true, { force: true });
+	selectionHandles.renderSelectionHandles();
+
+	const startHandle = root.children.find(
+		(child) =>
+			child.className === 'fressh-selection-handle' &&
+			child.dataset.glyph === 'start',
+	);
+	assert.ok(startHandle);
+
+	dispatchPointerEvent(startHandle, 'pointerdown', {
+		pointerId: 4,
+		clientX: 20,
+		clientY: 40,
+		timeStamp: 0,
+	});
+	dispatchPointerEvent(startHandle, 'pointermove', {
+		pointerId: 4,
+		clientX: 20,
+		clientY: 80,
+		timeStamp: 80,
+	});
+
+	assert.equal(
+		messages.some(
+			(message) =>
+				message.type === 'debug' &&
+				message.message.startsWith('updateSelectionRange ') &&
+				message.message.endsWith(' end=5,1'),
+		),
+		true,
+	);
+});
+
+void test('long-press selection drag past bottom emits selection-owned scrollback batch', async (t) => {
+	installDomGlobals(t);
+
+	const root = new FakeElement('div');
+	const screen = new FakeElement('div');
+	screen.className = 'xterm-screen';
+	root.appendChild(screen);
+	root.setBoundingClientRect({
+		left: 0,
+		top: 0,
+		width: 320,
+		height: 200,
+		right: 320,
+		bottom: 200,
+	});
+	screen.setBoundingClientRect({
+		left: 0,
+		top: 0,
+		width: 320,
+		height: 200,
+		right: 320,
+		bottom: 200,
+	});
+
+	const messages: BridgeInboundDraftMessage[] = [];
+	const selectionHandles = createSelectionHandles({
+		term: createSelectionTerm(root, screen) as never,
+		instanceId: 'instance-1',
+		sendToRn: (message) => {
+			messages.push(message);
+		},
+	});
+
+	selectionHandles.installLongPressHandlers();
+	dispatchPointerEvent(screen, 'pointerdown', {
+		pointerId: 8,
+		clientX: 32,
+		clientY: 40,
+		timeStamp: 0,
+	});
+	await new Promise((resolve) => setTimeout(resolve, 510));
+	dispatchPointerEvent(screen, 'pointermove', {
+		pointerId: 8,
+		clientX: 32,
+		clientY: 500,
+		timeStamp: 520,
+	});
+
+	const scrollBatch = messages.find(
+		(
+			message,
+		): message is Extract<BridgeInboundDraftMessage, { type: 'scrollbackBatch' }> =>
+			message.type === 'scrollbackBatch',
+	);
+	assert.ok(scrollBatch);
+	assert.equal(scrollBatch.direction, 'down');
+	assert.equal(scrollBatch.source, 'selection-handle');
 });
 
 void test('touch scroll batch includes the producer page step', (t) => {
@@ -694,6 +1173,90 @@ void test('touch scroll telemetry reports local xterm scroll state', (t) => {
 	assert.match(telemetry, /rootScroll=200/);
 });
 
+void test('touch scroll pointerdown does not pin local xterm before scroll owns gesture', (t) => {
+	installDomGlobals(t);
+
+	const root = new FakeElement('div');
+	root.setBoundingClientRect({
+		width: 320,
+		height: 200,
+		right: 320,
+		bottom: 200,
+	});
+
+	let scrollToBottomCalls = 0;
+	const controller = createTouchScrollController({
+		term: createTouchScrollTermWithBottomPin(root, () => {
+			scrollToBottomCalls += 1;
+		}) as never,
+		root: root as never,
+		instanceId: 'instance-1',
+		sendToRn: () => {},
+		isSelectionModeEnabled: () => false,
+		cancelLongPress() {},
+	});
+
+	controller.setConfig({
+		enabled: true,
+		slopPx: 8,
+		pxPerLine: 10,
+	});
+
+	dispatchPointerEvent(root, 'pointerdown', {
+		pointerId: 1,
+		clientX: 40,
+		clientY: 40,
+		timeStamp: 0,
+	});
+
+	assert.equal(scrollToBottomCalls, 0);
+});
+
+void test('touch scroll no-slop pointerup does not pin local xterm before scroll owns gesture', (t) => {
+	installDomGlobals(t);
+
+	const root = new FakeElement('div');
+	root.setBoundingClientRect({
+		width: 320,
+		height: 200,
+		right: 320,
+		bottom: 200,
+	});
+
+	let scrollToBottomCalls = 0;
+	const controller = createTouchScrollController({
+		term: createTouchScrollTermWithBottomPin(root, () => {
+			scrollToBottomCalls += 1;
+		}) as never,
+		root: root as never,
+		instanceId: 'instance-1',
+		sendToRn: () => {},
+		isSelectionModeEnabled: () => false,
+		cancelLongPress() {},
+	});
+
+	controller.setConfig({
+		enabled: true,
+		slopPx: 8,
+		pxPerLine: 10,
+	});
+
+	dispatchPointerEvent(root, 'pointerdown', {
+		pointerId: 1,
+		clientX: 40,
+		clientY: 40,
+		timeStamp: 0,
+	});
+	dispatchPointerEvent(root, 'pointerup', {
+		pointerId: 1,
+		clientX: 40,
+		clientY: 40,
+		timeStamp: 100,
+	});
+
+	assert.equal(scrollToBottomCalls, 0);
+});
+
 void test('touch scroll keeps local xterm viewport pinned to bottom during remote scroll', (t) => {
 	installDomGlobals(t);
 
@@ -742,6 +1305,7 @@ void test('touch scroll keeps local xterm viewport pinned to bottom during remot
 		timeStamp: 100,
 	});
 	controller.handleEnterAck(1);
+	const callsBeforePointerUp = scrollToBottomCalls;
 	dispatchPointerEvent(root, 'pointerup', {
 		pointerId: 1,
 		clientX: 40,
@@ -749,6 +1313,7 @@ void test('touch scroll keeps local xterm viewport pinned to bottom during remot
 		timeStamp: 120,
 	});
 
+	assert.equal(scrollToBottomCalls, callsBeforePointerUp + 1);
 	assert.ok(
 		scrollToBottomCalls >= 3,
 		`expected bottom pinning during down/move/up, got ${scrollToBottomCalls}`,

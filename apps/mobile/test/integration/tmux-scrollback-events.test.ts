@@ -66,6 +66,21 @@ void test('scrollback batch adapter gates events and passes pageStep into comman
 	}
 	assert.deepEqual(commands, []);
 
+	assert.equal(
+		runBatch({
+			selectionModeEnabled: true,
+			event: {
+				...baseEvent,
+				source: 'selection-handle',
+			} as Parameters<typeof handleTmuxScrollbackBatchEvent>[0]['event'],
+		}),
+		true,
+	);
+	assert.deepEqual(commands, [
+		[{ unit: 'page', count: 1, direction: 'up', sessionName: 'main' }],
+	]);
+	commands.length = 0;
+
 	for (const event of [
 		{ ...baseEvent, direction: 'sideways' },
 		{ ...baseEvent, pages: -1 },

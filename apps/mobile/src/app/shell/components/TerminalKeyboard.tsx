@@ -14,33 +14,35 @@ import {
 } from 'react-native';
 import {
 	getLongPressMoveState,
-	getLongPressPopupLayout,
 	getLongPressReleaseDecision,
 	getLongPressTrackedOptionIndex,
 	type LongPressKeyboardBounds,
-	type LongPressPopupLayout,
 } from '@/lib/keyboard-long-press';
 import { resolveLucideIcon } from '@/lib/lucide-utils';
 import {
 	type KeyboardDefinition,
 	type KeyboardExecutableItem,
-	type KeyboardLongPressOption,
 	type KeyboardSlot,
 	type ModifierKey,
 } from '@/lib/shell-config';
 import { useTheme } from '@/lib/theme';
+import {
+	getWorkmuxScopeForActionId,
+	WORKMUX_NAV_SCOPE_BADGE_LABEL,
+} from '@/lib/work-key-long-press-options';
 import { type WorkmuxNavScope } from '@/lib/workmux-app-commands';
-
-type LongPressPopupState = {
-	slot: KeyboardSlot;
-	options: readonly KeyboardLongPressOption[];
-	layout: LongPressPopupLayout;
-	highlightedIndex: number | null;
-};
+import {
+	activateTerminalKeyboardLongPressMount,
+	createTerminalKeyboardLongPressMeasureCallback,
+	deactivateTerminalKeyboardLongPressMount,
+	type TerminalKeyboardLongPressPopupState,
+} from './TerminalKeyboardLongPressController';
+import { TerminalKeyboardLongPressPopup } from './TerminalKeyboardLongPressPopup';
 
 type LongPressGestureState = {
 	slot: KeyboardSlot;
 	keyRef: React.RefObject<View | null>;
+	generation: number;
 	startPageX: number;
 	startPageY: number;
 	currentPageX: number;
@@ -51,24 +53,12 @@ type LongPressGestureState = {
 
 type KeyboardTheme = ReturnType<typeof useTheme>;
 
-const NAV_SCOPE_ACTION_TO_SCOPE: Record<string, WorkmuxNavScope> = {
-	WORKMUX_NAV_SCOPE_ACTIVE: 'active',
-	WORKMUX_NAV_SCOPE_VISIBLE: 'visible',
-	WORKMUX_NAV_SCOPE_ALL: 'all',
-};
-
-const SCOPE_BADGE_LABEL: Record<WorkmuxNavScope, string> = {
-	active: 'A',
-	visible: '+B',
-	all: '∀',
-};
-
 function slotHasNavScopeOptions(slot: KeyboardSlot): boolean {
 	return Boolean(
 		slot.longPress?.options.some(
 			(option) =>
 				option.type === 'action' &&
-				NAV_SCOPE_ACTION_TO_SCOPE[option.actionId] !== undefined,
+				getWorkmuxScopeForActionId(option.actionId) !== null,
 		),
 	);
 }
@@ -194,7 +184,7 @@ function TerminalKeyboardKey({
 							fontWeight: '700',
 						}}
 					>
-						{SCOPE_BADGE_LABEL[scopeBadge]}
+						{WORKMUX_NAV_SCOPE_BADGE_LABEL[scopeBadge]}
 					</Text>
 				</View>
 			) : null}
@@ -272,14 +262,19 @@ export function TerminalKeyboard({
 	const longPressTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
 		null,
 	);
+	const isMountedRef = useRef(true);
+	const longPressGenerationRef = useRef(0);
 	const longPressGestureRef = useRef<LongPressGestureState | null>(null);
 	const keyboardRootRef = useRef<View | null>(null);
 	const keyboardRootWindowRef = useRef({ x: 0, y: 0 });
 	const keyboardBoundsRef = useRef<LongPressKeyboardBounds | null>(null);
 	const keyboardWidthRef = useRef(0);
-	const longPressPopupRef = useRef<LongPressPopupState | null>(null);
+	const longPressPopupRef =
+		useRef<TerminalKeyboardLongPressPopupState | null>(null);
+	const navScopeRef = useRef(navScope);
+	navScopeRef.current = navScope;
 	const [longPressPopup, setLongPressPopup] =
-		useState<LongPressPopupState | null>(null);
+		useState<TerminalKeyboardLongPressPopupState | null>(null);
 	const iconOnlyLabels = useMemo(
 		() =>
 			new Set([
@@ -333,20 +328,34 @@ export function TerminalKeyboard({
 	);
 
 	useEffect(
-		() => () => {
-			clearRepeat();
-			clearLongPressTimer();
+		() => {
+			activateTerminalKeyboardLongPressMount({ isMountedRef });
+			return () => {
+				deactivateTerminalKeyboardLongPressMount({
+					isMountedRef,
+					longPressGenerationRef,
+					longPressGestureRef,
+					clearPopup: () => {
+						longPressPopupRef.current = null;
+					},
+				});
+				clearRepeat();
+				clearLongPressTimer();
+			};
 		},
 		[clearLongPressTimer, clearRepeat],
 	);
 
 	const closeLongPressPopup = useCallback(() => {
 		longPressPopupRef.current = null;
-		setLongPressPopup(null);
+		if (isMountedRef.current) {
+			setLongPressPopup(null);
+		}
 	}, []);
 
 	const updateKeyboardRootMetrics = useCallback(() => {
 		keyboardRootRef.current?.measureInWindow((x, y, width, height) => {
+			if (!isMountedRef.current) return;
 			keyboardRootWindowRef.current = { x, y };
 			keyboardBoundsRef.current =
 				width > 0 && height > 0 ? { left: 0, top: 0, width, height } : null;
@@ -392,47 +401,31 @@ export function TerminalKeyboard({
 	);
 
 	const openLongPressPopup = useCallback(
-		(slot: KeyboardSlot, keyRef: React.RefObject<View | null>) => {
-			const options = slot.longPress?.options;
-			if (!options?.length) return;
-
+		(
+			slot: KeyboardSlot,
+			keyRef: React.RefObject<View | null>,
+			generation: number,
+		) => {
 			clearRepeat();
 			updateKeyboardRootMetrics();
-			keyRef.current?.measureInWindow((x, y, width) => {
-				const gesture = longPressGestureRef.current;
-				if (
-					!gesture ||
-					gesture.slot !== slot ||
-					gesture.keyRef !== keyRef ||
-					!gesture.longPressFired
-				) {
-					return;
-				}
-				const root = keyboardRootWindowRef.current;
-				const layout = getLongPressPopupLayout({
-					keyboardWidth: keyboardWidthRef.current,
-					anchorX: x - root.x,
-					anchorY: y - root.y,
-					anchorWidth: width,
-					optionCount: options.length,
-				});
-				const localX = gesture.currentPageX - root.x;
-				const localY = gesture.currentPageY - root.y;
-				const nextPopup = {
+			keyRef.current?.measureInWindow(
+				createTerminalKeyboardLongPressMeasureCallback({
 					slot,
-					options,
-					layout,
-					highlightedIndex: getLongPressTrackedOptionIndex({
-						layout,
-						keyboardBounds: keyboardBoundsRef.current,
-						localX,
-						localY,
-						previousIndex: null,
-					}),
-				};
-				longPressPopupRef.current = nextPopup;
-				setLongPressPopup(nextPopup);
-			});
+					keyRef,
+					generation,
+					isMountedRef,
+					longPressGenerationRef,
+					longPressGestureRef,
+					keyboardRootWindowRef,
+					keyboardBoundsRef,
+					keyboardWidthRef,
+					navScopeRef,
+					setLongPressPopup: (nextPopup) => {
+						longPressPopupRef.current = nextPopup;
+						setLongPressPopup(nextPopup);
+					},
+				}),
+			);
 		},
 		[clearRepeat, updateKeyboardRootMetrics],
 	);
@@ -445,9 +438,12 @@ export function TerminalKeyboard({
 		) => {
 			clearLongPressTimer();
 			closeLongPressPopup();
+			const generation = longPressGenerationRef.current + 1;
+			longPressGenerationRef.current = generation;
 			longPressGestureRef.current = {
 				slot,
 				keyRef,
+				generation,
 				startPageX: event.nativeEvent.pageX,
 				startPageY: event.nativeEvent.pageY,
 				currentPageX: event.nativeEvent.pageX,
@@ -457,11 +453,16 @@ export function TerminalKeyboard({
 			};
 			longPressTimeoutRef.current = setTimeout(() => {
 				const current = longPressGestureRef.current;
-				if (!current || current.slot !== slot || current.keyRef !== keyRef) {
+				if (
+					!current ||
+					current.generation !== generation ||
+					current.slot !== slot ||
+					current.keyRef !== keyRef
+				) {
 					return;
 				}
 				current.longPressFired = true;
-				openLongPressPopup(slot, keyRef);
+				openLongPressPopup(slot, keyRef, generation);
 			}, longPressDelayMs);
 		},
 		[
@@ -505,6 +506,7 @@ export function TerminalKeyboard({
 			event: GestureResponderEvent,
 		) => {
 			const gesture = longPressGestureRef.current;
+			longPressGenerationRef.current += 1;
 			longPressGestureRef.current = null;
 			clearLongPressTimer();
 
@@ -554,6 +556,7 @@ export function TerminalKeyboard({
 	);
 
 	const cancelLongPressGesture = useCallback(() => {
+		longPressGenerationRef.current += 1;
 		longPressGestureRef.current = null;
 		clearLongPressTimer();
 		closeLongPressPopup();
@@ -676,69 +679,11 @@ export function TerminalKeyboard({
 		>
 			{rows}
 			{longPressPopup ? (
-				<View
-					pointerEvents="none"
-					style={{
-						position: 'absolute',
-						left: longPressPopup.layout.left,
-						top: longPressPopup.layout.top,
-						width: longPressPopup.layout.width,
-						height: longPressPopup.layout.height,
-						flexDirection: 'row',
-						borderRadius: 8,
-						borderWidth: 1,
-						borderColor: theme.colors.borderStrong,
-						backgroundColor: theme.colors.surface,
-						overflow: 'hidden',
-						shadowColor: '#000',
-						shadowOpacity: 0.25,
-						shadowRadius: 8,
-						shadowOffset: { width: 0, height: 3 },
-						elevation: 6,
-					}}
-				>
-					{longPressPopup.options.map((option, index) => {
-						const OptionIcon = resolveLucideIcon(option.icon);
-						const highlighted = longPressPopup.highlightedIndex === index;
-						const optionScope =
-							option.type === 'action'
-								? NAV_SCOPE_ACTION_TO_SCOPE[option.actionId]
-								: undefined;
-						const isCurrentScope =
-							optionScope !== undefined && optionScope === navScope;
-						return (
-							<View
-								key={`${option.type}-${option.label}-${index.toString()}`}
-								style={{
-									width: longPressPopup.layout.optionWidth,
-									alignItems: 'center',
-									justifyContent: 'center',
-									paddingHorizontal: 6,
-									backgroundColor: highlighted
-										? theme.colors.primary
-										: isCurrentScope
-											? theme.colors.border
-											: 'transparent',
-								}}
-							>
-								{OptionIcon ? (
-									<OptionIcon color={theme.colors.textPrimary} size={16} />
-								) : null}
-								<Text
-									numberOfLines={1}
-									style={{
-										color: theme.colors.textPrimary,
-										fontSize: 10,
-										lineHeight: 12,
-										marginTop: OptionIcon ? 2 : 0,
-									}}
-								>
-									{option.label}
-								</Text>
-							</View>
-						);
-					})}
-				</View>
+				<TerminalKeyboardLongPressPopup
+					popup={longPressPopup}
+					navScope={navScope}
+					theme={theme}
+				/>
 			) : null}
 		</View>
 	);

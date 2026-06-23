@@ -59,6 +59,7 @@ export type BridgeInboundMessage =
 			instanceId: string;
 			seq?: number;
 			ts?: number;
+			source?: 'touch-scroll' | 'selection-handle';
 	  } & BridgeGeneration
 	| {
 			type: 'tmuxScrollBatch';
@@ -69,6 +70,7 @@ export type BridgeInboundMessage =
 			instanceId: string;
 			seq?: number;
 			ts?: number;
+			source?: 'touch-scroll' | 'selection-handle';
 	  } & BridgeGeneration;
 
 type WithOptionalBridgeGeneration<T> = T extends BridgeGeneration
@@ -95,6 +97,7 @@ export type ScrollbackBatchEvent = {
 	instanceId: string;
 	seq?: number;
 	ts?: number;
+	source?: 'touch-scroll' | 'selection-handle';
 };
 /** @deprecated Use ScrollbackBatchEvent. Legacy tmux batches are normalized to the scrollback event shape. */
 export type TmuxScrollBatchEvent = ScrollbackBatchEvent;
@@ -111,6 +114,7 @@ export function mapScrollbackBatchMessage(
 	};
 	if (msg.seq !== undefined) event.seq = msg.seq;
 	if (msg.ts !== undefined) event.ts = msg.ts;
+	if (msg.source !== undefined) event.source = msg.source;
 	return event;
 }
 

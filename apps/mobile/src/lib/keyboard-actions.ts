@@ -26,7 +26,11 @@ export const KEYBOARD_TARGET_ACTION_IDS = [
 
 export type WorkmuxKeyboardCommand =
 	| { type: 'focus'; target: WorkmuxFocusTarget }
-	| { type: 'nav'; action: Exclude<WorkmuxNavAction, 'select'> }
+	| {
+			type: 'nav';
+			action: Exclude<WorkmuxNavAction, 'select'>;
+			scope?: WorkmuxNavScope;
+	  }
 	| { type: 'status-cycle' };
 const WORKMUX_KEYBOARD_PRIMARY_ACTION_ENTRIES = [
 	['WORKMUX_FOCUS_CLAUDE', { type: 'focus', target: 'claude' }],
@@ -172,7 +176,7 @@ export function createWorkmuxKeyboardCommandRunner({
 			const navScope =
 				command.type === 'nav' &&
 				(command.action === 'next' || command.action === 'prev')
-					? getNavScope?.()
+					? (command.scope ?? getNavScope?.())
 					: undefined;
 			const argv =
 				command.type === 'focus'
@@ -280,6 +284,10 @@ export type ActionContext = {
 	) => Promise<WorkmuxKeyboardCommandRunResult>;
 };
 
+export type RunActionOptions = {
+	workmuxNavScopeOverride?: WorkmuxNavScope;
+};
+
 const logger = rootLogger.extend('KeyboardActions');
 
 function selectKeyboardForAction(
@@ -306,10 +314,21 @@ function getWorkmuxKeyboardActionCommand(
 export async function runAction(
 	actionId: ActionId,
 	context: ActionContext,
+	options: RunActionOptions = {},
 ): Promise<void> {
 	const workmuxKeyboardCommand = getWorkmuxKeyboardActionCommand(actionId);
 	if (workmuxKeyboardCommand) {
-		await context.runWorkmuxKeyboardCommand?.(workmuxKeyboardCommand);
+		await context.runWorkmuxKeyboardCommand?.(
+			workmuxKeyboardCommand.type === 'nav' &&
+				(workmuxKeyboardCommand.action === 'next' ||
+					workmuxKeyboardCommand.action === 'prev') &&
+				options.workmuxNavScopeOverride
+				? {
+						...workmuxKeyboardCommand,
+						scope: options.workmuxNavScopeOverride,
+					}
+				: workmuxKeyboardCommand,
+		);
 		return;
 	}
 

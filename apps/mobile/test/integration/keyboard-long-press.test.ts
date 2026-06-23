@@ -39,6 +39,134 @@ void test('long press popup centers above the anchor and clamps to keyboard boun
 	);
 });
 
+void test('long press popup shrinks six options to fit a narrow keyboard', () => {
+	const layout = getLongPressPopupLayout({
+		keyboardWidth: 360,
+		anchorX: 160,
+		anchorY: 200,
+		anchorWidth: 40,
+		optionCount: 6,
+	});
+
+	assert.equal(layout.left, 6);
+	assert.equal(layout.width, 348);
+	assert.equal(layout.optionWidth, 58);
+	assert.ok(layout.left + layout.width <= 354);
+});
+
+void test('top-row long press popup floats above the keyboard instead of sharing the key row', () => {
+	const layout = getLongPressPopupLayout({
+		keyboardWidth: 1600,
+		anchorX: 980,
+		anchorY: 6,
+		anchorWidth: 300,
+		optionCount: 6,
+	});
+
+	assert.equal(layout.top, -54);
+	assert.equal(layout.height, 44);
+});
+
+void test('keyboard-bounded hit testing can select the last shrunken option', () => {
+	const layout = getLongPressPopupLayout({
+		keyboardWidth: 360,
+		anchorX: 160,
+		anchorY: 200,
+		anchorWidth: 40,
+		optionCount: 6,
+	});
+	const keyboardBounds = { left: 0, top: 100, width: 360, height: 180 };
+
+	assert.equal(
+		getLongPressKeyboardBoundedOptionIndex({
+			layout,
+			keyboardBounds,
+			localX: 353,
+			localY: 240,
+		}),
+		5,
+	);
+	assert.deepEqual(
+		getLongPressReleaseDecision({
+			longPressFired: true,
+			movedBeyondTapSlop: false,
+			startPageX: 100,
+			startPageY: 200,
+			releasePageX: 353,
+			releasePageY: 240,
+			tapSlopPx: 8,
+			rootX: 0,
+			rootY: 0,
+			popupLayout: layout,
+			keyboardBounds,
+			highlightedIndex: null,
+		}),
+		{ type: 'option', optionIndex: 5 },
+	);
+});
+
+void test('keyboard-bounded hit testing still selects a popup floated above the keyboard', () => {
+	const layout = getLongPressPopupLayout({
+		keyboardWidth: 1600,
+		anchorX: 980,
+		anchorY: 6,
+		anchorWidth: 300,
+		optionCount: 6,
+	});
+	const keyboardBounds = { left: 0, top: 0, width: 1600, height: 180 };
+
+	assert.equal(
+		getLongPressKeyboardBoundedOptionIndex({
+			layout,
+			keyboardBounds,
+			localX: layout.left + layout.optionWidth * 2 + 1,
+			localY: layout.top + layout.height / 2,
+		}),
+		2,
+	);
+	assert.deepEqual(
+		getLongPressReleaseDecision({
+			longPressFired: true,
+			movedBeyondTapSlop: false,
+			startPageX: 1125,
+			startPageY: 40,
+			releasePageX: layout.left + layout.optionWidth * 2 + 1,
+			releasePageY: layout.top + layout.height / 2,
+			tapSlopPx: 8,
+			rootX: 0,
+			rootY: 0,
+			popupLayout: layout,
+			keyboardBounds,
+			highlightedIndex: null,
+		}),
+		{ type: 'option', optionIndex: 2 },
+	);
+});
+
+void test('keyboard-bounded hit testing can select the last fractional-width option', () => {
+	const layout = getLongPressPopupLayout({
+		keyboardWidth: 525,
+		anchorX: 220,
+		anchorY: 200,
+		anchorWidth: 80,
+		optionCount: 7,
+	});
+	const keyboardBounds = { left: 0, top: 100, width: 525, height: 180 };
+
+	assert.equal(layout.left, 6);
+	assert.equal(layout.width, 513);
+	assert.equal(layout.optionWidth, 513 / 7);
+	assert.equal(
+		getLongPressKeyboardBoundedOptionIndex({
+			layout,
+			keyboardBounds,
+			localX: 524,
+			localY: 240,
+		}),
+		6,
+	);
+});
+
 void test('long press hit testing returns selected option or null outside popup', () => {
 	const layout = {
 		left: 74,

@@ -91,6 +91,28 @@ function extractHandleCommandBridgeEntryBlock(source: string): string {
 	return source.slice(callbackStart, callbackEnd);
 }
 
+function extractHandleActionBlock(source: string): string {
+	const callbackStart = source.indexOf('const handleAction = useCallback');
+	assert.notEqual(callbackStart, -1);
+	const callbackEnd = source.indexOf(
+		'const handleSlotPress = useCallback',
+		callbackStart,
+	);
+	assert.notEqual(callbackEnd, -1);
+	return source.slice(callbackStart, callbackEnd);
+}
+
+function extractHandleSlotPressBlock(source: string): string {
+	const callbackStart = source.indexOf('const handleSlotPress = useCallback');
+	assert.notEqual(callbackStart, -1);
+	const callbackEnd = source.indexOf(
+		'// Debounced PTY resize handler',
+		callbackStart,
+	);
+	assert.notEqual(callbackEnd, -1);
+	return source.slice(callbackStart, callbackEnd);
+}
+
 void describe('shell detail Workmux control channel wiring', () => {
 	void test('routes shell scrollback through WorkmuxControlChannel instead of one-shot mdev scroll commands', () => {
 		const source = readFileSync(detailSourcePath, 'utf8');
@@ -258,5 +280,22 @@ void describe('shell detail Workmux control channel wiring', () => {
 		);
 		assert.match(block, /logger\.warn\('Unhandled command bridge operation'/);
 		assert.match(source, /onBridge=\{handleCommandBridgeEntry\}/);
+	});
+
+	void test('routes action slot presses through action run options helper', () => {
+		const source = readFileSync(detailSourcePath, 'utf8');
+		const actionBlock = extractHandleActionBlock(source);
+		const block = extractHandleSlotPressBlock(source);
+
+		assert.match(
+			source,
+			/import \{ runKeyboardActionSlot \} from '@\/lib\/keyboard-action-run-options'/,
+		);
+		assert.match(actionBlock, /\(actionId: ActionId, options\?: RunActionOptions\)/);
+		assert.match(actionBlock, /runAction\(actionId, actionContext, options\)/);
+		assert.match(
+			block,
+			/case 'action':\s*runKeyboardActionSlot\(slot, handleAction\);/,
+		);
 	});
 });
