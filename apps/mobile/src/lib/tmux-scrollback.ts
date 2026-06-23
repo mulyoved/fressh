@@ -373,6 +373,7 @@ export function handleTmuxScrollbackBatchEvent({
 		instanceId: string;
 		seq?: number;
 		ts?: number;
+		source?: 'touch-scroll' | 'selection-handle';
 	};
 	shellAvailable: boolean;
 	currentInstanceId?: string | null;
@@ -401,6 +402,7 @@ export function handleTmuxScrollbackBatchEvent({
 			instanceId: event.instanceId,
 			seq: event.seq,
 			webviewTs: event.ts,
+			source: event.source,
 			...extras,
 		});
 	};
@@ -415,7 +417,7 @@ export function handleTmuxScrollbackBatchEvent({
 		});
 		return false;
 	}
-	if (selectionModeEnabled) {
+	if (selectionModeEnabled && event.source !== 'selection-handle') {
 		traceBatch('rn.batch.dropped', { reason: 'selection' });
 		return false;
 	}

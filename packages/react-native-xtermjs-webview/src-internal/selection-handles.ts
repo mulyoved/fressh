@@ -34,6 +34,11 @@ export const createSelectionHandles = ({
 	let endHandle: HTMLDivElement | null = null;
 	let activeHandle: 'start' | 'end' | null = null;
 	let activePointerId: number | null = null;
+	let selectionViewportLock: {
+		viewport: HTMLElement;
+		scrollTop: number;
+	} | null = null;
+	let selectionScrollBatchSeq = 0;
 	const selectionOverlayTint = 'rgba(0, 0, 0, 0)';
 	const minHandleGapPx = 36;
 	// Toggle handle debug visuals + oversized hitboxes (tuning aid).
@@ -85,6 +90,12 @@ export const createSelectionHandles = ({
 		style.id = selectionModeStyleId;
 		style.type = 'text/css';
 		style.textContent = `
+	.${selectionModeClass} .xterm,
+	.${selectionModeClass} .xterm-viewport,
+	.${selectionModeClass} .xterm-screen {
+		touch-action: none !important;
+		overscroll-behavior: contain;
+	}
 	.${selectionModeClass} .xterm .xterm-accessibility {
 		pointer-events: auto !important;
 	}
@@ -280,6 +291,28 @@ export const createSelectionHandles = ({
 		return { cellWidth, cellHeight };
 	};
 
+	const getXtermViewport = () =>
+		term.element?.querySelector<HTMLElement>('.xterm-viewport') ?? null;
+
+	const beginSelectionViewportLock = () => {
+		const viewport = getXtermViewport();
+		selectionViewportLock = viewport
+			? { viewport, scrollTop: viewport.scrollTop }
+			: null;
+	};
+
+	const restoreSelectionViewportLock = () => {
+		const lock = selectionViewportLock;
+		if (!lock) return;
+		if (lock.viewport.scrollTop !== lock.scrollTop) {
+			lock.viewport.scrollTop = lock.scrollTop;
+		}
+	};
+
+	const clearSelectionViewportLock = () => {
+		selectionViewportLock = null;
+	};
+
 	const getHandleGapPx = (
 		start: [number, number],
 		end: [number, number],
@@ -342,6 +375,21 @@ export const createSelectionHandles = ({
 		if (x > 0) return [x - 1, y];
 		if (y <= minRow) return [0, y];
 		return [cols - 1, y - 1];
+	};
+
+	const deriveEndExclusiveFromStartLength = (
+		start: [number, number] | undefined,
+		length: number | undefined,
+		cols: number,
+	): [number, number] | undefined => {
+		if (!start || !length || length <= 0) return undefined;
+		let x = start[0] + length;
+		let y = start[1];
+		while (x > cols) {
+			x -= cols;
+			y += 1;
+		}
+		return [x, y];
 	};
 
 	// Lollipop glyph in a padded viewBox: circle above the anchor, stem crosses it.
@@ -608,6 +656,22 @@ export const createSelectionHandles = ({
 		sendToRn({ type: 'selectionChanged', text, instanceId });
 	};
 
+	const emitSelectionHandleAutoScroll = (direction: 'up' | 'down') => {
+		const pageStep = Math.max(10, term.rows - 1);
+		selectionScrollBatchSeq += 1;
+		sendToRn({
+			type: 'scrollbackBatch',
+			direction,
+			pages: 0,
+			lines: 1,
+			pageStep,
+			instanceId,
+			seq: selectionScrollBatchSeq,
+			ts: Date.now(),
+			source: 'selection-handle',
+		});
+	};
+
 	const renderSelectionHandles = () => {
 		if (!selectionModeEnabled) {
 			if (startHandle) startHandle.style.display = 'none';
@@ -624,7 +688,14 @@ export const createSelectionHandles = ({
 		const model = selectionService._model;
 		const selectionStart =
 			selectionService.selectionStart ?? model.selectionStart;
-		const selectionEnd = selectionService.selectionEnd ?? model.selectionEnd;
+		const selectionEnd =
+			selectionService.selectionEnd ??
+			model.selectionEnd ??
+			deriveEndExclusiveFromStartLength(
+				selectionStart,
+				model.selectionStartLength,
+				core.bufferService.cols,
+			);
 		if (!selectionStart || !selectionEnd) {
 			if (startHandle) startHandle.style.display = 'none';
 			if (endHandle) endHandle.style.display = 'none';
@@ -894,6 +965,7 @@ export const createSelectionHandles = ({
 					y: event.clientY - anchorY,
 				};
 				dragging = false;
+				beginSelectionViewportLock();
 				handle.setPointerCapture(event.pointerId);
 			};
 			const onPointerMove = (event: PointerEvent) => {
@@ -901,6 +973,7 @@ export const createSelectionHandles = ({
 				if (activeHandle !== kind || activePointerId !== event.pointerId)
 					return;
 				consumeHandlePointerEvent(event);
+				restoreSelectionViewportLock();
 				if (!dragStart || !dragOffset) return;
 				const dx = event.clientX - dragStart.x;
 				const dy = event.clientY - dragStart.y;
@@ -916,6 +989,11 @@ export const createSelectionHandles = ({
 				// Clamp to the screen bounds so getBufferCoords stays valid.
 				const adjustedX = event.clientX - dragOffset.x;
 				const adjustedY = event.clientY - dragOffset.y;
+				if (adjustedY < screenRect.top) {
+					emitSelectionHandleAutoScroll('up');
+				} else if (adjustedY >= screenRect.bottom) {
+					emitSelectionHandleAutoScroll('down');
+				}
 				const maxX = Math.max(screenRect.left, screenRect.right - 1);
 				const maxY = Math.max(screenRect.top, screenRect.bottom - 1);
 				const clampedX = Math.min(
@@ -941,7 +1019,14 @@ export const createSelectionHandles = ({
 				const start =
 					selectionService.selectionStart ?? model.selectionStart ?? coords;
 				const endExclusive =
-					selectionService.selectionEnd ?? model.selectionEnd ?? coords;
+					selectionService.selectionEnd ??
+					model.selectionEnd ??
+					deriveEndExclusiveFromStartLength(
+						start,
+						model.selectionStartLength,
+						core.bufferService.cols,
+					) ??
+					coords;
 					const end = toInclusiveEnd(
 						endExclusive,
 						core.bufferService.cols,
@@ -952,10 +1037,13 @@ export const createSelectionHandles = ({
 					} else {
 						updateSelectionRange(start, [normalizedCol, coords[1]]);
 					}
+					restoreSelectionViewportLock();
 				};
 			const onPointerUp = (event: PointerEvent) => {
 				if (activePointerId !== event.pointerId) return;
 				consumeHandlePointerEvent(event);
+				restoreSelectionViewportLock();
+				clearSelectionViewportLock();
 				activeHandle = null;
 				activePointerId = null;
 				resetDrag();
@@ -965,6 +1053,8 @@ export const createSelectionHandles = ({
 			const onPointerCancel = (event: PointerEvent) => {
 				if (activePointerId !== event.pointerId) return;
 				consumeHandlePointerEvent(event);
+				restoreSelectionViewportLock();
+				clearSelectionViewportLock();
 				activeHandle = null;
 				activePointerId = null;
 				resetDrag();
@@ -1197,6 +1287,7 @@ export const createSelectionHandles = ({
 			}
 			activeHandle = null;
 			activePointerId = null;
+			clearSelectionViewportLock();
 			term.clearSelection();
 			if (startHandle) startHandle.style.display = 'none';
 			if (endHandle) endHandle.style.display = 'none';
@@ -1217,6 +1308,8 @@ export const createSelectionHandles = ({
 		let startPoint: { x: number; y: number } | null = null;
 		let longPressFired = false;
 		let activePointerId: number | null = null;
+		let longPressSelectionStart: [number, number] | null = null;
+		let longPressSelectionEnd: [number, number] | null = null;
 
 		const clearLongPress = () => {
 			if (longPressTimer) {
@@ -1226,8 +1319,52 @@ export const createSelectionHandles = ({
 			startPoint = null;
 			longPressFired = false;
 			activePointerId = null;
+			longPressSelectionStart = null;
+			longPressSelectionEnd = null;
+			restoreSelectionViewportLock();
+			clearSelectionViewportLock();
 		};
 		cancelLongPress = clearLongPress;
+
+		const compareCoords = (left: [number, number], right: [number, number]) => {
+			if (left[1] !== right[1]) return left[1] - right[1];
+			return left[0] - right[0];
+		};
+
+		const updateLongPressDragSelection = (x: number, y: number) => {
+			if (!longPressFired || !selectionModeEnabled) return false;
+			restoreSelectionViewportLock();
+			const core = getSelectionCore();
+			if (!core || !longPressSelectionStart || !longPressSelectionEnd) {
+				return true;
+			}
+			const screenRect = core.screenElement.getBoundingClientRect();
+			if (y < screenRect.top) {
+				emitSelectionHandleAutoScroll('up');
+			} else if (y >= screenRect.bottom) {
+				emitSelectionHandleAutoScroll('down');
+			}
+			const maxX = Math.max(screenRect.left, screenRect.right - 1);
+			const maxY = Math.max(screenRect.top, screenRect.bottom - 1);
+			const clampedX = Math.min(Math.max(x, screenRect.left), maxX);
+			const clampedY = Math.min(Math.max(y, screenRect.top), maxY);
+			const coords = getBufferCoords(clampedX, clampedY);
+			if (!coords) return true;
+			const line = core.bufferService.buffer.lines.get(coords[1]);
+			const normalizedCoords: [number, number] = [
+				line ? normalizeSelectionColumn(line, coords[0], core) : coords[0],
+				coords[1],
+			];
+			if (compareCoords(normalizedCoords, longPressSelectionStart) < 0) {
+				updateSelectionRange(normalizedCoords, longPressSelectionEnd);
+			} else {
+				updateSelectionRange(longPressSelectionStart, normalizedCoords);
+			}
+			renderSelectionHandles();
+			emitSelectionChanged();
+			restoreSelectionViewportLock();
+			return true;
+		};
 
 		const startLongPress = (x: number, y: number) => {
 			if (selectionModeEnabled) return;
@@ -1269,11 +1406,15 @@ export const createSelectionHandles = ({
 				updateSelectionRange(expanded.start, expanded.end);
 				renderSelectionHandles();
 				emitSelectionChanged();
+				longPressSelectionStart = expanded.start;
+				longPressSelectionEnd = expanded.end;
+				beginSelectionViewportLock();
 				longPressFired = true;
 			}, longPressTimeoutMs);
 		};
 
 		const moveLongPress = (x: number, y: number) => {
+			if (updateLongPressDragSelection(x, y)) return;
 			if (!startPoint || !longPressTimer) return;
 			const dx = x - startPoint.x;
 			const dy = y - startPoint.y;

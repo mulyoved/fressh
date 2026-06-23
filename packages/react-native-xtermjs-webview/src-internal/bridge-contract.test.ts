@@ -4,6 +4,7 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
 import {
+	type BridgeInboundDraftMessage,
 	type BridgeOutboundMessage,
 	handleScrollbackBatchBridgeMessage,
 	mapScrollbackBatchMessage,
@@ -116,6 +117,37 @@ void test('scrollbackBatch bridge helper forwards pageStep', () => {
 			instanceId: 'instance-2',
 			seq: 9,
 			ts: 456,
+		},
+	]);
+});
+
+void test('scrollbackBatch bridge helper preserves selection-handle source', () => {
+	const events: unknown[] = [];
+
+	assert.equal(
+		handleScrollbackBatchBridgeMessage(
+			{
+				type: 'scrollbackBatch',
+				direction: 'down',
+				pages: 0,
+				lines: 1,
+				pageStep: 32,
+				instanceId: 'instance-2',
+				source: 'selection-handle',
+			} as BridgeInboundDraftMessage,
+			(event) => events.push(event),
+		),
+		true,
+	);
+
+	assert.deepEqual(events, [
+		{
+			direction: 'down',
+			pages: 0,
+			lines: 1,
+			pageStep: 32,
+			instanceId: 'instance-2',
+			source: 'selection-handle',
 		},
 	]);
 });
