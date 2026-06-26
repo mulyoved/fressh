@@ -528,17 +528,18 @@ export function AutoConnectManager() {
 			if (opts?.replaceExisting === true && reconnectLoopRunningRef.current) {
 				stopReconnectCycle(`${reason}-restart`);
 			}
+			const autoState = useAutoConnectStore.getState();
 			const reconnectBlocked =
 				opts?.replaceExisting === true
 					? !canStartReplacementReconnect({
 							resetInFlight: tailscaleResetInFlightRef.current,
 							reconnectLoopRunning: reconnectLoopRunningRef.current,
-							isReconnecting: false,
-							isAutoConnecting,
+							isReconnecting: autoState.isReconnecting,
+							isAutoConnecting: autoState.isAutoConnecting,
 						})
 					: reconnectLoopRunningRef.current ||
-						isReconnecting ||
-						isAutoConnecting;
+						autoState.isReconnecting ||
+						autoState.isAutoConnecting;
 			if (reconnectBlocked) {
 				return false;
 			}
@@ -640,13 +641,7 @@ export function AutoConnectManager() {
 			void attemptWithBackoff();
 			return true;
 		},
-		[
-			attemptAutoConnect,
-			isAutoConnecting,
-			isReconnecting,
-			setReconnecting,
-			stopReconnectCycle,
-		],
+		[attemptAutoConnect, setReconnecting, stopReconnectCycle],
 	);
 
 	React.useEffect(() => {
