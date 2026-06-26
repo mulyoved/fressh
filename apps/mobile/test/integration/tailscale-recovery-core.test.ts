@@ -62,6 +62,9 @@ void test('network-like SSH errors trigger Tailscale recovery', () => {
 
 void test('non-network SSH errors do not trigger Tailscale recovery', () => {
 	for (const error of [
+		undefined,
+		null,
+		{},
 		{ tag: 'Auth', inner: ['Network is unreachable'] },
 		{ tag: 'TmuxAttachFailed', inner: ['session missing'] },
 		{ tag: 'TmuxAttachFailed', inner: ['Network is unreachable'] },
@@ -80,6 +83,8 @@ void test('Tailscale recovery cooldown allows first attempt and throttles the ne
 	assert.equal(cooldown.canAttempt(1_000), true);
 	cooldown.recordAttempt(1_000);
 	assert.equal(cooldown.canAttempt(5_000), false);
+	assert.equal(cooldown.canAttempt(20_999), false);
+	assert.equal(cooldown.canAttempt(21_000), true);
 	cooldown.reset();
 	assert.equal(cooldown.canAttempt(5_000), true);
 	assert.equal(cooldown.canAttempt(21_000), true);
@@ -109,6 +114,24 @@ void test('attention state appears after failed automatic recovery', () => {
 			platformOS: 'ios',
 			networkLikeFailure: true,
 			recoveryAttempted: true,
+			retrySucceeded: false,
+		}),
+		false,
+	);
+	assert.equal(
+		shouldShowTailscaleAttention({
+			platformOS: 'android',
+			networkLikeFailure: false,
+			recoveryAttempted: true,
+			retrySucceeded: false,
+		}),
+		false,
+	);
+	assert.equal(
+		shouldShowTailscaleAttention({
+			platformOS: 'android',
+			networkLikeFailure: true,
+			recoveryAttempted: false,
 			retrySucceeded: false,
 		}),
 		false,
