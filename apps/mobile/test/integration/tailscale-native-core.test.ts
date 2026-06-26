@@ -92,12 +92,7 @@ void test('Tailscale native controller preserves negative native successes', asy
 	assert.deepEqual(await controller.connect(), { attempted: false });
 	assert.deepEqual(await controller.disconnect(), { attempted: false });
 	assert.deepEqual(await controller.openApp(), { attempted: false });
-	assert.deepEqual(calls, [
-		'isAvailable',
-		'connect',
-		'disconnect',
-		'openApp',
-	]);
+	assert.deepEqual(calls, ['isAvailable', 'connect', 'disconnect', 'openApp']);
 });
 
 void test('Tailscale native controller converts missing module to no-attempt results', async () => {
