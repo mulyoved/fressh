@@ -656,6 +656,26 @@ void test('reset preserves failed connect result', async () => {
 	assert.deepEqual(waits, [1_500]);
 });
 
+void test('reset normalizes rejected connect result', async () => {
+	const calls: string[] = [];
+	const waits: number[] = [];
+	const controller = createTailscaleRecoveryController({
+		getPlatformOS: () => 'android',
+		getNowMs: () => 1_000,
+		sleep: async (ms) => {
+			waits.push(ms);
+		},
+		native: connectRejectingNativeFixture(calls),
+	});
+
+	assert.deepEqual(await controller.reset(), {
+		attempted: true,
+		failed: true,
+	});
+	assert.deepEqual(calls, ['disconnect', 'connect']);
+	assert.deepEqual(waits, [1_500]);
+});
+
 void test('reset does not record cooldown when connect skips', async () => {
 	const calls: string[] = [];
 	const waits: number[] = [];

@@ -160,7 +160,7 @@ export function createTailscaleRecoveryController({
 				await sleep(DEFAULT_TAILSCALE_RESET_DELAY_MS);
 			}
 
-			const connectResult = await native.connect();
+			const connectResult = await connectWithTimeout();
 			if (shouldRecordCooldown(connectResult)) {
 				cooldown.recordAttempt(getNowMs());
 			}
