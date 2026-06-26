@@ -442,6 +442,27 @@ void test('reset records cooldown when connect attempts', async () => {
 	assert.deepEqual(waits, [1_500, 3_000]);
 });
 
+void test('reset records cooldown when connect dispatch fails', async () => {
+	const calls: string[] = [];
+	const waits: number[] = [];
+	const controller = createTailscaleRecoveryController({
+		getPlatformOS: () => 'android',
+		getNowMs: () => 1_000,
+		sleep: async (ms) => {
+			waits.push(ms);
+		},
+		native: connectFailedNativeFixture(calls),
+	});
+
+	assert.deepEqual(await controller.reset(), { attempted: true });
+	assert.deepEqual(await controller.ensureReady(), {
+		attempted: false,
+		available: true,
+	});
+	assert.deepEqual(calls, ['disconnect', 'connect', 'isAvailable']);
+	assert.deepEqual(waits, [1_500]);
+});
+
 void test('reset does not record cooldown when connect skips', async () => {
 	const calls: string[] = [];
 	const waits: number[] = [];
