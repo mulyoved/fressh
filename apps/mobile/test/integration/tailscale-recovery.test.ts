@@ -13,6 +13,19 @@ function deferred<T>() {
 	return { promise, resolve };
 }
 
+async function withSafetyTimeout<T>(
+	promise: Promise<T>,
+): Promise<T | 'timeout'> {
+	return await Promise.race([
+		promise,
+		new Promise<'timeout'>((resolve) => {
+			setTimeout(() => {
+				resolve('timeout');
+			}, 50);
+		}),
+	]);
+}
+
 function nativeFixture(calls: string[]): TailscaleRecoveryNative {
 	return {
 		isAvailable: async () => {
@@ -169,10 +182,13 @@ void test('ensureReady respects cooldown', async () => {
 
 void test('ensureReady does not record cooldown when connect skips', async () => {
 	const calls: string[] = [];
+	const waits: number[] = [];
 	const controller = createTailscaleRecoveryController({
 		getPlatformOS: () => 'android',
 		getNowMs: () => 1_000,
-		sleep: async () => {},
+		sleep: async (ms) => {
+			waits.push(ms);
+		},
 		native: connectSkippedNativeFixture(calls),
 	});
 
@@ -185,19 +201,24 @@ void test('ensureReady does not record cooldown when connect skips', async () =>
 		available: true,
 	});
 	assert.deepEqual(calls, ['isAvailable', 'connect', 'isAvailable', 'connect']);
+	assert.deepEqual(waits, []);
 });
 
 void test('ensureReady records cooldown when connect dispatch fails', async () => {
 	const calls: string[] = [];
+	const waits: number[] = [];
 	const controller = createTailscaleRecoveryController({
 		getPlatformOS: () => 'android',
 		getNowMs: () => 1_000,
-		sleep: async () => {},
+		sleep: async (ms) => {
+			waits.push(ms);
+		},
 		native: connectFailedNativeFixture(calls),
 	});
 
 	assert.deepEqual(await controller.ensureReady(), {
 		attempted: false,
+		failed: true,
 		available: true,
 	});
 	assert.deepEqual(await controller.ensureReady(), {
@@ -205,6 +226,7 @@ void test('ensureReady records cooldown when connect dispatch fails', async () =
 		available: true,
 	});
 	assert.deepEqual(calls, ['isAvailable', 'connect', 'isAvailable']);
+	assert.deepEqual(waits, []);
 });
 
 void test('overlapping recovery calls share one in-flight native connect', async () => {
@@ -249,6 +271,60 @@ void test('overlapping recovery calls share one in-flight native connect', async
 	});
 	assert.equal(calls.filter((call) => call === 'connect').length, 1);
 	assert.deepEqual(waits, [3_000]);
+});
+
+void test('automatic recovery times out a stuck native connect and clears in-flight state', async () => {
+	const calls: string[] = [];
+	const waits: number[] = [];
+	const controller = createTailscaleRecoveryController({
+		getPlatformOS: () => 'android',
+		getNowMs: () => 1_000,
+		sleep: async (ms) => {
+			waits.push(ms);
+		},
+		connectTimeoutMs: 1,
+		native: {
+			...nativeFixture(calls),
+			connect: async () => {
+				calls.push('connect');
+				return await new Promise<{ attempted: boolean }>(() => {});
+			},
+		},
+	});
+
+	const firstReady = controller.ensureReady();
+	const joinedRecovery = controller.recoverAfterFailure(
+		new Error('No route to host'),
+	);
+
+	assert.deepEqual(await withSafetyTimeout(firstReady), {
+		attempted: false,
+		failed: true,
+		available: true,
+	});
+	assert.deepEqual(await withSafetyTimeout(joinedRecovery), {
+		attempted: false,
+		failed: true,
+		networkLikeFailure: true,
+		available: true,
+	});
+	assert.equal(calls.filter((call) => call === 'connect').length, 1);
+	assert.deepEqual(waits, []);
+
+	assert.deepEqual(await controller.ensureReady(), {
+		attempted: false,
+		available: true,
+	});
+	assert.equal(calls.filter((call) => call === 'connect').length, 1);
+
+	controller.resetCooldown();
+	assert.deepEqual(await withSafetyTimeout(controller.ensureReady()), {
+		attempted: false,
+		failed: true,
+		available: true,
+	});
+	assert.equal(calls.filter((call) => call === 'connect').length, 2);
+	assert.deepEqual(waits, []);
 });
 
 void test('resetCooldown allows a throttled controller to retry immediately', async () => {
@@ -368,6 +444,31 @@ void test('recoverAfterFailure connects after network-like errors and waits', as
 	);
 	assert.deepEqual(calls, ['isAvailable', 'connect']);
 	assert.deepEqual(waits, [3_000]);
+});
+
+void test('recoverAfterFailure preserves failed connect result without settle wait', async () => {
+	const calls: string[] = [];
+	const waits: number[] = [];
+	const controller = createTailscaleRecoveryController({
+		getPlatformOS: () => 'android',
+		getNowMs: () => 1_000,
+		sleep: async (ms) => {
+			waits.push(ms);
+		},
+		native: connectFailedNativeFixture(calls),
+	});
+
+	assert.deepEqual(
+		await controller.recoverAfterFailure(new Error('No route to host')),
+		{
+			attempted: false,
+			failed: true,
+			networkLikeFailure: true,
+			available: true,
+		},
+	);
+	assert.deepEqual(calls, ['isAvailable', 'connect']);
+	assert.deepEqual(waits, []);
 });
 
 void test('manual reset disconnects, connects, and waits between actions', async () => {

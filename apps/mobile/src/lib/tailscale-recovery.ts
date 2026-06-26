@@ -6,6 +6,8 @@ import {
 	isTailscaleRecoverySupported,
 } from './tailscale-recovery-core';
 
+const DEFAULT_TAILSCALE_CONNECT_TIMEOUT_MS = 5_000;
+
 type TailscaleRecoveryAttemptResult = {
 	attempted: boolean;
 	failed?: boolean;
@@ -23,6 +25,7 @@ type TailscaleRecoveryControllerDeps = {
 	getNowMs: () => number;
 	sleep: (ms: number) => Promise<void>;
 	native: TailscaleRecoveryNative;
+	connectTimeoutMs?: number;
 };
 
 type ReactNativeModule = {
@@ -39,6 +42,7 @@ export function createTailscaleRecoveryController({
 	getNowMs,
 	sleep,
 	native,
+	connectTimeoutMs = DEFAULT_TAILSCALE_CONNECT_TIMEOUT_MS,
 }: TailscaleRecoveryControllerDeps) {
 	const cooldown = createTailscaleRecoveryCooldown();
 	let connectRecoveryInFlight: Promise<TailscaleRecoveryAttemptResult> | null =
@@ -54,17 +58,41 @@ export function createTailscaleRecoveryController({
 	const shouldRecordCooldown = (result: TailscaleRecoveryAttemptResult) =>
 		result.attempted || result.failed === true;
 
+	const createFailedAttempt = (): TailscaleRecoveryAttemptResult => ({
+		attempted: false,
+		failed: true,
+	});
+
+	const connectWithTimeout = async () => {
+		let timeoutId: ReturnType<typeof setTimeout> | null = null;
+		const timeoutResult = new Promise<TailscaleRecoveryAttemptResult>(
+			(resolve) => {
+				timeoutId = setTimeout(() => {
+					timeoutId = null;
+					resolve(createFailedAttempt());
+				}, connectTimeoutMs);
+			},
+		);
+
+		try {
+			return await Promise.race([native.connect(), timeoutResult]);
+		} finally {
+			if (timeoutId !== null) {
+				clearTimeout(timeoutId);
+			}
+		}
+	};
+
 	const connectWithCooldown = async () => {
 		if (connectRecoveryInFlight) {
-			const result = await connectRecoveryInFlight;
-			return result.attempted;
+			return await connectRecoveryInFlight;
 		}
 
 		const nowMs = getNowMs();
-		if (!cooldown.canAttempt(nowMs)) return false;
+		if (!cooldown.canAttempt(nowMs)) return { attempted: false };
 
 		const connectRecovery = (async () => {
-			const result = await native.connect();
+			const result = await connectWithTimeout();
 			if (shouldRecordCooldown(result)) {
 				cooldown.recordAttempt(nowMs);
 			}
@@ -80,9 +108,16 @@ export function createTailscaleRecoveryController({
 		});
 		connectRecoveryInFlight = trackedConnectRecovery;
 
-		const result = await trackedConnectRecovery;
-		return result.attempted;
+		return await trackedConnectRecovery;
 	};
+
+	const createRecoveryResult = (
+		result: TailscaleRecoveryAttemptResult,
+		available: boolean,
+	) =>
+		result.failed === true
+			? { attempted: result.attempted, failed: true, available }
+			: { attempted: result.attempted, available };
 
 	return {
 		async ensureReady() {
@@ -91,8 +126,8 @@ export function createTailscaleRecoveryController({
 				return { attempted: false, available };
 			}
 
-			const attempted = await connectWithCooldown();
-			return { attempted, available };
+			const result = await connectWithCooldown();
+			return createRecoveryResult(result, available);
 		},
 
 		async recoverAfterFailure(error: unknown) {
@@ -103,8 +138,15 @@ export function createTailscaleRecoveryController({
 				return { attempted: false, networkLikeFailure, available };
 			}
 
-			const attempted = await connectWithCooldown();
-			return { attempted, networkLikeFailure, available };
+			const result = await connectWithCooldown();
+			return result.failed === true
+				? {
+						attempted: result.attempted,
+						failed: true,
+						networkLikeFailure,
+						available,
+					}
+				: { attempted: result.attempted, networkLikeFailure, available };
 		},
 
 		async reset() {
