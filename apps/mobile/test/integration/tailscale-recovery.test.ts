@@ -101,6 +101,26 @@ void test('ensureReady respects cooldown', async () => {
 	assert.deepEqual(calls, ['isAvailable', 'connect', 'isAvailable']);
 });
 
+void test('ensureReady does not record cooldown when connect skips', async () => {
+	const calls: string[] = [];
+	const controller = createTailscaleRecoveryController({
+		getPlatformOS: () => 'android',
+		getNowMs: () => 1_000,
+		sleep: async () => {},
+		native: connectSkippedNativeFixture(calls),
+	});
+
+	assert.deepEqual(await controller.ensureReady(), {
+		attempted: false,
+		available: true,
+	});
+	assert.deepEqual(await controller.ensureReady(), {
+		attempted: false,
+		available: true,
+	});
+	assert.deepEqual(calls, ['isAvailable', 'connect', 'isAvailable', 'connect']);
+});
+
 void test('resetCooldown allows a throttled controller to retry immediately', async () => {
 	const calls: string[] = [];
 	const waits: number[] = [];

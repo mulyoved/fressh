@@ -52,9 +52,9 @@ export function createTailscaleRecoveryController({
 		const nowMs = getNowMs();
 		if (!cooldown.canAttempt(nowMs)) return false;
 
-		cooldown.recordAttempt(nowMs);
 		const result = await native.connect();
 		if (result.attempted) {
+			cooldown.recordAttempt(nowMs);
 			await sleep(DEFAULT_TAILSCALE_SETTLE_DELAY_MS);
 		}
 		return result.attempted;
