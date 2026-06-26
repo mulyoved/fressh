@@ -9,6 +9,10 @@ export function shouldMarkTailscaleRecoveryAttention(input: {
 	failed?: boolean;
 	ensureAttemptedBeforeFailure: boolean;
 }) {
+	if (input.platformOS !== 'android' || !input.networkLikeFailure) {
+		return false;
+	}
+
 	return (
 		shouldShowTailscaleAttention(input) ||
 		!input.available ||

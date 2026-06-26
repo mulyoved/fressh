@@ -73,6 +73,21 @@ void test('Tailscale attention stays hidden for skipped non-network recovery', (
 	);
 });
 
+void test('Tailscale attention stays hidden on unsupported platforms', () => {
+	assert.equal(
+		shouldMarkTailscaleRecoveryAttention({
+			platformOS: 'ios',
+			networkLikeFailure: true,
+			recoveryAttempted: false,
+			retrySucceeded: false,
+			available: false,
+			failed: true,
+			ensureAttemptedBeforeFailure: true,
+		}),
+		false,
+	);
+});
+
 void test('Tailscale attention appears for unavailable or failed recovery', () => {
 	assert.equal(
 		shouldMarkTailscaleRecoveryAttention({
