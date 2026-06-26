@@ -12,7 +12,6 @@ type TailscaleRecoveryBannerAction = {
 	id: TailscaleRecoveryBannerActionId;
 	label: string;
 	disabled: boolean;
-	primary: boolean;
 };
 
 export type TailscaleRecoveryBannerPresentation =
@@ -51,10 +50,9 @@ export function getTailscaleRecoveryBannerPresentation(
 				id: 'openTailscale',
 				label: 'Open Tailscale',
 				disabled,
-				primary: true,
 			},
-			{ id: 'retry', label: 'Retry', disabled, primary: false },
-			{ id: 'reset', label: 'Reset', disabled, primary: false },
+			{ id: 'retry', label: 'Retry', disabled },
+			{ id: 'reset', label: 'Reset', disabled },
 		],
 	};
 }
