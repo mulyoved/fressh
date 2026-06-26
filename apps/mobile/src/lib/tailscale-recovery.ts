@@ -8,6 +8,7 @@ import {
 
 type TailscaleRecoveryAttemptResult = {
 	attempted: boolean;
+	failed?: boolean;
 };
 
 export type TailscaleRecoveryNative = {
@@ -40,6 +41,8 @@ export function createTailscaleRecoveryController({
 	native,
 }: TailscaleRecoveryControllerDeps) {
 	const cooldown = createTailscaleRecoveryCooldown();
+	let connectRecoveryInFlight: Promise<TailscaleRecoveryAttemptResult> | null =
+		null;
 
 	const isSupported = () => isTailscaleRecoverySupported(getPlatformOS());
 
@@ -48,15 +51,36 @@ export function createTailscaleRecoveryController({
 		return await native.isAvailable();
 	};
 
+	const shouldRecordCooldown = (result: TailscaleRecoveryAttemptResult) =>
+		result.attempted || result.failed === true;
+
 	const connectWithCooldown = async () => {
+		if (connectRecoveryInFlight) {
+			const result = await connectRecoveryInFlight;
+			return result.attempted;
+		}
+
 		const nowMs = getNowMs();
 		if (!cooldown.canAttempt(nowMs)) return false;
 
-		const result = await native.connect();
-		if (result.attempted) {
-			cooldown.recordAttempt(nowMs);
-			await sleep(DEFAULT_TAILSCALE_SETTLE_DELAY_MS);
-		}
+		const connectRecovery = (async () => {
+			const result = await native.connect();
+			if (shouldRecordCooldown(result)) {
+				cooldown.recordAttempt(nowMs);
+			}
+			if (result.attempted) {
+				await sleep(DEFAULT_TAILSCALE_SETTLE_DELAY_MS);
+			}
+			return result;
+		})();
+		const trackedConnectRecovery = connectRecovery.finally(() => {
+			if (connectRecoveryInFlight === trackedConnectRecovery) {
+				connectRecoveryInFlight = null;
+			}
+		});
+		connectRecoveryInFlight = trackedConnectRecovery;
+
+		const result = await trackedConnectRecovery;
 		return result.attempted;
 	};
 

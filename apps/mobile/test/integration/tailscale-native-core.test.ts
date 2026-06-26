@@ -144,7 +144,7 @@ void test('Tailscale native controller returns fresh no-attempt results', async 
 	assert.notEqual(disconnectResult, openAppResult);
 });
 
-void test('Tailscale native controller logs and returns false on native rejection', async () => {
+void test('Tailscale native controller marks imperative native rejections as failed', async () => {
 	const error = new Error('broadcast rejected');
 	const warnings: unknown[][] = [];
 	const controller = createTailscaleNativeController({
@@ -167,9 +167,18 @@ void test('Tailscale native controller logs and returns false on native rejectio
 	});
 
 	assert.equal(await controller.isAvailable(), false);
-	assert.deepEqual(await controller.connect(), { attempted: false });
-	assert.deepEqual(await controller.disconnect(), { attempted: false });
-	assert.deepEqual(await controller.openApp(), { attempted: false });
+	assert.deepEqual(await controller.connect(), {
+		attempted: false,
+		failed: true,
+	});
+	assert.deepEqual(await controller.disconnect(), {
+		attempted: false,
+		failed: true,
+	});
+	assert.deepEqual(await controller.openApp(), {
+		attempted: false,
+		failed: true,
+	});
 	assert.deepEqual(warnings, [
 		['tailscale availability check failed', error],
 		['tailscale connect intent failed', error],

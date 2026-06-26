@@ -1,5 +1,6 @@
 export type TailscaleNativeAttemptResult = {
 	attempted: boolean;
+	failed?: boolean;
 };
 
 export type TailscaleNativeModule = {
@@ -21,6 +22,11 @@ type TailscaleNativeControllerDeps = {
 
 const createNoAttempt = (): TailscaleNativeAttemptResult => ({
 	attempted: false,
+});
+
+const createFailedAttempt = (): TailscaleNativeAttemptResult => ({
+	attempted: false,
+	failed: true,
 });
 
 export function createTailscaleNativeController({
@@ -52,7 +58,7 @@ export function createTailscaleNativeController({
 				return await nativeModule.connect();
 			} catch (error) {
 				logger.warn('tailscale connect intent failed', error);
-				return createNoAttempt();
+				return createFailedAttempt();
 			}
 		},
 
@@ -63,7 +69,7 @@ export function createTailscaleNativeController({
 				return await nativeModule.disconnect();
 			} catch (error) {
 				logger.warn('tailscale disconnect intent failed', error);
-				return createNoAttempt();
+				return createFailedAttempt();
 			}
 		},
 
@@ -74,7 +80,7 @@ export function createTailscaleNativeController({
 				return await nativeModule.openApp();
 			} catch (error) {
 				logger.warn('tailscale open app failed', error);
-				return createNoAttempt();
+				return createFailedAttempt();
 			}
 		},
 	};
