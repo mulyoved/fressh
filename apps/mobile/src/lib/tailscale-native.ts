@@ -1,9 +1,9 @@
 import { NativeModules, Platform } from 'react-native';
+import { rootLogger } from './logger';
 import {
 	createTailscaleNativeController,
 	type TailscaleNativeModule,
 } from './tailscale-native-core';
-import { rootLogger } from './logger';
 
 const nativeTailscaleModule = NativeModules.FresshTailscale as
 	| TailscaleNativeModule
