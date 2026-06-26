@@ -101,6 +101,18 @@ function connectFailedNativeFixture(calls: string[]): TailscaleRecoveryNative {
 	};
 }
 
+function connectRejectingNativeFixture(
+	calls: string[],
+): TailscaleRecoveryNative {
+	return {
+		...nativeFixture(calls),
+		connect: async () => {
+			calls.push('connect');
+			throw new Error('connect rejected');
+		},
+	};
+}
+
 void test('unsupported platforms no-op without native calls', async () => {
 	const calls: string[] = [];
 	const controller = createTailscaleRecoveryController({
@@ -214,6 +226,31 @@ void test('ensureReady records cooldown when connect dispatch fails', async () =
 			waits.push(ms);
 		},
 		native: connectFailedNativeFixture(calls),
+	});
+
+	assert.deepEqual(await controller.ensureReady(), {
+		attempted: false,
+		failed: true,
+		available: true,
+	});
+	assert.deepEqual(await controller.ensureReady(), {
+		attempted: false,
+		available: true,
+	});
+	assert.deepEqual(calls, ['isAvailable', 'connect', 'isAvailable']);
+	assert.deepEqual(waits, []);
+});
+
+void test('ensureReady records cooldown when native connect rejects', async () => {
+	const calls: string[] = [];
+	const waits: number[] = [];
+	const controller = createTailscaleRecoveryController({
+		getPlatformOS: () => 'android',
+		getNowMs: () => 1_000,
+		sleep: async (ms) => {
+			waits.push(ms);
+		},
+		native: connectRejectingNativeFixture(calls),
 	});
 
 	assert.deepEqual(await controller.ensureReady(), {

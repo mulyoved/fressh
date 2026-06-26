@@ -75,7 +75,8 @@ export function createTailscaleRecoveryController({
 		);
 
 		try {
-			return await Promise.race([native.connect(), timeoutResult]);
+			const connectResult = native.connect().catch(() => createFailedAttempt());
+			return await Promise.race([connectResult, timeoutResult]);
 		} finally {
 			if (timeoutId !== null) {
 				clearTimeout(timeoutId);
