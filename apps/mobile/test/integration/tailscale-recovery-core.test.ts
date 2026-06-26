@@ -26,6 +26,8 @@ void test('network-like SSH errors trigger Tailscale recovery', () => {
 		assert.equal(isNetworkLikeSshError(new Error(message)), true, message);
 	}
 
+	assert.equal(isNetworkLikeSshError('No route to host'), true);
+
 	assert.equal(
 		isNetworkLikeSshError({ tag: 'Russh', inner: ['Network is unreachable'] }),
 		true,
@@ -62,6 +64,8 @@ void test('Tailscale recovery cooldown allows first attempt and throttles the ne
 	assert.equal(cooldown.canAttempt(1_000), true);
 	cooldown.recordAttempt(1_000);
 	assert.equal(cooldown.canAttempt(5_000), false);
+	cooldown.reset();
+	assert.equal(cooldown.canAttempt(5_000), true);
 	assert.equal(cooldown.canAttempt(21_000), true);
 });
 
