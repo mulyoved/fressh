@@ -76,7 +76,11 @@ export function createTailscaleRecoveryCooldown(opts?: {
 
 	return {
 		canAttempt(nowMs: number) {
-			return lastAttemptAtMs === null || nowMs - lastAttemptAtMs >= cooldownMs;
+			return (
+				lastAttemptAtMs === null ||
+				nowMs < lastAttemptAtMs ||
+				nowMs - lastAttemptAtMs >= cooldownMs
+			);
 		},
 		recordAttempt(nowMs: number) {
 			lastAttemptAtMs = nowMs;

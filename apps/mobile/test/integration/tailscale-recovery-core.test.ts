@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
 	createTailscaleRecoveryCooldown,
+	DEFAULT_TAILSCALE_RECOVERY_COOLDOWN_MS,
 	isNetworkLikeSshError,
 	isTailscaleRecoverySupported,
 	shouldShowTailscaleAttention,
@@ -97,6 +98,27 @@ void test('Tailscale recovery cooldown allows first attempt and throttles the ne
 	cooldown.reset();
 	assert.equal(cooldown.canAttempt(5_000), true);
 	assert.equal(cooldown.canAttempt(21_000), true);
+});
+
+void test('Tailscale recovery cooldown uses the default window', () => {
+	const cooldown = createTailscaleRecoveryCooldown();
+
+	cooldown.recordAttempt(1_000);
+	assert.equal(
+		cooldown.canAttempt(1_000 + DEFAULT_TAILSCALE_RECOVERY_COOLDOWN_MS - 1),
+		false,
+	);
+	assert.equal(
+		cooldown.canAttempt(1_000 + DEFAULT_TAILSCALE_RECOVERY_COOLDOWN_MS),
+		true,
+	);
+});
+
+void test('Tailscale recovery cooldown allows retry after backward clock movement', () => {
+	const cooldown = createTailscaleRecoveryCooldown({ cooldownMs: 20_000 });
+
+	cooldown.recordAttempt(60_000);
+	assert.equal(cooldown.canAttempt(0), true);
 });
 
 void test('attention state appears after failed automatic recovery', () => {
