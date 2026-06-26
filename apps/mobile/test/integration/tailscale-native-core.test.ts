@@ -63,6 +63,43 @@ void test('Tailscale native controller reports native successes', async () => {
 	assert.deepEqual(calls, ['connect', 'disconnect', 'openApp']);
 });
 
+void test('Tailscale native controller preserves negative native successes', async () => {
+	const calls: string[] = [];
+	const controller = createTailscaleNativeController({
+		getPlatformOS: () => 'android',
+		getNativeModule: () => ({
+			isAvailable: async () => {
+				calls.push('isAvailable');
+				return false;
+			},
+			connect: async () => {
+				calls.push('connect');
+				return { attempted: false };
+			},
+			disconnect: async () => {
+				calls.push('disconnect');
+				return { attempted: false };
+			},
+			openApp: async () => {
+				calls.push('openApp');
+				return { attempted: false };
+			},
+		}),
+		logger: { warn: () => {} },
+	});
+
+	assert.equal(await controller.isAvailable(), false);
+	assert.deepEqual(await controller.connect(), { attempted: false });
+	assert.deepEqual(await controller.disconnect(), { attempted: false });
+	assert.deepEqual(await controller.openApp(), { attempted: false });
+	assert.deepEqual(calls, [
+		'isAvailable',
+		'connect',
+		'disconnect',
+		'openApp',
+	]);
+});
+
 void test('Tailscale native controller converts missing module to no-attempt results', async () => {
 	const controller = createTailscaleNativeController({
 		getPlatformOS: () => 'android',
