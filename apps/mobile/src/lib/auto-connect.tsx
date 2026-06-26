@@ -39,6 +39,7 @@ import {
 import { extractTmuxAttachFailureReason } from './ssh-error-details';
 import { useSshStore } from './ssh-store';
 import { tailscaleRecovery } from './tailscale-recovery';
+import { isTailscaleRecoverySupported } from './tailscale-recovery-core';
 import {
 	TailscaleRecoveryBanner,
 	type TailscaleRecoveryBannerState,
@@ -340,7 +341,7 @@ export function AutoConnectManager() {
 			if (!latestEntry) return false;
 
 			const readiness = await tailscaleRecovery.ensureReady();
-			if (Platform.OS === 'android' && !readiness.available) {
+			if (isTailscaleRecoverySupported(Platform.OS) && !readiness.available) {
 				markTailscaleAttention(
 					'Tailscale is required for this SSH connection. Open Tailscale, then retry Fressh.',
 				);
