@@ -1,5 +1,3 @@
-import type { Platform } from 'react-native';
-import type { tailscaleNative } from './tailscale-native';
 import {
 	DEFAULT_TAILSCALE_RESET_DELAY_MS,
 	DEFAULT_TAILSCALE_SETTLE_DELAY_MS,
@@ -27,10 +25,10 @@ type TailscaleRecoveryControllerDeps = {
 };
 
 type ReactNativeModule = {
-	Platform: typeof Platform;
+	Platform: { OS: string };
 };
 type TailscaleNativeModule = {
-	tailscaleNative: typeof tailscaleNative;
+	tailscaleNative: TailscaleRecoveryNative;
 };
 
 declare const require: (id: string) => unknown;

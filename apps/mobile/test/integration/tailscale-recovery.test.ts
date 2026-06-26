@@ -79,6 +79,26 @@ void test('recoverAfterFailure skips non-network errors', async () => {
 	assert.deepEqual(calls, ['isAvailable']);
 });
 
+void test('recoverAfterFailure connects after network-like errors and waits', async () => {
+	const calls: string[] = [];
+	const waits: number[] = [];
+	const controller = createTailscaleRecoveryController({
+		getPlatformOS: () => 'android',
+		getNowMs: () => 1_000,
+		sleep: async (ms) => {
+			waits.push(ms);
+		},
+		native: nativeFixture(calls),
+	});
+
+	assert.deepEqual(
+		await controller.recoverAfterFailure(new Error('No route to host')),
+		{ attempted: true, networkLikeFailure: true, available: true },
+	);
+	assert.deepEqual(calls, ['isAvailable', 'connect']);
+	assert.deepEqual(waits, [3_000]);
+});
+
 void test('manual reset disconnects, connects, and waits between actions', async () => {
 	const calls: string[] = [];
 	const waits: number[] = [];
