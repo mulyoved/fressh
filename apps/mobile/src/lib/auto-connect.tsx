@@ -8,7 +8,9 @@ import { AgentNotificationBridgeManager } from './AgentNotificationBridgeManager
 import { getAutoConnectLaunchActionForUrl } from './auto-connect-launch';
 import {
 	canStartReplacementReconnect,
+	canUpdateTailscaleAttention,
 	getTailscaleManualResetDecision,
+	isCurrentReconnectLoop,
 	shouldMarkTailscaleRecoveryAttention,
 	TAILSCALE_RESET_FAILED_MESSAGE,
 } from './auto-connect-recovery';
@@ -56,6 +58,7 @@ const RECONNECT_DELAYS_MS = [500, 1_000, 2_000, 5_000, 10_000];
 const RECONNECT_WINDOW_MS = 2 * 60 * 1_000;
 const FOREGROUND_SERVICE_START_RETRY_MS = 5_000;
 const FOREGROUND_SERVICE_START_MAX_RETRIES = 5;
+const TAILSCALE_RESET_WAIT_FOR_IDLE_MS = 5_000;
 
 type TailscaleRecoveryUiState = TailscaleRecoveryBannerState;
 
@@ -138,6 +141,7 @@ export function AutoConnectManager() {
 	const reconnectStartedAtMsRef = React.useRef<number | null>(null);
 	const reconnectAttemptRef = React.useRef(0);
 	const reconnectLoopRunningRef = React.useRef(false);
+	const reconnectLoopGenerationRef = React.useRef(0);
 	const prevShellCountRef = React.useRef(shells.length);
 	const isActiveRef = React.useRef(isActiveState(AppState.currentState));
 	const foregroundKeyRef = React.useRef<string | null>(null);
@@ -150,12 +154,34 @@ export function AutoConnectManager() {
 	const tailscaleResetInFlightRef = React.useRef(false);
 	const [tailscaleRecoveryUiState, setTailscaleRecoveryUiState] =
 		React.useState<TailscaleRecoveryUiState>(hiddenTailscaleRecoveryState);
-	const clearTailscaleAttention = React.useCallback(() => {
-		setTailscaleRecoveryUiState(hiddenTailscaleRecoveryState);
-	}, []);
-	const markTailscaleAttention = React.useCallback((message: string) => {
-		setTailscaleRecoveryUiState({ phase: 'needsAttention', message });
-	}, []);
+	const clearTailscaleAttention = React.useCallback(
+		(opts?: { force?: boolean }) => {
+			if (
+				!canUpdateTailscaleAttention({
+					resetInFlight: tailscaleResetInFlightRef.current,
+					force: opts?.force,
+				})
+			) {
+				return;
+			}
+			setTailscaleRecoveryUiState(hiddenTailscaleRecoveryState);
+		},
+		[],
+	);
+	const markTailscaleAttention = React.useCallback(
+		(message: string, opts?: { force?: boolean }) => {
+			if (
+				!canUpdateTailscaleAttention({
+					resetInFlight: tailscaleResetInFlightRef.current,
+					force: opts?.force,
+				})
+			) {
+				return;
+			}
+			setTailscaleRecoveryUiState({ phase: 'needsAttention', message });
+		},
+		[],
+	);
 
 	const setForegroundServiceStarted = React.useCallback((started: boolean) => {
 		useForegroundServiceRuntimeStore.getState().setStarted(started);
@@ -191,6 +217,7 @@ export function AutoConnectManager() {
 	const stopReconnectCycle = React.useCallback(
 		(reason: string) => {
 			clearReconnectTimer();
+			reconnectLoopGenerationRef.current += 1;
 			reconnectLoopRunningRef.current = false;
 			reconnectStartedAtMsRef.current = null;
 			reconnectAttemptRef.current = 0;
@@ -199,6 +226,16 @@ export function AutoConnectManager() {
 		},
 		[clearReconnectTimer, setReconnecting],
 	);
+
+	const waitForAutoConnectIdle = React.useCallback(async () => {
+		const deadlineMs = Date.now() + TAILSCALE_RESET_WAIT_FOR_IDLE_MS;
+		while (inFlightRef.current && Date.now() < deadlineMs) {
+			await new Promise<void>((resolve) => {
+				setTimeout(resolve, 50);
+			});
+		}
+		return !inFlightRef.current;
+	}, []);
 
 	React.useEffect(() => {
 		if (Platform.OS !== 'android') return;
@@ -506,6 +543,8 @@ export function AutoConnectManager() {
 				return false;
 			}
 			reconnectLoopRunningRef.current = true;
+			const loopGeneration = reconnectLoopGenerationRef.current + 1;
+			reconnectLoopGenerationRef.current = loopGeneration;
 			reconnectStartedAtMsRef.current = Date.now();
 			reconnectAttemptRef.current = 0;
 			setReconnecting(true);
@@ -521,6 +560,15 @@ export function AutoConnectManager() {
 				});
 
 			const scheduleNextAttempt = () => {
+				if (
+					!isCurrentReconnectLoop({
+						currentGeneration: reconnectLoopGenerationRef.current,
+						loopGeneration,
+						reconnectLoopRunning: reconnectLoopRunningRef.current,
+					})
+				) {
+					return;
+				}
 				const attempt = reconnectAttemptRef.current;
 				reconnectAttemptRef.current = attempt + 1;
 				const delayMs =
@@ -533,6 +581,13 @@ export function AutoConnectManager() {
 			};
 
 			const attemptWithBackoff = async () => {
+				const isCurrentLoop = () =>
+					isCurrentReconnectLoop({
+						currentGeneration: reconnectLoopGenerationRef.current,
+						loopGeneration,
+						reconnectLoopRunning: reconnectLoopRunningRef.current,
+					});
+				if (!isCurrentLoop()) return;
 				const startedAt = reconnectStartedAtMsRef.current ?? Date.now();
 				const elapsedMs = Date.now() - startedAt;
 				if (elapsedMs >= RECONNECT_WINDOW_MS) {
@@ -544,6 +599,7 @@ export function AutoConnectManager() {
 					stopReconnectCycle('tailscale-reset-in-progress');
 					return;
 				}
+				if (!isCurrentLoop()) return;
 				if (
 					shouldWaitForForegroundServiceCoverage({
 						platformOS: Platform.OS,
@@ -555,6 +611,7 @@ export function AutoConnectManager() {
 					scheduleNextAttempt();
 					return;
 				}
+				if (!isCurrentLoop()) return;
 				if (
 					!canAttemptBackgroundReconnect({
 						platformOS: Platform.OS,
@@ -566,6 +623,7 @@ export function AutoConnectManager() {
 					return;
 				}
 				const success = await attemptAutoConnect();
+				if (!isCurrentLoop()) return;
 				if (success) {
 					logger.info('Reconnected successfully', { elapsedMs });
 					stopReconnectCycle('reconnected');
@@ -575,6 +633,7 @@ export function AutoConnectManager() {
 					stopReconnectCycle('tailscale-reset-in-progress');
 					return;
 				}
+				if (!isCurrentLoop()) return;
 				scheduleNextAttempt();
 			};
 
@@ -819,12 +878,20 @@ export function AutoConnectManager() {
 			phase: 'recovering',
 			message: 'Resetting Tailscale...',
 		});
-		void tailscaleRecovery
-			.reset()
-			.then((result) => {
+		void (async () => {
+			try {
+				const idle = await waitForAutoConnectIdle();
+				if (!idle) {
+					markTailscaleAttention(
+						'Fressh is still reconnecting. Try resetting Tailscale again.',
+						{ force: true },
+					);
+					return;
+				}
+				const result = await tailscaleRecovery.reset();
 				const decision = getTailscaleManualResetDecision(result);
 				if (decision.kind === 'attention') {
-					markTailscaleAttention(decision.message);
+					markTailscaleAttention(decision.message, { force: true });
 					return;
 				}
 				tailscaleResetInFlightRef.current = false;
@@ -837,20 +904,23 @@ export function AutoConnectManager() {
 				}
 				markTailscaleAttention(
 					'Tailscale reset finished. Retry Fressh to reconnect.',
+					{ force: true },
 				);
-			})
-			.catch((error: unknown) => {
+			} catch (error: unknown) {
 				logger.warn('Manual Tailscale reset failed', error);
-				markTailscaleAttention(TAILSCALE_RESET_FAILED_MESSAGE);
-			})
-			.finally(() => {
+				markTailscaleAttention(TAILSCALE_RESET_FAILED_MESSAGE, {
+					force: true,
+				});
+			} finally {
 				tailscaleResetInFlightRef.current = false;
-			});
+			}
+		})();
 	}, [
 		clearTailscaleAttention,
 		markTailscaleAttention,
 		scheduleReconnect,
 		stopReconnectCycle,
+		waitForAutoConnectIdle,
 	]);
 
 	return (

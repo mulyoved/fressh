@@ -6,7 +6,9 @@ import {
 } from '../../src/lib/auto-connect-launch';
 import {
 	canStartReplacementReconnect,
+	canUpdateTailscaleAttention,
 	getTailscaleManualResetDecision,
+	isCurrentReconnectLoop,
 	shouldMarkTailscaleRecoveryAttention,
 	TAILSCALE_RESET_FAILED_MESSAGE,
 	TAILSCALE_RESET_NOT_STARTED_MESSAGE,
@@ -174,6 +176,60 @@ void test('Tailscale reset reconnect starts only after reset is no longer in fli
 			reconnectLoopRunning: true,
 			isReconnecting: false,
 			isAutoConnecting: false,
+		}),
+		false,
+	);
+	assert.equal(
+		canStartReplacementReconnect({
+			resetInFlight: false,
+			reconnectLoopRunning: false,
+			isReconnecting: true,
+			isAutoConnecting: false,
+		}),
+		false,
+	);
+	assert.equal(
+		canStartReplacementReconnect({
+			resetInFlight: false,
+			reconnectLoopRunning: false,
+			isReconnecting: false,
+			isAutoConnecting: true,
+		}),
+		false,
+	);
+});
+
+void test('Tailscale attention updates are suppressed during manual reset unless forced', () => {
+	assert.equal(canUpdateTailscaleAttention({ resetInFlight: true }), false);
+	assert.equal(
+		canUpdateTailscaleAttention({ resetInFlight: true, force: true }),
+		true,
+	);
+	assert.equal(canUpdateTailscaleAttention({ resetInFlight: false }), true);
+});
+
+void test('stale reconnect loops cannot update reconnect state', () => {
+	assert.equal(
+		isCurrentReconnectLoop({
+			currentGeneration: 2,
+			loopGeneration: 2,
+			reconnectLoopRunning: true,
+		}),
+		true,
+	);
+	assert.equal(
+		isCurrentReconnectLoop({
+			currentGeneration: 3,
+			loopGeneration: 2,
+			reconnectLoopRunning: true,
+		}),
+		false,
+	);
+	assert.equal(
+		isCurrentReconnectLoop({
+			currentGeneration: 2,
+			loopGeneration: 2,
+			reconnectLoopRunning: false,
 		}),
 		false,
 	);
