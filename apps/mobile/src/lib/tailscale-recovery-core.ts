@@ -60,6 +60,8 @@ export function isNetworkLikeSshError(error: unknown) {
 		'connection timed out',
 		'operation timed out',
 		'unable to resolve host',
+		'failed to lookup address information',
+		'no address associated with hostname',
 		'connection reset',
 		'broken pipe',
 		'software caused connection abort',

@@ -33,6 +33,22 @@ void test('network-like SSH errors trigger Tailscale recovery', () => {
 		true,
 	);
 	assert.equal(
+		isNetworkLikeSshError({
+			tag: 'Russh',
+			inner: [
+				'failed to lookup address information: Name or service not known',
+			],
+		}),
+		true,
+	);
+	assert.equal(
+		isNetworkLikeSshError({
+			tag: 'Russh',
+			inner: ['No address associated with hostname'],
+		}),
+		true,
+	);
+	assert.equal(
 		isNetworkLikeSshError({ tag: 'RusshKeys', inner: ['No route to host'] }),
 		true,
 	);
