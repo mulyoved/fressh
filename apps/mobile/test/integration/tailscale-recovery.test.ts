@@ -26,6 +26,44 @@ function nativeFixture(calls: string[]): TailscaleRecoveryNative {
 	};
 }
 
+function unavailableNativeFixture(calls: string[]): TailscaleRecoveryNative {
+	return {
+		...nativeFixture(calls),
+		isAvailable: async () => {
+			calls.push('isAvailable');
+			return false;
+		},
+	};
+}
+
+function connectSkippedNativeFixture(calls: string[]): TailscaleRecoveryNative {
+	return {
+		...nativeFixture(calls),
+		connect: async () => {
+			calls.push('connect');
+			return { attempted: false };
+		},
+	};
+}
+
+void test('unsupported platforms no-op without native calls', async () => {
+	const calls: string[] = [];
+	const controller = createTailscaleRecoveryController({
+		getPlatformOS: () => 'ios',
+		getNowMs: () => 1_000,
+		sleep: async () => {},
+		native: nativeFixture(calls),
+	});
+
+	assert.deepEqual(await controller.ensureReady(), {
+		attempted: false,
+		available: false,
+	});
+	assert.deepEqual(await controller.reset(), { attempted: false });
+	assert.deepEqual(await controller.openApp(), { attempted: false });
+	assert.deepEqual(calls, []);
+});
+
 void test('ensureReady nudges Tailscale on Android and waits', async () => {
 	const calls: string[] = [];
 	const waits: number[] = [];
@@ -63,6 +101,73 @@ void test('ensureReady respects cooldown', async () => {
 	assert.deepEqual(calls, ['isAvailable', 'connect', 'isAvailable']);
 });
 
+void test('resetCooldown allows a throttled controller to retry immediately', async () => {
+	const calls: string[] = [];
+	const waits: number[] = [];
+	const controller = createTailscaleRecoveryController({
+		getPlatformOS: () => 'android',
+		getNowMs: () => 1_000,
+		sleep: async (ms) => {
+			waits.push(ms);
+		},
+		native: nativeFixture(calls),
+	});
+
+	assert.deepEqual(await controller.ensureReady(), {
+		attempted: true,
+		available: true,
+	});
+	assert.deepEqual(await controller.ensureReady(), {
+		attempted: false,
+		available: true,
+	});
+	controller.resetCooldown();
+	assert.deepEqual(await controller.ensureReady(), {
+		attempted: true,
+		available: true,
+	});
+	assert.deepEqual(calls, [
+		'isAvailable',
+		'connect',
+		'isAvailable',
+		'isAvailable',
+		'connect',
+	]);
+	assert.deepEqual(waits, [3_000, 3_000]);
+});
+
+void test('cooldown is independent per recovery controller', async () => {
+	const firstCalls: string[] = [];
+	const secondCalls: string[] = [];
+	const firstController = createTailscaleRecoveryController({
+		getPlatformOS: () => 'android',
+		getNowMs: () => 1_000,
+		sleep: async () => {},
+		native: nativeFixture(firstCalls),
+	});
+	const secondController = createTailscaleRecoveryController({
+		getPlatformOS: () => 'android',
+		getNowMs: () => 1_000,
+		sleep: async () => {},
+		native: nativeFixture(secondCalls),
+	});
+
+	assert.deepEqual(await firstController.ensureReady(), {
+		attempted: true,
+		available: true,
+	});
+	assert.deepEqual(await firstController.ensureReady(), {
+		attempted: false,
+		available: true,
+	});
+	assert.deepEqual(await secondController.ensureReady(), {
+		attempted: true,
+		available: true,
+	});
+	assert.deepEqual(firstCalls, ['isAvailable', 'connect', 'isAvailable']);
+	assert.deepEqual(secondCalls, ['isAvailable', 'connect']);
+});
+
 void test('recoverAfterFailure skips non-network errors', async () => {
 	const calls: string[] = [];
 	const controller = createTailscaleRecoveryController({
@@ -75,6 +180,22 @@ void test('recoverAfterFailure skips non-network errors', async () => {
 	assert.deepEqual(
 		await controller.recoverAfterFailure(new Error('Permission denied')),
 		{ attempted: false, networkLikeFailure: false, available: true },
+	);
+	assert.deepEqual(calls, ['isAvailable']);
+});
+
+void test('recoverAfterFailure skips unavailable native recovery', async () => {
+	const calls: string[] = [];
+	const controller = createTailscaleRecoveryController({
+		getPlatformOS: () => 'android',
+		getNowMs: () => 1_000,
+		sleep: async () => {},
+		native: unavailableNativeFixture(calls),
+	});
+
+	assert.deepEqual(
+		await controller.recoverAfterFailure(new Error('No route to host')),
+		{ attempted: false, networkLikeFailure: true, available: false },
 	);
 	assert.deepEqual(calls, ['isAvailable']);
 });
@@ -114,6 +235,48 @@ void test('manual reset disconnects, connects, and waits between actions', async
 	assert.deepEqual(await controller.reset(), { attempted: true });
 	assert.deepEqual(calls, ['disconnect', 'connect']);
 	assert.deepEqual(waits, [1_500, 3_000]);
+});
+
+void test('reset records cooldown when connect attempts', async () => {
+	const calls: string[] = [];
+	const waits: number[] = [];
+	const controller = createTailscaleRecoveryController({
+		getPlatformOS: () => 'android',
+		getNowMs: () => 1_000,
+		sleep: async (ms) => {
+			waits.push(ms);
+		},
+		native: nativeFixture(calls),
+	});
+
+	assert.deepEqual(await controller.reset(), { attempted: true });
+	assert.deepEqual(await controller.ensureReady(), {
+		attempted: false,
+		available: true,
+	});
+	assert.deepEqual(calls, ['disconnect', 'connect', 'isAvailable']);
+	assert.deepEqual(waits, [1_500, 3_000]);
+});
+
+void test('reset does not record cooldown when connect skips', async () => {
+	const calls: string[] = [];
+	const waits: number[] = [];
+	const controller = createTailscaleRecoveryController({
+		getPlatformOS: () => 'android',
+		getNowMs: () => 1_000,
+		sleep: async (ms) => {
+			waits.push(ms);
+		},
+		native: connectSkippedNativeFixture(calls),
+	});
+
+	assert.deepEqual(await controller.reset(), { attempted: true });
+	assert.deepEqual(await controller.ensureReady(), {
+		attempted: false,
+		available: true,
+	});
+	assert.deepEqual(calls, ['disconnect', 'connect', 'isAvailable', 'connect']);
+	assert.deepEqual(waits, [1_500]);
 });
 
 void test('openApp delegates to native module', async () => {
