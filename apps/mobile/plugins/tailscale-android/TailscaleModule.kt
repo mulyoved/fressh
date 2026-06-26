@@ -71,6 +71,8 @@ class TailscaleModule(
       true
     } catch (_: PackageManager.NameNotFoundException) {
       false
+    } catch (_: Exception) {
+      false
     }
   }
 

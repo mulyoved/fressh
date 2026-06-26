@@ -8,6 +8,7 @@ import {
 	withDangerousMod,
 	withMainApplication,
 } from 'expo/config-plugins';
+import { addReactPackageRegistration } from './android-main-application';
 
 const PERMISSIONS = [
 	'android.permission.FOREGROUND_SERVICE',
@@ -54,58 +55,11 @@ async function readAndroidTemplateSource(filename: string) {
 	return fs.readFile(path.join(ANDROID_TEMPLATE_SOURCE_PATH, filename), 'utf8');
 }
 
-function findMatchingBrace(contents: string, openBraceIndex: number): number {
-	let depth = 0;
-
-	for (let index = openBraceIndex; index < contents.length; index += 1) {
-		const char = contents[index];
-		if (char === '{') {
-			depth += 1;
-		} else if (char === '}') {
-			depth -= 1;
-			if (depth === 0) {
-				return index;
-			}
-		}
-	}
-
-	return -1;
-}
-
-function addForegroundServicePackageRegistration(contents: string): string {
-	const packageListApply = 'PackageList(this).packages.apply {';
-	const applyIndex = contents.indexOf(packageListApply);
-	if (applyIndex === -1) {
-		throw new Error(
-			`Could not find ${packageListApply} in Android MainApplication.kt`,
-		);
-	}
-
-	const openBraceIndex = contents.indexOf('{', applyIndex);
-	const closeBraceIndex = findMatchingBrace(contents, openBraceIndex);
-	if (closeBraceIndex === -1) {
-		throw new Error(
-			'Could not find PackageList(this).packages.apply block end in Android MainApplication.kt',
-		);
-	}
-
-	const applyBlock = contents.slice(openBraceIndex + 1, closeBraceIndex);
-	if (applyBlock.includes(FOREGROUND_SERVICE_PACKAGE_REGISTRATION)) {
-		return contents;
-	}
-
-	const blockLines = applyBlock.split('\n');
-	const indentedLine = blockLines.find((line) => line.trim().length > 0);
-	const indent = indentedLine?.match(/^\s*/)?.[0] ?? '              ';
-	const closeBraceLineStart = contents.lastIndexOf('\n', closeBraceIndex) + 1;
-
-	return `${contents.slice(0, closeBraceLineStart)}${indent}${FOREGROUND_SERVICE_PACKAGE_REGISTRATION}\n${contents.slice(closeBraceLineStart)}`;
-}
-
 const withForegroundServicePackageRegistration: ConfigPlugin = (config) =>
 	withMainApplication(config, (config) => {
-		config.modResults.contents = addForegroundServicePackageRegistration(
+		config.modResults.contents = addReactPackageRegistration(
 			config.modResults.contents,
+			FOREGROUND_SERVICE_PACKAGE_REGISTRATION,
 		);
 
 		return config;

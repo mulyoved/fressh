@@ -10,10 +10,10 @@ const packageJson = require('../../package.json') as {
 	dependencies: { expo: string };
 };
 
-void test('runtimeVersion changes when native agent alert route ABI changes', () => {
+void test('runtimeVersion changes when native Tailscale recovery ABI changes', () => {
 	assert.equal(
 		config.runtimeVersion,
-		`${packageJson.version}-native-agent-alert-route-v1`,
+		`${packageJson.version}-native-tailscale-recovery-v1`,
 	);
 	assert.notEqual(config.runtimeVersion, packageJson.dependencies.expo);
 });

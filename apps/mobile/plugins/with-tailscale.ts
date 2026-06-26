@@ -7,6 +7,7 @@ import {
 	withDangerousMod,
 	withMainApplication,
 } from 'expo/config-plugins';
+import { addReactPackageRegistration } from './android-main-application';
 
 const TAILSCALE_PACKAGE_NAME = 'com.tailscale.ipn';
 const TAILSCALE_PACKAGE_REGISTRATION = 'add(TailscalePackage())';
@@ -36,54 +37,6 @@ class TailscalePackage : ReactPackage {
 
 async function readAndroidTemplateSource(filename: string) {
 	return fs.readFile(path.join(ANDROID_TEMPLATE_SOURCE_PATH, filename), 'utf8');
-}
-
-function findMatchingBrace(contents: string, openBraceIndex: number): number {
-	let depth = 0;
-
-	for (let index = openBraceIndex; index < contents.length; index += 1) {
-		const char = contents[index];
-		if (char === '{') {
-			depth += 1;
-		} else if (char === '}') {
-			depth -= 1;
-			if (depth === 0) {
-				return index;
-			}
-		}
-	}
-
-	return -1;
-}
-
-function addTailscalePackageRegistration(contents: string): string {
-	const packageListApply = 'PackageList(this).packages.apply {';
-	const applyIndex = contents.indexOf(packageListApply);
-	if (applyIndex === -1) {
-		throw new Error(
-			`Could not find ${packageListApply} in Android MainApplication.kt`,
-		);
-	}
-
-	const openBraceIndex = contents.indexOf('{', applyIndex);
-	const closeBraceIndex = findMatchingBrace(contents, openBraceIndex);
-	if (closeBraceIndex === -1) {
-		throw new Error(
-			'Could not find PackageList(this).packages.apply block end in Android MainApplication.kt',
-		);
-	}
-
-	const applyBlock = contents.slice(openBraceIndex + 1, closeBraceIndex);
-	if (applyBlock.includes(TAILSCALE_PACKAGE_REGISTRATION)) {
-		return contents;
-	}
-
-	const blockLines = applyBlock.split('\n');
-	const indentedLine = blockLines.find((line) => line.trim().length > 0);
-	const indent = indentedLine?.match(/^\s*/)?.[0] ?? '              ';
-	const closeBraceLineStart = contents.lastIndexOf('\n', closeBraceIndex) + 1;
-
-	return `${contents.slice(0, closeBraceLineStart)}${indent}${TAILSCALE_PACKAGE_REGISTRATION}\n${contents.slice(closeBraceLineStart)}`;
 }
 
 type AndroidManifestWithQueries = {
@@ -123,8 +76,9 @@ const withTailscaleManifest: ConfigPlugin = (config) =>
 
 const withTailscalePackageRegistration: ConfigPlugin = (config) =>
 	withMainApplication(config, (config) => {
-		config.modResults.contents = addTailscalePackageRegistration(
+		config.modResults.contents = addReactPackageRegistration(
 			config.modResults.contents,
+			TAILSCALE_PACKAGE_REGISTRATION,
 		);
 
 		return config;

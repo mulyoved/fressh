@@ -77,7 +77,7 @@ const config: ExpoConfig = {
 			'expo-channel-name': updateChannel,
 		},
 	},
-	runtimeVersion: `${packageJson.version}-native-agent-alert-route-v1`,
+	runtimeVersion: `${packageJson.version}-native-tailscale-recovery-v1`,
 	plugins: [
 		'expo-router',
 		[
