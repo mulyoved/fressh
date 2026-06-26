@@ -7,6 +7,10 @@ void test('Tailscale native controller skips unsupported platforms', async () =>
 	const controller = createTailscaleNativeController({
 		getPlatformOS: () => 'ios',
 		getNativeModule: () => ({
+			isAvailable: async () => {
+				calls.push('isAvailable');
+				return true;
+			},
 			connect: async () => {
 				calls.push('connect');
 				return { attempted: true };
