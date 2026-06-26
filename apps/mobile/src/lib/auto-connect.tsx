@@ -1,5 +1,5 @@
-import { usePathname, useRouter } from 'expo-router';
 import * as Linking from 'expo-linking';
+import { usePathname, useRouter } from 'expo-router';
 import React from 'react';
 import { AppState, Platform } from 'react-native';
 import { create } from 'zustand';
@@ -37,6 +37,12 @@ import {
 } from './secrets-manager';
 import { extractTmuxAttachFailureReason } from './ssh-error-details';
 import { useSshStore } from './ssh-store';
+import { tailscaleRecovery } from './tailscale-recovery';
+import { shouldShowTailscaleAttention } from './tailscale-recovery-core';
+import {
+	TailscaleRecoveryBanner,
+	type TailscaleRecoveryBannerState,
+} from './TailscaleRecoveryBanner';
 import { AbortSignalTimeout, queryClient } from './utils';
 
 const logger = rootLogger.extend('AutoConnect');
@@ -44,6 +50,12 @@ const RECONNECT_DELAYS_MS = [500, 1_000, 2_000, 5_000, 10_000];
 const RECONNECT_WINDOW_MS = 2 * 60 * 1_000;
 const FOREGROUND_SERVICE_START_RETRY_MS = 5_000;
 const FOREGROUND_SERVICE_START_MAX_RETRIES = 5;
+
+type TailscaleRecoveryUiState = TailscaleRecoveryBannerState;
+
+const hiddenTailscaleRecoveryState: TailscaleRecoveryUiState = {
+	phase: 'hidden',
+};
 
 type AutoConnectState = {
 	isAutoConnecting: boolean;
@@ -129,6 +141,14 @@ export function AutoConnectManager() {
 	const allowBackgroundRef = React.useRef(false);
 	const didInitRef = React.useRef(false);
 	const launchUrlSuppressAutoConnectRef = React.useRef(false);
+	const [tailscaleRecoveryUiState, setTailscaleRecoveryUiState] =
+		React.useState<TailscaleRecoveryUiState>(hiddenTailscaleRecoveryState);
+	const clearTailscaleAttention = React.useCallback(() => {
+		setTailscaleRecoveryUiState(hiddenTailscaleRecoveryState);
+	}, []);
+	const markTailscaleAttention = React.useCallback((message: string) => {
+		setTailscaleRecoveryUiState({ phase: 'needsAttention', message });
+	}, []);
 
 	const setForegroundServiceStarted = React.useCallback((started: boolean) => {
 		useForegroundServiceRuntimeStore.getState().setStarted(started);
@@ -319,6 +339,14 @@ export function AutoConnectManager() {
 			const latestEntry = await loadLatestSavedConnection();
 			if (!latestEntry) return false;
 
+			const readiness = await tailscaleRecovery.ensureReady();
+			if (Platform.OS === 'android' && !readiness.available) {
+				markTailscaleAttention(
+					'Tailscale is required for this SSH connection. Open Tailscale, then retry Fressh.',
+				);
+				return false;
+			}
+
 			const details = latestEntry.value;
 			if (
 				typeof details.useTmux !== 'boolean' ||
@@ -335,23 +363,88 @@ export function AutoConnectManager() {
 			const resolvedSecurity = await resolveKeySecurity(details);
 			if (!resolvedSecurity) return false;
 
-			const result = await connectAndOpenShell({
-				connectionDetails: normalizedDetails,
-				resolvedSecurity,
-				connect,
-				navigate: ({ connectionId, channelId }) => {
-					navigateToShell(connectionId, channelId);
-				},
-			});
-			if (result.status === 'tmux_attach_failed') {
+			const connectSavedEntry = () =>
+				connectAndOpenShell({
+					connectionDetails: normalizedDetails,
+					resolvedSecurity,
+					connect,
+					navigate: ({ connectionId, channelId }) => {
+						navigateToShell(connectionId, channelId);
+					},
+				});
+			const logTmuxAttachFailure = (
+				result: Extract<
+					Awaited<ReturnType<typeof connectSavedEntry>>,
+					{ status: 'tmux_attach_failed' }
+				>,
+			) => {
 				logger.info('Auto-connect tmux attach failed, will retry', {
 					connectionId: result.connectionId,
 					tmuxAttachFailureReason: result.tmuxAttachFailureReason,
 					tmuxSessionName: result.tmuxSessionName,
 				});
-				return false;
+			};
+
+			try {
+				const result = await connectSavedEntry();
+				if (result.status === 'tmux_attach_failed') {
+					logTmuxAttachFailure(result);
+					return false;
+				}
+				clearTailscaleAttention();
+				return true;
+			} catch (error) {
+				const recovery = await tailscaleRecovery.recoverAfterFailure(error);
+				if (!recovery.networkLikeFailure) {
+					throw error;
+				}
+
+				if (!recovery.attempted) {
+					if (
+						shouldShowTailscaleAttention({
+							platformOS: Platform.OS,
+							networkLikeFailure: recovery.networkLikeFailure,
+							recoveryAttempted: recovery.attempted,
+							retrySucceeded: false,
+						}) ||
+						!recovery.available ||
+						recovery.failed === true
+					) {
+						markTailscaleAttention(
+							'Fressh could not reach the SSH host through Tailscale.',
+						);
+					}
+					return false;
+				}
+
+				try {
+					const retryResult = await connectSavedEntry();
+					if (retryResult.status === 'tmux_attach_failed') {
+						logTmuxAttachFailure(retryResult);
+						return false;
+					}
+					clearTailscaleAttention();
+					return true;
+				} catch (retryError) {
+					if (
+						shouldShowTailscaleAttention({
+							platformOS: Platform.OS,
+							networkLikeFailure: recovery.networkLikeFailure,
+							recoveryAttempted: recovery.attempted,
+							retrySucceeded: false,
+						})
+					) {
+						markTailscaleAttention(
+							'Fressh could not reach the SSH host after restarting Tailscale.',
+						);
+					}
+					logger.warn(
+						'Auto-connect failed after Tailscale recovery retry',
+						retryError,
+					);
+					return false;
+				}
 			}
-			return true;
 		} catch (error) {
 			logger.warn('Auto-connect attempt failed', error);
 			return false;
@@ -362,8 +455,10 @@ export function AutoConnectManager() {
 	}, [
 		connect,
 		connections,
+		clearTailscaleAttention,
 		latestShell,
 		loadLatestSavedConnection,
+		markTailscaleAttention,
 		navigateToShell,
 		pathname,
 		setAutoConnecting,
@@ -675,9 +770,51 @@ export function AutoConnectManager() {
 		prevShellCountRef.current = shells.length;
 	}, [scheduleReconnect, shells.length]);
 
+	const handleOpenTailscale = React.useCallback(() => {
+		void tailscaleRecovery.openApp();
+	}, []);
+
+	const handleRetryAfterTailscaleRecovery = React.useCallback(() => {
+		clearTailscaleAttention();
+		void scheduleReconnect('tailscale-retry-action');
+	}, [clearTailscaleAttention, scheduleReconnect]);
+
+	const handleResetTailscale = React.useCallback(() => {
+		setTailscaleRecoveryUiState({
+			phase: 'recovering',
+			message: 'Resetting Tailscale...',
+		});
+		void tailscaleRecovery
+			.reset()
+			.then((result) => {
+				if ('failed' in result && result.failed === true) {
+					markTailscaleAttention(
+						'Tailscale reset failed. Open Tailscale, then retry Fressh.',
+					);
+					return;
+				}
+				clearTailscaleAttention();
+				void scheduleReconnect('tailscale-reset-action');
+			})
+			.catch((error: unknown) => {
+				logger.warn('Manual Tailscale reset failed', error);
+				markTailscaleAttention(
+					'Tailscale reset failed. Open Tailscale, then retry Fressh.',
+				);
+			});
+	}, [clearTailscaleAttention, markTailscaleAttention, scheduleReconnect]);
+
 	return (
-		<AgentNotificationBridgeManager
-			preservePendingWithoutTarget={reconnectExpectedFromShellDrop}
-		/>
+		<>
+			<AgentNotificationBridgeManager
+				preservePendingWithoutTarget={reconnectExpectedFromShellDrop}
+			/>
+			<TailscaleRecoveryBanner
+				state={tailscaleRecoveryUiState}
+				onOpenTailscale={handleOpenTailscale}
+				onRetry={handleRetryAfterTailscaleRecovery}
+				onReset={handleResetTailscale}
+			/>
+		</>
 	);
 }
