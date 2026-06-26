@@ -79,6 +79,18 @@ function disconnectSkippedNativeFixture(
 	};
 }
 
+function disconnectFailedNativeFixture(
+	calls: string[],
+): TailscaleRecoveryNative {
+	return {
+		...nativeFixture(calls),
+		disconnect: async () => {
+			calls.push('disconnect');
+			return { attempted: false, failed: true };
+		},
+	};
+}
+
 function connectAndDisconnectSkippedNativeFixture(
 	calls: string[],
 ): TailscaleRecoveryNative {
@@ -559,6 +571,26 @@ void test('reset reports no attempt when disconnect and connect skip', async () 
 	assert.deepEqual(waits, []);
 });
 
+void test('reset preserves failed disconnect result', async () => {
+	const calls: string[] = [];
+	const waits: number[] = [];
+	const controller = createTailscaleRecoveryController({
+		getPlatformOS: () => 'android',
+		getNowMs: () => 1_000,
+		sleep: async (ms) => {
+			waits.push(ms);
+		},
+		native: disconnectFailedNativeFixture(calls),
+	});
+
+	assert.deepEqual(await controller.reset(), {
+		attempted: true,
+		failed: true,
+	});
+	assert.deepEqual(calls, ['disconnect', 'connect']);
+	assert.deepEqual(waits, [3_000]);
+});
+
 void test('reset records cooldown when connect attempts', async () => {
 	const calls: string[] = [];
 	const waits: number[] = [];
@@ -592,12 +624,35 @@ void test('reset records cooldown when connect dispatch fails', async () => {
 		native: connectFailedNativeFixture(calls),
 	});
 
-	assert.deepEqual(await controller.reset(), { attempted: true });
+	assert.deepEqual(await controller.reset(), {
+		attempted: true,
+		failed: true,
+	});
 	assert.deepEqual(await controller.ensureReady(), {
 		attempted: false,
 		available: true,
 	});
 	assert.deepEqual(calls, ['disconnect', 'connect', 'isAvailable']);
+	assert.deepEqual(waits, [1_500]);
+});
+
+void test('reset preserves failed connect result', async () => {
+	const calls: string[] = [];
+	const waits: number[] = [];
+	const controller = createTailscaleRecoveryController({
+		getPlatformOS: () => 'android',
+		getNowMs: () => 1_000,
+		sleep: async (ms) => {
+			waits.push(ms);
+		},
+		native: connectFailedNativeFixture(calls),
+	});
+
+	assert.deepEqual(await controller.reset(), {
+		attempted: true,
+		failed: true,
+	});
+	assert.deepEqual(calls, ['disconnect', 'connect']);
 	assert.deepEqual(waits, [1_500]);
 });
 

@@ -168,9 +168,12 @@ export function createTailscaleRecoveryController({
 				await sleep(DEFAULT_TAILSCALE_SETTLE_DELAY_MS);
 			}
 
-			return {
+			const result = {
 				attempted: disconnectResult.attempted || connectResult.attempted,
 			};
+			return disconnectResult.failed === true || connectResult.failed === true
+				? { ...result, failed: true }
+				: result;
 		},
 
 		async openApp() {
