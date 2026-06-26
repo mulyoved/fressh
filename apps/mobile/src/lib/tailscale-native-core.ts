@@ -19,7 +19,9 @@ type TailscaleNativeControllerDeps = {
 	logger: TailscaleNativeLogger;
 };
 
-const noAttempt: TailscaleNativeAttemptResult = { attempted: false };
+const createNoAttempt = (): TailscaleNativeAttemptResult => ({
+	attempted: false,
+});
 
 export function createTailscaleNativeController({
 	getPlatformOS,
@@ -45,34 +47,34 @@ export function createTailscaleNativeController({
 
 		async connect(): Promise<TailscaleNativeAttemptResult> {
 			const nativeModule = getAndroidModule();
-			if (!nativeModule?.connect) return noAttempt;
+			if (!nativeModule?.connect) return createNoAttempt();
 			try {
 				return await nativeModule.connect();
 			} catch (error) {
 				logger.warn('tailscale connect intent failed', error);
-				return noAttempt;
+				return createNoAttempt();
 			}
 		},
 
 		async disconnect(): Promise<TailscaleNativeAttemptResult> {
 			const nativeModule = getAndroidModule();
-			if (!nativeModule?.disconnect) return noAttempt;
+			if (!nativeModule?.disconnect) return createNoAttempt();
 			try {
 				return await nativeModule.disconnect();
 			} catch (error) {
 				logger.warn('tailscale disconnect intent failed', error);
-				return noAttempt;
+				return createNoAttempt();
 			}
 		},
 
 		async openApp(): Promise<TailscaleNativeAttemptResult> {
 			const nativeModule = getAndroidModule();
-			if (!nativeModule?.openApp) return noAttempt;
+			if (!nativeModule?.openApp) return createNoAttempt();
 			try {
 				return await nativeModule.openApp();
 			} catch (error) {
 				logger.warn('tailscale open app failed', error);
-				return noAttempt;
+				return createNoAttempt();
 			}
 		},
 	};
