@@ -1,12 +1,13 @@
 import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import {
+	getTailscaleRecoveryBannerPresentation,
+	type TailscaleRecoveryBannerState,
+} from './TailscaleRecoveryBannerPresentation';
 import { useTheme } from './theme';
 
-export type TailscaleRecoveryBannerState =
-	| { phase: 'hidden' }
-	| { phase: 'needsAttention'; message: string }
-	| { phase: 'recovering'; message: string };
+export type { TailscaleRecoveryBannerState };
 
 export function TailscaleRecoveryBanner(props: {
 	state: TailscaleRecoveryBannerState;
@@ -16,13 +17,13 @@ export function TailscaleRecoveryBanner(props: {
 }) {
 	const theme = useTheme();
 	const insets = useSafeAreaInsets();
+	const presentation = getTailscaleRecoveryBannerPresentation(
+		props.state,
+		theme.colors,
+	);
 
-	if (props.state.phase === 'hidden') return null;
-
-	const disabled = props.state.phase === 'recovering';
-	const primaryBackgroundColor = disabled
-		? theme.colors.primaryDisabled
-		: theme.colors.primary;
+	if (!presentation.visible) return null;
+	const [openAction, retryAction, resetAction] = presentation.actions;
 
 	return (
 		<View
@@ -40,21 +41,23 @@ export function TailscaleRecoveryBanner(props: {
 				]}
 			>
 				<Text style={[styles.title, { color: theme.colors.textPrimary }]}>
-					Tailscale connection needs attention
+					{presentation.title}
 				</Text>
 				<Text style={[styles.message, { color: theme.colors.textSecondary }]}>
-					{props.state.message}
+					{presentation.message}
 				</Text>
 				<View style={styles.actions}>
 					<Pressable
 						accessibilityRole="button"
-						disabled={disabled}
+						disabled={openAction.disabled}
 						onPress={props.onOpenTailscale}
 						style={[
 							styles.button,
 							styles.primaryButton,
-							{ backgroundColor: primaryBackgroundColor },
-							disabled && styles.disabledButton,
+							{
+								backgroundColor: presentation.primaryBackgroundColor,
+							},
+							openAction.disabled && styles.disabledButton,
 						]}
 					>
 						<Text
@@ -63,12 +66,12 @@ export function TailscaleRecoveryBanner(props: {
 								{ color: theme.colors.buttonTextOnPrimary },
 							]}
 						>
-							Open Tailscale
+							{openAction.label}
 						</Text>
 					</Pressable>
 					<Pressable
 						accessibilityRole="button"
-						disabled={disabled}
+						disabled={retryAction.disabled}
 						onPress={props.onRetry}
 						style={[
 							styles.button,
@@ -77,18 +80,18 @@ export function TailscaleRecoveryBanner(props: {
 								backgroundColor: theme.colors.surface,
 								borderColor: theme.colors.border,
 							},
-							disabled && styles.disabledButton,
+							retryAction.disabled && styles.disabledButton,
 						]}
 					>
 						<Text
 							style={[styles.buttonText, { color: theme.colors.textPrimary }]}
 						>
-							Retry
+							{retryAction.label}
 						</Text>
 					</Pressable>
 					<Pressable
 						accessibilityRole="button"
-						disabled={disabled}
+						disabled={resetAction.disabled}
 						onPress={props.onReset}
 						style={[
 							styles.button,
@@ -97,13 +100,13 @@ export function TailscaleRecoveryBanner(props: {
 								backgroundColor: theme.colors.surface,
 								borderColor: theme.colors.border,
 							},
-							disabled && styles.disabledButton,
+							resetAction.disabled && styles.disabledButton,
 						]}
 					>
 						<Text
 							style={[styles.buttonText, { color: theme.colors.textPrimary }]}
 						>
-							Reset
+							{resetAction.label}
 						</Text>
 					</Pressable>
 				</View>
