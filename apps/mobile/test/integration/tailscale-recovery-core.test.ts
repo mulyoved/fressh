@@ -25,11 +25,28 @@ void test('network-like SSH errors trigger Tailscale recovery', () => {
 	]) {
 		assert.equal(isNetworkLikeSshError(new Error(message)), true, message);
 	}
+
+	assert.equal(
+		isNetworkLikeSshError({ tag: 'Russh', inner: ['Network is unreachable'] }),
+		true,
+	);
+	assert.equal(
+		isNetworkLikeSshError({ tag: 'RusshKeys', inner: ['No route to host'] }),
+		true,
+	);
+
+	const error = Object.assign(new Error('SshError.Russh'), {
+		tag: 'Russh',
+		inner: ['Connection timed out'],
+	});
+	assert.equal(isNetworkLikeSshError(error), true);
 });
 
 void test('non-network SSH errors do not trigger Tailscale recovery', () => {
 	for (const error of [
+		{ tag: 'Auth', inner: ['Network is unreachable'] },
 		{ tag: 'TmuxAttachFailed', inner: ['session missing'] },
+		{ tag: 'TmuxAttachFailed', inner: ['Network is unreachable'] },
 		new Error('Permission denied (publickey)'),
 		new Error('Host key verification failed'),
 		new Error('Key missing'),

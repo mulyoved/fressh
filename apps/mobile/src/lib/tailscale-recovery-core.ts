@@ -6,7 +6,29 @@ export function isTailscaleRecoverySupported(platformOS: string) {
 	return platformOS === 'android';
 }
 
+const NETWORK_ERROR_TAGS = new Set(['Russh', 'RusshKeys']);
+const NON_NETWORK_ERROR_TAGS = new Set(['Auth', 'TmuxAttachFailed']);
+
+function errorTag(error: unknown): string | null {
+	if (!error || typeof error !== 'object') return null;
+	const tag = (error as { tag?: unknown }).tag;
+	return typeof tag === 'string' ? tag : null;
+}
+
+function structuredErrorText(error: unknown): string | null {
+	const tag = errorTag(error);
+	if (!tag || !NETWORK_ERROR_TAGS.has(tag)) return null;
+
+	const inner = (error as { inner?: unknown }).inner;
+	if (!Array.isArray(inner)) return null;
+
+	const text = inner.filter((value) => typeof value === 'string').join(' ');
+	return text === '' ? null : text;
+}
+
 function errorText(error: unknown): string {
+	const structuredText = structuredErrorText(error);
+	if (structuredText !== null) return structuredText;
 	if (error instanceof Error) return error.message;
 	if (typeof error === 'string') return error;
 	try {
@@ -17,11 +39,8 @@ function errorText(error: unknown): string {
 }
 
 export function isNetworkLikeSshError(error: unknown) {
-	if (
-		error &&
-		typeof error === 'object' &&
-		(error as { tag?: unknown }).tag === 'TmuxAttachFailed'
-	) {
+	const tag = errorTag(error);
+	if (tag !== null && NON_NETWORK_ERROR_TAGS.has(tag)) {
 		return false;
 	}
 
