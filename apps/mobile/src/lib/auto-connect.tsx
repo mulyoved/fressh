@@ -6,6 +6,7 @@ import { create } from 'zustand';
 import { useShallow } from 'zustand/react/shallow';
 import { AgentNotificationBridgeManager } from './AgentNotificationBridgeManager';
 import { getAutoConnectLaunchActionForUrl } from './auto-connect-launch';
+import { shouldMarkTailscaleRecoveryAttention } from './auto-connect-recovery';
 import {
 	getStoredConnectionId,
 	pickLatestConnection,
@@ -401,14 +402,16 @@ export function AutoConnectManager() {
 
 				if (!recovery.attempted) {
 					if (
-						shouldShowTailscaleAttention({
+						shouldMarkTailscaleRecoveryAttention({
 							platformOS: Platform.OS,
 							networkLikeFailure: recovery.networkLikeFailure,
 							recoveryAttempted: recovery.attempted,
 							retrySucceeded: false,
-						}) ||
-						!recovery.available ||
-						recovery.failed === true
+							available: recovery.available,
+							failed: recovery.failed,
+							ensureAttemptedBeforeFailure:
+								readiness.attempted || readiness.failed === true,
+						})
 					) {
 						markTailscaleAttention(
 							'Fressh could not reach the SSH host through Tailscale.',
