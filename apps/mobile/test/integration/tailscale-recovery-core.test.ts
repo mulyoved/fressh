@@ -22,6 +22,7 @@ void test('network-like SSH errors trigger Tailscale recovery', () => {
 		'Unable to resolve host dev-remote-machine-1',
 		'Connection reset by peer',
 		'Broken pipe',
+		'Software caused connection abort',
 	]) {
 		assert.equal(isNetworkLikeSshError(new Error(message)), true, message);
 	}
@@ -58,6 +59,14 @@ void test('network-like SSH errors trigger Tailscale recovery', () => {
 		inner: ['Connection timed out'],
 	});
 	assert.equal(isNetworkLikeSshError(error), true);
+});
+
+void test('weird SSH error payloads do not throw or trigger Tailscale recovery', () => {
+	const circular: Record<string, unknown> = {};
+	circular.self = circular;
+
+	assert.equal(isNetworkLikeSshError(circular), false);
+	assert.equal(isNetworkLikeSshError({ code: 1n }), false);
 });
 
 void test('non-network SSH errors do not trigger Tailscale recovery', () => {
