@@ -39,7 +39,6 @@ import {
 import { extractTmuxAttachFailureReason } from './ssh-error-details';
 import { useSshStore } from './ssh-store';
 import { tailscaleRecovery } from './tailscale-recovery';
-import { shouldShowTailscaleAttention } from './tailscale-recovery-core';
 import {
 	TailscaleRecoveryBanner,
 	type TailscaleRecoveryBannerState,
@@ -430,7 +429,7 @@ export function AutoConnectManager() {
 					return true;
 				} catch (retryError) {
 					if (
-						shouldShowTailscaleAttention({
+						shouldMarkTailscaleRecoveryAttention({
 							platformOS: Platform.OS,
 							networkLikeFailure: recovery.networkLikeFailure,
 							recoveryAttempted: recovery.attempted,

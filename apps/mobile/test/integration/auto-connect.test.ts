@@ -59,6 +59,18 @@ void test('Tailscale attention appears when initial ensure consumed recovery', (
 	);
 });
 
+void test('Tailscale attention appears after attempted recovery retry failure', () => {
+	assert.equal(
+		shouldMarkTailscaleRecoveryAttention({
+			platformOS: 'android',
+			networkLikeFailure: true,
+			recoveryAttempted: true,
+			retrySucceeded: false,
+		}),
+		true,
+	);
+});
+
 void test('Tailscale attention stays hidden for skipped non-network recovery', () => {
 	assert.equal(
 		shouldMarkTailscaleRecoveryAttention({
