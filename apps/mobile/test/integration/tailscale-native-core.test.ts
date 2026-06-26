@@ -11,12 +11,22 @@ void test('Tailscale native controller skips unsupported platforms', async () =>
 				calls.push('connect');
 				return { attempted: true };
 			},
+			disconnect: async () => {
+				calls.push('disconnect');
+				return { attempted: true };
+			},
+			openApp: async () => {
+				calls.push('openApp');
+				return { attempted: true };
+			},
 		}),
 		logger: { warn: () => {} },
 	});
 
 	assert.equal(await controller.isAvailable(), false);
 	assert.deepEqual(await controller.connect(), { attempted: false });
+	assert.deepEqual(await controller.disconnect(), { attempted: false });
+	assert.deepEqual(await controller.openApp(), { attempted: false });
 	assert.deepEqual(calls, []);
 });
 
