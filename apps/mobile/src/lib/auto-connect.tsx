@@ -6,7 +6,11 @@ import { create } from 'zustand';
 import { useShallow } from 'zustand/react/shallow';
 import { AgentNotificationBridgeManager } from './AgentNotificationBridgeManager';
 import { getAutoConnectLaunchActionForUrl } from './auto-connect-launch';
-import { shouldMarkTailscaleRecoveryAttention } from './auto-connect-recovery';
+import {
+	getTailscaleManualResetDecision,
+	shouldMarkTailscaleRecoveryAttention,
+	TAILSCALE_RESET_FAILED_MESSAGE,
+} from './auto-connect-recovery';
 import {
 	getStoredConnectionId,
 	pickLatestConnection,
@@ -142,6 +146,7 @@ export function AutoConnectManager() {
 	const allowBackgroundRef = React.useRef(false);
 	const didInitRef = React.useRef(false);
 	const launchUrlSuppressAutoConnectRef = React.useRef(false);
+	const tailscaleResetInFlightRef = React.useRef(false);
 	const [tailscaleRecoveryUiState, setTailscaleRecoveryUiState] =
 		React.useState<TailscaleRecoveryUiState>(hiddenTailscaleRecoveryState);
 	const clearTailscaleAttention = React.useCallback(() => {
@@ -481,13 +486,16 @@ export function AutoConnectManager() {
 
 	// On disconnect, retry with capped backoff for up to RECONNECT_WINDOW_MS.
 	const scheduleReconnect = React.useCallback(
-		async (reason: string) => {
+		(reason: string, opts?: { replaceExisting?: boolean }) => {
+			if (opts?.replaceExisting === true && reconnectLoopRunningRef.current) {
+				stopReconnectCycle(`${reason}-restart`);
+			}
 			if (
 				reconnectLoopRunningRef.current ||
-				isReconnecting ||
+				(opts?.replaceExisting !== true && isReconnecting) ||
 				isAutoConnecting
 			) {
-				return;
+				return false;
 			}
 			reconnectLoopRunningRef.current = true;
 			reconnectStartedAtMsRef.current = Date.now();
@@ -524,6 +532,10 @@ export function AutoConnectManager() {
 					stopReconnectCycle('retry-timeout');
 					return;
 				}
+				if (tailscaleResetInFlightRef.current) {
+					stopReconnectCycle('tailscale-reset-in-progress');
+					return;
+				}
 				if (
 					shouldWaitForForegroundServiceCoverage({
 						platformOS: Platform.OS,
@@ -551,10 +563,15 @@ export function AutoConnectManager() {
 					stopReconnectCycle('reconnected');
 					return;
 				}
+				if (tailscaleResetInFlightRef.current) {
+					stopReconnectCycle('tailscale-reset-in-progress');
+					return;
+				}
 				scheduleNextAttempt();
 			};
 
-			await attemptWithBackoff();
+			void attemptWithBackoff();
+			return true;
 		},
 		[
 			attemptAutoConnect,
@@ -741,7 +758,7 @@ export function AutoConnectManager() {
 			}
 			if (!wasActive && isActiveRef.current) {
 				if (shells.length === 0) {
-					void scheduleReconnect('app-resume-no-shell');
+					scheduleReconnect('app-resume-no-shell');
 				} else {
 					void runAutoConnectOnce();
 				}
@@ -768,7 +785,7 @@ export function AutoConnectManager() {
 			return;
 		}
 		if (prevShellCountRef.current > 0 && shells.length === 0) {
-			void scheduleReconnect('shell-drop');
+			scheduleReconnect('shell-drop');
 		}
 		prevShellCountRef.current = shells.length;
 	}, [scheduleReconnect, shells.length]);
@@ -778,11 +795,18 @@ export function AutoConnectManager() {
 	}, []);
 
 	const handleRetryAfterTailscaleRecovery = React.useCallback(() => {
-		clearTailscaleAttention();
-		void scheduleReconnect('tailscale-retry-action');
+		const started = scheduleReconnect('tailscale-retry-action', {
+			replaceExisting: true,
+		});
+		if (started) {
+			clearTailscaleAttention();
+		}
 	}, [clearTailscaleAttention, scheduleReconnect]);
 
 	const handleResetTailscale = React.useCallback(() => {
+		if (tailscaleResetInFlightRef.current) return;
+		tailscaleResetInFlightRef.current = true;
+		stopReconnectCycle('tailscale-reset-action');
 		setTailscaleRecoveryUiState({
 			phase: 'recovering',
 			message: 'Resetting Tailscale...',
@@ -790,22 +814,35 @@ export function AutoConnectManager() {
 		void tailscaleRecovery
 			.reset()
 			.then((result) => {
-				if ('failed' in result && result.failed === true) {
-					markTailscaleAttention(
-						'Tailscale reset failed. Open Tailscale, then retry Fressh.',
-					);
+				const decision = getTailscaleManualResetDecision(result);
+				if (decision.kind === 'attention') {
+					markTailscaleAttention(decision.message);
 					return;
 				}
-				clearTailscaleAttention();
-				void scheduleReconnect('tailscale-reset-action');
+				const started = scheduleReconnect('tailscale-reset-action', {
+					replaceExisting: true,
+				});
+				if (started) {
+					clearTailscaleAttention();
+					return;
+				}
+				markTailscaleAttention(
+					'Tailscale reset finished. Retry Fressh to reconnect.',
+				);
 			})
 			.catch((error: unknown) => {
 				logger.warn('Manual Tailscale reset failed', error);
-				markTailscaleAttention(
-					'Tailscale reset failed. Open Tailscale, then retry Fressh.',
-				);
+				markTailscaleAttention(TAILSCALE_RESET_FAILED_MESSAGE);
+			})
+			.finally(() => {
+				tailscaleResetInFlightRef.current = false;
 			});
-	}, [clearTailscaleAttention, markTailscaleAttention, scheduleReconnect]);
+	}, [
+		clearTailscaleAttention,
+		markTailscaleAttention,
+		scheduleReconnect,
+		stopReconnectCycle,
+	]);
 
 	return (
 		<>

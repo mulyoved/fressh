@@ -4,7 +4,12 @@ import {
 	getAutoConnectLaunchActionForUrl,
 	shouldSkipInitialAutoConnectForUrl,
 } from '../../src/lib/auto-connect-launch';
-import { shouldMarkTailscaleRecoveryAttention } from '../../src/lib/auto-connect-recovery';
+import {
+	getTailscaleManualResetDecision,
+	shouldMarkTailscaleRecoveryAttention,
+	TAILSCALE_RESET_FAILED_MESSAGE,
+	TAILSCALE_RESET_NOT_STARTED_MESSAGE,
+} from '../../src/lib/auto-connect-recovery';
 
 void test('e2e launch URL can suppress the initial auto-connect attempt', () => {
 	assert.equal(
@@ -124,4 +129,21 @@ void test('Tailscale attention appears for unavailable or failed recovery', () =
 		}),
 		true,
 	);
+});
+
+void test('Tailscale manual reset decision preserves attention on failed or skipped reset', () => {
+	assert.deepEqual(
+		getTailscaleManualResetDecision({ attempted: false, failed: true }),
+		{
+			kind: 'attention',
+			message: TAILSCALE_RESET_FAILED_MESSAGE,
+		},
+	);
+	assert.deepEqual(getTailscaleManualResetDecision({ attempted: false }), {
+		kind: 'attention',
+		message: TAILSCALE_RESET_NOT_STARTED_MESSAGE,
+	});
+	assert.deepEqual(getTailscaleManualResetDecision({ attempted: true }), {
+		kind: 'reconnect',
+	});
 });
