@@ -5,6 +5,7 @@ import {
 	shouldSkipInitialAutoConnectForUrl,
 } from '../../src/lib/auto-connect-launch';
 import {
+	canStartReplacementReconnect,
 	getTailscaleManualResetDecision,
 	shouldMarkTailscaleRecoveryAttention,
 	TAILSCALE_RESET_FAILED_MESSAGE,
@@ -146,4 +147,34 @@ void test('Tailscale manual reset decision preserves attention on failed or skip
 	assert.deepEqual(getTailscaleManualResetDecision({ attempted: true }), {
 		kind: 'reconnect',
 	});
+});
+
+void test('Tailscale reset reconnect starts only after reset is no longer in flight', () => {
+	assert.equal(
+		canStartReplacementReconnect({
+			resetInFlight: true,
+			reconnectLoopRunning: false,
+			isReconnecting: false,
+			isAutoConnecting: false,
+		}),
+		false,
+	);
+	assert.equal(
+		canStartReplacementReconnect({
+			resetInFlight: false,
+			reconnectLoopRunning: false,
+			isReconnecting: false,
+			isAutoConnecting: false,
+		}),
+		true,
+	);
+	assert.equal(
+		canStartReplacementReconnect({
+			resetInFlight: false,
+			reconnectLoopRunning: true,
+			isReconnecting: false,
+			isAutoConnecting: false,
+		}),
+		false,
+	);
 });

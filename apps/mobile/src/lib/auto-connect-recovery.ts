@@ -50,3 +50,17 @@ export function getTailscaleManualResetDecision(result: {
 	}
 	return { kind: 'reconnect' as const };
 }
+
+export function canStartReplacementReconnect(input: {
+	resetInFlight: boolean;
+	reconnectLoopRunning: boolean;
+	isReconnecting: boolean;
+	isAutoConnecting: boolean;
+}) {
+	return (
+		!input.resetInFlight &&
+		!input.reconnectLoopRunning &&
+		!input.isReconnecting &&
+		!input.isAutoConnecting
+	);
+}

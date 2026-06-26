@@ -7,6 +7,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { AgentNotificationBridgeManager } from './AgentNotificationBridgeManager';
 import { getAutoConnectLaunchActionForUrl } from './auto-connect-launch';
 import {
+	canStartReplacementReconnect,
 	getTailscaleManualResetDecision,
 	shouldMarkTailscaleRecoveryAttention,
 	TAILSCALE_RESET_FAILED_MESSAGE,
@@ -490,11 +491,18 @@ export function AutoConnectManager() {
 			if (opts?.replaceExisting === true && reconnectLoopRunningRef.current) {
 				stopReconnectCycle(`${reason}-restart`);
 			}
-			if (
-				reconnectLoopRunningRef.current ||
-				(opts?.replaceExisting !== true && isReconnecting) ||
-				isAutoConnecting
-			) {
+			const reconnectBlocked =
+				opts?.replaceExisting === true
+					? !canStartReplacementReconnect({
+							resetInFlight: tailscaleResetInFlightRef.current,
+							reconnectLoopRunning: reconnectLoopRunningRef.current,
+							isReconnecting: false,
+							isAutoConnecting,
+						})
+					: reconnectLoopRunningRef.current ||
+						isReconnecting ||
+						isAutoConnecting;
+			if (reconnectBlocked) {
 				return false;
 			}
 			reconnectLoopRunningRef.current = true;
@@ -819,6 +827,7 @@ export function AutoConnectManager() {
 					markTailscaleAttention(decision.message);
 					return;
 				}
+				tailscaleResetInFlightRef.current = false;
 				const started = scheduleReconnect('tailscale-reset-action', {
 					replaceExisting: true,
 				});
