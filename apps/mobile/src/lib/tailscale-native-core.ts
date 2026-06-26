@@ -1,3 +1,5 @@
+import { isTailscaleRecoverySupported } from './tailscale-recovery-core';
+
 export type TailscaleNativeAttemptResult = {
 	attempted: boolean;
 	failed?: boolean;
@@ -35,7 +37,7 @@ export function createTailscaleNativeController({
 	logger,
 }: TailscaleNativeControllerDeps) {
 	const getAndroidModule = () => {
-		if (getPlatformOS() !== 'android') return undefined;
+		if (!isTailscaleRecoverySupported(getPlatformOS())) return undefined;
 		return getNativeModule();
 	};
 
