@@ -5,11 +5,9 @@ import {
 	shouldSkipInitialAutoConnectForUrl,
 } from '../../src/lib/auto-connect-launch';
 import {
-	canStartReplacementReconnect,
 	canUpdateTailscaleAttention,
 	getTailscaleRecoveryAttentionDecision,
 	getTailscaleManualResetDecision,
-	isCurrentReconnectLoop,
 } from '../../src/lib/auto-connect-recovery';
 import {
 	TAILSCALE_REACHABILITY_MESSAGE,
@@ -167,54 +165,6 @@ void test('Tailscale manual reset decision preserves attention on failed or skip
 	);
 });
 
-void test('Tailscale reset reconnect starts only after reset is no longer in flight', () => {
-	assert.equal(
-		canStartReplacementReconnect({
-			resetInFlight: true,
-			reconnectLoopRunning: false,
-			isReconnecting: false,
-			isAutoConnecting: false,
-		}),
-		false,
-	);
-	assert.equal(
-		canStartReplacementReconnect({
-			resetInFlight: false,
-			reconnectLoopRunning: false,
-			isReconnecting: false,
-			isAutoConnecting: false,
-		}),
-		true,
-	);
-	assert.equal(
-		canStartReplacementReconnect({
-			resetInFlight: false,
-			reconnectLoopRunning: true,
-			isReconnecting: false,
-			isAutoConnecting: false,
-		}),
-		false,
-	);
-	assert.equal(
-		canStartReplacementReconnect({
-			resetInFlight: false,
-			reconnectLoopRunning: false,
-			isReconnecting: true,
-			isAutoConnecting: false,
-		}),
-		false,
-	);
-	assert.equal(
-		canStartReplacementReconnect({
-			resetInFlight: false,
-			reconnectLoopRunning: false,
-			isReconnecting: false,
-			isAutoConnecting: true,
-		}),
-		false,
-	);
-});
-
 void test('Tailscale attention updates are suppressed during manual reset unless forced', () => {
 	assert.equal(canUpdateTailscaleAttention({ resetInFlight: true }), false);
 	assert.equal(
@@ -222,31 +172,4 @@ void test('Tailscale attention updates are suppressed during manual reset unless
 		true,
 	);
 	assert.equal(canUpdateTailscaleAttention({ resetInFlight: false }), true);
-});
-
-void test('stale reconnect loops cannot update reconnect state', () => {
-	assert.equal(
-		isCurrentReconnectLoop({
-			currentGeneration: 2,
-			loopGeneration: 2,
-			reconnectLoopRunning: true,
-		}),
-		true,
-	);
-	assert.equal(
-		isCurrentReconnectLoop({
-			currentGeneration: 3,
-			loopGeneration: 2,
-			reconnectLoopRunning: true,
-		}),
-		false,
-	);
-	assert.equal(
-		isCurrentReconnectLoop({
-			currentGeneration: 2,
-			loopGeneration: 2,
-			reconnectLoopRunning: false,
-		}),
-		false,
-	);
 });

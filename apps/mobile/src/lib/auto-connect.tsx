@@ -7,11 +7,13 @@ import { useShallow } from 'zustand/react/shallow';
 import { AgentNotificationBridgeManager } from './AgentNotificationBridgeManager';
 import { getAutoConnectLaunchActionForUrl } from './auto-connect-launch';
 import {
-	canStartReplacementReconnect,
 	canUpdateTailscaleAttention,
 	getTailscaleManualResetDecision,
-	isCurrentReconnectLoop,
 } from './auto-connect-recovery';
+import {
+	createAutoConnectReconnectController,
+	type AutoConnectReconnectController,
+} from './auto-connect-reconnect-controller';
 import { attemptSavedEntryWithTailscaleRecovery } from './auto-connect-saved-entry';
 import {
 	getStoredConnectionId,
@@ -23,7 +25,6 @@ import {
 } from './foreground-service';
 import {
 	canRunAndroidBackgroundWork,
-	canAttemptBackgroundReconnect,
 	createForegroundServiceStartCoordinator,
 	getForegroundServiceStartRetryDelay,
 	getForegroundServiceNotificationMessage,
@@ -128,19 +129,17 @@ export function AutoConnectManager() {
 	);
 
 	const inFlightRef = React.useRef(false);
-	const reconnectTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(
-		null,
-	);
 	const foregroundStartRetryTimerRef = React.useRef<ReturnType<
 		typeof setTimeout
 	> | null>(null);
 	const foregroundStartFailureCountRef = React.useRef(0);
 	const [foregroundStartRetryNonce, setForegroundStartRetryNonce] =
 		React.useState(0);
-	const reconnectStartedAtMsRef = React.useRef<number | null>(null);
-	const reconnectAttemptRef = React.useRef(0);
-	const reconnectLoopRunningRef = React.useRef(false);
-	const reconnectLoopGenerationRef = React.useRef(0);
+	const attemptAutoConnectRef = React.useRef<(() => Promise<boolean>) | null>(
+		null,
+	);
+	const reconnectControllerRef =
+		React.useRef<AutoConnectReconnectController | null>(null);
 	const prevShellCountRef = React.useRef(shells.length);
 	const isActiveRef = React.useRef(isActiveState(AppState.currentState));
 	const foregroundKeyRef = React.useRef<string | null>(null);
@@ -199,13 +198,6 @@ export function AutoConnectManager() {
 		isReconnecting,
 	});
 
-	const clearReconnectTimer = React.useCallback(() => {
-		if (reconnectTimerRef.current) {
-			clearTimeout(reconnectTimerRef.current);
-			reconnectTimerRef.current = null;
-		}
-	}, []);
-
 	const clearForegroundStartRetryTimer = React.useCallback(() => {
 		if (foregroundStartRetryTimerRef.current) {
 			clearTimeout(foregroundStartRetryTimerRef.current);
@@ -215,15 +207,9 @@ export function AutoConnectManager() {
 
 	const stopReconnectCycle = React.useCallback(
 		(reason: string) => {
-			clearReconnectTimer();
-			reconnectLoopGenerationRef.current += 1;
-			reconnectLoopRunningRef.current = false;
-			reconnectStartedAtMsRef.current = null;
-			reconnectAttemptRef.current = 0;
-			setReconnecting(false);
-			logger.info('Reconnect cycle stopped', { reason });
+			reconnectControllerRef.current?.stop(reason);
 		},
-		[clearReconnectTimer, setReconnecting],
+		[],
 	);
 
 	const waitForAutoConnectIdle = React.useCallback(async () => {
@@ -450,6 +436,42 @@ export function AutoConnectManager() {
 		pathname,
 		setAutoConnecting,
 	]);
+	attemptAutoConnectRef.current = attemptAutoConnect;
+
+	if (reconnectControllerRef.current === null) {
+		reconnectControllerRef.current = createAutoConnectReconnectController({
+			delaysMs: RECONNECT_DELAYS_MS,
+			windowMs: RECONNECT_WINDOW_MS,
+			now: () => Date.now(),
+			setTimeout: (callback, delayMs) => setTimeout(callback, delayMs),
+			clearTimeout: (timer) => {
+				clearTimeout(timer as ReturnType<typeof setTimeout>);
+			},
+			getSnapshot: () => {
+				const autoState = useAutoConnectStore.getState();
+				const shellCount = useSshStore.getState().shells
+					? Object.keys(useSshStore.getState().shells).length
+					: 0;
+				return {
+					isAutoConnecting: autoState.isAutoConnecting,
+					isReconnecting: autoState.isReconnecting,
+					resetInFlight: tailscaleResetInFlightRef.current,
+					platformOS: Platform.OS,
+					appActive: isActiveRef.current,
+					backgroundWorkAllowed: allowBackgroundRef.current,
+					foregroundServiceRequired: shouldRunForegroundService({
+						shellCount,
+						isAutoConnecting: autoState.isAutoConnecting,
+						isReconnecting: autoState.isReconnecting,
+					}),
+				};
+			},
+			setReconnecting,
+			attemptAutoConnect: async () =>
+				(await attemptAutoConnectRef.current?.()) ?? false,
+			logger,
+		});
+	}
 
 	const runAutoConnectOnce = React.useCallback(async () => {
 		if (launchUrlSuppressAutoConnectRef.current) return;
@@ -463,126 +485,16 @@ export function AutoConnectManager() {
 		await attemptAutoConnect();
 	}, [attemptAutoConnect]);
 
-	// On disconnect, retry with capped backoff for up to RECONNECT_WINDOW_MS.
 	const scheduleReconnect = React.useCallback(
 		(reason: string, opts?: { replaceExisting?: boolean }) => {
-			if (opts?.replaceExisting === true && reconnectLoopRunningRef.current) {
-				stopReconnectCycle(`${reason}-restart`);
+			const controller = reconnectControllerRef.current;
+			if (!controller) return false;
+			if (opts?.replaceExisting === true) {
+				return controller.replace(reason);
 			}
-			const autoState = useAutoConnectStore.getState();
-			const reconnectBlocked =
-				opts?.replaceExisting === true
-					? !canStartReplacementReconnect({
-							resetInFlight: tailscaleResetInFlightRef.current,
-							reconnectLoopRunning: reconnectLoopRunningRef.current,
-							isReconnecting: autoState.isReconnecting,
-							isAutoConnecting: autoState.isAutoConnecting,
-						})
-					: reconnectLoopRunningRef.current ||
-						autoState.isReconnecting ||
-						autoState.isAutoConnecting;
-			if (reconnectBlocked) {
-				return false;
-			}
-			reconnectLoopRunningRef.current = true;
-			const loopGeneration = reconnectLoopGenerationRef.current + 1;
-			reconnectLoopGenerationRef.current = loopGeneration;
-			reconnectStartedAtMsRef.current = Date.now();
-			reconnectAttemptRef.current = 0;
-			setReconnecting(true);
-			logger.info('Reconnect cycle started', { reason });
-
-			const getForegroundServiceRequired = () =>
-				shouldRunForegroundService({
-					shellCount: useSshStore.getState().shells
-						? Object.keys(useSshStore.getState().shells).length
-						: 0,
-					isAutoConnecting: useAutoConnectStore.getState().isAutoConnecting,
-					isReconnecting: useAutoConnectStore.getState().isReconnecting,
-				});
-
-			const scheduleNextAttempt = () => {
-				if (
-					!isCurrentReconnectLoop({
-						currentGeneration: reconnectLoopGenerationRef.current,
-						loopGeneration,
-						reconnectLoopRunning: reconnectLoopRunningRef.current,
-					})
-				) {
-					return;
-				}
-				const attempt = reconnectAttemptRef.current;
-				reconnectAttemptRef.current = attempt + 1;
-				const delayMs =
-					RECONNECT_DELAYS_MS[
-						Math.min(attempt, RECONNECT_DELAYS_MS.length - 1)
-					] ?? 10_000;
-				reconnectTimerRef.current = setTimeout(() => {
-					void attemptWithBackoff();
-				}, delayMs);
-			};
-
-			const attemptWithBackoff = async () => {
-				const isCurrentLoop = () =>
-					isCurrentReconnectLoop({
-						currentGeneration: reconnectLoopGenerationRef.current,
-						loopGeneration,
-						reconnectLoopRunning: reconnectLoopRunningRef.current,
-					});
-				if (!isCurrentLoop()) return;
-				const startedAt = reconnectStartedAtMsRef.current ?? Date.now();
-				const elapsedMs = Date.now() - startedAt;
-				if (elapsedMs >= RECONNECT_WINDOW_MS) {
-					logger.warn('Reconnect timeout reached', { elapsedMs });
-					stopReconnectCycle('retry-timeout');
-					return;
-				}
-				if (tailscaleResetInFlightRef.current) {
-					stopReconnectCycle('tailscale-reset-in-progress');
-					return;
-				}
-				if (!isCurrentLoop()) return;
-				if (
-					shouldWaitForForegroundServiceCoverage({
-						platformOS: Platform.OS,
-						appActive: isActiveRef.current,
-						backgroundWorkAllowed: allowBackgroundRef.current,
-						foregroundServiceRequired: getForegroundServiceRequired(),
-					})
-				) {
-					scheduleNextAttempt();
-					return;
-				}
-				if (!isCurrentLoop()) return;
-				if (
-					!canAttemptBackgroundReconnect({
-						platformOS: Platform.OS,
-						appActive: isActiveRef.current,
-						backgroundWorkAllowed: allowBackgroundRef.current,
-					})
-				) {
-					stopReconnectCycle('app-not-active');
-					return;
-				}
-				const success = await attemptAutoConnect();
-				if (!isCurrentLoop()) return;
-				if (success) {
-					logger.info('Reconnected successfully', { elapsedMs });
-					stopReconnectCycle('reconnected');
-					return;
-				}
-				if (tailscaleResetInFlightRef.current) {
-					stopReconnectCycle('tailscale-reset-in-progress');
-					return;
-				}
-				if (!isCurrentLoop()) return;
-				scheduleNextAttempt();
-			};
-
-			void attemptWithBackoff();
-			return true;
+			return controller.start(reason);
 		},
-		[attemptAutoConnect, setReconnecting, stopReconnectCycle],
+		[],
 	);
 
 	React.useEffect(() => {

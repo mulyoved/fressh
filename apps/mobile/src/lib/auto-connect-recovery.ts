@@ -51,34 +51,9 @@ export function getTailscaleManualResetDecision(
 	return { kind: 'none' as const };
 }
 
-export function canStartReplacementReconnect(input: {
-	resetInFlight: boolean;
-	reconnectLoopRunning: boolean;
-	isReconnecting: boolean;
-	isAutoConnecting: boolean;
-}) {
-	return (
-		!input.resetInFlight &&
-		!input.reconnectLoopRunning &&
-		!input.isReconnecting &&
-		!input.isAutoConnecting
-	);
-}
-
 export function canUpdateTailscaleAttention(input: {
 	resetInFlight: boolean;
 	force?: boolean;
 }) {
 	return input.force === true || !input.resetInFlight;
-}
-
-export function isCurrentReconnectLoop(input: {
-	currentGeneration: number;
-	loopGeneration: number;
-	reconnectLoopRunning: boolean;
-}) {
-	return (
-		input.reconnectLoopRunning &&
-		input.currentGeneration === input.loopGeneration
-	);
 }
