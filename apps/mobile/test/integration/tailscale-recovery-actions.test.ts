@@ -1,5 +1,12 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import {
+	attemptSavedEntryWithTailscaleRecovery,
+	type SavedEntryTailscaleRecovery,
+} from '../../src/lib/auto-connect-saved-entry';
+// eslint-disable-next-line import/consistent-type-specifier-style -- keep query-fns type-only so Node integration tests do not load React Native at runtime
+import type { ConnectAndOpenShellResult } from '../../src/lib/query-fns';
+import { createTailscaleRecoveryController } from '../../src/lib/tailscale-recovery';
 import { createTailscaleRecoveryActions } from '../../src/lib/tailscale-recovery-actions';
 import {
 	TAILSCALE_RESET_FAILED_MESSAGE,
@@ -10,6 +17,7 @@ import {
 type Call =
 	| ['openApp']
 	| ['reset']
+	| ['resetCooldown']
 	| ['waitForIdle']
 	| ['stop', string]
 	| ['replace', string]
@@ -47,6 +55,9 @@ function createDeps(opts?: {
 				calls.push(['reset']);
 				if (opts?.resetError) throw opts.resetError;
 				return opts?.resetResult ?? { kind: 'reset', attempted: true };
+			},
+			resetCooldown: () => {
+				calls.push(['resetCooldown']);
 			},
 		},
 		waitForAutoConnectIdle: async () => {
@@ -89,7 +100,11 @@ void test('manual retry replaces reconnect and clears attention when replacement
 
 	actions.retry();
 
-	assert.deepEqual(calls, [['replace', 'tailscale-retry-action'], ['clear']]);
+	assert.deepEqual(calls, [
+		['resetCooldown'],
+		['replace', 'tailscale-retry-action'],
+		['clear'],
+	]);
 });
 
 void test('manual retry preserves attention when reconnect replacement cannot start', () => {
@@ -98,7 +113,10 @@ void test('manual retry preserves attention when reconnect replacement cannot st
 
 	actions.retry();
 
-	assert.deepEqual(calls, [['replace', 'tailscale-retry-action']]);
+	assert.deepEqual(calls, [
+		['resetCooldown'],
+		['replace', 'tailscale-retry-action'],
+	]);
 });
 
 void test('manual reset stops reconnect, waits for idle, resets, replaces reconnect, and clears attention when replacement starts', async () => {
@@ -113,6 +131,7 @@ void test('manual reset stops reconnect, waits for idle, resets, replaces reconn
 		['recovering', 'Resetting Tailscale...'],
 		['waitForIdle'],
 		['reset'],
+		['resetCooldown'],
 		['replace', 'tailscale-reset-action'],
 		['clear'],
 	]);
@@ -171,6 +190,7 @@ void test('manual reset suppresses duplicate reset while first reset is in fligh
 		['recovering', 'Resetting Tailscale...'],
 		['waitForIdle'],
 		['reset'],
+		['resetCooldown'],
 		['replace', 'tailscale-reset-action'],
 		['clear'],
 	]);
@@ -188,8 +208,124 @@ void test('manual reset marks retry attention when reconnect replacement cannot 
 		['recovering', 'Resetting Tailscale...'],
 		['waitForIdle'],
 		['reset'],
+		['resetCooldown'],
 		['replace', 'tailscale-reset-action'],
 		['mark', 'Tailscale reset finished. Retry Fressh to reconnect.'],
+	]);
+});
+
+function connectedResult(): ConnectAndOpenShellResult {
+	return {
+		status: 'connected',
+		connectionId: 'connection-1',
+		channelId: 1,
+		sshConnection: {} as Extract<
+			ConnectAndOpenShellResult,
+			{ status: 'connected' }
+		>['sshConnection'],
+		shellHandle: {} as Extract<
+			ConnectAndOpenShellResult,
+			{ status: 'connected' }
+		>['shellHandle'],
+	};
+}
+
+function createComposedCooldownHarness() {
+	const nativeCalls: string[] = [];
+	const connectSavedEntryCalls: string[] = [];
+	const reconnectPromises: Promise<{ connected: boolean }>[] = [];
+	const recovery = createTailscaleRecoveryController({
+		getPlatformOS: () => 'android',
+		getNowMs: () => 1_000,
+		sleep: async () => {},
+		native: {
+			isAvailable: async () => {
+				nativeCalls.push('isAvailable');
+				return true;
+			},
+			connect: async () => {
+				nativeCalls.push('connect');
+				return { attempted: true };
+			},
+			disconnect: async () => {
+				nativeCalls.push('disconnect');
+				return { attempted: true };
+			},
+			openApp: async () => {
+				nativeCalls.push('openApp');
+				return { attempted: true };
+			},
+		},
+	});
+	const actions = createTailscaleRecoveryActions({
+		recovery,
+		waitForAutoConnectIdle: async () => true,
+		reconnect: {
+			stop: () => {},
+			replace: () => {
+				const reconnectPromise = attemptSavedEntryWithTailscaleRecovery({
+					platformOS: 'android',
+					recovery: recovery satisfies SavedEntryTailscaleRecovery,
+					connectSavedEntry: async () => {
+						connectSavedEntryCalls.push('connectSavedEntry');
+						return connectedResult();
+					},
+					markTailscaleAttention: () => {},
+					clearTailscaleAttention: () => {},
+					logTmuxAttachFailure: () => {},
+					logWarning: () => {},
+				});
+				reconnectPromises.push(reconnectPromise);
+				return true;
+			},
+		},
+		attention: {
+			clear: () => {},
+			mark: () => {},
+			recovering: () => {},
+		},
+		logger: {
+			warn: () => {},
+		},
+	});
+
+	return {
+		actions,
+		recovery,
+		nativeCalls,
+		connectSavedEntryCalls,
+		reconnectPromises,
+	};
+}
+
+void test('manual retry reaches saved-entry connect even when recovery cooldown is active', async () => {
+	const context = createComposedCooldownHarness();
+	await context.recovery.ensureReady();
+	assert.deepEqual(await context.recovery.ensureReady(), {
+		kind: 'cooldown',
+		attempted: false,
+		available: true,
+	});
+
+	context.actions.retry();
+	assert.equal(context.reconnectPromises.length, 1);
+	assert.deepEqual(await context.reconnectPromises[0], { connected: true });
+	assert.deepEqual(context.connectSavedEntryCalls, ['connectSavedEntry']);
+});
+
+void test('manual reset reaches saved-entry connect after reset records cooldown', async () => {
+	const context = createComposedCooldownHarness();
+
+	await context.actions.reset();
+
+	assert.equal(context.reconnectPromises.length, 1);
+	assert.deepEqual(await context.reconnectPromises[0], { connected: true });
+	assert.deepEqual(context.connectSavedEntryCalls, ['connectSavedEntry']);
+	assert.deepEqual(context.nativeCalls, [
+		'disconnect',
+		'connect',
+		'isAvailable',
+		'connect',
 	]);
 });
 

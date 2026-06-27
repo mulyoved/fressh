@@ -16,6 +16,7 @@ type TailscaleRecoveryActionsDeps = {
 	recovery: {
 		openApp: () => Promise<unknown>;
 		reset: () => Promise<TailscaleManualResetResult>;
+		resetCooldown: () => void;
 	};
 	waitForAutoConnectIdle: () => Promise<boolean>;
 	reconnect: {
@@ -66,6 +67,7 @@ export function createTailscaleRecoveryActions({
 	};
 
 	const retry = () => {
+		recovery.resetCooldown();
 		const started = reconnect.replace(TAILSCALE_RETRY_ACTION_REASON);
 		if (started) {
 			attention.clear();
@@ -104,6 +106,7 @@ export function createTailscaleRecoveryActions({
 			}
 
 			resetInFlight = false;
+			recovery.resetCooldown();
 			const started = reconnect.replace(TAILSCALE_RESET_ACTION_REASON);
 			if (started) {
 				attention.clear();

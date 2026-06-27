@@ -205,7 +205,11 @@ export function AutoConnectManager() {
 
 	if (tailscaleRecoveryActionsRef.current === null) {
 		tailscaleRecoveryActionsRef.current = createTailscaleRecoveryActions({
-			recovery: tailscaleRecovery,
+			recovery: {
+				openApp: tailscaleRecovery.openApp,
+				reset: tailscaleRecovery.reset,
+				resetCooldown: tailscaleRecovery.resetCooldown,
+			},
 			waitForAutoConnectIdle,
 			reconnect: {
 				stop: (reason) => {
