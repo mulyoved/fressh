@@ -108,6 +108,71 @@ void test('manual reset stops reconnect, waits for idle, resets, replaces reconn
 	]);
 });
 
+void test('ordinary attention updates are ignored during manual reset while reset-owned clear still works', async () => {
+	let actions: ReturnType<typeof createTailscaleRecoveryActions>;
+	let attentionState = 'needs attention';
+	const { deps } = createDeps();
+	const guardedDeps = {
+		...deps,
+		waitForAutoConnectIdle: async () => {
+			actions.attention.clear();
+			actions.attention.mark('ordinary auto-connect attention');
+			assert.equal(attentionState, 'Resetting Tailscale...');
+			return true;
+		},
+		attention: {
+			clear: () => {
+				attentionState = 'hidden';
+			},
+			mark: (message: string) => {
+				attentionState = message;
+			},
+			recovering: (message: string) => {
+				attentionState = message;
+			},
+		},
+	};
+	actions = createTailscaleRecoveryActions(guardedDeps);
+
+	await actions.reset();
+
+	assert.equal(attentionState, 'hidden');
+});
+
+void test('ordinary attention updates are ignored during manual reset while reset-owned mark still works', async () => {
+	let actions: ReturnType<typeof createTailscaleRecoveryActions>;
+	let attentionState = 'needs attention';
+	const { deps } = createDeps({ idleResult: false });
+	const guardedDeps = {
+		...deps,
+		waitForAutoConnectIdle: async () => {
+			actions.attention.clear();
+			actions.attention.mark('ordinary auto-connect attention');
+			assert.equal(attentionState, 'Resetting Tailscale...');
+			return false;
+		},
+		attention: {
+			clear: () => {
+				attentionState = 'hidden';
+			},
+			mark: (message: string) => {
+				attentionState = message;
+			},
+			recovering: (message: string) => {
+				attentionState = message;
+			},
+		},
+	};
+	actions = createTailscaleRecoveryActions(guardedDeps);
+
+	await actions.reset();
+
+	assert.equal(
+		attentionState,
+		'Fressh is still reconnecting. Try resetting Tailscale again.',
+	);
+});
+
 void test('manual reset marks not-started attention when reset did not start', async () => {
 	const { calls, deps } = createDeps({
 		resetResult: { kind: 'notStarted', attempted: false },

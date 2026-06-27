@@ -152,11 +152,17 @@ export function AutoConnectManager() {
 		React.useRef<TailscaleRecoveryActions | null>(null);
 	const [tailscaleRecoveryUiState, setTailscaleRecoveryUiState] =
 		React.useState<TailscaleRecoveryUiState>(hiddenTailscaleRecoveryState);
-	const clearTailscaleAttention = React.useCallback(() => {
+	const clearTailscaleAttentionState = React.useCallback(() => {
 		setTailscaleRecoveryUiState(hiddenTailscaleRecoveryState);
 	}, []);
-	const markTailscaleAttention = React.useCallback((message: string) => {
+	const markTailscaleAttentionState = React.useCallback((message: string) => {
 		setTailscaleRecoveryUiState({ phase: 'needsAttention', message });
+	}, []);
+	const clearTailscaleAttention = React.useCallback(() => {
+		tailscaleRecoveryActionsRef.current?.attention.clear();
+	}, []);
+	const markTailscaleAttention = React.useCallback((message: string) => {
+		tailscaleRecoveryActionsRef.current?.attention.mark(message);
 	}, []);
 
 	const setForegroundServiceStarted = React.useCallback((started: boolean) => {
@@ -209,8 +215,8 @@ export function AutoConnectManager() {
 					reconnectControllerRef.current?.replace(reason) ?? false,
 			},
 			attention: {
-				clear: clearTailscaleAttention,
-				mark: markTailscaleAttention,
+				clear: clearTailscaleAttentionState,
+				mark: markTailscaleAttentionState,
 				recovering: (message) => {
 					setTailscaleRecoveryUiState({
 						phase: 'recovering',

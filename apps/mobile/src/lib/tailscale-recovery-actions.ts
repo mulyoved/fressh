@@ -37,6 +37,10 @@ export type TailscaleRecoveryActions = {
 	retry: () => void;
 	reset: () => Promise<void>;
 	isResetInFlight: () => boolean;
+	attention: {
+		clear: () => void;
+		mark: (message: string) => void;
+	};
 };
 
 export function createTailscaleRecoveryActions({
@@ -47,6 +51,19 @@ export function createTailscaleRecoveryActions({
 	logger,
 }: TailscaleRecoveryActionsDeps): TailscaleRecoveryActions {
 	let resetInFlight = false;
+
+	const guardedAttention = {
+		clear: () => {
+			if (!resetInFlight) {
+				attention.clear();
+			}
+		},
+		mark: (message: string) => {
+			if (!resetInFlight) {
+				attention.mark(message);
+			}
+		},
+	};
 
 	const retry = () => {
 		const started = reconnect.replace(TAILSCALE_RETRY_ACTION_REASON);
@@ -106,5 +123,6 @@ export function createTailscaleRecoveryActions({
 		retry,
 		reset,
 		isResetInFlight: () => resetInFlight,
+		attention: guardedAttention,
 	};
 }
