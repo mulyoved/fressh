@@ -1,10 +1,26 @@
-import { getTailscaleRecoveryAttentionDecision } from './auto-connect-recovery';
-import type { ConnectAndOpenShellResult } from './query-fns';
 import {
 	getTailscaleRecoveryAttentionMessage,
+	isTailscaleRecoverySupported,
+	TAILSCALE_RESTART_FAILED_MESSAGE,
 	type TailscaleReadyResult,
 	type TailscaleRecoverAfterFailureResult,
 } from './tailscale-recovery-core';
+
+type ConnectAndOpenShellResult =
+	| {
+			status: 'connected';
+			sshConnection: unknown;
+			shellHandle: unknown;
+			connectionId: string;
+			channelId: number;
+	  }
+	| {
+			status: 'tmux_attach_failed';
+			connectionId: string;
+			tmuxAttachFailureReason: string | null;
+			tmuxSessionName: string;
+			storedConnectionId: string;
+	  };
 
 type TmuxAttachFailedResult = Extract<
 	ConnectAndOpenShellResult,
@@ -27,6 +43,23 @@ export type AttemptSavedEntryWithTailscaleRecoveryArgs = {
 	logTmuxAttachFailure: (result: TmuxAttachFailedResult) => void;
 	logWarning: (message: string, error: unknown) => void;
 };
+
+function getTailscaleRecoveryFailureAttentionMessage(input: {
+	platformOS: string;
+	result: TailscaleRecoverAfterFailureResult;
+}) {
+	if (
+		!isTailscaleRecoverySupported(input.platformOS) ||
+		!input.result.networkLikeFailure
+	) {
+		return null;
+	}
+
+	return (
+		getTailscaleRecoveryAttentionMessage(input.result) ??
+		(input.result.attempted ? TAILSCALE_RESTART_FAILED_MESSAGE : null)
+	);
+}
 
 export async function attemptSavedEntryWithTailscaleRecovery({
 	platformOS,
@@ -62,13 +95,12 @@ export async function attemptSavedEntryWithTailscaleRecovery({
 		}
 
 		if (recoveryResult.kind !== 'recovered') {
-			const decision = getTailscaleRecoveryAttentionDecision({
+			const attentionMessage = getTailscaleRecoveryFailureAttentionMessage({
 				platformOS,
 				result: recoveryResult,
-				retrySucceeded: false,
 			});
-			if (decision.kind === 'attention') {
-				markTailscaleAttention(decision.message);
+			if (attentionMessage !== null) {
+				markTailscaleAttention(attentionMessage);
 			}
 			return { connected: false };
 		}
@@ -76,13 +108,12 @@ export async function attemptSavedEntryWithTailscaleRecovery({
 		try {
 			return handleConnectResult(await connectSavedEntry());
 		} catch (retryError) {
-			const decision = getTailscaleRecoveryAttentionDecision({
+			const attentionMessage = getTailscaleRecoveryFailureAttentionMessage({
 				platformOS,
 				result: recoveryResult,
-				retrySucceeded: false,
 			});
-			if (decision.kind === 'attention') {
-				markTailscaleAttention(decision.message);
+			if (attentionMessage !== null) {
+				markTailscaleAttention(attentionMessage);
 			}
 			logWarning(
 				'Auto-connect failed after Tailscale recovery retry',
