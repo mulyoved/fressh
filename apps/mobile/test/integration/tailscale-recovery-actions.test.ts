@@ -329,6 +329,19 @@ void test('manual reset reaches saved-entry connect after reset records cooldown
 	]);
 });
 
+void test('automatic attention methods pass through when manual reset is idle', () => {
+	const { calls, deps } = createDeps();
+	const coordinator = createTailscaleRecoveryActions(deps);
+
+	coordinator.clearAutomaticAttention();
+	coordinator.markAutomaticAttention('Network looks offline');
+
+	assert.deepEqual(calls, [
+		['clear'],
+		['mark', 'Network looks offline'],
+	]);
+});
+
 void test('automatic attention changes are ignored while manual reset is in flight', async () => {
 	const resetDeferred = deferred<TailscaleManualResetResult>();
 	const { calls, deps } = createDeps();
