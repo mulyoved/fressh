@@ -44,7 +44,7 @@ import { useSshStore } from './ssh-store';
 import { tailscaleRecovery } from './tailscale-recovery';
 import {
 	createTailscaleRecoveryActions,
-	type TailscaleRecoveryActions,
+	type TailscaleRecoveryCoordinator,
 } from './tailscale-recovery-actions';
 import {
 	TailscaleRecoveryBanner,
@@ -148,8 +148,8 @@ export function AutoConnectManager() {
 	const allowBackgroundRef = React.useRef(false);
 	const didInitRef = React.useRef(false);
 	const launchUrlSuppressAutoConnectRef = React.useRef(false);
-	const tailscaleRecoveryActionsRef =
-		React.useRef<TailscaleRecoveryActions | null>(null);
+	const tailscaleRecoveryCoordinatorRef =
+		React.useRef<TailscaleRecoveryCoordinator | null>(null);
 	const [tailscaleRecoveryUiState, setTailscaleRecoveryUiState] =
 		React.useState<TailscaleRecoveryUiState>(hiddenTailscaleRecoveryState);
 	const clearTailscaleAttentionState = React.useCallback(() => {
@@ -159,10 +159,10 @@ export function AutoConnectManager() {
 		setTailscaleRecoveryUiState({ phase: 'needsAttention', message });
 	}, []);
 	const clearTailscaleAttention = React.useCallback(() => {
-		tailscaleRecoveryActionsRef.current?.attention.clear();
+		tailscaleRecoveryCoordinatorRef.current?.clearAutomaticAttention();
 	}, []);
 	const markTailscaleAttention = React.useCallback((message: string) => {
-		tailscaleRecoveryActionsRef.current?.attention.mark(message);
+		tailscaleRecoveryCoordinatorRef.current?.markAutomaticAttention(message);
 	}, []);
 
 	const setForegroundServiceStarted = React.useCallback((started: boolean) => {
@@ -203,8 +203,8 @@ export function AutoConnectManager() {
 		return !inFlightRef.current;
 	}, []);
 
-	if (tailscaleRecoveryActionsRef.current === null) {
-		tailscaleRecoveryActionsRef.current = createTailscaleRecoveryActions({
+	if (tailscaleRecoveryCoordinatorRef.current === null) {
+		tailscaleRecoveryCoordinatorRef.current = createTailscaleRecoveryActions({
 			recovery: {
 				openApp: tailscaleRecovery.openApp,
 				reset: tailscaleRecovery.reset,
@@ -466,7 +466,8 @@ export function AutoConnectManager() {
 					isAutoConnecting: autoState.isAutoConnecting,
 					isReconnecting: autoState.isReconnecting,
 					resetInFlight:
-						tailscaleRecoveryActionsRef.current?.isResetInFlight() ?? false,
+						tailscaleRecoveryCoordinatorRef.current?.isResetInFlight() ??
+						false,
 					platformOS: Platform.OS,
 					appActive: isActiveRef.current,
 					backgroundWorkAllowed: allowBackgroundRef.current,
@@ -717,15 +718,15 @@ export function AutoConnectManager() {
 	}, [scheduleReconnect, shells.length]);
 
 	const handleOpenTailscale = React.useCallback(() => {
-		void tailscaleRecoveryActionsRef.current?.open();
+		void tailscaleRecoveryCoordinatorRef.current?.open();
 	}, []);
 
 	const handleRetryAfterTailscaleRecovery = React.useCallback(() => {
-		tailscaleRecoveryActionsRef.current?.retry();
+		tailscaleRecoveryCoordinatorRef.current?.retry();
 	}, []);
 
 	const handleResetTailscale = React.useCallback(() => {
-		void tailscaleRecoveryActionsRef.current?.reset();
+		void tailscaleRecoveryCoordinatorRef.current?.reset();
 	}, []);
 
 	return (

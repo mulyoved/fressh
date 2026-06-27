@@ -33,15 +33,13 @@ type TailscaleRecoveryActionsDeps = {
 	};
 };
 
-export type TailscaleRecoveryActions = {
+export type TailscaleRecoveryCoordinator = {
 	open: () => Promise<void>;
 	retry: () => void;
 	reset: () => Promise<void>;
 	isResetInFlight: () => boolean;
-	attention: {
-		clear: () => void;
-		mark: (message: string) => void;
-	};
+	clearAutomaticAttention: () => void;
+	markAutomaticAttention: (message: string) => void;
 };
 
 export function createTailscaleRecoveryActions({
@@ -50,20 +48,19 @@ export function createTailscaleRecoveryActions({
 	reconnect,
 	attention,
 	logger,
-}: TailscaleRecoveryActionsDeps): TailscaleRecoveryActions {
+}: TailscaleRecoveryActionsDeps): TailscaleRecoveryCoordinator {
 	let resetInFlight = false;
 
-	const guardedAttention = {
-		clear: () => {
-			if (!resetInFlight) {
-				attention.clear();
-			}
-		},
-		mark: (message: string) => {
-			if (!resetInFlight) {
-				attention.mark(message);
-			}
-		},
+	const clearAutomaticAttention = () => {
+		if (!resetInFlight) {
+			attention.clear();
+		}
+	};
+
+	const markAutomaticAttention = (message: string) => {
+		if (!resetInFlight) {
+			attention.mark(message);
+		}
 	};
 
 	const retry = () => {
@@ -126,6 +123,7 @@ export function createTailscaleRecoveryActions({
 		retry,
 		reset,
 		isResetInFlight: () => resetInFlight,
-		attention: guardedAttention,
+		clearAutomaticAttention,
+		markAutomaticAttention,
 	};
 }

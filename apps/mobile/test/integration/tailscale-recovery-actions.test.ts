@@ -329,46 +329,45 @@ void test('manual reset reaches saved-entry connect after reset records cooldown
 	]);
 });
 
-void test('ordinary attention updates are ignored during manual reset while reset-owned clear still works', async () => {
-	let actions: ReturnType<typeof createTailscaleRecoveryActions>;
-	let attentionState = 'needs attention';
-	const { deps } = createDeps();
-	const guardedDeps = {
-		...deps,
-		waitForAutoConnectIdle: async () => {
-			actions.attention.clear();
-			actions.attention.mark('ordinary auto-connect attention');
-			assert.equal(attentionState, 'Resetting Tailscale...');
-			return true;
-		},
-		attention: {
-			clear: () => {
-				attentionState = 'hidden';
-			},
-			mark: (message: string) => {
-				attentionState = message;
-			},
-			recovering: (message: string) => {
-				attentionState = message;
-			},
-		},
+void test('automatic attention changes are ignored while manual reset is in flight', async () => {
+	const resetDeferred = deferred<TailscaleManualResetResult>();
+	const { calls, deps } = createDeps();
+	deps.recovery.reset = async () => {
+		calls.push(['reset']);
+		return await resetDeferred.promise;
 	};
-	actions = createTailscaleRecoveryActions(guardedDeps);
+	const coordinator = createTailscaleRecoveryActions(deps);
 
-	await actions.reset();
+	const resetPromise = coordinator.reset();
+	await Promise.resolve();
+	await Promise.resolve();
 
-	assert.equal(attentionState, 'hidden');
+	assert.equal(coordinator.isResetInFlight(), true);
+	coordinator.clearAutomaticAttention();
+	coordinator.markAutomaticAttention('Network looks offline');
+	resetDeferred.resolve({ kind: 'reset', attempted: true });
+	await resetPromise;
+
+	assert.deepEqual(calls, [
+		['stop', 'tailscale-reset-action'],
+		['recovering', 'Resetting Tailscale...'],
+		['waitForIdle'],
+		['reset'],
+		['resetCooldown'],
+		['replace', 'tailscale-reset-action'],
+		['clear'],
+	]);
 });
 
-void test('ordinary attention updates are ignored during manual reset while reset-owned mark still works', async () => {
-	let actions: ReturnType<typeof createTailscaleRecoveryActions>;
+void test('automatic attention updates are ignored during manual reset while reset-owned mark still works', async () => {
+	let coordinator: ReturnType<typeof createTailscaleRecoveryActions>;
 	let attentionState = 'needs attention';
 	const { deps } = createDeps({ idleResult: false });
 	const guardedDeps = {
 		...deps,
 		waitForAutoConnectIdle: async () => {
-			actions.attention.clear();
-			actions.attention.mark('ordinary auto-connect attention');
+			coordinator.clearAutomaticAttention();
+			coordinator.markAutomaticAttention('ordinary auto-connect attention');
 			assert.equal(attentionState, 'Resetting Tailscale...');
 			return false;
 		},
@@ -384,9 +383,9 @@ void test('ordinary attention updates are ignored during manual reset while rese
 			},
 		},
 	};
-	actions = createTailscaleRecoveryActions(guardedDeps);
+	coordinator = createTailscaleRecoveryActions(guardedDeps);
 
-	await actions.reset();
+	await coordinator.reset();
 
 	assert.equal(
 		attentionState,
