@@ -9,10 +9,9 @@ import { getAutoConnectLaunchActionForUrl } from './auto-connect-launch';
 import {
 	canStartReplacementReconnect,
 	canUpdateTailscaleAttention,
+	getTailscaleRecoveryAttentionDecision,
 	getTailscaleManualResetDecision,
 	isCurrentReconnectLoop,
-	shouldMarkTailscaleRecoveryAttention,
-	TAILSCALE_RESET_FAILED_MESSAGE,
 } from './auto-connect-recovery';
 import {
 	getStoredConnectionId,
@@ -46,7 +45,11 @@ import {
 import { extractTmuxAttachFailureReason } from './ssh-error-details';
 import { useSshStore } from './ssh-store';
 import { tailscaleRecovery } from './tailscale-recovery';
-import { isTailscaleRecoverySupported } from './tailscale-recovery-core';
+import {
+	getTailscaleRecoveryAttentionMessage,
+	isTailscaleRecoverySupported,
+	TAILSCALE_RESET_FAILED_MESSAGE,
+} from './tailscale-recovery-core';
 import {
 	TailscaleRecoveryBanner,
 	type TailscaleRecoveryBannerState,
@@ -385,9 +388,10 @@ export function AutoConnectManager() {
 
 			const readiness = await tailscaleRecovery.ensureReady();
 			if (isTailscaleRecoverySupported(Platform.OS) && !readiness.available) {
-				markTailscaleAttention(
-					'Tailscale is required for this SSH connection. Open Tailscale, then retry Fressh.',
-				);
+				const message = getTailscaleRecoveryAttentionMessage(readiness);
+				if (message !== null) {
+					markTailscaleAttention(message);
+				}
 				return false;
 			}
 
@@ -444,21 +448,13 @@ export function AutoConnectManager() {
 				}
 
 				if (!recovery.attempted) {
-					if (
-						shouldMarkTailscaleRecoveryAttention({
-							platformOS: Platform.OS,
-							networkLikeFailure: recovery.networkLikeFailure,
-							recoveryAttempted: recovery.attempted,
-							retrySucceeded: false,
-							available: recovery.available,
-							failed: recovery.failed,
-							ensureAttemptedBeforeFailure:
-								readiness.attempted || readiness.failed === true,
-						})
-					) {
-						markTailscaleAttention(
-							'Fressh could not reach the SSH host through Tailscale.',
-						);
+					const decision = getTailscaleRecoveryAttentionDecision({
+						platformOS: Platform.OS,
+						result: recovery,
+						retrySucceeded: false,
+					});
+					if (decision.kind === 'attention') {
+						markTailscaleAttention(decision.message);
 					}
 					return false;
 				}
@@ -472,17 +468,13 @@ export function AutoConnectManager() {
 					clearTailscaleAttention();
 					return true;
 				} catch (retryError) {
-					if (
-						shouldMarkTailscaleRecoveryAttention({
-							platformOS: Platform.OS,
-							networkLikeFailure: recovery.networkLikeFailure,
-							recoveryAttempted: recovery.attempted,
-							retrySucceeded: false,
-						})
-					) {
-						markTailscaleAttention(
-							'Fressh could not reach the SSH host after restarting Tailscale.',
-						);
+					const decision = getTailscaleRecoveryAttentionDecision({
+						platformOS: Platform.OS,
+						result: recovery,
+						retrySucceeded: false,
+					});
+					if (decision.kind === 'attention') {
+						markTailscaleAttention(decision.message);
 					}
 					logger.warn(
 						'Auto-connect failed after Tailscale recovery retry',
@@ -887,6 +879,9 @@ export function AutoConnectManager() {
 				const decision = getTailscaleManualResetDecision(result);
 				if (decision.kind === 'attention') {
 					markTailscaleAttention(decision.message, { force: true });
+					return;
+				}
+				if (decision.kind === 'none') {
 					return;
 				}
 				tailscaleResetInFlightRef.current = false;

@@ -7,12 +7,16 @@ import {
 import {
 	canStartReplacementReconnect,
 	canUpdateTailscaleAttention,
+	getTailscaleRecoveryAttentionDecision,
 	getTailscaleManualResetDecision,
 	isCurrentReconnectLoop,
-	shouldMarkTailscaleRecoveryAttention,
+} from '../../src/lib/auto-connect-recovery';
+import {
+	TAILSCALE_REACHABILITY_MESSAGE,
+	TAILSCALE_RESTART_FAILED_MESSAGE,
 	TAILSCALE_RESET_FAILED_MESSAGE,
 	TAILSCALE_RESET_NOT_STARTED_MESSAGE,
-} from '../../src/lib/auto-connect-recovery';
+} from '../../src/lib/tailscale-recovery-core';
 
 void test('e2e launch URL can suppress the initial auto-connect attempt', () => {
 	assert.equal(
@@ -53,102 +57,114 @@ void test('e2e launch URL routes warm launches back to the connection form', () 
 	);
 });
 
-void test('Tailscale attention appears when initial ensure consumed recovery', () => {
-	assert.equal(
-		shouldMarkTailscaleRecoveryAttention({
+void test('Tailscale recovery attention decision uses restart failed copy for failed automatic recovery', () => {
+	assert.deepEqual(
+		getTailscaleRecoveryAttentionDecision({
 			platformOS: 'android',
-			networkLikeFailure: true,
-			recoveryAttempted: false,
+			result: {
+				kind: 'failed',
+				attempted: false,
+				networkLikeFailure: true,
+				available: true,
+			},
 			retrySucceeded: false,
-			available: true,
-			ensureAttemptedBeforeFailure: true,
 		}),
-		true,
+		{
+			kind: 'attention',
+			message: TAILSCALE_RESTART_FAILED_MESSAGE,
+		},
 	);
 });
 
-void test('Tailscale attention appears after attempted recovery retry failure', () => {
-	assert.equal(
-		shouldMarkTailscaleRecoveryAttention({
-			platformOS: 'android',
-			networkLikeFailure: true,
-			recoveryAttempted: true,
-			retrySucceeded: false,
-		}),
-		true,
-	);
+void test('Tailscale recovery attention decision uses reachability copy for cooldown and notStarted recovery', () => {
+	for (const kind of ['cooldown', 'notStarted'] as const) {
+		assert.deepEqual(
+			getTailscaleRecoveryAttentionDecision({
+				platformOS: 'android',
+				result: {
+					kind,
+					attempted: false,
+					networkLikeFailure: true,
+					available: true,
+				},
+				retrySucceeded: false,
+			}),
+			{
+				kind: 'attention',
+				message: TAILSCALE_REACHABILITY_MESSAGE,
+			},
+		);
+	}
 });
 
-void test('Tailscale attention stays hidden for skipped non-network recovery', () => {
-	assert.equal(
-		shouldMarkTailscaleRecoveryAttention({
+void test('Tailscale recovery attention decision handles recovered retry outcome', () => {
+	assert.deepEqual(
+		getTailscaleRecoveryAttentionDecision({
 			platformOS: 'android',
-			networkLikeFailure: false,
-			recoveryAttempted: false,
+			result: {
+				kind: 'recovered',
+				attempted: true,
+				networkLikeFailure: true,
+				available: true,
+			},
 			retrySucceeded: false,
-			available: true,
-			ensureAttemptedBeforeFailure: true,
 		}),
-		false,
+		{
+			kind: 'attention',
+			message: TAILSCALE_RESTART_FAILED_MESSAGE,
+		},
 	);
-});
-
-void test('Tailscale attention stays hidden on unsupported platforms', () => {
-	assert.equal(
-		shouldMarkTailscaleRecoveryAttention({
-			platformOS: 'ios',
-			networkLikeFailure: true,
-			recoveryAttempted: false,
-			retrySucceeded: false,
-			available: false,
-			failed: true,
-			ensureAttemptedBeforeFailure: true,
-		}),
-		false,
-	);
-});
-
-void test('Tailscale attention appears for unavailable or failed recovery', () => {
-	assert.equal(
-		shouldMarkTailscaleRecoveryAttention({
+	assert.deepEqual(
+		getTailscaleRecoveryAttentionDecision({
 			platformOS: 'android',
-			networkLikeFailure: true,
-			recoveryAttempted: false,
-			retrySucceeded: false,
-			available: false,
-			ensureAttemptedBeforeFailure: false,
+			result: {
+				kind: 'recovered',
+				attempted: true,
+				networkLikeFailure: true,
+				available: true,
+			},
+			retrySucceeded: true,
 		}),
-		true,
-	);
-	assert.equal(
-		shouldMarkTailscaleRecoveryAttention({
-			platformOS: 'android',
-			networkLikeFailure: true,
-			recoveryAttempted: false,
-			retrySucceeded: false,
-			available: true,
-			failed: true,
-			ensureAttemptedBeforeFailure: false,
-		}),
-		true,
+		{
+			kind: 'none',
+		},
 	);
 });
 
 void test('Tailscale manual reset decision preserves attention on failed or skipped reset', () => {
 	assert.deepEqual(
-		getTailscaleManualResetDecision({ attempted: false, failed: true }),
+		getTailscaleManualResetDecision({ kind: 'failed', attempted: false }),
 		{
 			kind: 'attention',
 			message: TAILSCALE_RESET_FAILED_MESSAGE,
 		},
 	);
-	assert.deepEqual(getTailscaleManualResetDecision({ attempted: false }), {
-		kind: 'attention',
-		message: TAILSCALE_RESET_NOT_STARTED_MESSAGE,
-	});
-	assert.deepEqual(getTailscaleManualResetDecision({ attempted: true }), {
-		kind: 'reconnect',
-	});
+	assert.deepEqual(
+		getTailscaleManualResetDecision({ kind: 'failed', attempted: true }),
+		{
+			kind: 'attention',
+			message: TAILSCALE_RESET_FAILED_MESSAGE,
+		},
+	);
+	assert.deepEqual(
+		getTailscaleManualResetDecision({ kind: 'notStarted', attempted: false }),
+		{
+			kind: 'attention',
+			message: TAILSCALE_RESET_NOT_STARTED_MESSAGE,
+		},
+	);
+	assert.deepEqual(
+		getTailscaleManualResetDecision({ kind: 'unsupported', attempted: false }),
+		{
+			kind: 'none',
+		},
+	);
+	assert.deepEqual(
+		getTailscaleManualResetDecision({ kind: 'reset', attempted: true }),
+		{
+			kind: 'reconnect',
+		},
+	);
 });
 
 void test('Tailscale reset reconnect starts only after reset is no longer in flight', () => {

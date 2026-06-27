@@ -57,6 +57,18 @@ function unavailableNativeFixture(calls: string[]): TailscaleRecoveryNative {
 	};
 }
 
+function availabilityRejectingNativeFixture(
+	calls: string[],
+): TailscaleRecoveryNative {
+	return {
+		...nativeFixture(calls),
+		isAvailable: async () => {
+			calls.push('isAvailable');
+			throw new Error('availability rejected');
+		},
+	};
+}
+
 function connectSkippedNativeFixture(calls: string[]): TailscaleRecoveryNative {
 	return {
 		...nativeFixture(calls),
@@ -87,6 +99,18 @@ function disconnectFailedNativeFixture(
 		disconnect: async () => {
 			calls.push('disconnect');
 			return { attempted: false, failed: true };
+		},
+	};
+}
+
+function disconnectRejectingNativeFixture(
+	calls: string[],
+): TailscaleRecoveryNative {
+	return {
+		...nativeFixture(calls),
+		disconnect: async () => {
+			calls.push('disconnect');
+			throw new Error('disconnect rejected');
 		},
 	};
 }
@@ -135,14 +159,23 @@ void test('unsupported platforms no-op without native calls', async () => {
 	});
 
 	assert.deepEqual(await controller.ensureReady(), {
+		kind: 'unsupported',
 		attempted: false,
 		available: false,
 	});
-	assert.deepEqual(await controller.reset(), { attempted: false });
+	assert.deepEqual(await controller.reset(), {
+		kind: 'unsupported',
+		attempted: false,
+	});
 	assert.deepEqual(await controller.openApp(), { attempted: false });
 	assert.deepEqual(
 		await controller.recoverAfterFailure(new Error('No route to host')),
-		{ attempted: false, networkLikeFailure: true, available: false },
+		{
+			kind: 'unsupported',
+			attempted: false,
+			networkLikeFailure: true,
+			available: false,
+		},
 	);
 	assert.deepEqual(calls, []);
 });
@@ -160,6 +193,28 @@ void test('ensureReady skips unavailable native recovery without waiting', async
 	});
 
 	assert.deepEqual(await controller.ensureReady(), {
+		kind: 'unavailable',
+		attempted: false,
+		available: false,
+	});
+	assert.deepEqual(calls, ['isAvailable']);
+	assert.deepEqual(waits, []);
+});
+
+void test('ensureReady normalizes rejected native availability as unavailable', async () => {
+	const calls: string[] = [];
+	const waits: number[] = [];
+	const controller = createTailscaleRecoveryController({
+		getPlatformOS: () => 'android',
+		getNowMs: () => 1_000,
+		sleep: async (ms) => {
+			waits.push(ms);
+		},
+		native: availabilityRejectingNativeFixture(calls),
+	});
+
+	assert.deepEqual(await controller.ensureReady(), {
+		kind: 'unavailable',
 		attempted: false,
 		available: false,
 	});
@@ -180,6 +235,7 @@ void test('ensureReady nudges Tailscale on Android and waits', async () => {
 	});
 
 	assert.deepEqual(await controller.ensureReady(), {
+		kind: 'ready',
 		attempted: true,
 		available: true,
 	});
@@ -198,6 +254,7 @@ void test('ensureReady respects cooldown', async () => {
 
 	await controller.ensureReady();
 	assert.deepEqual(await controller.ensureReady(), {
+		kind: 'cooldown',
 		attempted: false,
 		available: true,
 	});
@@ -217,10 +274,12 @@ void test('ensureReady does not record cooldown when connect skips', async () =>
 	});
 
 	assert.deepEqual(await controller.ensureReady(), {
+		kind: 'notStarted',
 		attempted: false,
 		available: true,
 	});
 	assert.deepEqual(await controller.ensureReady(), {
+		kind: 'notStarted',
 		attempted: false,
 		available: true,
 	});
@@ -241,11 +300,12 @@ void test('ensureReady records cooldown when connect dispatch fails', async () =
 	});
 
 	assert.deepEqual(await controller.ensureReady(), {
+		kind: 'failed',
 		attempted: false,
-		failed: true,
 		available: true,
 	});
 	assert.deepEqual(await controller.ensureReady(), {
+		kind: 'cooldown',
 		attempted: false,
 		available: true,
 	});
@@ -266,11 +326,12 @@ void test('ensureReady records cooldown when native connect rejects', async () =
 	});
 
 	assert.deepEqual(await controller.ensureReady(), {
+		kind: 'failed',
 		attempted: false,
-		failed: true,
 		available: true,
 	});
 	assert.deepEqual(await controller.ensureReady(), {
+		kind: 'cooldown',
 		attempted: false,
 		available: true,
 	});
@@ -310,10 +371,12 @@ void test('overlapping recovery calls share one in-flight native connect', async
 	connect.resolve({ attempted: true });
 
 	assert.deepEqual(await firstReady, {
+		kind: 'ready',
 		attempted: true,
 		available: true,
 	});
 	assert.deepEqual(await secondRecovery, {
+		kind: 'recovered',
 		attempted: true,
 		networkLikeFailure: true,
 		available: true,
@@ -347,13 +410,13 @@ void test('automatic recovery times out a stuck native connect and clears in-fli
 	);
 
 	assert.deepEqual(await withSafetyTimeout(firstReady), {
+		kind: 'failed',
 		attempted: false,
-		failed: true,
 		available: true,
 	});
 	assert.deepEqual(await withSafetyTimeout(joinedRecovery), {
+		kind: 'failed',
 		attempted: false,
-		failed: true,
 		networkLikeFailure: true,
 		available: true,
 	});
@@ -361,6 +424,7 @@ void test('automatic recovery times out a stuck native connect and clears in-fli
 	assert.deepEqual(waits, []);
 
 	assert.deepEqual(await controller.ensureReady(), {
+		kind: 'cooldown',
 		attempted: false,
 		available: true,
 	});
@@ -368,8 +432,8 @@ void test('automatic recovery times out a stuck native connect and clears in-fli
 
 	controller.resetCooldown();
 	assert.deepEqual(await withSafetyTimeout(controller.ensureReady()), {
+		kind: 'failed',
 		attempted: false,
-		failed: true,
 		available: true,
 	});
 	assert.equal(calls.filter((call) => call === 'connect').length, 2);
@@ -389,15 +453,18 @@ void test('resetCooldown allows a throttled controller to retry immediately', as
 	});
 
 	assert.deepEqual(await controller.ensureReady(), {
+		kind: 'ready',
 		attempted: true,
 		available: true,
 	});
 	assert.deepEqual(await controller.ensureReady(), {
+		kind: 'cooldown',
 		attempted: false,
 		available: true,
 	});
 	controller.resetCooldown();
 	assert.deepEqual(await controller.ensureReady(), {
+		kind: 'ready',
 		attempted: true,
 		available: true,
 	});
@@ -428,14 +495,17 @@ void test('cooldown is independent per recovery controller', async () => {
 	});
 
 	assert.deepEqual(await firstController.ensureReady(), {
+		kind: 'ready',
 		attempted: true,
 		available: true,
 	});
 	assert.deepEqual(await firstController.ensureReady(), {
+		kind: 'cooldown',
 		attempted: false,
 		available: true,
 	});
 	assert.deepEqual(await secondController.ensureReady(), {
+		kind: 'ready',
 		attempted: true,
 		available: true,
 	});
@@ -454,7 +524,12 @@ void test('recoverAfterFailure skips non-network errors', async () => {
 
 	assert.deepEqual(
 		await controller.recoverAfterFailure(new Error('Permission denied')),
-		{ attempted: false, networkLikeFailure: false, available: true },
+		{
+			kind: 'nonNetworkFailure',
+			attempted: false,
+			networkLikeFailure: false,
+			available: true,
+		},
 	);
 	assert.deepEqual(calls, ['isAvailable']);
 });
@@ -470,7 +545,33 @@ void test('recoverAfterFailure skips unavailable native recovery', async () => {
 
 	assert.deepEqual(
 		await controller.recoverAfterFailure(new Error('No route to host')),
-		{ attempted: false, networkLikeFailure: true, available: false },
+		{
+			kind: 'unavailable',
+			attempted: false,
+			networkLikeFailure: true,
+			available: false,
+		},
+	);
+	assert.deepEqual(calls, ['isAvailable']);
+});
+
+void test('recoverAfterFailure normalizes rejected native availability as unavailable', async () => {
+	const calls: string[] = [];
+	const controller = createTailscaleRecoveryController({
+		getPlatformOS: () => 'android',
+		getNowMs: () => 1_000,
+		sleep: async () => {},
+		native: availabilityRejectingNativeFixture(calls),
+	});
+
+	assert.deepEqual(
+		await controller.recoverAfterFailure(new Error('No route to host')),
+		{
+			kind: 'unavailable',
+			attempted: false,
+			networkLikeFailure: true,
+			available: false,
+		},
 	);
 	assert.deepEqual(calls, ['isAvailable']);
 });
@@ -489,9 +590,40 @@ void test('recoverAfterFailure connects after network-like errors and waits', as
 
 	assert.deepEqual(
 		await controller.recoverAfterFailure(new Error('No route to host')),
-		{ attempted: true, networkLikeFailure: true, available: true },
+		{
+			kind: 'recovered',
+			attempted: true,
+			networkLikeFailure: true,
+			available: true,
+		},
 	);
 	assert.deepEqual(calls, ['isAvailable', 'connect']);
+	assert.deepEqual(waits, [3_000]);
+});
+
+void test('recoverAfterFailure respects cooldown without reconnecting', async () => {
+	const calls: string[] = [];
+	const waits: number[] = [];
+	const controller = createTailscaleRecoveryController({
+		getPlatformOS: () => 'android',
+		getNowMs: () => 1_000,
+		sleep: async (ms) => {
+			waits.push(ms);
+		},
+		native: nativeFixture(calls),
+	});
+
+	await controller.ensureReady();
+	assert.deepEqual(
+		await controller.recoverAfterFailure(new Error('No route to host')),
+		{
+			kind: 'cooldown',
+			attempted: false,
+			networkLikeFailure: true,
+			available: true,
+		},
+	);
+	assert.deepEqual(calls, ['isAvailable', 'connect', 'isAvailable']);
 	assert.deepEqual(waits, [3_000]);
 });
 
@@ -510,8 +642,33 @@ void test('recoverAfterFailure preserves failed connect result without settle wa
 	assert.deepEqual(
 		await controller.recoverAfterFailure(new Error('No route to host')),
 		{
+			kind: 'failed',
 			attempted: false,
-			failed: true,
+			networkLikeFailure: true,
+			available: true,
+		},
+	);
+	assert.deepEqual(calls, ['isAvailable', 'connect']);
+	assert.deepEqual(waits, []);
+});
+
+void test('recoverAfterFailure reports notStarted when native connect skips', async () => {
+	const calls: string[] = [];
+	const waits: number[] = [];
+	const controller = createTailscaleRecoveryController({
+		getPlatformOS: () => 'android',
+		getNowMs: () => 1_000,
+		sleep: async (ms) => {
+			waits.push(ms);
+		},
+		native: connectSkippedNativeFixture(calls),
+	});
+
+	assert.deepEqual(
+		await controller.recoverAfterFailure(new Error('No route to host')),
+		{
+			kind: 'notStarted',
+			attempted: false,
 			networkLikeFailure: true,
 			available: true,
 		},
@@ -532,7 +689,10 @@ void test('manual reset disconnects, connects, and waits between actions', async
 		native: nativeFixture(calls),
 	});
 
-	assert.deepEqual(await controller.reset(), { attempted: true });
+	assert.deepEqual(await controller.reset(), {
+		kind: 'reset',
+		attempted: true,
+	});
 	assert.deepEqual(calls, ['disconnect', 'connect']);
 	assert.deepEqual(waits, [1_500, 3_000]);
 });
@@ -549,7 +709,10 @@ void test('reset connects without reset wait when disconnect skips', async () =>
 		native: disconnectSkippedNativeFixture(calls),
 	});
 
-	assert.deepEqual(await controller.reset(), { attempted: true });
+	assert.deepEqual(await controller.reset(), {
+		kind: 'reset',
+		attempted: true,
+	});
 	assert.deepEqual(calls, ['disconnect', 'connect']);
 	assert.deepEqual(waits, [3_000]);
 });
@@ -566,7 +729,10 @@ void test('reset reports no attempt when disconnect and connect skip', async () 
 		native: connectAndDisconnectSkippedNativeFixture(calls),
 	});
 
-	assert.deepEqual(await controller.reset(), { attempted: false });
+	assert.deepEqual(await controller.reset(), {
+		kind: 'notStarted',
+		attempted: false,
+	});
 	assert.deepEqual(calls, ['disconnect', 'connect']);
 	assert.deepEqual(waits, []);
 });
@@ -584,11 +750,31 @@ void test('reset preserves failed disconnect result', async () => {
 	});
 
 	assert.deepEqual(await controller.reset(), {
+		kind: 'failed',
 		attempted: true,
-		failed: true,
 	});
 	assert.deepEqual(calls, ['disconnect', 'connect']);
 	assert.deepEqual(waits, [3_000]);
+});
+
+void test('reset normalizes rejected disconnect result without connecting', async () => {
+	const calls: string[] = [];
+	const waits: number[] = [];
+	const controller = createTailscaleRecoveryController({
+		getPlatformOS: () => 'android',
+		getNowMs: () => 1_000,
+		sleep: async (ms) => {
+			waits.push(ms);
+		},
+		native: disconnectRejectingNativeFixture(calls),
+	});
+
+	assert.deepEqual(await controller.reset(), {
+		kind: 'failed',
+		attempted: false,
+	});
+	assert.deepEqual(calls, ['disconnect']);
+	assert.deepEqual(waits, []);
 });
 
 void test('reset records cooldown when connect attempts', async () => {
@@ -603,8 +789,12 @@ void test('reset records cooldown when connect attempts', async () => {
 		native: nativeFixture(calls),
 	});
 
-	assert.deepEqual(await controller.reset(), { attempted: true });
+	assert.deepEqual(await controller.reset(), {
+		kind: 'reset',
+		attempted: true,
+	});
 	assert.deepEqual(await controller.ensureReady(), {
+		kind: 'cooldown',
 		attempted: false,
 		available: true,
 	});
@@ -625,10 +815,11 @@ void test('reset records cooldown when connect dispatch fails', async () => {
 	});
 
 	assert.deepEqual(await controller.reset(), {
+		kind: 'failed',
 		attempted: true,
-		failed: true,
 	});
 	assert.deepEqual(await controller.ensureReady(), {
+		kind: 'cooldown',
 		attempted: false,
 		available: true,
 	});
@@ -649,8 +840,8 @@ void test('reset preserves failed connect result', async () => {
 	});
 
 	assert.deepEqual(await controller.reset(), {
+		kind: 'failed',
 		attempted: true,
-		failed: true,
 	});
 	assert.deepEqual(calls, ['disconnect', 'connect']);
 	assert.deepEqual(waits, [1_500]);
@@ -669,8 +860,8 @@ void test('reset normalizes rejected connect result', async () => {
 	});
 
 	assert.deepEqual(await controller.reset(), {
+		kind: 'failed',
 		attempted: true,
-		failed: true,
 	});
 	assert.deepEqual(calls, ['disconnect', 'connect']);
 	assert.deepEqual(waits, [1_500]);
@@ -688,8 +879,12 @@ void test('reset does not record cooldown when connect skips', async () => {
 		native: connectSkippedNativeFixture(calls),
 	});
 
-	assert.deepEqual(await controller.reset(), { attempted: true });
+	assert.deepEqual(await controller.reset(), {
+		kind: 'reset',
+		attempted: true,
+	});
 	assert.deepEqual(await controller.ensureReady(), {
+		kind: 'notStarted',
 		attempted: false,
 		available: true,
 	});

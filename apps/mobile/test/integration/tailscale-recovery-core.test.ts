@@ -3,9 +3,15 @@ import { test } from 'node:test';
 import {
 	createTailscaleRecoveryCooldown,
 	DEFAULT_TAILSCALE_RECOVERY_COOLDOWN_MS,
+	getTailscaleManualResetAttentionMessage,
+	getTailscaleRecoveryAttentionMessage,
 	isNetworkLikeSshError,
 	isTailscaleRecoverySupported,
-	shouldShowTailscaleAttention,
+	TAILSCALE_REACHABILITY_MESSAGE,
+	TAILSCALE_RESTART_FAILED_MESSAGE,
+	TAILSCALE_RESET_FAILED_MESSAGE,
+	TAILSCALE_RESET_NOT_STARTED_MESSAGE,
+	TAILSCALE_UNAVAILABLE_MESSAGE,
 } from '../../src/lib/tailscale-recovery-core';
 
 void test('Tailscale recovery is Android-only', () => {
@@ -121,50 +127,69 @@ void test('Tailscale recovery cooldown allows retry after backward clock movemen
 	assert.equal(cooldown.canAttempt(0), true);
 });
 
-void test('attention state appears after failed automatic recovery', () => {
+void test('automatic Tailscale recovery attention messages match explicit result kinds', () => {
 	assert.equal(
-		shouldShowTailscaleAttention({
-			platformOS: 'android',
-			networkLikeFailure: true,
-			recoveryAttempted: true,
-			retrySucceeded: false,
+		getTailscaleRecoveryAttentionMessage({
+			kind: 'unavailable',
+			attempted: false,
+			available: false,
 		}),
-		true,
+		TAILSCALE_UNAVAILABLE_MESSAGE,
 	);
 	assert.equal(
-		shouldShowTailscaleAttention({
-			platformOS: 'android',
-			networkLikeFailure: true,
-			recoveryAttempted: true,
-			retrySucceeded: true,
+		getTailscaleRecoveryAttentionMessage({
+			kind: 'cooldown',
+			attempted: false,
+			available: true,
 		}),
-		false,
+		TAILSCALE_REACHABILITY_MESSAGE,
 	);
 	assert.equal(
-		shouldShowTailscaleAttention({
-			platformOS: 'ios',
-			networkLikeFailure: true,
-			recoveryAttempted: true,
-			retrySucceeded: false,
+		getTailscaleRecoveryAttentionMessage({
+			kind: 'failed',
+			attempted: false,
+			available: true,
 		}),
-		false,
+		TAILSCALE_RESTART_FAILED_MESSAGE,
 	);
 	assert.equal(
-		shouldShowTailscaleAttention({
-			platformOS: 'android',
-			networkLikeFailure: false,
-			recoveryAttempted: true,
-			retrySucceeded: false,
+		getTailscaleRecoveryAttentionMessage({
+			kind: 'notStarted',
+			attempted: false,
+			available: true,
 		}),
-		false,
+		TAILSCALE_REACHABILITY_MESSAGE,
 	);
 	assert.equal(
-		shouldShowTailscaleAttention({
-			platformOS: 'android',
-			networkLikeFailure: true,
-			recoveryAttempted: false,
-			retrySucceeded: false,
+		getTailscaleRecoveryAttentionMessage({
+			kind: 'ready',
+			attempted: true,
+			available: true,
 		}),
-		false,
+		null,
+	);
+});
+
+void test('manual Tailscale reset attention messages match explicit result kinds', () => {
+	assert.equal(
+		getTailscaleManualResetAttentionMessage({
+			kind: 'failed',
+			attempted: true,
+		}),
+		TAILSCALE_RESET_FAILED_MESSAGE,
+	);
+	assert.equal(
+		getTailscaleManualResetAttentionMessage({
+			kind: 'notStarted',
+			attempted: false,
+		}),
+		TAILSCALE_RESET_NOT_STARTED_MESSAGE,
+	);
+	assert.equal(
+		getTailscaleManualResetAttentionMessage({
+			kind: 'reset',
+			attempted: true,
+		}),
+		null,
 	);
 });

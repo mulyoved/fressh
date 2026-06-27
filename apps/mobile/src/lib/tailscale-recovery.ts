@@ -4,6 +4,9 @@ import {
 	createTailscaleRecoveryCooldown,
 	isNetworkLikeSshError,
 	isTailscaleRecoverySupported,
+	type TailscaleManualResetResult,
+	type TailscaleReadyResult,
+	type TailscaleRecoverAfterFailureResult,
 } from './tailscale-recovery-core';
 
 const DEFAULT_TAILSCALE_CONNECT_TIMEOUT_MS = 5_000;
@@ -12,6 +15,12 @@ type TailscaleRecoveryAttemptResult = {
 	attempted: boolean;
 	failed?: boolean;
 };
+
+type TailscaleConnectCooldownResult =
+	| { kind: 'cooldown'; attempted: false }
+	| { kind: 'notStarted'; attempted: false }
+	| { kind: 'attempted'; attempted: true }
+	| { kind: 'failed'; attempted: boolean };
 
 export type TailscaleRecoveryNative = {
 	isAvailable: () => Promise<boolean>;
@@ -45,14 +54,17 @@ export function createTailscaleRecoveryController({
 	connectTimeoutMs = DEFAULT_TAILSCALE_CONNECT_TIMEOUT_MS,
 }: TailscaleRecoveryControllerDeps) {
 	const cooldown = createTailscaleRecoveryCooldown();
-	let connectRecoveryInFlight: Promise<TailscaleRecoveryAttemptResult> | null =
+	let connectRecoveryInFlight: Promise<TailscaleConnectCooldownResult> | null =
 		null;
 
 	const isSupported = () => isTailscaleRecoverySupported(getPlatformOS());
 
 	const checkAvailability = async () => {
-		if (!isSupported()) return false;
-		return await native.isAvailable();
+		try {
+			return await native.isAvailable();
+		} catch {
+			return false;
+		}
 	};
 
 	const shouldRecordCooldown = (result: TailscaleRecoveryAttemptResult) =>
@@ -84,78 +96,169 @@ export function createTailscaleRecoveryController({
 		}
 	};
 
-	const connectWithCooldown = async () => {
-		if (connectRecoveryInFlight) {
-			return await connectRecoveryInFlight;
+	const createConnectRecoveryResult = (
+		result: TailscaleRecoveryAttemptResult,
+	): TailscaleConnectCooldownResult => {
+		if (result.failed === true) {
+			return { kind: 'failed', attempted: result.attempted };
 		}
-
-		const nowMs = getNowMs();
-		if (!cooldown.canAttempt(nowMs)) return { attempted: false };
-
-		const connectRecovery = (async () => {
-			const result = await connectWithTimeout();
-			if (shouldRecordCooldown(result)) {
-				cooldown.recordAttempt(nowMs);
-			}
-			if (result.attempted) {
-				await sleep(DEFAULT_TAILSCALE_SETTLE_DELAY_MS);
-			}
-			return result;
-		})();
-		const trackedConnectRecovery = connectRecovery.finally(() => {
-			if (connectRecoveryInFlight === trackedConnectRecovery) {
-				connectRecoveryInFlight = null;
-			}
-		});
-		connectRecoveryInFlight = trackedConnectRecovery;
-
-		return await trackedConnectRecovery;
+		if (result.attempted) {
+			return { kind: 'attempted', attempted: true };
+		}
+		return { kind: 'notStarted', attempted: false };
 	};
 
-	const createRecoveryResult = (
-		result: TailscaleRecoveryAttemptResult,
-		available: boolean,
-	) =>
-		result.failed === true
-			? { attempted: result.attempted, failed: true, available }
-			: { attempted: result.attempted, available };
+	const connectWithCooldown =
+		async (): Promise<TailscaleConnectCooldownResult> => {
+			if (connectRecoveryInFlight) {
+				return await connectRecoveryInFlight;
+			}
+
+			const nowMs = getNowMs();
+			if (!cooldown.canAttempt(nowMs)) {
+				return { kind: 'cooldown', attempted: false };
+			}
+
+			const connectRecovery = (async () => {
+				const result = await connectWithTimeout();
+				if (shouldRecordCooldown(result)) {
+					cooldown.recordAttempt(nowMs);
+				}
+				if (result.attempted) {
+					await sleep(DEFAULT_TAILSCALE_SETTLE_DELAY_MS);
+				}
+				return createConnectRecoveryResult(result);
+			})();
+			const trackedConnectRecovery = connectRecovery.finally(() => {
+				if (connectRecoveryInFlight === trackedConnectRecovery) {
+					connectRecoveryInFlight = null;
+				}
+			});
+			connectRecoveryInFlight = trackedConnectRecovery;
+
+			return await trackedConnectRecovery;
+		};
+
+	const createReadyResult = (
+		result: TailscaleConnectCooldownResult,
+	): TailscaleReadyResult => {
+		switch (result.kind) {
+			case 'failed':
+				return { kind: 'failed', attempted: result.attempted, available: true };
+			case 'attempted':
+				return { kind: 'ready', attempted: true, available: true };
+			case 'cooldown':
+				return { kind: 'cooldown', attempted: false, available: true };
+			case 'notStarted':
+				return { kind: 'notStarted', attempted: false, available: true };
+		}
+	};
+
+	const createRecoverAfterFailureResult = (
+		result: TailscaleConnectCooldownResult,
+	): TailscaleRecoverAfterFailureResult => {
+		switch (result.kind) {
+			case 'failed':
+				return {
+					kind: 'failed',
+					attempted: result.attempted,
+					networkLikeFailure: true,
+					available: true,
+				};
+			case 'attempted':
+				return {
+					kind: 'recovered',
+					attempted: true,
+					networkLikeFailure: true,
+					available: true,
+				};
+			case 'cooldown':
+				return {
+					kind: 'cooldown',
+					attempted: false,
+					networkLikeFailure: true,
+					available: true,
+				};
+			case 'notStarted':
+				return {
+					kind: 'notStarted',
+					attempted: false,
+					networkLikeFailure: true,
+					available: true,
+				};
+		}
+	};
 
 	return {
-		async ensureReady() {
+		async ensureReady(): Promise<TailscaleReadyResult> {
+			if (!isSupported()) {
+				return { kind: 'unsupported', attempted: false, available: false };
+			}
+
 			const available = await checkAvailability();
 			if (!available) {
-				return { attempted: false, available };
+				return { kind: 'unavailable', attempted: false, available: false };
 			}
 
 			const result = await connectWithCooldown();
-			return createRecoveryResult(result, available);
+			return createReadyResult(result);
 		},
 
-		async recoverAfterFailure(error: unknown) {
-			const available = await checkAvailability();
+		async recoverAfterFailure(
+			error: unknown,
+		): Promise<TailscaleRecoverAfterFailureResult> {
 			const networkLikeFailure = isNetworkLikeSshError(error);
+			if (!isSupported()) {
+				if (!networkLikeFailure) {
+					return {
+						kind: 'nonNetworkFailure',
+						attempted: false,
+						networkLikeFailure: false,
+						available: false,
+					};
+				}
+				return {
+					kind: 'unsupported',
+					attempted: false,
+					networkLikeFailure: true,
+					available: false,
+				};
+			}
 
-			if (!available || !networkLikeFailure) {
-				return { attempted: false, networkLikeFailure, available };
+			const available = await checkAvailability();
+
+			if (!networkLikeFailure) {
+				return {
+					kind: 'nonNetworkFailure',
+					attempted: false,
+					networkLikeFailure: false,
+					available,
+				};
+			}
+			if (!available) {
+				return {
+					kind: 'unavailable',
+					attempted: false,
+					networkLikeFailure,
+					available,
+				};
 			}
 
 			const result = await connectWithCooldown();
-			return result.failed === true
-				? {
-						attempted: result.attempted,
-						failed: true,
-						networkLikeFailure,
-						available,
-					}
-				: { attempted: result.attempted, networkLikeFailure, available };
+			return createRecoverAfterFailureResult(result);
 		},
 
-		async reset() {
+		async reset(): Promise<TailscaleManualResetResult> {
 			if (!isSupported()) {
-				return { attempted: false };
+				return { kind: 'unsupported', attempted: false };
 			}
 
-			const disconnectResult = await native.disconnect();
+			let disconnectResult: TailscaleRecoveryAttemptResult;
+			try {
+				disconnectResult = await native.disconnect();
+			} catch {
+				return { kind: 'failed', attempted: false };
+			}
 			if (disconnectResult.attempted) {
 				await sleep(DEFAULT_TAILSCALE_RESET_DELAY_MS);
 			}
@@ -168,12 +271,14 @@ export function createTailscaleRecoveryController({
 				await sleep(DEFAULT_TAILSCALE_SETTLE_DELAY_MS);
 			}
 
-			const result = {
-				attempted: disconnectResult.attempted || connectResult.attempted,
-			};
-			return disconnectResult.failed === true || connectResult.failed === true
-				? { ...result, failed: true }
-				: result;
+			const attempted = disconnectResult.attempted || connectResult.attempted;
+			if (disconnectResult.failed === true || connectResult.failed === true) {
+				return { kind: 'failed', attempted };
+			}
+			if (attempted) {
+				return { kind: 'reset', attempted: true };
+			}
+			return { kind: 'notStarted', attempted: false };
 		},
 
 		async openApp() {

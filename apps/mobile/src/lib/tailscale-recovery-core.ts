@@ -1,6 +1,74 @@
 export const DEFAULT_TAILSCALE_RECOVERY_COOLDOWN_MS = 20_000;
 export const DEFAULT_TAILSCALE_SETTLE_DELAY_MS = 3_000;
 export const DEFAULT_TAILSCALE_RESET_DELAY_MS = 1_500;
+export const TAILSCALE_UNAVAILABLE_MESSAGE =
+	'Tailscale is required for this SSH connection. Open Tailscale, then retry Fressh.';
+export const TAILSCALE_REACHABILITY_MESSAGE =
+	'Fressh could not reach the SSH host through Tailscale.';
+export const TAILSCALE_RESTART_FAILED_MESSAGE =
+	'Fressh could not reach the SSH host after restarting Tailscale.';
+export const TAILSCALE_RESET_FAILED_MESSAGE =
+	'Tailscale reset failed. Open Tailscale, then retry Fressh.';
+export const TAILSCALE_RESET_NOT_STARTED_MESSAGE =
+	'Tailscale reset did not start. Open Tailscale, then retry Fressh.';
+
+export type TailscaleReadyResult =
+	| { kind: 'unsupported'; attempted: false; available: false }
+	| { kind: 'unavailable'; attempted: false; available: false }
+	| { kind: 'ready'; attempted: true; available: true }
+	| { kind: 'cooldown'; attempted: false; available: true }
+	| { kind: 'notStarted'; attempted: false; available: true }
+	| { kind: 'failed'; attempted: boolean; available: true };
+
+export type TailscaleRecoverAfterFailureResult =
+	| {
+			kind: 'nonNetworkFailure';
+			attempted: false;
+			networkLikeFailure: false;
+			available: boolean;
+	  }
+	| {
+			kind: 'unsupported';
+			attempted: false;
+			networkLikeFailure: true;
+			available: false;
+	  }
+	| {
+			kind: 'unavailable';
+			attempted: false;
+			networkLikeFailure: true;
+			available: false;
+	  }
+	| {
+			kind: 'cooldown';
+			attempted: false;
+			networkLikeFailure: true;
+			available: true;
+	  }
+	| {
+			kind: 'notStarted';
+			attempted: false;
+			networkLikeFailure: true;
+			available: true;
+	  }
+	| {
+			kind: 'recovered';
+			attempted: true;
+			networkLikeFailure: true;
+			available: true;
+	  }
+	| {
+			kind: 'failed';
+			attempted: boolean;
+			networkLikeFailure: true;
+			available: true;
+	  };
+
+export type TailscaleManualResetResult =
+	| { kind: 'unsupported'; attempted: false }
+	| { kind: 'notStarted'; attempted: false }
+	| { kind: 'reset'; attempted: true }
+	| { kind: 'failed'; attempted: boolean };
 
 export function isTailscaleRecoverySupported(platformOS: string) {
 	return platformOS === 'android';
@@ -91,16 +159,35 @@ export function createTailscaleRecoveryCooldown(opts?: {
 	};
 }
 
-export function shouldShowTailscaleAttention(input: {
-	platformOS: string;
-	networkLikeFailure: boolean;
-	recoveryAttempted: boolean;
-	retrySucceeded: boolean;
-}) {
-	return (
-		isTailscaleRecoverySupported(input.platformOS) &&
-		input.networkLikeFailure &&
-		input.recoveryAttempted &&
-		!input.retrySucceeded
-	);
+export function getTailscaleRecoveryAttentionMessage(
+	result: TailscaleReadyResult | TailscaleRecoverAfterFailureResult,
+) {
+	switch (result.kind) {
+		case 'unavailable':
+			return TAILSCALE_UNAVAILABLE_MESSAGE;
+		case 'cooldown':
+		case 'notStarted':
+			return TAILSCALE_REACHABILITY_MESSAGE;
+		case 'failed':
+			return TAILSCALE_RESTART_FAILED_MESSAGE;
+		case 'unsupported':
+		case 'ready':
+		case 'recovered':
+		case 'nonNetworkFailure':
+			return null;
+	}
+}
+
+export function getTailscaleManualResetAttentionMessage(
+	result: TailscaleManualResetResult,
+) {
+	switch (result.kind) {
+		case 'failed':
+			return TAILSCALE_RESET_FAILED_MESSAGE;
+		case 'notStarted':
+			return TAILSCALE_RESET_NOT_STARTED_MESSAGE;
+		case 'unsupported':
+		case 'reset':
+			return null;
+	}
 }

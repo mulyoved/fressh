@@ -1,54 +1,54 @@
 import {
+	getTailscaleManualResetAttentionMessage,
+	getTailscaleRecoveryAttentionMessage,
 	isTailscaleRecoverySupported,
-	shouldShowTailscaleAttention,
+	TAILSCALE_RESTART_FAILED_MESSAGE,
+	type TailscaleManualResetResult,
+	type TailscaleRecoverAfterFailureResult,
 } from './tailscale-recovery-core';
 
-export const TAILSCALE_RESET_FAILED_MESSAGE =
-	'Tailscale reset failed. Open Tailscale, then retry Fressh.';
-export const TAILSCALE_RESET_NOT_STARTED_MESSAGE =
-	'Tailscale reset did not start. Open Tailscale, then retry Fressh.';
-
-export function shouldMarkTailscaleRecoveryAttention(input: {
+export function getTailscaleRecoveryAttentionDecision(input: {
 	platformOS: string;
-	networkLikeFailure: boolean;
-	recoveryAttempted: boolean;
+	result: TailscaleRecoverAfterFailureResult;
 	retrySucceeded: boolean;
-	available?: boolean;
-	failed?: boolean;
-	ensureAttemptedBeforeFailure?: boolean;
 }) {
 	if (
 		!isTailscaleRecoverySupported(input.platformOS) ||
-		!input.networkLikeFailure
+		!input.result.networkLikeFailure ||
+		input.retrySucceeded
 	) {
-		return false;
+		return { kind: 'none' as const };
 	}
 
-	return (
-		shouldShowTailscaleAttention(input) ||
-		input.available === false ||
-		input.failed === true ||
-		input.ensureAttemptedBeforeFailure === true
-	);
+	const message =
+		getTailscaleRecoveryAttentionMessage(input.result) ??
+		(input.result.attempted ? TAILSCALE_RESTART_FAILED_MESSAGE : null);
+
+	if (message === null) {
+		return { kind: 'none' as const };
+	}
+
+	return {
+		kind: 'attention' as const,
+		message,
+	};
 }
 
-export function getTailscaleManualResetDecision(result: {
-	attempted: boolean;
-	failed?: boolean;
-}) {
-	if (result.failed === true) {
+export function getTailscaleManualResetDecision(
+	result: TailscaleManualResetResult,
+) {
+	const message = getTailscaleManualResetAttentionMessage(result);
+	if (message !== null) {
 		return {
 			kind: 'attention' as const,
-			message: TAILSCALE_RESET_FAILED_MESSAGE,
+			message,
 		};
 	}
-	if (!result.attempted) {
-		return {
-			kind: 'attention' as const,
-			message: TAILSCALE_RESET_NOT_STARTED_MESSAGE,
-		};
+
+	if (result.kind === 'reset') {
+		return { kind: 'reconnect' as const };
 	}
-	return { kind: 'reconnect' as const };
+	return { kind: 'none' as const };
 }
 
 export function canStartReplacementReconnect(input: {
