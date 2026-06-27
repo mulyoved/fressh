@@ -1,3 +1,5 @@
+// eslint-disable-next-line import/consistent-type-specifier-style -- Type-only import avoids loading query-fns' React Native dependencies in Node integration tests.
+import type { ConnectAndOpenShellResult } from './query-fns';
 import {
 	getTailscaleRecoveryAttentionMessage,
 	isTailscaleRecoverySupported,
@@ -5,22 +7,6 @@ import {
 	type TailscaleReadyResult,
 	type TailscaleRecoverAfterFailureResult,
 } from './tailscale-recovery-core';
-
-type ConnectAndOpenShellResult =
-	| {
-			status: 'connected';
-			sshConnection: unknown;
-			shellHandle: unknown;
-			connectionId: string;
-			channelId: number;
-	  }
-	| {
-			status: 'tmux_attach_failed';
-			connectionId: string;
-			tmuxAttachFailureReason: string | null;
-			tmuxSessionName: string;
-			storedConnectionId: string;
-	  };
 
 type TmuxAttachFailedResult = Extract<
 	ConnectAndOpenShellResult,
