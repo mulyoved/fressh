@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { attemptAutoConnectSource } from '../../src/lib/auto-connect-attempt';
-import type { SavedConnectionEntry } from '../../src/lib/connection-utils';
+import { type SavedConnectionEntry } from '../../src/lib/connection-utils';
+// eslint-disable-next-line import/consistent-type-specifier-style -- keep secrets-manager fully type-only so Node integration tests do not load React Native at runtime
 import type { InputConnectionDetails } from '../../src/lib/secrets-manager';
 
 const baseDetails: InputConnectionDetails = {
@@ -70,7 +71,7 @@ const readyRecovery = {
 };
 
 void test('active shell navigates outside shell detail', async () => {
-	const navigations: Array<[string, number]> = [];
+	const navigations: [string, number][] = [];
 	const { logger } = createLogger();
 
 	const connected = await attemptAutoConnectSource({
@@ -105,7 +106,7 @@ void test('active shell navigates outside shell detail', async () => {
 });
 
 void test('active shell does not navigate when already on shell detail', async () => {
-	const navigations: Array<[string, number]> = [];
+	const navigations: [string, number][] = [];
 	const { logger } = createLogger();
 
 	const connected = await attemptAutoConnectSource({
@@ -136,7 +137,7 @@ void test('active shell does not navigate when already on shell detail', async (
 });
 
 void test('latest active connection loads tmux settings, starts shell, and navigates', async () => {
-	const navigations: Array<[string, number]> = [];
+	const navigations: [string, number][] = [];
 	const shellStarts: unknown[] = [];
 	const { logger } = createLogger();
 
@@ -196,7 +197,7 @@ void test('latest active connection loads tmux settings, starts shell, and navig
 });
 
 void test('saved-entry path delegates through Tailscale recovery and injected opener', async () => {
-	const navigations: Array<[string, number]> = [];
+	const navigations: [string, number][] = [];
 	const { logger } = createLogger();
 
 	const connected = await attemptAutoConnectSource({
