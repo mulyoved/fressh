@@ -18,6 +18,16 @@ type Call =
 	| ['recovering', string]
 	| ['warn', string, unknown];
 
+function deferred<T>() {
+	let resolve!: (value: T | PromiseLike<T>) => void;
+	let reject!: (reason?: unknown) => void;
+	const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+		resolve = resolvePromise;
+		reject = rejectPromise;
+	});
+	return { promise, resolve, reject };
+}
+
 function createDeps(opts?: {
 	replaceResult?: boolean;
 	idleResult?: boolean;
@@ -105,6 +115,81 @@ void test('manual reset stops reconnect, waits for idle, resets, replaces reconn
 		['reset'],
 		['replace', 'tailscale-reset-action'],
 		['clear'],
+	]);
+});
+
+for (const attempted of [false, true]) {
+	void test(`manual reset marks failed attention when reset returns failed with attempted ${attempted}`, async () => {
+		const { calls, deps } = createDeps({
+			resetResult: { kind: 'failed', attempted },
+		});
+		const actions = createTailscaleRecoveryActions(deps);
+
+		await actions.reset();
+
+		assert.equal(actions.isResetInFlight(), false);
+		assert.deepEqual(calls, [
+			['stop', 'tailscale-reset-action'],
+			['recovering', 'Resetting Tailscale...'],
+			['waitForIdle'],
+			['reset'],
+			['mark', TAILSCALE_RESET_FAILED_MESSAGE],
+		]);
+	});
+}
+
+void test('manual reset suppresses duplicate reset while first reset is in flight', async () => {
+	const pendingReset = deferred<TailscaleManualResetResult>();
+	const { calls, deps } = createDeps();
+	const actions = createTailscaleRecoveryActions({
+		...deps,
+		recovery: {
+			...deps.recovery,
+			reset: async () => {
+				calls.push(['reset']);
+				return pendingReset.promise;
+			},
+		},
+	});
+
+	const firstReset = actions.reset();
+	await Promise.resolve();
+	await Promise.resolve();
+
+	assert.equal(actions.isResetInFlight(), true);
+
+	const secondReset = actions.reset();
+	pendingReset.resolve({ kind: 'reset', attempted: true });
+
+	const secondResult = await secondReset;
+	await firstReset;
+
+	assert.equal(secondResult, undefined);
+	assert.equal(actions.isResetInFlight(), false);
+	assert.deepEqual(calls, [
+		['stop', 'tailscale-reset-action'],
+		['recovering', 'Resetting Tailscale...'],
+		['waitForIdle'],
+		['reset'],
+		['replace', 'tailscale-reset-action'],
+		['clear'],
+	]);
+});
+
+void test('manual reset marks retry attention when reconnect replacement cannot start after reset', async () => {
+	const { calls, deps } = createDeps({ replaceResult: false });
+	const actions = createTailscaleRecoveryActions(deps);
+
+	await actions.reset();
+
+	assert.equal(actions.isResetInFlight(), false);
+	assert.deepEqual(calls, [
+		['stop', 'tailscale-reset-action'],
+		['recovering', 'Resetting Tailscale...'],
+		['waitForIdle'],
+		['reset'],
+		['replace', 'tailscale-reset-action'],
+		['mark', 'Tailscale reset finished. Retry Fressh to reconnect.'],
 	]);
 });
 
