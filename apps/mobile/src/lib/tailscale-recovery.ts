@@ -64,14 +64,6 @@ export function createTailscaleRecoveryController({
 
 	const isSupported = () => isTailscaleRecoverySupported(getPlatformOS());
 
-	const checkAvailability = async () => {
-		try {
-			return await native.isAvailable();
-		} catch {
-			return false;
-		}
-	};
-
 	const shouldRecordCooldown = (result: TailscaleRecoveryAttemptResult) =>
 		result.attempted || result.failed === true;
 
@@ -79,6 +71,37 @@ export function createTailscaleRecoveryController({
 		attempted: false,
 		failed: true,
 	});
+
+	const runBooleanWithTimeout = async (
+		attempt: () => Promise<boolean>,
+		fallback: boolean,
+	): Promise<boolean> => {
+		let timeoutId: ReturnType<typeof setTimeout> | null = null;
+		const timeoutResult = new Promise<boolean>((resolve) => {
+			timeoutId = setTimeout(() => {
+				timeoutId = null;
+				resolve(fallback);
+			}, connectTimeoutMs);
+		});
+
+		let nativeResult: Promise<boolean>;
+		try {
+			nativeResult = attempt().catch(() => fallback);
+		} catch {
+			nativeResult = Promise.resolve(fallback);
+		}
+
+		try {
+			return await Promise.race([nativeResult, timeoutResult]);
+		} finally {
+			if (timeoutId !== null) {
+				clearTimeout(timeoutId);
+			}
+		}
+	};
+
+	const checkAvailability = async () =>
+		await runBooleanWithTimeout(() => native.isAvailable(), false);
 
 	const runNativeAttemptWithTimeout = async (
 		attempt: () => Promise<TailscaleRecoveryAttemptResult>,

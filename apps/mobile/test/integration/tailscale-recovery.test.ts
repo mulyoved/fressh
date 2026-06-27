@@ -246,6 +246,34 @@ void test('ensureReady normalizes rejected native availability as unavailable', 
 	assert.deepEqual(waits, []);
 });
 
+void test('ensureReady times out stuck native availability as unavailable', async () => {
+	const calls: string[] = [];
+	const waits: number[] = [];
+	const controller = createTailscaleRecoveryController({
+		getPlatformOS: () => 'android',
+		getNowMs: () => 1_000,
+		sleep: async (ms) => {
+			waits.push(ms);
+		},
+		connectTimeoutMs: 1,
+		native: {
+			...nativeFixture(calls),
+			isAvailable: async () => {
+				calls.push('isAvailable');
+				return await new Promise<boolean>(() => {});
+			},
+		},
+	});
+
+	assert.deepEqual(await withSafetyTimeout(controller.ensureReady()), {
+		kind: 'unavailable',
+		attempted: false,
+		available: false,
+	});
+	assert.deepEqual(calls, ['isAvailable']);
+	assert.deepEqual(waits, []);
+});
+
 void test('ensureReady nudges Tailscale on Android and waits', async () => {
 	const calls: string[] = [];
 	const waits: number[] = [];
@@ -651,6 +679,40 @@ void test('recoverAfterFailure normalizes rejected native availability as unavai
 		},
 	);
 	assert.deepEqual(calls, ['isAvailable']);
+});
+
+void test('recoverAfterFailure times out stuck native availability as unavailable', async () => {
+	const calls: string[] = [];
+	const waits: number[] = [];
+	const controller = createTailscaleRecoveryController({
+		getPlatformOS: () => 'android',
+		getNowMs: () => 1_000,
+		sleep: async (ms) => {
+			waits.push(ms);
+		},
+		connectTimeoutMs: 1,
+		native: {
+			...nativeFixture(calls),
+			isAvailable: async () => {
+				calls.push('isAvailable');
+				return await new Promise<boolean>(() => {});
+			},
+		},
+	});
+
+	assert.deepEqual(
+		await withSafetyTimeout(
+			controller.recoverAfterFailure(new Error('No route to host')),
+		),
+		{
+			kind: 'unavailable',
+			attempted: false,
+			networkLikeFailure: true,
+			available: false,
+		},
+	);
+	assert.deepEqual(calls, ['isAvailable']);
+	assert.deepEqual(waits, []);
 });
 
 void test('recoverAfterFailure connects after network-like errors and waits', async () => {
