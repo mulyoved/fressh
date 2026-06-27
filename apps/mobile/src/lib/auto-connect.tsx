@@ -7,10 +7,6 @@ import { useShallow } from 'zustand/react/shallow';
 import { AgentNotificationBridgeManager } from './AgentNotificationBridgeManager';
 import { getAutoConnectLaunchActionForUrl } from './auto-connect-launch';
 import {
-	canUpdateTailscaleAttention,
-	getTailscaleManualResetDecision,
-} from './auto-connect-recovery';
-import {
 	createAutoConnectReconnectController,
 	type AutoConnectReconnectController,
 } from './auto-connect-reconnect-controller';
@@ -46,7 +42,10 @@ import {
 import { extractTmuxAttachFailureReason } from './ssh-error-details';
 import { useSshStore } from './ssh-store';
 import { tailscaleRecovery } from './tailscale-recovery';
-import { TAILSCALE_RESET_FAILED_MESSAGE } from './tailscale-recovery-core';
+import {
+	createTailscaleRecoveryActions,
+	type TailscaleRecoveryActions,
+} from './tailscale-recovery-actions';
 import {
 	TailscaleRecoveryBanner,
 	type TailscaleRecoveryBannerState,
@@ -149,37 +148,16 @@ export function AutoConnectManager() {
 	const allowBackgroundRef = React.useRef(false);
 	const didInitRef = React.useRef(false);
 	const launchUrlSuppressAutoConnectRef = React.useRef(false);
-	const tailscaleResetInFlightRef = React.useRef(false);
+	const tailscaleRecoveryActionsRef =
+		React.useRef<TailscaleRecoveryActions | null>(null);
 	const [tailscaleRecoveryUiState, setTailscaleRecoveryUiState] =
 		React.useState<TailscaleRecoveryUiState>(hiddenTailscaleRecoveryState);
-	const clearTailscaleAttention = React.useCallback(
-		(opts?: { force?: boolean }) => {
-			if (
-				!canUpdateTailscaleAttention({
-					resetInFlight: tailscaleResetInFlightRef.current,
-					force: opts?.force,
-				})
-			) {
-				return;
-			}
-			setTailscaleRecoveryUiState(hiddenTailscaleRecoveryState);
-		},
-		[],
-	);
-	const markTailscaleAttention = React.useCallback(
-		(message: string, opts?: { force?: boolean }) => {
-			if (
-				!canUpdateTailscaleAttention({
-					resetInFlight: tailscaleResetInFlightRef.current,
-					force: opts?.force,
-				})
-			) {
-				return;
-			}
-			setTailscaleRecoveryUiState({ phase: 'needsAttention', message });
-		},
-		[],
-	);
+	const clearTailscaleAttention = React.useCallback(() => {
+		setTailscaleRecoveryUiState(hiddenTailscaleRecoveryState);
+	}, []);
+	const markTailscaleAttention = React.useCallback((message: string) => {
+		setTailscaleRecoveryUiState({ phase: 'needsAttention', message });
+	}, []);
 
 	const setForegroundServiceStarted = React.useCallback((started: boolean) => {
 		useForegroundServiceRuntimeStore.getState().setStarted(started);
@@ -205,12 +183,9 @@ export function AutoConnectManager() {
 		}
 	}, []);
 
-	const stopReconnectCycle = React.useCallback(
-		(reason: string) => {
-			reconnectControllerRef.current?.stop(reason);
-		},
-		[],
-	);
+	const stopReconnectCycle = React.useCallback((reason: string) => {
+		reconnectControllerRef.current?.stop(reason);
+	}, []);
 
 	const waitForAutoConnectIdle = React.useCallback(async () => {
 		const deadlineMs = Date.now() + TAILSCALE_RESET_WAIT_FOR_IDLE_MS;
@@ -221,6 +196,31 @@ export function AutoConnectManager() {
 		}
 		return !inFlightRef.current;
 	}, []);
+
+	if (tailscaleRecoveryActionsRef.current === null) {
+		tailscaleRecoveryActionsRef.current = createTailscaleRecoveryActions({
+			recovery: tailscaleRecovery,
+			waitForAutoConnectIdle,
+			reconnect: {
+				stop: (reason) => {
+					reconnectControllerRef.current?.stop(reason);
+				},
+				replace: (reason) =>
+					reconnectControllerRef.current?.replace(reason) ?? false,
+			},
+			attention: {
+				clear: clearTailscaleAttention,
+				mark: markTailscaleAttention,
+				recovering: (message) => {
+					setTailscaleRecoveryUiState({
+						phase: 'recovering',
+						message,
+					});
+				},
+			},
+			logger,
+		});
+	}
 
 	React.useEffect(() => {
 		if (Platform.OS !== 'android') return;
@@ -455,7 +455,8 @@ export function AutoConnectManager() {
 				return {
 					isAutoConnecting: autoState.isAutoConnecting,
 					isReconnecting: autoState.isReconnecting,
-					resetInFlight: tailscaleResetInFlightRef.current,
+					resetInFlight:
+						tailscaleRecoveryActionsRef.current?.isResetInFlight() ?? false,
 					platformOS: Platform.OS,
 					appActive: isActiveRef.current,
 					backgroundWorkAllowed: allowBackgroundRef.current,
@@ -706,73 +707,16 @@ export function AutoConnectManager() {
 	}, [scheduleReconnect, shells.length]);
 
 	const handleOpenTailscale = React.useCallback(() => {
-		void tailscaleRecovery.openApp();
+		void tailscaleRecoveryActionsRef.current?.open();
 	}, []);
 
 	const handleRetryAfterTailscaleRecovery = React.useCallback(() => {
-		const started = scheduleReconnect('tailscale-retry-action', {
-			replaceExisting: true,
-		});
-		if (started) {
-			clearTailscaleAttention();
-		}
-	}, [clearTailscaleAttention, scheduleReconnect]);
+		tailscaleRecoveryActionsRef.current?.retry();
+	}, []);
 
 	const handleResetTailscale = React.useCallback(() => {
-		if (tailscaleResetInFlightRef.current) return;
-		tailscaleResetInFlightRef.current = true;
-		stopReconnectCycle('tailscale-reset-action');
-		setTailscaleRecoveryUiState({
-			phase: 'recovering',
-			message: 'Resetting Tailscale...',
-		});
-		void (async () => {
-			try {
-				const idle = await waitForAutoConnectIdle();
-				if (!idle) {
-					markTailscaleAttention(
-						'Fressh is still reconnecting. Try resetting Tailscale again.',
-						{ force: true },
-					);
-					return;
-				}
-				const result = await tailscaleRecovery.reset();
-				const decision = getTailscaleManualResetDecision(result);
-				if (decision.kind === 'attention') {
-					markTailscaleAttention(decision.message, { force: true });
-					return;
-				}
-				if (decision.kind === 'none') {
-					return;
-				}
-				tailscaleResetInFlightRef.current = false;
-				const started = scheduleReconnect('tailscale-reset-action', {
-					replaceExisting: true,
-				});
-				if (started) {
-					clearTailscaleAttention();
-					return;
-				}
-				markTailscaleAttention(
-					'Tailscale reset finished. Retry Fressh to reconnect.',
-					{ force: true },
-				);
-			} catch (error: unknown) {
-				logger.warn('Manual Tailscale reset failed', error);
-				markTailscaleAttention(TAILSCALE_RESET_FAILED_MESSAGE, {
-					force: true,
-				});
-			} finally {
-				tailscaleResetInFlightRef.current = false;
-			}
-		})();
-	}, [
-		clearTailscaleAttention,
-		markTailscaleAttention,
-		scheduleReconnect,
-		stopReconnectCycle,
-		waitForAutoConnectIdle,
-	]);
+		void tailscaleRecoveryActionsRef.current?.reset();
+	}, []);
 
 	return (
 		<>

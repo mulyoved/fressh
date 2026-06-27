@@ -1,9 +1,7 @@
 import {
-	getTailscaleManualResetAttentionMessage,
 	getTailscaleRecoveryAttentionMessage,
 	isTailscaleRecoverySupported,
 	TAILSCALE_RESTART_FAILED_MESSAGE,
-	type TailscaleManualResetResult,
 	type TailscaleRecoverAfterFailureResult,
 } from './tailscale-recovery-core';
 
@@ -32,28 +30,4 @@ export function getTailscaleRecoveryAttentionDecision(input: {
 		kind: 'attention' as const,
 		message,
 	};
-}
-
-export function getTailscaleManualResetDecision(
-	result: TailscaleManualResetResult,
-) {
-	const message = getTailscaleManualResetAttentionMessage(result);
-	if (message !== null) {
-		return {
-			kind: 'attention' as const,
-			message,
-		};
-	}
-
-	if (result.kind === 'reset') {
-		return { kind: 'reconnect' as const };
-	}
-	return { kind: 'none' as const };
-}
-
-export function canUpdateTailscaleAttention(input: {
-	resetInFlight: boolean;
-	force?: boolean;
-}) {
-	return input.force === true || !input.resetInFlight;
 }

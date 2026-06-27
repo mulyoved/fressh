@@ -4,16 +4,10 @@ import {
 	getAutoConnectLaunchActionForUrl,
 	shouldSkipInitialAutoConnectForUrl,
 } from '../../src/lib/auto-connect-launch';
-import {
-	canUpdateTailscaleAttention,
-	getTailscaleRecoveryAttentionDecision,
-	getTailscaleManualResetDecision,
-} from '../../src/lib/auto-connect-recovery';
+import { getTailscaleRecoveryAttentionDecision } from '../../src/lib/auto-connect-recovery';
 import {
 	TAILSCALE_REACHABILITY_MESSAGE,
 	TAILSCALE_RESTART_FAILED_MESSAGE,
-	TAILSCALE_RESET_FAILED_MESSAGE,
-	TAILSCALE_RESET_NOT_STARTED_MESSAGE,
 } from '../../src/lib/tailscale-recovery-core';
 
 void test('e2e launch URL can suppress the initial auto-connect attempt', () => {
@@ -127,49 +121,4 @@ void test('Tailscale recovery attention decision handles recovered retry outcome
 			kind: 'none',
 		},
 	);
-});
-
-void test('Tailscale manual reset decision preserves attention on failed or skipped reset', () => {
-	assert.deepEqual(
-		getTailscaleManualResetDecision({ kind: 'failed', attempted: false }),
-		{
-			kind: 'attention',
-			message: TAILSCALE_RESET_FAILED_MESSAGE,
-		},
-	);
-	assert.deepEqual(
-		getTailscaleManualResetDecision({ kind: 'failed', attempted: true }),
-		{
-			kind: 'attention',
-			message: TAILSCALE_RESET_FAILED_MESSAGE,
-		},
-	);
-	assert.deepEqual(
-		getTailscaleManualResetDecision({ kind: 'notStarted', attempted: false }),
-		{
-			kind: 'attention',
-			message: TAILSCALE_RESET_NOT_STARTED_MESSAGE,
-		},
-	);
-	assert.deepEqual(
-		getTailscaleManualResetDecision({ kind: 'unsupported', attempted: false }),
-		{
-			kind: 'none',
-		},
-	);
-	assert.deepEqual(
-		getTailscaleManualResetDecision({ kind: 'reset', attempted: true }),
-		{
-			kind: 'reconnect',
-		},
-	);
-});
-
-void test('Tailscale attention updates are suppressed during manual reset unless forced', () => {
-	assert.equal(canUpdateTailscaleAttention({ resetInFlight: true }), false);
-	assert.equal(
-		canUpdateTailscaleAttention({ resetInFlight: true, force: true }),
-		true,
-	);
-	assert.equal(canUpdateTailscaleAttention({ resetInFlight: false }), true);
 });
