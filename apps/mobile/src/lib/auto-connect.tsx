@@ -5,16 +5,13 @@ import { AppState, Platform } from 'react-native';
 import { create } from 'zustand';
 import { useShallow } from 'zustand/react/shallow';
 import { AgentNotificationBridgeManager } from './AgentNotificationBridgeManager';
+import { attemptAutoConnectSource } from './auto-connect-attempt';
 import { getAutoConnectLaunchActionForUrl } from './auto-connect-launch';
 import {
 	createAutoConnectReconnectController,
 	type AutoConnectReconnectController,
 } from './auto-connect-reconnect-controller';
-import { attemptSavedEntryWithTailscaleRecovery } from './auto-connect-saved-entry';
-import {
-	getStoredConnectionId,
-	pickLatestConnection,
-} from './connection-utils';
+import { pickLatestConnection } from './connection-utils';
 import {
 	startForegroundService,
 	stopForegroundService,
@@ -36,10 +33,8 @@ import { rootLogger } from './logger';
 import { connectAndOpenShell } from './query-fns';
 import {
 	secretsManager,
-	type InputConnectionDetails,
 	type StoredConnectionDetails,
 } from './secrets-manager';
-import { extractTmuxAttachFailureReason } from './ssh-error-details';
 import { useSshStore } from './ssh-store';
 import { tailscaleRecovery } from './tailscale-recovery';
 import {
@@ -50,7 +45,7 @@ import {
 	TailscaleRecoveryBanner,
 	type TailscaleRecoveryBannerState,
 } from './TailscaleRecoveryBanner';
-import { AbortSignalTimeout, queryClient } from './utils';
+import { queryClient } from './utils';
 
 const logger = rootLogger.extend('AutoConnect');
 const RECONNECT_DELAYS_MS = [500, 1_000, 2_000, 5_000, 10_000];
@@ -312,122 +307,30 @@ export function AutoConnectManager() {
 		setAutoConnecting(true);
 
 		try {
-			if (latestShell) {
-				// Avoid re-mounting the terminal if we're already on the detail screen.
-				if (pathname !== '/shell/detail') {
-					navigateToShell(latestShell.connectionId, latestShell.channelId);
-				}
-				return true;
-			}
-
-			const activeConnections = Object.values(connections);
-			if (activeConnections.length > 0) {
-				const activeConnection = activeConnections.reduce((latest, current) =>
-					current.connectedAtMs > latest.connectedAtMs ? current : latest,
-				);
-				const storedConnectionId = getStoredConnectionId(
-					activeConnection.connectionDetails,
-				);
-				let useTmux = true;
-				let tmuxSessionName = 'main';
-				try {
-					const entry = await queryClient.fetchQuery(
-						secretsManager.connections.query.get(storedConnectionId),
-					);
-					if (entry?.value) {
-						useTmux = entry.value.useTmux ?? true;
-						tmuxSessionName = entry.value.tmuxSessionName?.trim() || 'main';
-					}
-				} catch (error) {
-					logger.warn(
-						'Failed to load tmux settings for active connection',
-						error,
-					);
-				}
-
-				try {
-					const shellHandle = await activeConnection.startShell({
-						term: 'Xterm',
-						useTmux,
-						tmuxSessionName,
-						abortSignal: AbortSignalTimeout(5_000),
-					});
-					logger.info('Reconnected by reopening shell on active connection', {
-						connectionId: activeConnection.connectionId,
-						channelId: shellHandle.channelId,
-					});
-					navigateToShell(activeConnection.connectionId, shellHandle.channelId);
-					return true;
-				} catch (error) {
-					const tmuxAttachFailureReason = extractTmuxAttachFailureReason(error);
-					if (tmuxAttachFailureReason !== null) {
-						logger.info(
-							'Tmux attach failed while reopening shell on active connection',
-							{
-								connectionId: activeConnection.connectionId,
-								tmuxAttachFailureReason,
-								tmuxSessionName,
-							},
-						);
-					} else {
-						logger.warn('Failed to reopen shell on active connection', error);
-					}
-				}
-			}
-
-			const latestEntry = await loadLatestSavedConnection();
-			if (!latestEntry) return false;
-
-			const details = latestEntry.value;
-			if (
-				typeof details.useTmux !== 'boolean' ||
-				typeof details.tmuxSessionName !== 'string'
-			) {
-				return false;
-			}
-			const normalizedDetails: InputConnectionDetails = {
-				...details,
-				useTmux: details.useTmux,
-				tmuxSessionName: details.tmuxSessionName,
-				autoConnect: details.autoConnect ?? false,
-			};
-			const resolvedSecurity = await resolveKeySecurity(details);
-			if (!resolvedSecurity) return false;
-
-			const connectSavedEntry = () =>
-				connectAndOpenShell({
-					connectionDetails: normalizedDetails,
-					resolvedSecurity,
-					connect,
-					navigate: ({ connectionId, channelId }) => {
-						navigateToShell(connectionId, channelId);
-					},
-				});
-			const logTmuxAttachFailure = (
-				result: Extract<
-					Awaited<ReturnType<typeof connectSavedEntry>>,
-					{ status: 'tmux_attach_failed' }
-				>,
-			) => {
-				logger.info('Auto-connect tmux attach failed, will retry', {
-					connectionId: result.connectionId,
-					tmuxAttachFailureReason: result.tmuxAttachFailureReason,
-					tmuxSessionName: result.tmuxSessionName,
-				});
-			};
-
-			const result = await attemptSavedEntryWithTailscaleRecovery({
+			return await attemptAutoConnectSource({
 				platformOS: Platform.OS,
+				pathname,
+				latestShell,
+				connections,
+				openSavedEntryShell: ({
+					connectionDetails,
+					resolvedSecurity,
+					navigate,
+				}) =>
+					connectAndOpenShell({
+						connectionDetails,
+						resolvedSecurity,
+						connect,
+						navigate,
+					}),
+				loadLatestSavedConnection,
+				resolveKeySecurity,
+				navigateToShell,
 				recovery: tailscaleRecovery,
-				connectSavedEntry,
 				markTailscaleAttention,
 				clearTailscaleAttention,
-				logTmuxAttachFailure,
-				logWarning: (message, error) => {
-					logger.warn(message, error);
-				},
+				logger,
 			});
-			return result.connected;
 		} catch (error) {
 			logger.warn('Auto-connect attempt failed', error);
 			return false;
@@ -466,8 +369,7 @@ export function AutoConnectManager() {
 					isAutoConnecting: autoState.isAutoConnecting,
 					isReconnecting: autoState.isReconnecting,
 					resetInFlight:
-						tailscaleRecoveryCoordinatorRef.current?.isResetInFlight() ??
-						false,
+						tailscaleRecoveryCoordinatorRef.current?.isResetInFlight() ?? false,
 					platformOS: Platform.OS,
 					appActive: isActiveRef.current,
 					backgroundWorkAllowed: allowBackgroundRef.current,
