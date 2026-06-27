@@ -9,10 +9,10 @@ import { getAutoConnectLaunchActionForUrl } from './auto-connect-launch';
 import {
 	canStartReplacementReconnect,
 	canUpdateTailscaleAttention,
-	getTailscaleRecoveryAttentionDecision,
 	getTailscaleManualResetDecision,
 	isCurrentReconnectLoop,
 } from './auto-connect-recovery';
+import { attemptSavedEntryWithTailscaleRecovery } from './auto-connect-saved-entry';
 import {
 	getStoredConnectionId,
 	pickLatestConnection,
@@ -45,11 +45,7 @@ import {
 import { extractTmuxAttachFailureReason } from './ssh-error-details';
 import { useSshStore } from './ssh-store';
 import { tailscaleRecovery } from './tailscale-recovery';
-import {
-	getTailscaleRecoveryAttentionMessage,
-	isTailscaleRecoverySupported,
-	TAILSCALE_RESET_FAILED_MESSAGE,
-} from './tailscale-recovery-core';
+import { TAILSCALE_RESET_FAILED_MESSAGE } from './tailscale-recovery-core';
 import {
 	TailscaleRecoveryBanner,
 	type TailscaleRecoveryBannerState,
@@ -386,15 +382,6 @@ export function AutoConnectManager() {
 			const latestEntry = await loadLatestSavedConnection();
 			if (!latestEntry) return false;
 
-			const readiness = await tailscaleRecovery.ensureReady();
-			if (isTailscaleRecoverySupported(Platform.OS) && !readiness.available) {
-				const message = getTailscaleRecoveryAttentionMessage(readiness);
-				if (message !== null) {
-					markTailscaleAttention(message);
-				}
-				return false;
-			}
-
 			const details = latestEntry.value;
 			if (
 				typeof details.useTmux !== 'boolean' ||
@@ -433,56 +420,18 @@ export function AutoConnectManager() {
 				});
 			};
 
-			try {
-				const result = await connectSavedEntry();
-				if (result.status === 'tmux_attach_failed') {
-					logTmuxAttachFailure(result);
-					return false;
-				}
-				clearTailscaleAttention();
-				return true;
-			} catch (error) {
-				const recovery = await tailscaleRecovery.recoverAfterFailure(error);
-				if (!recovery.networkLikeFailure) {
-					throw error;
-				}
-
-				if (!recovery.attempted) {
-					const decision = getTailscaleRecoveryAttentionDecision({
-						platformOS: Platform.OS,
-						result: recovery,
-						retrySucceeded: false,
-					});
-					if (decision.kind === 'attention') {
-						markTailscaleAttention(decision.message);
-					}
-					return false;
-				}
-
-				try {
-					const retryResult = await connectSavedEntry();
-					if (retryResult.status === 'tmux_attach_failed') {
-						logTmuxAttachFailure(retryResult);
-						return false;
-					}
-					clearTailscaleAttention();
-					return true;
-				} catch (retryError) {
-					const decision = getTailscaleRecoveryAttentionDecision({
-						platformOS: Platform.OS,
-						result: recovery,
-						retrySucceeded: false,
-					});
-					if (decision.kind === 'attention') {
-						markTailscaleAttention(decision.message);
-					}
-					logger.warn(
-						'Auto-connect failed after Tailscale recovery retry',
-						retryError,
-					);
-					return false;
-				}
-			}
+			const result = await attemptSavedEntryWithTailscaleRecovery({
+				platformOS: Platform.OS,
+				recovery: tailscaleRecovery,
+				connectSavedEntry,
+				markTailscaleAttention,
+				clearTailscaleAttention,
+				logTmuxAttachFailure,
+				logWarning: (message, error) => {
+					logger.warn(message, error);
+				},
+			});
+			return result.connected;
 		} catch (error) {
 			logger.warn('Auto-connect attempt failed', error);
 			return false;
