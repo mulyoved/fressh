@@ -16,6 +16,11 @@ type TailscaleRecoveryAttemptResult = {
 	failed?: boolean;
 };
 
+type TailscaleDisconnectResult = {
+	result: TailscaleRecoveryAttemptResult;
+	fallback: boolean;
+};
+
 type TailscaleConnectCooldownResult =
 	| { kind: 'cooldown'; attempted: false }
 	| { kind: 'notStarted'; attempted: false }
@@ -95,6 +100,36 @@ export function createTailscaleRecoveryController({
 			}
 		}
 	};
+
+	const disconnectWithTimeout =
+		async (): Promise<TailscaleDisconnectResult> => {
+			let timeoutId: ReturnType<typeof setTimeout> | null = null;
+			const timeoutResult = new Promise<TailscaleDisconnectResult>(
+				(resolve) => {
+					timeoutId = setTimeout(() => {
+						timeoutId = null;
+						resolve({ result: createFailedAttempt(), fallback: true });
+					}, connectTimeoutMs);
+				},
+			);
+
+			try {
+				const disconnectResult = native.disconnect().then(
+					(result): TailscaleDisconnectResult => ({ result, fallback: false }),
+					(): TailscaleDisconnectResult => ({
+						result: createFailedAttempt(),
+						fallback: true,
+					}),
+				);
+				return await Promise.race([disconnectResult, timeoutResult]);
+			} catch {
+				return { result: createFailedAttempt(), fallback: true };
+			} finally {
+				if (timeoutId !== null) {
+					clearTimeout(timeoutId);
+				}
+			}
+		};
 
 	const createConnectRecoveryResult = (
 		result: TailscaleRecoveryAttemptResult,
@@ -254,11 +289,11 @@ export function createTailscaleRecoveryController({
 			}
 
 			let disconnectResult: TailscaleRecoveryAttemptResult;
-			try {
-				disconnectResult = await native.disconnect();
-			} catch {
+			const disconnectAttempt = await disconnectWithTimeout();
+			if (disconnectAttempt.fallback) {
 				return { kind: 'failed', attempted: false };
 			}
+			disconnectResult = disconnectAttempt.result;
 			if (disconnectResult.attempted) {
 				await sleep(DEFAULT_TAILSCALE_RESET_DELAY_MS);
 			}

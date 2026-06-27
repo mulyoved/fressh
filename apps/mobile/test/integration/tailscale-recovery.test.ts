@@ -777,6 +777,33 @@ void test('reset normalizes rejected disconnect result without connecting', asyn
 	assert.deepEqual(waits, []);
 });
 
+void test('reset times out a stuck native disconnect without connecting', async () => {
+	const calls: string[] = [];
+	const waits: number[] = [];
+	const controller = createTailscaleRecoveryController({
+		getPlatformOS: () => 'android',
+		getNowMs: () => 1_000,
+		sleep: async (ms) => {
+			waits.push(ms);
+		},
+		connectTimeoutMs: 1,
+		native: {
+			...nativeFixture(calls),
+			disconnect: async () => {
+				calls.push('disconnect');
+				return await new Promise<{ attempted: boolean }>(() => {});
+			},
+		},
+	});
+
+	assert.deepEqual(await withSafetyTimeout(controller.reset()), {
+		kind: 'failed',
+		attempted: false,
+	});
+	assert.deepEqual(calls, ['disconnect']);
+	assert.deepEqual(waits, []);
+});
+
 void test('reset records cooldown when connect attempts', async () => {
 	const calls: string[] = [];
 	const waits: number[] = [];
