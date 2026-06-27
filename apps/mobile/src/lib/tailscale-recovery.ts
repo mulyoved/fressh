@@ -93,8 +93,9 @@ export function createTailscaleRecoveryController({
 			},
 		);
 
+		let nativeResult: Promise<TailscaleNativeAttemptWithFallback>;
 		try {
-			const nativeResult = attempt().then(
+			nativeResult = attempt().then(
 				(result): TailscaleNativeAttemptWithFallback => ({
 					result,
 					fallback: false,
@@ -104,6 +105,14 @@ export function createTailscaleRecoveryController({
 					fallback: true,
 				}),
 			);
+		} catch {
+			nativeResult = Promise.resolve({
+				result: createFailedAttempt(),
+				fallback: true,
+			});
+		}
+
+		try {
 			return await Promise.race([nativeResult, timeoutResult]);
 		} finally {
 			if (timeoutId !== null) {
