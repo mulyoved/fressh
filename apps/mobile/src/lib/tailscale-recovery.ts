@@ -122,7 +122,9 @@ export function createTailscaleRecoveryController({
 	};
 
 	const connectWithTimeout = async () => {
-		const { result } = await runNativeAttemptWithTimeout(() => native.connect());
+		const { result } = await runNativeAttemptWithTimeout(() =>
+			native.connect(),
+		);
 		return result;
 	};
 

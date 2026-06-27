@@ -149,7 +149,9 @@ function connectRejectingNativeFixture(
 	};
 }
 
-function connectThrowingNativeFixture(calls: string[]): TailscaleRecoveryNative {
+function connectThrowingNativeFixture(
+	calls: string[],
+): TailscaleRecoveryNative {
 	return {
 		...nativeFixture(calls),
 		connect: () => {

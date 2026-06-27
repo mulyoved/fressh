@@ -336,10 +336,7 @@ void test('automatic attention methods pass through when manual reset is idle', 
 	coordinator.clearAutomaticAttention();
 	coordinator.markAutomaticAttention('Network looks offline');
 
-	assert.deepEqual(calls, [
-		['clear'],
-		['mark', 'Network looks offline'],
-	]);
+	assert.deepEqual(calls, [['clear'], ['mark', 'Network looks offline']]);
 });
 
 void test('automatic attention changes are ignored while manual reset is in flight', async () => {
