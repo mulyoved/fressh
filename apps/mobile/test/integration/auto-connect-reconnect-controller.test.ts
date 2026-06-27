@@ -32,7 +32,7 @@ function harness(
 	const timers: Timer[] = [];
 	const setReconnectingCalls: boolean[] = [];
 	const attempts: number[] = [];
-	const logs: Array<{ level: 'info' | 'warn'; message: string }> = [];
+	const logs: { level: 'info' | 'warn'; message: string }[] = [];
 	const snapshot: AutoConnectReconnectSnapshot = {
 		isAutoConnecting: opts.isAutoConnecting ?? false,
 		isReconnecting: reconnecting,
@@ -172,7 +172,7 @@ void test('replacement stops current loop and starts a new one', async () => {
 
 void test('in-flight attempt resolving after replacement cannot update the new loop', async () => {
 	const attemptCalls: number[] = [];
-	const resolvers: Array<(value: boolean) => void> = [];
+	const resolvers: ((value: boolean) => void)[] = [];
 	const context = harness({
 		attemptAutoConnect: () => {
 			attemptCalls.push(attemptCalls.length + 1);

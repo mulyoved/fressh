@@ -80,8 +80,7 @@ export function createAutoConnectReconnectController({
 		if (!isCurrentLoop(loopGeneration)) return;
 		const attempt = attemptIndex;
 		attemptIndex += 1;
-		const delayMs =
-			delaysMs[Math.min(attempt, delaysMs.length - 1)] ?? 10_000;
+		const delayMs = delaysMs[Math.min(attempt, delaysMs.length - 1)] ?? 10_000;
 		timer = setTimeout(() => {
 			timer = null;
 			void attemptWithBackoff();

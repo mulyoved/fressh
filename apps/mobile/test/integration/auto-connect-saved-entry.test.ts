@@ -4,6 +4,8 @@ import {
 	attemptSavedEntryWithTailscaleRecovery,
 	type SavedEntryTailscaleRecovery,
 } from '../../src/lib/auto-connect-saved-entry';
+// eslint-disable-next-line import/consistent-type-specifier-style -- keep query-fns type-only so Node integration tests do not load React Native at runtime
+import type { ConnectAndOpenShellResult } from '../../src/lib/query-fns';
 import {
 	TAILSCALE_REACHABILITY_MESSAGE,
 	TAILSCALE_RESTART_FAILED_MESSAGE,
@@ -11,7 +13,6 @@ import {
 	type TailscaleReadyResult,
 	type TailscaleRecoverAfterFailureResult,
 } from '../../src/lib/tailscale-recovery-core';
-import type { ConnectAndOpenShellResult } from '../../src/lib/query-fns';
 
 type ConnectedResult = Extract<
 	ConnectAndOpenShellResult,
