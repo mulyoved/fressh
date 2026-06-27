@@ -283,6 +283,31 @@ void test('reset-in-flight snapshot blocks start and retry', async () => {
 	assert.deepEqual(retryBlocked.setReconnectingCalls, [true, false]);
 });
 
+void test('reset-in-flight after a failed attempt stops without scheduling retry', async () => {
+	let attemptCount = 0;
+	let resolveAttempt: (value: boolean) => void = () => {};
+	const context = harness({
+		attemptAutoConnect: () => {
+			attemptCount += 1;
+			return new Promise<boolean>((resolve) => {
+				resolveAttempt = resolve;
+			});
+		},
+	});
+
+	assert.equal(context.controller.start('shell-drop'), true);
+	assert.equal(attemptCount, 1);
+
+	context.snapshot.resetInFlight = true;
+	resolveAttempt(false);
+	await flushPromises();
+
+	assert.equal(context.controller.isRunning(), false);
+	assert.equal(context.timers.length, 0);
+	assert.equal(attemptCount, 1);
+	assert.deepEqual(context.setReconnectingCalls, [true, false]);
+});
+
 void test('background not allowed stops with app-not-active', async () => {
 	const context = harness({
 		platformOS: 'ios',
