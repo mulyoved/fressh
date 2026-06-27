@@ -16,7 +16,7 @@ type TailscaleRecoveryAttemptResult = {
 	failed?: boolean;
 };
 
-type TailscaleDisconnectResult = {
+type TailscaleNativeAttemptWithFallback = {
 	result: TailscaleRecoveryAttemptResult;
 	fallback: boolean;
 };
@@ -80,20 +80,31 @@ export function createTailscaleRecoveryController({
 		failed: true,
 	});
 
-	const connectWithTimeout = async () => {
+	const runNativeAttemptWithTimeout = async (
+		attempt: () => Promise<TailscaleRecoveryAttemptResult>,
+	): Promise<TailscaleNativeAttemptWithFallback> => {
 		let timeoutId: ReturnType<typeof setTimeout> | null = null;
-		const timeoutResult = new Promise<TailscaleRecoveryAttemptResult>(
+		const timeoutResult = new Promise<TailscaleNativeAttemptWithFallback>(
 			(resolve) => {
 				timeoutId = setTimeout(() => {
 					timeoutId = null;
-					resolve(createFailedAttempt());
+					resolve({ result: createFailedAttempt(), fallback: true });
 				}, connectTimeoutMs);
 			},
 		);
 
 		try {
-			const connectResult = native.connect().catch(() => createFailedAttempt());
-			return await Promise.race([connectResult, timeoutResult]);
+			const nativeResult = attempt().then(
+				(result): TailscaleNativeAttemptWithFallback => ({
+					result,
+					fallback: false,
+				}),
+				(): TailscaleNativeAttemptWithFallback => ({
+					result: createFailedAttempt(),
+					fallback: true,
+				}),
+			);
+			return await Promise.race([nativeResult, timeoutResult]);
 		} finally {
 			if (timeoutId !== null) {
 				clearTimeout(timeoutId);
@@ -101,35 +112,14 @@ export function createTailscaleRecoveryController({
 		}
 	};
 
-	const disconnectWithTimeout =
-		async (): Promise<TailscaleDisconnectResult> => {
-			let timeoutId: ReturnType<typeof setTimeout> | null = null;
-			const timeoutResult = new Promise<TailscaleDisconnectResult>(
-				(resolve) => {
-					timeoutId = setTimeout(() => {
-						timeoutId = null;
-						resolve({ result: createFailedAttempt(), fallback: true });
-					}, connectTimeoutMs);
-				},
-			);
+	const connectWithTimeout = async () => {
+		const { result } = await runNativeAttemptWithTimeout(() => native.connect());
+		return result;
+	};
 
-			try {
-				const disconnectResult = native.disconnect().then(
-					(result): TailscaleDisconnectResult => ({ result, fallback: false }),
-					(): TailscaleDisconnectResult => ({
-						result: createFailedAttempt(),
-						fallback: true,
-					}),
-				);
-				return await Promise.race([disconnectResult, timeoutResult]);
-			} catch {
-				return { result: createFailedAttempt(), fallback: true };
-			} finally {
-				if (timeoutId !== null) {
-					clearTimeout(timeoutId);
-				}
-			}
-		};
+	const disconnectWithTimeout =
+		async (): Promise<TailscaleNativeAttemptWithFallback> =>
+			await runNativeAttemptWithTimeout(() => native.disconnect());
 
 	const createConnectRecoveryResult = (
 		result: TailscaleRecoveryAttemptResult,

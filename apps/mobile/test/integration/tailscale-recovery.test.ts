@@ -440,6 +440,33 @@ void test('automatic recovery times out a stuck native connect and clears in-fli
 	assert.deepEqual(waits, []);
 });
 
+void test('native connect and disconnect timeouts both return failed recovery results', async () => {
+	const controller = createTailscaleRecoveryController({
+		getPlatformOS: () => 'android',
+		getNowMs: () => 1_000,
+		sleep: async () => {},
+		connectTimeoutMs: 1,
+		native: {
+			isAvailable: async () => true,
+			connect: async () =>
+				await new Promise<{ attempted: boolean }>(() => undefined),
+			disconnect: async () =>
+				await new Promise<{ attempted: boolean }>(() => undefined),
+			openApp: async () => ({ attempted: true }),
+		},
+	});
+
+	const ready = await controller.ensureReady();
+	assert.deepEqual(ready, {
+		kind: 'failed',
+		attempted: false,
+		available: true,
+	});
+
+	const reset = await controller.reset();
+	assert.deepEqual(reset, { kind: 'failed', attempted: false });
+});
+
 void test('resetCooldown allows a throttled controller to retry immediately', async () => {
 	const calls: string[] = [];
 	const waits: number[] = [];
