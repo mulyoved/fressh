@@ -2,9 +2,9 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
 	attemptSavedEntryWithTailscaleRecovery,
+	type SavedEntryConnectResult,
 	type SavedEntryTailscaleRecovery,
 } from '../../src/lib/auto-connect-saved-entry';
-import { type ConnectAndOpenShellResult } from '../../src/lib/connect-and-open-shell';
 import {
 	TAILSCALE_REACHABILITY_MESSAGE,
 	TAILSCALE_RESTART_FAILED_MESSAGE,
@@ -13,26 +13,19 @@ import {
 	type TailscaleRecoverAfterFailureResult,
 } from '../../src/lib/tailscale-recovery-core';
 
-type ConnectedResult = Extract<
-	ConnectAndOpenShellResult,
-	{ status: 'connected' }
->;
-
 function connectedResult(
 	connectionId = 'connection-1',
-): ConnectAndOpenShellResult {
+): SavedEntryConnectResult {
 	return {
 		status: 'connected',
 		connectionId,
 		channelId: 1,
-		sshConnection: {} as ConnectedResult['sshConnection'],
-		shellHandle: {} as ConnectedResult['shellHandle'],
 	};
 }
 
 function tmuxAttachFailedResult(
 	connectionId = 'connection-1',
-): ConnectAndOpenShellResult {
+): SavedEntryConnectResult {
 	return {
 		status: 'tmux_attach_failed',
 		connectionId,
@@ -61,12 +54,12 @@ function recoveryFixture(opts?: {
 
 function harness(opts?: {
 	recovery?: SavedEntryTailscaleRecovery;
-	connectSavedEntry?: () => Promise<ConnectAndOpenShellResult>;
+	connectSavedEntry?: () => Promise<SavedEntryConnectResult>;
 	platformOS?: string;
 }) {
 	const attention: string[] = [];
 	let clearAttentionCount = 0;
-	const tmuxFailures: ConnectAndOpenShellResult[] = [];
+	const tmuxFailures: SavedEntryConnectResult[] = [];
 	const warnings: unknown[] = [];
 
 	const attempt = () =>
@@ -490,8 +483,6 @@ void test('records Tailscale recovery retry trace events', async () => {
 			if (connectCalls === 1) throw new Error('network unreachable');
 			return {
 				status: 'connected',
-				sshConnection: {} as never,
-				shellHandle: {} as never,
 				connectionId: 'conn-2',
 				channelId: 3,
 			};
@@ -601,7 +592,7 @@ void test('trace payload mutation cannot force Tailscale retry', async () => {
 
 void test('trace payload mutation cannot convert tmux attach failure to success', async () => {
 	const tmuxResult = tmuxAttachFailedResult();
-	const tmuxFailures: ConnectAndOpenShellResult[] = [];
+	const tmuxFailures: SavedEntryConnectResult[] = [];
 
 	const result = await attemptSavedEntryWithTailscaleRecovery({
 		platformOS: 'android',

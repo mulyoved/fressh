@@ -5,6 +5,7 @@ import type {
 	SshConnection,
 	SshConnectionProgress,
 } from '@fressh/react-native-uniffi-russh';
+import { type SavedEntryConnectResult } from './auto-connect-saved-entry';
 import {
 	serializeConnectionDiagnosticError,
 	type ConnectionDiagnosticConnectionIdentity,
@@ -21,19 +22,7 @@ import { AbortSignalTimeout } from './utils';
 const logger = rootLogger.extend('DiagnosticShellProbe');
 const DEFAULT_CONNECT_TIMEOUT_MS = 5_000;
 
-export type DiagnosticShellProbeResult =
-	| {
-			status: 'connected';
-			connectionId: string;
-			channelId: number;
-	  }
-	| {
-			status: 'tmux_attach_failed';
-			connectionId: string;
-			tmuxAttachFailureReason: string | null;
-			tmuxSessionName: string;
-			storedConnectionId: string;
-	  };
+export type DiagnosticShellProbeResult = SavedEntryConnectResult;
 
 type ProbeTrace = {
 	event: (event: ConnectionDiagnosticEventInput) => void;
@@ -158,6 +147,7 @@ export async function runDiagnosticShellProbe(args: {
 				source: 'saved-entry',
 				connection: connectedIdentity,
 			});
+			return null;
 		} catch (error) {
 			traceEvent({
 				type: 'ssh.diagnostic.disconnect-failed',
@@ -165,6 +155,7 @@ export async function runDiagnosticShellProbe(args: {
 				connection: connectedIdentity,
 				error: serializeConnectionDiagnosticError(error),
 			});
+			return error;
 		}
 	};
 
@@ -215,7 +206,10 @@ export async function runDiagnosticShellProbe(args: {
 		details: { channelId: shellHandle.channelId, storedConnectionId },
 	});
 
-	await cleanupDiagnosticConnection();
+	const cleanupError = await cleanupDiagnosticConnection();
+	if (cleanupError !== null) {
+		throw cleanupError;
+	}
 
 	return {
 		status: 'connected',

@@ -165,6 +165,36 @@ void test('manual diagnostic records failed connection and produces prompt', asy
 	assert.doesNotMatch(result.prompt, /secret/);
 });
 
+void test('manual diagnostic records tmux attach failures in the prompt', async () => {
+	const recorder = createConnectionDiagnosticRecorder({ now: () => 10 });
+
+	const result = await runManualConnectionDiagnostic({
+		recorder,
+		appState: {
+			platformOS: 'android',
+			isAutoConnecting: false,
+			isReconnecting: true,
+		},
+		loadLatestSavedConnection: async () => savedEntry,
+		resolveKeySecurity: async () => ({ type: 'key', privateKey: 'secret' }),
+		connectSavedEntry: async () => ({
+			status: 'tmux_attach_failed',
+			connectionId: 'conn-1',
+			tmuxAttachFailureReason: 'missing session',
+			tmuxSessionName: 'main',
+			storedConnectionId: 'stored-1',
+		}),
+		recovery: readyRecovery,
+		formatPrompt: formatConnectionDiagnosticPrompt,
+	});
+
+	assert.equal(result.status, 'failed');
+	assert.match(result.prompt, /manual-diagnostic\.tmux-attach-failed/);
+	assert.match(result.prompt, /missing session/);
+	assert.match(result.prompt, /tmuxSessionName=main/);
+	assert.doesNotMatch(result.prompt, /secret/);
+});
+
 void test('manual diagnostic records missing saved key as failed trace', async () => {
 	const recorder = createConnectionDiagnosticRecorder({ now: () => 10 });
 

@@ -2,9 +2,9 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
 	attemptSavedEntryWithTailscaleRecovery,
+	type SavedEntryConnectResult,
 	type SavedEntryTailscaleRecovery,
 } from '../../src/lib/auto-connect-saved-entry';
-import { type ConnectAndOpenShellResult } from '../../src/lib/connect-and-open-shell';
 import { createTailscaleRecoveryController } from '../../src/lib/tailscale-recovery';
 import { createTailscaleRecoveryActions } from '../../src/lib/tailscale-recovery-actions';
 import {
@@ -213,19 +213,11 @@ void test('manual reset marks retry attention when reconnect replacement cannot 
 	]);
 });
 
-function connectedResult(): ConnectAndOpenShellResult {
+function connectedResult(): SavedEntryConnectResult {
 	return {
 		status: 'connected',
 		connectionId: 'connection-1',
 		channelId: 1,
-		sshConnection: {} as Extract<
-			ConnectAndOpenShellResult,
-			{ status: 'connected' }
-		>['sshConnection'],
-		shellHandle: {} as Extract<
-			ConnectAndOpenShellResult,
-			{ status: 'connected' }
-		>['shellHandle'],
 	};
 }
 

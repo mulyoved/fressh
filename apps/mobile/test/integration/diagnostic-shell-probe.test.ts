@@ -57,8 +57,45 @@ void test('diagnostic probe disconnects after success and never navigates or sav
 	assert.doesNotMatch(JSON.stringify(events), /secret/);
 });
 
+void test('diagnostic probe fails successful probes when disconnect fails', async () => {
+	const events: unknown[] = [];
+
+	await assert.rejects(
+		runDiagnosticShellProbe({
+			connectionDetails,
+			resolvedSecurity: { type: 'key', privateKey: 'secret' },
+			connect: async () =>
+				({
+					connectionId: 'conn-1',
+					disconnect: () => {
+						throw new Error('disconnect failed');
+					},
+					startShell: async () => ({ channelId: 7 }),
+				}) as never,
+			trace: {
+				event: (event) => {
+					events.push(event);
+				},
+			},
+		}),
+		/disconnect failed/,
+	);
+
+	assert.deepEqual(
+		events.map((event) => (event as { type: string }).type),
+		[
+			'ssh.connect.started',
+			'ssh.connect.connected',
+			'ssh.shell.started',
+			'ssh.shell.connected',
+			'ssh.diagnostic.disconnect-failed',
+		],
+	);
+});
+
 void test('diagnostic probe disconnects after tmux attach failure without throwing', async () => {
 	let disconnected = 0;
+	const events: unknown[] = [];
 
 	const result = await runDiagnosticShellProbe({
 		connectionDetails,
@@ -76,11 +113,68 @@ void test('diagnostic probe disconnects after tmux attach failure without throwi
 					};
 				},
 			}) as never,
+		trace: {
+			event: (event) => {
+				events.push(event);
+			},
+		},
 	});
 
 	assert.equal(result.status, 'tmux_attach_failed');
 	assert.equal(result.connectionId, 'conn-1');
+	assert.equal(result.tmuxAttachFailureReason, 'missing session');
+	assert.equal(result.tmuxSessionName, 'main');
+	assert.equal(result.storedConnectionId, 'muly-dev_tailnet_ts_net-22');
 	assert.equal(disconnected, 1);
+	assert.deepEqual(
+		events.map((event) => (event as { type: string }).type),
+		[
+			'ssh.connect.started',
+			'ssh.connect.connected',
+			'ssh.shell.started',
+			'ssh.shell.tmux-attach-failed',
+			'ssh.diagnostic.disconnected',
+		],
+	);
+});
+
+void test('diagnostic probe preserves tmux result when disconnect fails', async () => {
+	const events: unknown[] = [];
+
+	const result = await runDiagnosticShellProbe({
+		connectionDetails,
+		resolvedSecurity: { type: 'key', privateKey: 'secret' },
+		connect: async () =>
+			({
+				connectionId: 'conn-1',
+				disconnect: () => {
+					throw new Error('disconnect failed');
+				},
+				startShell: async () => {
+					throw {
+						tag: 'TmuxAttachFailed',
+						inner: ['missing session'],
+					};
+				},
+			}) as never,
+		trace: {
+			event: (event) => {
+				events.push(event);
+			},
+		},
+	});
+
+	assert.equal(result.status, 'tmux_attach_failed');
+	assert.deepEqual(
+		events.map((event) => (event as { type: string }).type),
+		[
+			'ssh.connect.started',
+			'ssh.connect.connected',
+			'ssh.shell.started',
+			'ssh.shell.tmux-attach-failed',
+			'ssh.diagnostic.disconnect-failed',
+		],
+	);
 });
 
 void test('diagnostic probe disconnects after shell failure and preserves shell error', async () => {

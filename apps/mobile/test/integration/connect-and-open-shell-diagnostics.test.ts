@@ -15,16 +15,38 @@ const connectionDetails = {
 void test('connectAndOpenShell records connect and shell success events', async () => {
 	const events: unknown[] = [];
 	const navigations: unknown[] = [];
+	const connectParams: unknown[] = [];
+	const saveCalls: unknown[] = [];
+	const startShellOptions: unknown[] = [];
+	const progressEvents: unknown[] = [];
 
 	const result = await connectAndOpenShell({
 		connectionDetails,
 		resolvedSecurity: { type: 'key', privateKey: 'secret' },
-		connect: async () =>
-			({
+		connect: async (params) => {
+			connectParams.push(params);
+			params.onConnectionProgress?.({ phase: 'auth' } as never);
+			assert.equal(await params.onServerKey({} as never), true);
+			assert.equal(params.host, 'dev.tailnet.ts.net');
+			assert.equal(params.port, 22);
+			assert.equal(params.username, 'muly');
+			assert.deepEqual(params.security, { type: 'key', privateKey: 'secret' });
+			assert.ok(params.abortSignal);
+			assert.equal(params.abortSignal.aborted, false);
+			return {
 				connectionId: 'conn-1',
-				startShell: async () => ({ channelId: 7 }),
-			}) as never,
-		saveConnection: async () => {},
+				startShell: async (options: unknown) => {
+					startShellOptions.push(options);
+					return { channelId: 7 };
+				},
+			} as never;
+		},
+		onConnectionProgress: (event) => {
+			progressEvents.push(event);
+		},
+		saveConnection: async (params) => {
+			saveCalls.push(params);
+		},
 		navigate: (params) => {
 			navigations.push(params);
 		},
@@ -36,11 +58,25 @@ void test('connectAndOpenShell records connect and shell success events', async 
 	});
 
 	assert.equal(result.status, 'connected');
+	assert.equal(connectParams.length, 1);
+	assert.deepEqual(progressEvents, [{ phase: 'auth' }]);
+	assert.deepEqual(saveCalls, [
+		{
+			label: 'muly@dev.tailnet.ts.net:22',
+			details: connectionDetails,
+			priority: 0,
+		},
+	]);
+	assert.equal(
+		(startShellOptions[0] as { registerInStore?: boolean }).registerInStore,
+		undefined,
+	);
 	assert.deepEqual(navigations, [{ connectionId: 'conn-1', channelId: 7 }]);
 	assert.deepEqual(
 		events.map((event) => (event as { type: string }).type),
 		[
 			'ssh.connect.started',
+			'ssh.connect.progress',
 			'ssh.connect.connected',
 			'ssh.shell.started',
 			'ssh.shell.connected',
@@ -51,6 +87,8 @@ void test('connectAndOpenShell records connect and shell success events', async 
 
 void test('connectAndOpenShell navigates with tmux attach failure metadata', async () => {
 	const navigatedWithError: unknown[] = [];
+	const saveCalls: unknown[] = [];
+	const startShellOptions: unknown[] = [];
 
 	const result = await connectAndOpenShell({
 		connectionDetails,
@@ -58,14 +96,17 @@ void test('connectAndOpenShell navigates with tmux attach failure metadata', asy
 		connect: async () =>
 			({
 				connectionId: 'conn-1',
-				startShell: async () => {
+				startShell: async (options: unknown) => {
+					startShellOptions.push(options);
 					throw {
 						tag: 'TmuxAttachFailed',
 						inner: ['missing session'],
 					};
 				},
 			}) as never,
-		saveConnection: async () => {},
+		saveConnection: async (params) => {
+			saveCalls.push(params);
+		},
 		navigate: () => {
 			throw new Error('success navigation should not run');
 		},
@@ -75,6 +116,11 @@ void test('connectAndOpenShell navigates with tmux attach failure metadata', asy
 	});
 
 	assert.equal(result.status, 'tmux_attach_failed');
+	assert.equal(saveCalls.length, 1);
+	assert.equal(
+		(startShellOptions[0] as { registerInStore?: boolean }).registerInStore,
+		undefined,
+	);
 	assert.deepEqual(navigatedWithError, [
 		{
 			connectionId: 'conn-1',
@@ -87,6 +133,8 @@ void test('connectAndOpenShell navigates with tmux attach failure metadata', asy
 
 void test('connectAndOpenShell records connect failure', async () => {
 	const events: unknown[] = [];
+	let saveCalls = 0;
+	let navigations = 0;
 
 	await assert.rejects(
 		connectAndOpenShell({
@@ -95,8 +143,12 @@ void test('connectAndOpenShell records connect failure', async () => {
 			connect: async () => {
 				throw new Error('network unreachable');
 			},
-			saveConnection: async () => {},
-			navigate: () => {},
+			saveConnection: async () => {
+				saveCalls += 1;
+			},
+			navigate: () => {
+				navigations += 1;
+			},
 			trace: {
 				event: (event) => {
 					events.push(event);
@@ -110,4 +162,6 @@ void test('connectAndOpenShell records connect failure', async () => {
 		events.map((event) => (event as { type: string }).type),
 		['ssh.connect.started', 'ssh.connect.failed'],
 	);
+	assert.equal(saveCalls, 0);
+	assert.equal(navigations, 0);
 });
