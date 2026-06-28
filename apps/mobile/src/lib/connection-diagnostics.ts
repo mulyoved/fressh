@@ -130,10 +130,26 @@ const DIAGNOSTIC_SECRET_TERMS = [
 	'privatekey',
 	'refreshtoken',
 	'secret',
-	'session',
 	'signature',
 	'token',
 ];
+const DIAGNOSTIC_SECRET_KEY_TERMS = [
+	...DIAGNOSTIC_SECRET_TERMS,
+	'code',
+	'key',
+	'session',
+	'sig',
+];
+const CONNECTION_IDENTITY_KEYS = new Set([
+	'savedConnectionId',
+	'connectionId',
+	'username',
+	'host',
+	'port',
+	'keyId',
+	'useTmux',
+	'tmuxSessionName',
+]);
 
 function redactDiagnosticText(value: string): string {
 	const redacted = redactBrowserActionErrorText(
@@ -191,17 +207,14 @@ function containsDiagnosticSecretTerm(value: string): boolean {
 }
 
 function isSecretDiagnosticKey(key: string): boolean {
+	if (CONNECTION_IDENTITY_KEYS.has(key)) {
+		return false;
+	}
+
 	const normalizedKey = key.toLowerCase().replace(/[^a-z0-9]/gu, '');
-	return [
-		'privatekey',
-		'password',
-		'passphrase',
-		'token',
-		'secret',
-		'apikey',
-		'authorization',
-		'credential',
-	].some((secretName) => normalizedKey.includes(secretName));
+	return DIAGNOSTIC_SECRET_KEY_TERMS.some((secretName) =>
+		normalizedKey.includes(secretName),
+	);
 }
 
 function nextTraceId(now: number): string {
