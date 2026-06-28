@@ -296,20 +296,47 @@ function cloneDiagnosticValue<T>(value: T): T {
 	return snapshotDiagnosticValue(value) as T;
 }
 
-function sanitizeEventInput(
-	input: ConnectionDiagnosticEventInput,
-): ConnectionDiagnosticEventInput {
+function sanitizeEventInput(input: unknown): ConnectionDiagnosticEventInput {
+	const details = readObjectField(input, 'details');
+
 	return {
-		...input,
-		message: input.message ? redactDiagnosticText(input.message) : undefined,
-		connection: input.connection
-			? cloneDiagnosticValue(input.connection)
-			: undefined,
-		error: input.error ? cloneDiagnosticValue(input.error) : undefined,
-		details: input.details
-			? (cloneDiagnosticValue(input.details) as Record<string, unknown>)
-			: undefined,
+		type:
+			readErrorStringField(input, 'type', undefined) ??
+			'diagnostic.event.unserializable',
+		source: readConnectionDiagnosticSource(input, 'source'),
+		message: readErrorStringField(input, 'message', undefined),
+		connection: normalizeConnectionIdentity(
+			readObjectField(input, 'connection'),
+		),
+		error: normalizeDiagnosticError(readObjectField(input, 'error')),
+		details:
+			details !== undefined
+				? (cloneDiagnosticValue(details) as Record<string, unknown>)
+				: undefined,
 	};
+}
+
+function createConnectionDiagnosticEvent(input: {
+	rawEvent: unknown;
+	startedAtMs: number;
+	atMs: number;
+}): ConnectionDiagnosticEvent {
+	try {
+		const sanitizedInput = sanitizeEventInput(input.rawEvent);
+		return {
+			...sanitizedInput,
+			atMs: input.atMs,
+			elapsedMs: input.atMs - input.startedAtMs,
+		};
+	} catch {
+		return {
+			type: 'diagnostic.event.unserializable',
+			source: 'manual-diagnostic',
+			message: UNREADABLE_ERROR_MESSAGE,
+			atMs: input.atMs,
+			elapsedMs: input.atMs - input.startedAtMs,
+		};
+	}
 }
 
 function cloneTrace(
@@ -322,41 +349,77 @@ function cloneTrace(
 	};
 }
 
+function normalizeTraceForPrompt(
+	trace: ConnectionDiagnosticTrace,
+): ConnectionDiagnosticTrace {
+	try {
+		const startedAtMs = readNumberField(trace, 'startedAtMs') ?? 0;
+		const events = readObjectField(trace, 'events');
+		return {
+			id: readErrorStringField(trace, 'id', undefined) ?? 'unknown-trace',
+			trigger: readConnectionDiagnosticTrigger(trace, 'trigger'),
+			reason: readErrorStringField(trace, 'reason', undefined) ?? 'unknown',
+			status: readConnectionDiagnosticStatus(trace, 'status'),
+			startedAtMs,
+			finishedAtMs: readNumberField(trace, 'finishedAtMs'),
+			events: Array.isArray(events)
+				? events.map((event) =>
+						createConnectionDiagnosticEvent({
+							rawEvent: event,
+							startedAtMs,
+							atMs: readNumberField(event, 'atMs') ?? startedAtMs,
+						}),
+					)
+				: [],
+		};
+	} catch {
+		return {
+			id: 'unknown-trace',
+			trigger: 'manual-diagnostic',
+			reason: UNREADABLE_ERROR_MESSAGE,
+			status: 'failed',
+			startedAtMs: 0,
+			events: [],
+		};
+	}
+}
+
 function formatConnectionIdentity(
 	connection: ConnectionDiagnosticConnectionIdentity | undefined,
 ): string {
-	if (!connection) return 'unknown connection';
+	const normalizedConnection = normalizeConnectionIdentity(connection);
+	if (!normalizedConnection) return 'unknown connection';
 
-	const username = connection.username
-		? redactDiagnosticText(connection.username.trim())
+	const username = normalizedConnection.username
+		? redactDiagnosticText(normalizedConnection.username.trim())
 		: undefined;
-	const host = connection.host
-		? redactDiagnosticText(connection.host.trim())
+	const host = normalizedConnection.host
+		? redactDiagnosticText(normalizedConnection.host.trim())
 		: undefined;
-	const port = connection.port;
+	const port = normalizedConnection.port;
 	const address =
 		username && host && typeof port === 'number'
 			? `${username}@${host}:${port}`
 			: null;
 
-	const savedId = connection.savedConnectionId
-		? redactDiagnosticText(connection.savedConnectionId.trim())
+	const savedId = normalizedConnection.savedConnectionId
+		? redactDiagnosticText(normalizedConnection.savedConnectionId.trim())
 		: undefined;
-	const connectionId = connection.connectionId
-		? redactDiagnosticText(connection.connectionId.trim())
+	const connectionId = normalizedConnection.connectionId
+		? redactDiagnosticText(normalizedConnection.connectionId.trim())
 		: undefined;
-	const keyId = connection.keyId
-		? redactDiagnosticText(connection.keyId.trim())
+	const keyId = normalizedConnection.keyId
+		? redactDiagnosticText(normalizedConnection.keyId.trim())
 		: undefined;
-	const tmuxSessionName = connection.tmuxSessionName
-		? redactDiagnosticText(connection.tmuxSessionName.trim())
+	const tmuxSessionName = normalizedConnection.tmuxSessionName
+		? redactDiagnosticText(normalizedConnection.tmuxSessionName.trim())
 		: undefined;
 	const parts = [
 		address,
 		savedId ? `savedConnectionId=${savedId}` : null,
 		connectionId ? `connectionId=${connectionId}` : null,
-		typeof connection.useTmux === 'boolean'
-			? `useTmux=${String(connection.useTmux)}`
+		typeof normalizedConnection.useTmux === 'boolean'
+			? `useTmux=${String(normalizedConnection.useTmux)}`
 			: null,
 		tmuxSessionName ? `tmuxSessionName=${tmuxSessionName}` : null,
 	];
@@ -504,6 +567,138 @@ function readErrorStringField(
 	}
 }
 
+function readNumberField(value: unknown, field: string): number | undefined {
+	try {
+		const fieldValue = readObjectField(value, field);
+		return typeof fieldValue === 'number' && Number.isFinite(fieldValue)
+			? fieldValue
+			: undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+function readBooleanField(value: unknown, field: string): boolean | undefined {
+	try {
+		const fieldValue = readObjectField(value, field);
+		return typeof fieldValue === 'boolean' ? fieldValue : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+function readConnectionDiagnosticSource(
+	value: unknown,
+	field: string,
+): ConnectionDiagnosticSource {
+	const source = readErrorStringField(value, field, undefined);
+	switch (source) {
+		case 'latest-shell':
+		case 'active-connection':
+		case 'saved-entry':
+		case 'tailscale-recovery':
+		case 'reconnect-controller':
+		case 'manual-diagnostic':
+		case 'foreground-service':
+		case 'command-menu':
+			return source;
+		default:
+			return 'manual-diagnostic';
+	}
+}
+
+function readConnectionDiagnosticTrigger(
+	value: unknown,
+	field: string,
+): ConnectionDiagnosticTrigger {
+	const trigger = readErrorStringField(value, field, undefined);
+	switch (trigger) {
+		case 'initial-auto-connect':
+		case 'reconnect':
+		case 'manual-diagnostic':
+		case 'command-menu':
+			return trigger;
+		default:
+			return 'manual-diagnostic';
+	}
+}
+
+function readConnectionDiagnosticStatus(
+	value: unknown,
+	field: string,
+): ConnectionDiagnosticStatus {
+	const status = readErrorStringField(value, field, undefined);
+	switch (status) {
+		case 'running':
+		case 'failed':
+		case 'connected':
+		case 'skipped':
+			return status;
+		default:
+			return 'failed';
+	}
+}
+
+function normalizeConnectionIdentity(
+	value: unknown,
+): ConnectionDiagnosticConnectionIdentity | undefined {
+	const identity: ConnectionDiagnosticConnectionIdentity = {};
+	const savedConnectionId = readErrorStringField(
+		value,
+		'savedConnectionId',
+		undefined,
+	);
+	const connectionId = readErrorStringField(value, 'connectionId', undefined);
+	const username = readErrorStringField(value, 'username', undefined);
+	const host = readErrorStringField(value, 'host', undefined);
+	const port = readNumberField(value, 'port');
+	const keyId = readErrorStringField(value, 'keyId', undefined);
+	const useTmux = readBooleanField(value, 'useTmux');
+	const tmuxSessionName = readErrorStringField(
+		value,
+		'tmuxSessionName',
+		undefined,
+	);
+
+	if (savedConnectionId !== undefined)
+		identity.savedConnectionId = savedConnectionId;
+	if (connectionId !== undefined) identity.connectionId = connectionId;
+	if (username !== undefined) identity.username = username;
+	if (host !== undefined) identity.host = host;
+	if (port !== undefined) identity.port = port;
+	if (keyId !== undefined) identity.keyId = keyId;
+	if (useTmux !== undefined) identity.useTmux = useTmux;
+	if (tmuxSessionName !== undefined) {
+		identity.tmuxSessionName = tmuxSessionName;
+	}
+
+	return Object.keys(identity).length ? identity : undefined;
+}
+
+function normalizeDiagnosticError(
+	value: unknown,
+): ConnectionDiagnosticError | undefined {
+	if (value === undefined) {
+		return undefined;
+	}
+
+	const hasStructuredFields =
+		readErrorStringField(value, 'name', undefined) !== undefined ||
+		readErrorStringField(value, 'message', undefined) !== undefined ||
+		readErrorStringField(value, 'tag', undefined) !== undefined ||
+		readObjectField(value, 'inner') !== undefined;
+
+	if (hasStructuredFields) {
+		return createSerializedErrorFromFields(value, {
+			defaultName: 'Error',
+			defaultMessage: UNREADABLE_ERROR_MESSAGE,
+			includeStack: true,
+		});
+	}
+
+	return serializeConnectionDiagnosticError(value);
+}
+
 function readObjectField(value: unknown, field: string): unknown {
 	try {
 		if (
@@ -551,13 +746,12 @@ export function createConnectionDiagnosticRecorder(
 					return cloneTrace(trace);
 				},
 				event: (input) => {
-					const sanitizedInput = sanitizeEventInput(input);
 					const atMs = now();
-					const event: ConnectionDiagnosticEvent = {
-						...sanitizedInput,
+					const event = createConnectionDiagnosticEvent({
+						rawEvent: input,
+						startedAtMs: trace.startedAtMs,
 						atMs,
-						elapsedMs: atMs - trace.startedAtMs,
-					};
+					});
 					if (finished) {
 						return cloneDiagnosticValue(event);
 					}
@@ -599,27 +793,26 @@ function findPrimaryConnectionIdentity(
 	let selectedScore = -1;
 
 	for (const event of trace.events) {
-		if (!event.connection) {
+		const connection = normalizeConnectionIdentity(event.connection);
+		if (!connection) {
 			continue;
 		}
 
 		const score = [
-			event.connection.savedConnectionId?.trim(),
-			event.connection.connectionId?.trim(),
-			event.connection.username?.trim(),
-			event.connection.host?.trim(),
-			typeof event.connection.port === 'number'
-				? String(event.connection.port)
+			connection.savedConnectionId?.trim(),
+			connection.connectionId?.trim(),
+			connection.username?.trim(),
+			connection.host?.trim(),
+			typeof connection.port === 'number' ? String(connection.port) : undefined,
+			connection.keyId?.trim(),
+			typeof connection.useTmux === 'boolean'
+				? String(connection.useTmux)
 				: undefined,
-			event.connection.keyId?.trim(),
-			typeof event.connection.useTmux === 'boolean'
-				? String(event.connection.useTmux)
-				: undefined,
-			event.connection.tmuxSessionName?.trim(),
+			connection.tmuxSessionName?.trim(),
 		].filter(Boolean).length;
 
 		if (score >= selectedScore) {
-			selectedConnection = event.connection;
+			selectedConnection = connection;
 			selectedScore = score;
 		}
 	}
@@ -634,70 +827,93 @@ export function formatConnectionDiagnosticPrompt(
 	trace: ConnectionDiagnosticTrace,
 	options: FormatPromptOptions = {},
 ): string {
-	const connection = findPrimaryConnectionIdentity(trace);
-	const appStateLines: string[] = [];
+	try {
+		const safeTrace = normalizeTraceForPrompt(trace);
+		const connection = findPrimaryConnectionIdentity(safeTrace);
+		const appStateLines: string[] = [];
 
-	if (options.appState) {
-		appStateLines.push(
-			'App state:',
-			`- platformOS: ${redactDiagnosticText(options.appState.platformOS)}`,
-			`- isAutoConnecting: ${String(options.appState.isAutoConnecting)}`,
-			`- isReconnecting: ${String(options.appState.isReconnecting)}`,
-		);
-
-		if (options.appState.pathname !== undefined) {
+		if (options.appState) {
 			appStateLines.push(
-				`- pathname: ${redactDiagnosticText(options.appState.pathname)}`,
+				'App state:',
+				`- platformOS: ${redactDiagnosticText(options.appState.platformOS)}`,
+				`- isAutoConnecting: ${String(options.appState.isAutoConnecting)}`,
+				`- isReconnecting: ${String(options.appState.isReconnecting)}`,
 			);
+
+			if (options.appState.pathname !== undefined) {
+				appStateLines.push(
+					`- pathname: ${redactDiagnosticText(options.appState.pathname)}`,
+				);
+			}
+
+			if (options.appState.foregroundServiceStarted !== undefined) {
+				appStateLines.push(
+					`- foregroundServiceStarted: ${String(
+						options.appState.foregroundServiceStarted,
+					)}`,
+				);
+			}
+
+			if (options.appState.backgroundWorkAllowed !== undefined) {
+				appStateLines.push(
+					`- backgroundWorkAllowed: ${String(
+						options.appState.backgroundWorkAllowed,
+					)}`,
+				);
+			}
+
+			if (options.appState.foregroundServiceRequired !== undefined) {
+				appStateLines.push(
+					`- foregroundServiceRequired: ${String(
+						options.appState.foregroundServiceRequired,
+					)}`,
+				);
+			}
+
+			if (options.appState.appActive !== undefined) {
+				appStateLines.push(
+					`- appActive: ${String(options.appState.appActive)}`,
+				);
+			}
 		}
 
-		if (options.appState.foregroundServiceStarted !== undefined) {
-			appStateLines.push(
-				`- foregroundServiceStarted: ${String(
-					options.appState.foregroundServiceStarted,
-				)}`,
-			);
-		}
-
-		if (options.appState.backgroundWorkAllowed !== undefined) {
-			appStateLines.push(
-				`- backgroundWorkAllowed: ${String(
-					options.appState.backgroundWorkAllowed,
-				)}`,
-			);
-		}
-
-		if (options.appState.foregroundServiceRequired !== undefined) {
-			appStateLines.push(
-				`- foregroundServiceRequired: ${String(
-					options.appState.foregroundServiceRequired,
-				)}`,
-			);
-		}
-
-		if (options.appState.appActive !== undefined) {
-			appStateLines.push(`- appActive: ${String(options.appState.appActive)}`);
-		}
+		return [
+			'Debug this Fressh mobile SSH connection failure.',
+			'',
+			'Trace summary:',
+			`- traceId: ${redactDiagnosticText(safeTrace.id)}`,
+			`- trigger: ${safeTrace.trigger}`,
+			`- reason: ${redactDiagnosticText(safeTrace.reason)}`,
+			`- status: ${safeTrace.status}`,
+			`- startedAtMs: ${safeTrace.startedAtMs}`,
+			`- finishedAtMs: ${safeTrace.finishedAtMs ?? 'not-finished'}`,
+			`- connection: ${formatConnectionIdentity(connection)}`,
+			'',
+			...appStateLines,
+			...(appStateLines.length ? [''] : []),
+			'Events:',
+			...safeTrace.events.map((event) => formatEvent(event)),
+			'',
+			'Private key material has been omitted from this diagnostic trace.',
+			'Please explain the most likely failure point, the evidence from the trace, and the next debugging steps.',
+		].join('\n');
+	} catch {
+		return [
+			'Debug this Fressh mobile SSH connection failure.',
+			'',
+			'Trace summary:',
+			'- traceId: unknown-trace',
+			'- trigger: manual-diagnostic',
+			`- reason: ${UNREADABLE_ERROR_MESSAGE}`,
+			'- status: failed',
+			'- startedAtMs: 0',
+			'- finishedAtMs: not-finished',
+			'- connection: unknown connection',
+			'',
+			'Events:',
+			'',
+			'Private key material has been omitted from this diagnostic trace.',
+			'Please explain the most likely failure point, the evidence from the trace, and the next debugging steps.',
+		].join('\n');
 	}
-
-	return [
-		'Debug this Fressh mobile SSH connection failure.',
-		'',
-		'Trace summary:',
-		`- traceId: ${redactDiagnosticText(trace.id)}`,
-		`- trigger: ${trace.trigger}`,
-		`- reason: ${redactDiagnosticText(trace.reason)}`,
-		`- status: ${trace.status}`,
-		`- startedAtMs: ${trace.startedAtMs}`,
-		`- finishedAtMs: ${trace.finishedAtMs ?? 'not-finished'}`,
-		`- connection: ${formatConnectionIdentity(connection)}`,
-		'',
-		...appStateLines,
-		...(appStateLines.length ? [''] : []),
-		'Events:',
-		...trace.events.map((event) => formatEvent(event)),
-		'',
-		'Private key material has been omitted from this diagnostic trace.',
-		'Please explain the most likely failure point, the evidence from the trace, and the next debugging steps.',
-	].join('\n');
 }

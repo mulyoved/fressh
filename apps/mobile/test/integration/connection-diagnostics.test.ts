@@ -426,6 +426,49 @@ void test('trace handle finalization is terminal and idempotent', () => {
 	assert.equal(history[0]?.finishedAtMs, 1050);
 });
 
+void test('recorder tolerates hostile event inputs before and after finish', () => {
+	let currentNow = 1400;
+	const recorder = createConnectionDiagnosticRecorder({
+		now: () => currentNow,
+	});
+	const handle = recorder.startTrace({
+		trigger: 'manual-diagnostic',
+		reason: 'hostile-event-input',
+	});
+	const hostileEvent = Object.create(null, {
+		type: {
+			get() {
+				throw new Error('type getter failed');
+			},
+		},
+		source: {
+			get() {
+				throw new Error('source getter failed');
+			},
+		},
+		details: {
+			get() {
+				throw new Error('details getter failed');
+			},
+		},
+	}) as ConnectionDiagnosticTrace['events'][number];
+
+	assert.doesNotThrow(() => handle.event(hostileEvent));
+
+	const latestTrace = recorder.getLatestTrace();
+	assert.ok(latestTrace);
+	assert.equal(latestTrace.events[0]?.type, 'diagnostic.event.unserializable');
+	assert.equal(latestTrace.events[0]?.source, 'manual-diagnostic');
+
+	currentNow = 1450;
+	handle.finish('failed');
+
+	currentNow = 1500;
+	assert.doesNotThrow(() => handle.event(hostileEvent));
+
+	assert.equal(recorder.getLatestTrace()?.events.length, 1);
+});
+
 void test('older trace finish does not replace newer latest trace', () => {
 	let currentNow = 1200;
 	const recorder = createConnectionDiagnosticRecorder({
@@ -586,6 +629,52 @@ void test('prompt omits optional app state lines when values are absent', () => 
 	assert.doesNotMatch(prompt, /- backgroundWorkAllowed:/);
 	assert.doesNotMatch(prompt, /- foregroundServiceRequired:/);
 	assert.doesNotMatch(prompt, /- appActive:/);
+});
+
+void test('prompt formatting tolerates malformed direct trace input', () => {
+	const hostileTrace = Object.create(null, {
+		id: { value: 'trace-hostile' },
+		trigger: { value: 'manual-diagnostic' },
+		reason: { value: 'hostile-direct-trace' },
+		status: { value: 'failed' },
+		startedAtMs: { value: 10 },
+		events: {
+			get() {
+				throw new Error('events getter failed');
+			},
+		},
+	}) as ConnectionDiagnosticTrace;
+
+	assert.doesNotThrow(() => formatConnectionDiagnosticPrompt(hostileTrace));
+	assert.match(formatConnectionDiagnosticPrompt(hostileTrace), /trace-hostile/);
+
+	const malformedIdentityTrace = {
+		id: 'trace-malformed-identity',
+		trigger: 'manual-diagnostic',
+		reason: 'malformed-identity',
+		status: 'failed',
+		startedAtMs: 10,
+		events: [
+			{
+				atMs: 11,
+				elapsedMs: 1,
+				type: 'connection.selected',
+				source: 'active-connection',
+				connection: {
+					username: 42,
+					host: { nested: true },
+					port: 'bad-port',
+					keyId: 'key-1',
+					tmuxSessionName: false,
+				},
+			},
+		],
+	} as unknown as ConnectionDiagnosticTrace;
+
+	const prompt = formatConnectionDiagnosticPrompt(malformedIdentityTrace);
+	assert.match(prompt, /keyId=key-1/);
+	assert.doesNotMatch(prompt, /42/);
+	assert.doesNotMatch(prompt, /bad-port/);
 });
 
 void test('prompt formatting tolerates direct messy trace details', () => {
