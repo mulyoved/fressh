@@ -27,6 +27,12 @@ type TailscaleConnectCooldownResult =
 	| { kind: 'attempted'; attempted: true }
 	| { kind: 'failed'; attempted: boolean };
 
+type TailscaleConnectCooldownReason = 'readiness' | 'failure' | 'reset';
+
+type PendingReadinessRetry = {
+	source: 'successfulReadinessNudge';
+};
+
 export type TailscaleRecoveryNative = {
 	isAvailable: () => Promise<boolean>;
 	connect: () => Promise<TailscaleRecoveryAttemptResult>;
@@ -61,11 +67,48 @@ export function createTailscaleRecoveryController({
 	const cooldown = createTailscaleRecoveryCooldown();
 	let connectRecoveryInFlight: Promise<TailscaleConnectCooldownResult> | null =
 		null;
+	let connectRecoveryInFlightReason: TailscaleConnectCooldownReason | null =
+		null;
+	let pendingReadinessRetry: PendingReadinessRetry | null = null;
 
 	const isSupported = () => isTailscaleRecoverySupported(getPlatformOS());
 
 	const shouldRecordCooldown = (result: TailscaleRecoveryAttemptResult) =>
 		result.attempted || result.failed === true;
+
+	const clearPendingReadinessRetry = () => {
+		pendingReadinessRetry = null;
+	};
+
+	const grantPendingReadinessRetry = (
+		result: TailscaleRecoveryAttemptResult,
+	) => {
+		pendingReadinessRetry =
+			result.attempted && result.failed !== true
+				? { source: 'successfulReadinessNudge' }
+				: null;
+	};
+
+	const consumePendingReadinessRetry = () => {
+		if (pendingReadinessRetry === null) {
+			return false;
+		}
+		clearPendingReadinessRetry();
+		return true;
+	};
+
+	const recordConnectCooldown = (
+		reason: TailscaleConnectCooldownReason,
+		nowMs: number,
+		result: TailscaleRecoveryAttemptResult,
+	) => {
+		cooldown.recordAttempt(nowMs);
+		if (reason === 'readiness') {
+			grantPendingReadinessRetry(result);
+			return;
+		}
+		clearPendingReadinessRetry();
+	};
 
 	const createFailedAttempt = (): TailscaleRecoveryAttemptResult => ({
 		attempted: false,
@@ -167,36 +210,50 @@ export function createTailscaleRecoveryController({
 		return { kind: 'notStarted', attempted: false };
 	};
 
-	const connectWithCooldown =
-		async (): Promise<TailscaleConnectCooldownResult> => {
-			if (connectRecoveryInFlight) {
-				return await connectRecoveryInFlight;
+	const connectWithCooldown = async (
+		reason: TailscaleConnectCooldownReason,
+	): Promise<TailscaleConnectCooldownResult> => {
+		if (connectRecoveryInFlight) {
+			if (
+				reason === 'failure' &&
+				connectRecoveryInFlightReason === 'readiness'
+			) {
+				connectRecoveryInFlightReason = 'failure';
+				clearPendingReadinessRetry();
 			}
+			return await connectRecoveryInFlight;
+		}
 
-			const nowMs = getNowMs();
-			if (!cooldown.canAttempt(nowMs)) {
-				return { kind: 'cooldown', attempted: false };
+		const nowMs = getNowMs();
+		if (!cooldown.canAttempt(nowMs)) {
+			return { kind: 'cooldown', attempted: false };
+		}
+
+		const connectRecovery = (async () => {
+			const result = await connectWithTimeout();
+			if (shouldRecordCooldown(result)) {
+				recordConnectCooldown(
+					connectRecoveryInFlightReason ?? reason,
+					nowMs,
+					result,
+				);
 			}
+			if (result.attempted) {
+				await sleep(DEFAULT_TAILSCALE_SETTLE_DELAY_MS);
+			}
+			return createConnectRecoveryResult(result);
+		})();
+		const trackedConnectRecovery = connectRecovery.finally(() => {
+			if (connectRecoveryInFlight === trackedConnectRecovery) {
+				connectRecoveryInFlight = null;
+				connectRecoveryInFlightReason = null;
+			}
+		});
+		connectRecoveryInFlightReason = reason;
+		connectRecoveryInFlight = trackedConnectRecovery;
 
-			const connectRecovery = (async () => {
-				const result = await connectWithTimeout();
-				if (shouldRecordCooldown(result)) {
-					cooldown.recordAttempt(nowMs);
-				}
-				if (result.attempted) {
-					await sleep(DEFAULT_TAILSCALE_SETTLE_DELAY_MS);
-				}
-				return createConnectRecoveryResult(result);
-			})();
-			const trackedConnectRecovery = connectRecovery.finally(() => {
-				if (connectRecoveryInFlight === trackedConnectRecovery) {
-					connectRecoveryInFlight = null;
-				}
-			});
-			connectRecoveryInFlight = trackedConnectRecovery;
-
-			return await trackedConnectRecovery;
-		};
+		return await trackedConnectRecovery;
+	};
 
 	const createReadyResult = (
 		result: TailscaleConnectCooldownResult,
@@ -259,7 +316,7 @@ export function createTailscaleRecoveryController({
 				return { kind: 'unavailable', attempted: false, available: false };
 			}
 
-			const result = await connectWithCooldown();
+			const result = await connectWithCooldown('readiness');
 			return createReadyResult(result);
 		},
 
@@ -303,7 +360,15 @@ export function createTailscaleRecoveryController({
 				};
 			}
 
-			const result = await connectWithCooldown();
+			const result = await connectWithCooldown('failure');
+			if (result.kind === 'cooldown' && consumePendingReadinessRetry()) {
+				return {
+					kind: 'preflightReady',
+					attempted: false,
+					networkLikeFailure: true,
+					available: true,
+				};
+			}
 			return createRecoverAfterFailureResult(result);
 		},
 
@@ -311,6 +376,8 @@ export function createTailscaleRecoveryController({
 			if (!isSupported()) {
 				return { kind: 'unsupported', attempted: false };
 			}
+
+			clearPendingReadinessRetry();
 
 			let disconnectResult: TailscaleRecoveryAttemptResult;
 			const disconnectAttempt = await disconnectWithTimeout();
@@ -324,7 +391,7 @@ export function createTailscaleRecoveryController({
 
 			const connectResult = await connectWithTimeout();
 			if (shouldRecordCooldown(connectResult)) {
-				cooldown.recordAttempt(getNowMs());
+				recordConnectCooldown('reset', getNowMs(), connectResult);
 			}
 			if (connectResult.attempted) {
 				await sleep(DEFAULT_TAILSCALE_SETTLE_DELAY_MS);
@@ -349,6 +416,7 @@ export function createTailscaleRecoveryController({
 
 		resetCooldown() {
 			cooldown.reset();
+			clearPendingReadinessRetry();
 		},
 	};
 }

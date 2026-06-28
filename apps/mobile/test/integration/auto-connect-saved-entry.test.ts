@@ -210,6 +210,33 @@ void test('retries once after recovered network-like failure', async () => {
 	assert.deepEqual(context.attention, []);
 });
 
+void test('retries once when readiness preflight already nudged Tailscale', async () => {
+	const calls: string[] = [];
+	const networkError = new Error('No route to host');
+	const context = harness({
+		recovery: recoveryFixture({
+			afterFailure: {
+				kind: 'preflightReady',
+				attempted: false,
+				networkLikeFailure: true,
+				available: true,
+			},
+		}),
+		connectSavedEntry: async () => {
+			calls.push('connect');
+			if (calls.length === 1) {
+				throw networkError;
+			}
+			return connectedResult();
+		},
+	});
+
+	assert.deepEqual(await context.attempt(), { connected: true });
+	assert.deepEqual(calls, ['connect', 'connect']);
+	assert.equal(context.clearAttentionCount, 1);
+	assert.deepEqual(context.attention, []);
+});
+
 void test('marks attention without retry when network recovery fails', async () => {
 	let connectCount = 0;
 	const networkError = new Error('No route to host');
@@ -303,6 +330,56 @@ void test('marks restart-failed attention when retry fails', async () => {
 	assert.deepEqual(context.warnings, [retryError]);
 });
 
+void test('rethrows non-network failure from recovery retry', async () => {
+	let connectCount = 0;
+	const retryError = new Error('Permission denied');
+	const context = harness({
+		recovery: recoveryFixture({
+			afterFailure: {
+				kind: 'recovered',
+				attempted: true,
+				networkLikeFailure: true,
+				available: true,
+			},
+		}),
+		connectSavedEntry: async () => {
+			connectCount += 1;
+			if (connectCount === 1) {
+				throw new Error('No route to host');
+			}
+			throw retryError;
+		},
+	});
+
+	await assert.rejects(context.attempt, retryError);
+	assert.equal(connectCount, 2);
+	assert.deepEqual(context.attention, []);
+	assert.equal(context.clearAttentionCount, 0);
+	assert.deepEqual(context.warnings, []);
+});
+
+void test('marks restart-failed attention when preflight retry fails', async () => {
+	const retryError = new Error('No route to host');
+	const context = harness({
+		recovery: recoveryFixture({
+			afterFailure: {
+				kind: 'preflightReady',
+				attempted: false,
+				networkLikeFailure: true,
+				available: true,
+			},
+		}),
+		connectSavedEntry: async () => {
+			throw retryError;
+		},
+	});
+
+	assert.deepEqual(await context.attempt(), { connected: false });
+	assert.deepEqual(context.attention, [TAILSCALE_RESTART_FAILED_MESSAGE]);
+	assert.equal(context.clearAttentionCount, 0);
+	assert.deepEqual(context.warnings, [retryError]);
+});
+
 void test('handles tmux_attach_failed before recovery without clearing attention', async () => {
 	const tmuxResult = tmuxAttachFailedResult();
 	const context = harness({
@@ -342,16 +419,49 @@ void test('handles tmux_attach_failed after recovery without clearing attention'
 	assert.deepEqual(context.attention, []);
 });
 
-void test('handles cooldown and notStarted readiness by marking reachability attention', async () => {
+void test('readiness cooldown and notStarted still allow SSH probe', async () => {
 	for (const ready of [
 		{ kind: 'cooldown', attempted: false, available: true },
 		{ kind: 'notStarted', attempted: false, available: true },
 	] as const) {
+		let connectCount = 0;
 		const context = harness({
 			recovery: recoveryFixture({ ready }),
+			connectSavedEntry: async () => {
+				connectCount += 1;
+				return connectedResult();
+			},
+		});
+
+		assert.deepEqual(await context.attempt(), { connected: true });
+		assert.equal(connectCount, 1);
+		assert.deepEqual(context.attention, []);
+		assert.equal(context.clearAttentionCount, 1);
+	}
+});
+
+void test('readiness cooldown and notStarted mark reachability after failed SSH probe', async () => {
+	for (const kind of ['cooldown', 'notStarted'] as const) {
+		let connectCount = 0;
+		const networkError = new Error('No route to host');
+		const context = harness({
+			recovery: recoveryFixture({
+				ready: { kind, attempted: false, available: true },
+				afterFailure: {
+					kind,
+					attempted: false,
+					networkLikeFailure: true,
+					available: true,
+				},
+			}),
+			connectSavedEntry: async () => {
+				connectCount += 1;
+				throw networkError;
+			},
 		});
 
 		assert.deepEqual(await context.attempt(), { connected: false });
+		assert.equal(connectCount, 1);
 		assert.deepEqual(context.attention, [TAILSCALE_REACHABILITY_MESSAGE]);
 		assert.equal(context.clearAttentionCount, 0);
 	}

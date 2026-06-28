@@ -83,6 +83,7 @@ const readyRecovery = {
 
 void test('active shell navigates outside shell detail', async () => {
 	const navigations: [string, number][] = [];
+	let clearAttentionCount = 0;
 	const { logger } = createLogger();
 
 	const connected = await attemptAutoConnectSource({
@@ -107,17 +108,19 @@ void test('active shell navigates outside shell detail', async () => {
 			throw new Error('attention should not be marked');
 		},
 		clearTailscaleAttention: () => {
-			throw new Error('attention should not be cleared');
+			clearAttentionCount += 1;
 		},
 		logger,
 	});
 
 	assert.equal(connected, true);
 	assert.deepEqual(navigations, [['conn-1', 7]]);
+	assert.equal(clearAttentionCount, 1);
 });
 
 void test('active shell does not navigate when already on shell detail', async () => {
 	const navigations: [string, number][] = [];
+	let clearAttentionCount = 0;
 	const { logger } = createLogger();
 
 	const connected = await attemptAutoConnectSource({
@@ -139,17 +142,21 @@ void test('active shell does not navigate when already on shell detail', async (
 		},
 		recovery: unsupportedRecovery,
 		markTailscaleAttention: () => {},
-		clearTailscaleAttention: () => {},
+		clearTailscaleAttention: () => {
+			clearAttentionCount += 1;
+		},
 		logger,
 	});
 
 	assert.equal(connected, true);
 	assert.deepEqual(navigations, []);
+	assert.equal(clearAttentionCount, 1);
 });
 
 void test('latest active connection loads tmux settings, starts shell, and navigates', async () => {
 	const navigations: [string, number][] = [];
 	const shellStarts: unknown[] = [];
+	let clearAttentionCount = 0;
 	const { logger } = createLogger();
 
 	const connected = await attemptAutoConnectSource({
@@ -189,12 +196,15 @@ void test('latest active connection loads tmux settings, starts shell, and navig
 		},
 		recovery: unsupportedRecovery,
 		markTailscaleAttention: () => {},
-		clearTailscaleAttention: () => {},
+		clearTailscaleAttention: () => {
+			clearAttentionCount += 1;
+		},
 		logger,
 	});
 
 	assert.equal(connected, true);
 	assert.deepEqual(navigations, [['newer', 44]]);
+	assert.equal(clearAttentionCount, 1);
 	assert.equal(shellStarts.length, 1);
 	assert.deepEqual(
 		{

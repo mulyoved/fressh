@@ -52,6 +52,12 @@ export type TailscaleRecoverAfterFailureResult =
 			available: true;
 	  }
 	| {
+			kind: 'preflightReady';
+			attempted: false;
+			networkLikeFailure: true;
+			available: true;
+	  }
+	| {
 			kind: 'recovered';
 			attempted: true;
 			networkLikeFailure: true;
@@ -172,6 +178,7 @@ export function getTailscaleRecoveryAttentionMessage(
 			return TAILSCALE_RESTART_FAILED_MESSAGE;
 		case 'unsupported':
 		case 'ready':
+		case 'preflightReady':
 		case 'recovered':
 		case 'nonNetworkFailure':
 			return null;

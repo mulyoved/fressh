@@ -2,6 +2,7 @@
 import type { ConnectAndOpenShellResult } from './query-fns';
 import {
 	getTailscaleRecoveryAttentionMessage,
+	isNetworkLikeSshError,
 	isTailscaleRecoverySupported,
 	TAILSCALE_RESTART_FAILED_MESSAGE,
 	type TailscaleReadyResult,
@@ -43,8 +44,20 @@ function getTailscaleRecoveryFailureAttentionMessage(input: {
 
 	return (
 		getTailscaleRecoveryAttentionMessage(input.result) ??
-		(input.result.attempted ? TAILSCALE_RESTART_FAILED_MESSAGE : null)
+		(input.result.attempted || input.result.kind === 'preflightReady'
+			? TAILSCALE_RESTART_FAILED_MESSAGE
+			: null)
 	);
+}
+
+function shouldRetryAfterTailscaleRecovery(
+	result: TailscaleRecoverAfterFailureResult,
+) {
+	return result.kind === 'recovered' || result.kind === 'preflightReady';
+}
+
+function shouldBlockBeforeSshProbe(readiness: TailscaleReadyResult) {
+	return readiness.kind !== 'cooldown' && readiness.kind !== 'notStarted';
 }
 
 export async function attemptSavedEntryWithTailscaleRecovery({
@@ -58,7 +71,7 @@ export async function attemptSavedEntryWithTailscaleRecovery({
 }: AttemptSavedEntryWithTailscaleRecoveryArgs) {
 	const readiness = await recovery.ensureReady();
 	const readinessMessage = getTailscaleRecoveryAttentionMessage(readiness);
-	if (readinessMessage !== null) {
+	if (readinessMessage !== null && shouldBlockBeforeSshProbe(readiness)) {
 		markTailscaleAttention(readinessMessage);
 		return { connected: false };
 	}
@@ -80,7 +93,7 @@ export async function attemptSavedEntryWithTailscaleRecovery({
 			throw error;
 		}
 
-		if (recoveryResult.kind !== 'recovered') {
+		if (!shouldRetryAfterTailscaleRecovery(recoveryResult)) {
 			const attentionMessage = getTailscaleRecoveryFailureAttentionMessage({
 				platformOS,
 				result: recoveryResult,
@@ -94,6 +107,10 @@ export async function attemptSavedEntryWithTailscaleRecovery({
 		try {
 			return handleConnectResult(await connectSavedEntry());
 		} catch (retryError) {
+			if (!isNetworkLikeSshError(retryError)) {
+				throw retryError;
+			}
+
 			const attentionMessage = getTailscaleRecoveryFailureAttentionMessage({
 				platformOS,
 				result: recoveryResult,

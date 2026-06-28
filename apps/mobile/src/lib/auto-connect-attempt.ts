@@ -122,6 +122,7 @@ export async function attemptAutoConnectSource({
 		if (pathname !== '/shell/detail') {
 			navigateToShell(latestShell.connectionId, latestShell.channelId);
 		}
+		clearTailscaleAttention();
 		return true;
 	}
 
@@ -154,6 +155,7 @@ export async function attemptAutoConnectSource({
 				channelId: shellHandle.channelId,
 			});
 			navigateToShell(activeConnection.connectionId, shellHandle.channelId);
+			clearTailscaleAttention();
 			return true;
 		} catch (error) {
 			const tmuxAttachFailureReason = extractTmuxAttachFailureReason(error);
