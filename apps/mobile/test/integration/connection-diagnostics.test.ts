@@ -579,11 +579,17 @@ void test('prompt omits optional app state lines when values are absent', () => 
 });
 
 void test('prompt formatting tolerates direct messy trace details', () => {
+	function tokenSECRET() {
+		return 'hidden';
+	}
+
 	const cyclicDetails: {
 		self?: unknown;
 		bigint: bigint;
 		handler: () => string;
+		secretFunction: () => string;
 		diagnosticSymbol: symbol;
+		secretSymbol: symbol;
 		accessToken: string;
 		nested: { privateKeyPreview: string };
 	} = {
@@ -591,7 +597,9 @@ void test('prompt formatting tolerates direct messy trace details', () => {
 		handler: function refreshConnection() {
 			return 'ok';
 		},
+		secretFunction: tokenSECRET,
 		diagnosticSymbol: Symbol('diagnostic-token'),
+		secretSymbol: Symbol('Bearer SYMBOL_SECRET'),
 		accessToken: 'ACCESS_TOKEN_SECRET',
 		nested: { privateKeyPreview: 'SECRET_PREVIEW' },
 	};
@@ -624,6 +632,8 @@ void test('prompt formatting tolerates direct messy trace details', () => {
 	assert.match(prompt, /\[Symbol diagnostic-token\]/);
 	assert.doesNotMatch(prompt, /SECRET_PREVIEW/);
 	assert.doesNotMatch(prompt, /ACCESS_TOKEN_SECRET/);
+	assert.doesNotMatch(prompt, /tokenSECRET/);
+	assert.doesNotMatch(prompt, /SYMBOL_SECRET/);
 });
 
 void test('prompt redacts credential text inside generic string fields', () => {
@@ -654,9 +664,10 @@ void test('prompt redacts credential text inside generic string fields', () => {
 					generic:
 						'privateKey=DETAIL_PRIVATE_KEY_SECRET passphrase: DETAIL_PASSPHRASE_SECRET',
 					multiWord:
-						'password: MULTI_WORD_PASSWORD_SECRET beta gamma token=MULTI_WORD_TOKEN_SECRET beta gamma apiKey=MULTI_WORD_API_KEY_SECRET beta gamma',
+						'password: MULTI_WORD_PASSWORD_SECRET beta gamma token=MULTI_WORD_TOKEN_SECRET beta gamma apiKey=MULTI_WORD_API_KEY_SECRET beta gamma access_token=ACCESS_TWO beta gamma refresh_token=REFRESH_TWO beta gamma client_secret=CLIENT_TWO beta gamma credential=CREDENTIAL_TWO beta gamma secret=SECRET_TWO beta gamma session=SESSION_TWO beta gamma sig=SIG_TWO beta gamma signature=SIGNATURE_TWO beta gamma auth=AUTH_TWO beta gamma',
 					bareAuth:
 						'Bearer BARE_BEARER_SECRET Basic BARE_BASIC_SECRET Token BARE_TOKEN_SECRET',
+					'Authorization: Bearer DETAIL_KEY_SECRET': 'redacted key',
 					pem: [
 						'-----BEGIN OPENSSH PRIVATE KEY-----',
 						'PRIVATE_KEY_BODY_SECRET',
@@ -693,9 +704,19 @@ void test('prompt redacts credential text inside generic string fields', () => {
 		'MULTI_WORD_PASSWORD_SECRET',
 		'MULTI_WORD_TOKEN_SECRET',
 		'MULTI_WORD_API_KEY_SECRET',
+		'ACCESS_TWO',
+		'REFRESH_TWO',
+		'CLIENT_TWO',
+		'CREDENTIAL_TWO',
+		'SECRET_TWO',
+		'SESSION_TWO',
+		'SIG_TWO',
+		'SIGNATURE_TWO',
+		'AUTH_TWO',
 		'BARE_BEARER_SECRET',
 		'BARE_BASIC_SECRET',
 		'BARE_TOKEN_SECRET',
+		'DETAIL_KEY_SECRET',
 		'beta gamma',
 		'PRIVATE_KEY_BODY_SECRET',
 		'APP_STATE_SECRET',

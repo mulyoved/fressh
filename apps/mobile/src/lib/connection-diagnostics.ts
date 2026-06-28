@@ -114,7 +114,7 @@ const CIRCULAR_PLACEHOLDER = '[Circular]';
 const REDACTED_PLACEHOLDER = '[REDACTED]';
 const UNREADABLE_ERROR_MESSAGE = '[Unserializable error]';
 const DIAGNOSTIC_SECRET_TEXT_PATTERN =
-	/(^|[^\w])((?:private[_-]?key)|passphrase|password|token|api[_-]?key|authorization)\s*([:=])\s*(?:"[^"]*"|'[^']*'|[^\n]*)/giu;
+	/(^|[^\w])((?:access[_-]?token)|(?:api[_-]?key)|auth|authorization|client[_-]?secret|code|credential|id[_-]?token|key|passphrase|password|private[_-]?key|refresh[_-]?token|secret|session|sig|signature|token)\s*([:=])\s*(?:"[^"]*"|'[^']*'|[^\n]*)/giu;
 const DIAGNOSTIC_AUTH_SCHEME_PATTERN =
 	/(^|[^\w])((?:Bearer|Basic|Token))\s+(?:"[^"]*"|'[^']*'|[^\s"',;]+)/gu;
 
@@ -207,11 +207,13 @@ function snapshotDiagnosticValue(
 		}
 
 		if (typeof value === 'function') {
-			return value.name ? `[Function ${value.name}]` : '[Function anonymous]';
+			return redactDiagnosticText(
+				value.name ? `[Function ${value.name}]` : '[Function anonymous]',
+			);
 		}
 
 		if (typeof value === 'symbol') {
-			return `[Symbol ${value.description ?? ''}]`;
+			return redactDiagnosticText(`[Symbol ${value.description ?? ''}]`);
 		}
 
 		if (!value || typeof value !== 'object') {
@@ -235,7 +237,8 @@ function snapshotDiagnosticValue(
 			const snapshot: Record<string, unknown> = {};
 			seen.set(value, snapshot);
 			for (const [key, entryValue] of Object.entries(value)) {
-				snapshot[key] = isSecretDiagnosticKey(key)
+				const safeKey = redactDiagnosticText(key);
+				snapshot[safeKey] = isSecretDiagnosticKey(key)
 					? REDACTED_PLACEHOLDER
 					: snapshotDiagnosticValue(entryValue, seen);
 			}
