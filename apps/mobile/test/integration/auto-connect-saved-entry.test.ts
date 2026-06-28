@@ -521,3 +521,112 @@ void test('records Tailscale recovery retry trace events', async () => {
 		],
 	);
 });
+
+void test('trace payload mutation cannot bypass Tailscale readiness block', async () => {
+	let connectCalls = 0;
+	const result = await attemptSavedEntryWithTailscaleRecovery({
+		platformOS: 'android',
+		recovery: recoveryFixture({
+			ready: {
+				kind: 'unavailable',
+				attempted: false,
+				available: false,
+			},
+		}),
+		connectSavedEntry: async () => {
+			connectCalls += 1;
+			return connectedResult();
+		},
+		markTailscaleAttention: () => {},
+		clearTailscaleAttention: () => {},
+		logTmuxAttachFailure: () => {},
+		logWarning: () => {},
+		trace: {
+			event: (event) => {
+				if (event.type !== 'tailscale.ensure-ready.result') return;
+				const details = event.details as {
+					readiness?: { kind?: string; available?: boolean };
+				};
+				if (details.readiness) {
+					details.readiness.kind = 'ready';
+					details.readiness.available = true;
+				}
+			},
+		},
+	});
+
+	assert.deepEqual(result, { connected: false });
+	assert.equal(connectCalls, 0);
+});
+
+void test('trace payload mutation cannot force Tailscale retry', async () => {
+	let connectCalls = 0;
+	const result = await attemptSavedEntryWithTailscaleRecovery({
+		platformOS: 'android',
+		recovery: recoveryFixture({
+			afterFailure: {
+				kind: 'failed',
+				attempted: true,
+				networkLikeFailure: true,
+				available: true,
+			},
+		}),
+		connectSavedEntry: async () => {
+			connectCalls += 1;
+			throw new Error('No route to host');
+		},
+		markTailscaleAttention: () => {},
+		clearTailscaleAttention: () => {},
+		logTmuxAttachFailure: () => {},
+		logWarning: () => {},
+		trace: {
+			event: (event) => {
+				if (event.type !== 'tailscale.recovery.result') return;
+				const details = event.details as {
+					recoveryResult?: {
+						kind?: string;
+						networkLikeFailure?: boolean;
+					};
+				};
+				if (details.recoveryResult) {
+					details.recoveryResult.kind = 'recovered';
+					details.recoveryResult.networkLikeFailure = false;
+				}
+			},
+		},
+	});
+
+	assert.deepEqual(result, { connected: false });
+	assert.equal(connectCalls, 1);
+});
+
+void test('trace payload mutation cannot convert tmux attach failure to success', async () => {
+	const tmuxResult = tmuxAttachFailedResult();
+	const tmuxFailures: ConnectAndOpenShellResult[] = [];
+
+	const result = await attemptSavedEntryWithTailscaleRecovery({
+		platformOS: 'android',
+		recovery: recoveryFixture(),
+		connectSavedEntry: async () => tmuxResult,
+		markTailscaleAttention: () => {},
+		clearTailscaleAttention: () => {},
+		logTmuxAttachFailure: (result) => {
+			tmuxFailures.push(result);
+		},
+		logWarning: () => {},
+		trace: {
+			event: (event) => {
+				if (
+					event.type !== 'auto-connect.saved-entry.connect.tmux-attach-failed'
+				) {
+					return;
+				}
+				const details = event.details as { status?: string };
+				details.status = 'connected';
+			},
+		},
+	});
+
+	assert.deepEqual(result, { connected: false });
+	assert.deepEqual(tmuxFailures, [tmuxResult]);
+});

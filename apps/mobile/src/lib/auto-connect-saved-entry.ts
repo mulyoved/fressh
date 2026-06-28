@@ -69,6 +69,34 @@ function shouldBlockBeforeSshProbe(readiness: TailscaleReadyResult) {
 	return readiness.kind !== 'cooldown' && readiness.kind !== 'notStarted';
 }
 
+function snapshotTailscaleReadyResult(readiness: TailscaleReadyResult) {
+	return { ...readiness };
+}
+
+function snapshotTailscaleRecoverAfterFailureResult(
+	recoveryResult: TailscaleRecoverAfterFailureResult,
+) {
+	return { ...recoveryResult };
+}
+
+function snapshotConnectResult(result: ConnectAndOpenShellResult) {
+	if (result.status === 'tmux_attach_failed') {
+		return {
+			status: result.status,
+			connectionId: result.connectionId,
+			tmuxAttachFailureReason: result.tmuxAttachFailureReason,
+			tmuxSessionName: result.tmuxSessionName,
+			storedConnectionId: result.storedConnectionId,
+		};
+	}
+
+	return {
+		status: result.status,
+		connectionId: result.connectionId,
+		channelId: result.channelId,
+	};
+}
+
 export async function attemptSavedEntryWithTailscaleRecovery({
 	platformOS,
 	recovery,
@@ -91,7 +119,10 @@ export async function attemptSavedEntryWithTailscaleRecovery({
 	traceEvent({
 		type: 'tailscale.ensure-ready.result',
 		source: 'tailscale-recovery',
-		details: { platformOS, readiness },
+		details: {
+			platformOS,
+			readiness: snapshotTailscaleReadyResult(readiness),
+		},
 	});
 	const readinessMessage = getTailscaleRecoveryAttentionMessage(readiness);
 	if (readinessMessage !== null && shouldBlockBeforeSshProbe(readiness)) {
@@ -113,7 +144,7 @@ export async function attemptSavedEntryWithTailscaleRecovery({
 							tmuxSessionName: result.tmuxSessionName,
 						}
 					: { connectionId: result.connectionId },
-			details: result,
+			details: snapshotConnectResult(result),
 		});
 		if (result.status === 'tmux_attach_failed') {
 			logTmuxAttachFailure(result);
@@ -139,7 +170,10 @@ export async function attemptSavedEntryWithTailscaleRecovery({
 		traceEvent({
 			type: 'tailscale.recovery.result',
 			source: 'tailscale-recovery',
-			details: { recoveryResult },
+			details: {
+				recoveryResult:
+					snapshotTailscaleRecoverAfterFailureResult(recoveryResult),
+			},
 		});
 		if (!recoveryResult.networkLikeFailure) {
 			throw error;
