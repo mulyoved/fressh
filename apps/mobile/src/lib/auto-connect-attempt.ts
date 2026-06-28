@@ -1,8 +1,8 @@
 import {
 	attemptSavedEntryWithTailscaleRecovery,
+	type SavedEntryConnectResult,
 	type SavedEntryTailscaleRecovery,
 } from './auto-connect-saved-entry';
-import { type ConnectAndOpenShellResult } from './connect-and-open-shell';
 import {
 	serializeConnectionDiagnosticError,
 	type ConnectionDiagnosticConnectionIdentity,
@@ -51,7 +51,7 @@ type OpenSavedEntryShell = (args: {
 	connectionDetails: InputConnectionDetails;
 	resolvedSecurity: ResolvedKeySecurity;
 	navigate: (params: { connectionId: string; channelId: number }) => void;
-}) => Promise<ConnectAndOpenShellResult>;
+}) => Promise<SavedEntryConnectResult>;
 
 type Logger = {
 	info: (message: string, data?: unknown) => void;

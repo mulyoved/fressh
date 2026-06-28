@@ -1,4 +1,3 @@
-import { type ConnectAndOpenShellResult } from './connect-and-open-shell';
 import {
 	serializeConnectionDiagnosticError,
 	type ConnectionDiagnosticEventInput,
@@ -12,8 +11,22 @@ import {
 	type TailscaleRecoverAfterFailureResult,
 } from './tailscale-recovery-core';
 
+export type SavedEntryConnectResult =
+	| {
+			status: 'connected';
+			connectionId: string;
+			channelId: number;
+	  }
+	| {
+			status: 'tmux_attach_failed';
+			connectionId: string;
+			tmuxAttachFailureReason: string | null;
+			tmuxSessionName: string;
+			storedConnectionId: string;
+	  };
+
 type TmuxAttachFailedResult = Extract<
-	ConnectAndOpenShellResult,
+	SavedEntryConnectResult,
 	{ status: 'tmux_attach_failed' }
 >;
 
@@ -31,7 +44,7 @@ type SavedEntryTrace = {
 export type AttemptSavedEntryWithTailscaleRecoveryArgs = {
 	platformOS: string;
 	recovery: SavedEntryTailscaleRecovery;
-	connectSavedEntry: () => Promise<ConnectAndOpenShellResult>;
+	connectSavedEntry: () => Promise<SavedEntryConnectResult>;
 	markTailscaleAttention: (message: string) => void;
 	clearTailscaleAttention: () => void;
 	logTmuxAttachFailure: (result: TmuxAttachFailedResult) => void;
@@ -78,7 +91,7 @@ function snapshotTailscaleRecoverAfterFailureResult(
 	return { ...recoveryResult };
 }
 
-function snapshotConnectResult(result: ConnectAndOpenShellResult) {
+function snapshotConnectResult(result: SavedEntryConnectResult) {
 	if (result.status === 'tmux_attach_failed') {
 		return {
 			status: result.status,
@@ -129,7 +142,7 @@ export async function attemptSavedEntryWithTailscaleRecovery({
 		return { connected: false };
 	}
 
-	const handleConnectResult = (result: ConnectAndOpenShellResult) => {
+	const handleConnectResult = (result: SavedEntryConnectResult) => {
 		traceEvent({
 			type:
 				result.status === 'tmux_attach_failed'

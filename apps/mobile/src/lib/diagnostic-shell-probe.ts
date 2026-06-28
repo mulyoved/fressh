@@ -4,7 +4,6 @@ import type {
 	RnRussh,
 	SshConnection,
 	SshConnectionProgress,
-	SshShell,
 } from '@fressh/react-native-uniffi-russh';
 import {
 	serializeConnectionDiagnosticError,
@@ -14,6 +13,7 @@ import {
 import { type InputConnectionDetails } from './connection-storage';
 import { getStoredConnectionId } from './connection-utils';
 import { rootLogger } from './logger';
+import { connectWithoutRemembering } from './ssh-connect-flow';
 import { extractTmuxAttachFailureReason } from './ssh-error-details';
 import { type RegisteredStartShellOptions } from './ssh-registry-store';
 import { AbortSignalTimeout } from './utils';
@@ -24,8 +24,6 @@ const DEFAULT_CONNECT_TIMEOUT_MS = 5_000;
 export type DiagnosticShellProbeResult =
 	| {
 			status: 'connected';
-			sshConnection: SshConnection;
-			shellHandle: SshShell;
 			connectionId: string;
 			channelId: number;
 	  }
@@ -109,11 +107,9 @@ export async function runDiagnosticShellProbe(args: {
 
 	let sshConnection: SshConnection;
 	try {
-		sshConnection = await connect({
-			host: connectionDetails.host,
-			port: connectionDetails.port,
-			username: connectionDetails.username,
-			security: resolvedSecurity,
+		sshConnection = await connectWithoutRemembering({
+			connectionDetails,
+			connect,
 			onConnectionProgress: (progressEvent) => {
 				traceEvent({
 					type: 'ssh.connect.progress',
@@ -123,8 +119,8 @@ export async function runDiagnosticShellProbe(args: {
 				});
 				onConnectionProgress?.(progressEvent);
 			},
-			onServerKey: async () => true,
-			abortSignal: AbortSignalTimeout(abortSignalTimeoutMs),
+			abortSignalTimeoutMs,
+			resolvedSecurity,
 		});
 	} catch (error) {
 		traceEvent({
@@ -223,8 +219,6 @@ export async function runDiagnosticShellProbe(args: {
 
 	return {
 		status: 'connected',
-		sshConnection,
-		shellHandle,
 		connectionId: sshConnection.connectionId,
 		channelId: shellHandle.channelId,
 	};

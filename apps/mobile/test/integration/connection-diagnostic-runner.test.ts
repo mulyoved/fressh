@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { type ConnectAndOpenShellResult } from '../../src/lib/connect-and-open-shell';
 import { runManualConnectionDiagnostic } from '../../src/lib/connection-diagnostic-runner';
 import {
 	createConnectionDiagnosticRecorder,
 	formatConnectionDiagnosticPrompt,
 } from '../../src/lib/connection-diagnostics';
 import { type SavedConnectionEntry } from '../../src/lib/connection-utils';
+import { type DiagnosticShellProbeResult } from '../../src/lib/diagnostic-shell-probe';
 
 const savedEntry: SavedConnectionEntry = {
 	id: 'saved-1',
@@ -81,7 +81,7 @@ void test('manual diagnostic is single-flight', async () => {
 	const competingRecorder = createConnectionDiagnosticRecorder({
 		now: () => 50,
 	});
-	let resolveConnect: (value: ConnectAndOpenShellResult) => void = () => {};
+	let resolveConnect: (value: DiagnosticShellProbeResult) => void = () => {};
 	let notifyConnectStarted: () => void = () => {};
 	const connectStarted = new Promise<void>((resolve) => {
 		notifyConnectStarted = resolve;
@@ -96,7 +96,7 @@ void test('manual diagnostic is single-flight', async () => {
 		loadLatestSavedConnection: async () => savedEntry,
 		resolveKeySecurity: async () => ({ type: 'key', privateKey: 'secret' }),
 		connectSavedEntry: () =>
-			new Promise<ConnectAndOpenShellResult>((resolve) => {
+			new Promise<DiagnosticShellProbeResult>((resolve) => {
 				resolveConnect = resolve;
 				notifyConnectStarted();
 			}),
@@ -134,8 +134,6 @@ void test('manual diagnostic is single-flight', async () => {
 	assert.equal(second.trace?.id, recorder.getLatestTrace()?.id);
 	resolveConnect({
 		status: 'connected',
-		sshConnection: {} as never,
-		shellHandle: {} as never,
 		connectionId: 'conn-1',
 		channelId: 1,
 	});
@@ -334,8 +332,6 @@ void test('manual diagnostic continues when trace events and finish fail', async
 			connected = true;
 			return {
 				status: 'connected',
-				sshConnection: {} as never,
-				shellHandle: {} as never,
 				connectionId: 'conn-1',
 				channelId: 1,
 			};
@@ -374,8 +370,6 @@ void test('manual diagnostic prompt uses normalized tmux settings', async () => 
 			assert.equal(connectionDetails.tmuxSessionName, 'main');
 			return {
 				status: 'connected',
-				sshConnection: {} as never,
-				shellHandle: {} as never,
 				connectionId: 'conn-1',
 				channelId: 1,
 			};

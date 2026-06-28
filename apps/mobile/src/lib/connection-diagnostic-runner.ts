@@ -2,7 +2,6 @@ import {
 	attemptSavedEntryWithTailscaleRecovery,
 	type SavedEntryTailscaleRecovery,
 } from './auto-connect-saved-entry';
-import { type ConnectAndOpenShellResult } from './connect-and-open-shell';
 import {
 	formatConnectionDiagnosticPrompt,
 	serializeConnectionDiagnosticError,
@@ -13,6 +12,7 @@ import {
 	type ConnectionDiagnosticTraceHandle,
 } from './connection-diagnostics';
 import { type SavedConnectionEntry } from './connection-utils';
+import { type DiagnosticShellProbeResult } from './diagnostic-shell-probe';
 // eslint-disable-next-line import/consistent-type-specifier-style -- keep secrets-manager type-only so Node integration tests do not load React Native at runtime
 import type { InputConnectionDetails } from './secrets-manager';
 
@@ -38,7 +38,7 @@ export type ManualConnectionDiagnosticArgs = {
 		connectionDetails: InputConnectionDetails;
 		resolvedSecurity: ResolvedKeySecurity;
 		trace: ConnectionDiagnosticTraceHandle;
-	}) => Promise<ConnectAndOpenShellResult>;
+	}) => Promise<DiagnosticShellProbeResult>;
 	recovery: SavedEntryTailscaleRecovery;
 	formatPrompt?: typeof formatConnectionDiagnosticPrompt;
 	timeoutMs?: number;
