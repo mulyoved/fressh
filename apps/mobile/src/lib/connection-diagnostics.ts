@@ -92,7 +92,7 @@ export type ConnectionDiagnosticRecorder = {
 	clear: () => void;
 };
 
-type RecorderOptions = {
+export type ConnectionDiagnosticRecorderOptions = {
 	now?: () => number;
 	maxHistory?: number;
 };
@@ -102,7 +102,7 @@ type HistoryEntry = {
 	trace: ConnectionDiagnosticTrace;
 };
 
-type FormatPromptOptions = {
+export type ConnectionDiagnosticPromptOptions = {
 	appState?: ConnectionDiagnosticAppState;
 };
 
@@ -724,7 +724,7 @@ function readObjectField(value: unknown, field: string): unknown {
 }
 
 export function createConnectionDiagnosticRecorder(
-	options: RecorderOptions = {},
+	options: ConnectionDiagnosticRecorderOptions = {},
 ): ConnectionDiagnosticRecorder {
 	const now = options.now ?? Date.now;
 	const maxHistory = Math.max(1, options.maxHistory ?? DEFAULT_MAX_HISTORY);
@@ -834,7 +834,7 @@ export const connectionDiagnosticRecorder =
 
 export function formatConnectionDiagnosticPrompt(
 	trace: ConnectionDiagnosticTrace,
-	options: FormatPromptOptions = {},
+	options: ConnectionDiagnosticPromptOptions = {},
 ): string {
 	try {
 		const safeTrace = normalizeTraceForPrompt(trace);
