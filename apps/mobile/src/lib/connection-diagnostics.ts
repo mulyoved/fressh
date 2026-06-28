@@ -101,9 +101,77 @@ const DEFAULT_MAX_HISTORY = 20;
 
 let traceSequence = 0;
 
+const CIRCULAR_PLACEHOLDER = '[Circular]';
+
 function nextTraceId(now: number): string {
 	traceSequence += 1;
 	return `connection-diagnostic-${now}-${traceSequence}`;
+}
+
+function snapshotDiagnosticValue(
+	value: unknown,
+	seen = new WeakMap<object, unknown>(),
+): unknown {
+	try {
+		if (
+			value === null ||
+			typeof value === 'string' ||
+			typeof value === 'number' ||
+			typeof value === 'boolean'
+		) {
+			return value;
+		}
+
+		if (typeof value === 'bigint') {
+			return `${value}n`;
+		}
+
+		if (typeof value === 'undefined') {
+			return undefined;
+		}
+
+		if (typeof value === 'function') {
+			return value.name
+				? `[Function ${value.name}]`
+				: '[Function anonymous]';
+		}
+
+		if (typeof value === 'symbol') {
+			return `[Symbol ${value.description ?? ''}]`;
+		}
+
+		if (!value || typeof value !== 'object') {
+			return String(value);
+		}
+
+		if (seen.has(value)) {
+			return CIRCULAR_PLACEHOLDER;
+		}
+
+		if (Array.isArray(value)) {
+			const snapshot: unknown[] = [];
+			seen.set(value, snapshot);
+			for (const entry of value) {
+				snapshot.push(snapshotDiagnosticValue(entry, seen));
+			}
+			return snapshot;
+		}
+
+		if (Object.getPrototypeOf(value) === Object.prototype) {
+			const snapshot: Record<string, unknown> = {};
+			seen.set(value, snapshot);
+			for (const [key, entryValue] of Object.entries(value)) {
+				snapshot[key] = /privateKey/i.test(key)
+					? '[REDACTED]'
+					: snapshotDiagnosticValue(entryValue, seen);
+			}
+			return snapshot;
+		}
+
+		return Object.prototype.toString.call(value);
+	} catch {
+		return '[Unserializable]';
+	}
 }
 
 function sanitizeDiagnosticValue(value: unknown): unknown {
@@ -129,11 +197,7 @@ function sanitizeDiagnosticValue(value: unknown): unknown {
 }
 
 function cloneDiagnosticValue<T>(value: T): T {
-	if (value === undefined) {
-		return value;
-	}
-
-	return JSON.parse(JSON.stringify(value)) as T;
+	return snapshotDiagnosticValue(value) as T;
 }
 
 function sanitizeEventInput(
@@ -290,13 +354,36 @@ export function createConnectionDiagnosticRecorder(
 function findPrimaryConnectionIdentity(
 	trace: ConnectionDiagnosticTrace,
 ): ConnectionDiagnosticConnectionIdentity | undefined {
+	let selectedConnection: ConnectionDiagnosticConnectionIdentity | undefined;
+	let selectedScore = -1;
+
 	for (const event of trace.events) {
-		if (event.connection) {
-			return event.connection;
+		if (!event.connection) {
+			continue;
+		}
+
+		const score = [
+			event.connection.savedConnectionId?.trim(),
+			event.connection.connectionId?.trim(),
+			event.connection.username?.trim(),
+			event.connection.host?.trim(),
+			typeof event.connection.port === 'number'
+				? String(event.connection.port)
+				: undefined,
+			event.connection.keyId?.trim(),
+			typeof event.connection.useTmux === 'boolean'
+				? String(event.connection.useTmux)
+				: undefined,
+			event.connection.tmuxSessionName?.trim(),
+		].filter(Boolean).length;
+
+		if (score >= selectedScore) {
+			selectedConnection = event.connection;
+			selectedScore = score;
 		}
 	}
 
-	return undefined;
+	return selectedConnection;
 }
 
 export const connectionDiagnosticRecorder =

@@ -235,6 +235,100 @@ void test('recorder snapshots event inputs and returned traces', () => {
 	assert.equal(freshDetails.nested?.phase, 'connect');
 });
 
+void test('recorder safely snapshots messy details without throwing', () => {
+	let currentNow = 700;
+	const recorder = createConnectionDiagnosticRecorder({
+		now: () => currentNow,
+	});
+	const trace = recorder.startTrace({
+		trigger: 'manual-diagnostic',
+		reason: 'safe-snapshot',
+	});
+	const cyclicDetails: {
+		self?: unknown;
+		bigint: bigint;
+		handler: () => string;
+		nested: { privateKeyPreview: string };
+	} = {
+		bigint: 123n,
+		handler: function refreshConnection() {
+			return 'ok';
+		},
+		nested: { privateKeyPreview: 'SECRET_PREVIEW' },
+	};
+	cyclicDetails.self = cyclicDetails;
+
+	assert.doesNotThrow(() => {
+		trace.event({
+			type: 'ssh.connect.failed',
+			source: 'active-connection',
+			details: cyclicDetails as Record<string, unknown>,
+		});
+	});
+
+	assert.doesNotThrow(() => recorder.getLatestTrace());
+
+	const latestTrace = recorder.getLatestTrace();
+	assert.ok(latestTrace);
+	assert.deepEqual(latestTrace.events[0]?.details, {
+		self: '[Circular]',
+		bigint: '123n',
+		handler: '[Function refreshConnection]',
+		nested: { privateKeyPreview: '[REDACTED]' },
+	});
+});
+
+void test('prompt summary prefers the richest later connection identity', () => {
+	const trace: ConnectionDiagnosticTrace = {
+		id: 'trace-richer-identity',
+		trigger: 'manual-diagnostic',
+		reason: 'identity-selection',
+		status: 'failed',
+		startedAtMs: 100,
+		finishedAtMs: 180,
+		events: [
+			{
+				atMs: 100,
+				elapsedMs: 0,
+				type: 'connection.selected',
+				source: 'saved-entry',
+				connection: {
+					savedConnectionId: 'saved-22',
+					username: 'muly',
+					host: 'dev.tailnet.ts.net',
+					port: 22,
+				},
+			},
+			{
+				atMs: 140,
+				elapsedMs: 40,
+				type: 'connection.promoted',
+				source: 'active-connection',
+				connection: {
+					savedConnectionId: 'saved-22',
+					connectionId: 'connection-9',
+					username: 'muly',
+					host: 'dev.tailnet.ts.net',
+					port: 22,
+					keyId: 'key-9',
+					useTmux: true,
+					tmuxSessionName: 'workspace',
+				},
+			},
+		],
+	};
+
+	const prompt = formatConnectionDiagnosticPrompt(trace);
+	const connectionLine = prompt
+		.split('\n')
+		.find((line) => line.startsWith('- connection: '));
+
+	assert.equal(
+		connectionLine,
+		'- connection: muly@dev.tailnet.ts.net:22 | savedConnectionId=saved-22 | connectionId=connection-9 | useTmux=true | tmuxSessionName=workspace | keyId=key-9',
+	);
+});
+
 void test('error serializer preserves useful non-secret details', () => {
 	const error = new Error('connection timed out');
 	error.name = 'TimeoutError';
