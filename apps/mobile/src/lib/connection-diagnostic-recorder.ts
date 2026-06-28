@@ -1,6 +1,6 @@
+import { createConnectionDiagnosticEvent } from './connection-diagnostic-normalization';
 import {
 	cloneDiagnosticValue,
-	createConnectionDiagnosticEvent,
 	redactDiagnosticText,
 } from './connection-diagnostic-redaction';
 import {

@@ -2,16 +2,10 @@ import { redactBrowserActionErrorText } from './browser-action-error-report';
 import {
 	type ConnectionDiagnosticConnectionIdentity,
 	type ConnectionDiagnosticError,
-	type ConnectionDiagnosticEvent,
-	type ConnectionDiagnosticEventInput,
-	type ConnectionDiagnosticSource,
-	type ConnectionDiagnosticStatus,
-	type ConnectionDiagnosticTrace,
-	type ConnectionDiagnosticTrigger,
 } from './connection-diagnostic-types';
 
-export const CIRCULAR_PLACEHOLDER = '[Circular]';
-export const REDACTED_PLACEHOLDER = '[REDACTED]';
+const CIRCULAR_PLACEHOLDER = '[Circular]';
+const REDACTED_PLACEHOLDER = '[REDACTED]';
 export const UNREADABLE_ERROR_MESSAGE = '[Unserializable error]';
 
 const DIAGNOSTIC_SECRET_TEXT_PATTERN =
@@ -192,84 +186,6 @@ export function cloneDiagnosticValue<T>(value: T): T {
 	return snapshotDiagnosticValue(value) as T;
 }
 
-function sanitizeEventInput(input: unknown): ConnectionDiagnosticEventInput {
-	const details = readObjectField(input, 'details');
-
-	return {
-		type:
-			readErrorStringField(input, 'type', undefined) ??
-			'diagnostic.event.unserializable',
-		source: readConnectionDiagnosticSource(input, 'source'),
-		message: readErrorStringField(input, 'message', undefined),
-		connection: normalizeConnectionIdentity(
-			readObjectField(input, 'connection'),
-		),
-		error: normalizeDiagnosticError(readObjectField(input, 'error')),
-		details:
-			details !== undefined
-				? (cloneDiagnosticValue(details) as Record<string, unknown>)
-				: undefined,
-	};
-}
-
-export function createConnectionDiagnosticEvent(input: {
-	rawEvent: unknown;
-	startedAtMs: number;
-	atMs: number;
-}): ConnectionDiagnosticEvent {
-	try {
-		const sanitizedInput = sanitizeEventInput(input.rawEvent);
-		return {
-			...sanitizedInput,
-			atMs: input.atMs,
-			elapsedMs: input.atMs - input.startedAtMs,
-		};
-	} catch {
-		return {
-			type: 'diagnostic.event.unserializable',
-			source: 'manual-diagnostic',
-			message: UNREADABLE_ERROR_MESSAGE,
-			atMs: input.atMs,
-			elapsedMs: input.atMs - input.startedAtMs,
-		};
-	}
-}
-
-export function normalizeTraceForPrompt(
-	trace: ConnectionDiagnosticTrace,
-): ConnectionDiagnosticTrace {
-	try {
-		const startedAtMs = readNumberField(trace, 'startedAtMs') ?? 0;
-		const events = readObjectField(trace, 'events');
-		return {
-			id: readErrorStringField(trace, 'id', undefined) ?? 'unknown-trace',
-			trigger: readConnectionDiagnosticTrigger(trace, 'trigger'),
-			reason: readErrorStringField(trace, 'reason', undefined) ?? 'unknown',
-			status: readConnectionDiagnosticStatus(trace, 'status'),
-			startedAtMs,
-			finishedAtMs: readNumberField(trace, 'finishedAtMs'),
-			events: Array.isArray(events)
-				? events.map((event) =>
-						createConnectionDiagnosticEvent({
-							rawEvent: event,
-							startedAtMs,
-							atMs: readNumberField(event, 'atMs') ?? startedAtMs,
-						}),
-					)
-				: [],
-		};
-	} catch {
-		return {
-			id: 'unknown-trace',
-			trigger: 'manual-diagnostic',
-			reason: UNREADABLE_ERROR_MESSAGE,
-			status: 'failed',
-			startedAtMs: 0,
-			events: [],
-		};
-	}
-}
-
 export function serializeConnectionDiagnosticError(
 	error: unknown,
 ): ConnectionDiagnosticError {
@@ -307,7 +223,7 @@ export function serializeConnectionDiagnosticError(
 	};
 }
 
-function createSerializedErrorFromFields(
+export function createSerializedErrorFromFields(
 	error: unknown,
 	options: {
 		defaultName: string;
@@ -385,58 +301,6 @@ function readBooleanField(value: unknown, field: string): boolean | undefined {
 	}
 }
 
-function readConnectionDiagnosticSource(
-	value: unknown,
-	field: string,
-): ConnectionDiagnosticSource {
-	const source = readErrorStringField(value, field, undefined);
-	switch (source) {
-		case 'latest-shell':
-		case 'active-connection':
-		case 'saved-entry':
-		case 'tailscale-recovery':
-		case 'reconnect-controller':
-		case 'manual-diagnostic':
-		case 'foreground-service':
-		case 'command-menu':
-			return source;
-		default:
-			return 'manual-diagnostic';
-	}
-}
-
-function readConnectionDiagnosticTrigger(
-	value: unknown,
-	field: string,
-): ConnectionDiagnosticTrigger {
-	const trigger = readErrorStringField(value, field, undefined);
-	switch (trigger) {
-		case 'initial-auto-connect':
-		case 'reconnect':
-		case 'manual-diagnostic':
-		case 'command-menu':
-			return trigger;
-		default:
-			return 'manual-diagnostic';
-	}
-}
-
-function readConnectionDiagnosticStatus(
-	value: unknown,
-	field: string,
-): ConnectionDiagnosticStatus {
-	const status = readErrorStringField(value, field, undefined);
-	switch (status) {
-		case 'running':
-		case 'failed':
-		case 'connected':
-		case 'skipped':
-			return status;
-		default:
-			return 'failed';
-	}
-}
-
 export function normalizeConnectionIdentity(
 	value: unknown,
 ): ConnectionDiagnosticConnectionIdentity | undefined {
@@ -471,30 +335,6 @@ export function normalizeConnectionIdentity(
 	}
 
 	return Object.keys(identity).length ? identity : undefined;
-}
-
-function normalizeDiagnosticError(
-	value: unknown,
-): ConnectionDiagnosticError | undefined {
-	if (value === undefined) {
-		return undefined;
-	}
-
-	const hasStructuredFields =
-		readErrorStringField(value, 'name', undefined) !== undefined ||
-		readErrorStringField(value, 'message', undefined) !== undefined ||
-		readErrorStringField(value, 'tag', undefined) !== undefined ||
-		readObjectField(value, 'inner') !== undefined;
-
-	if (hasStructuredFields) {
-		return createSerializedErrorFromFields(value, {
-			defaultName: 'Error',
-			defaultMessage: UNREADABLE_ERROR_MESSAGE,
-			includeStack: true,
-		});
-	}
-
-	return serializeConnectionDiagnosticError(value);
 }
 
 function readObjectField(value: unknown, field: string): unknown {

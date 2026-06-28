@@ -1,7 +1,7 @@
+import { normalizeTraceForPrompt } from './connection-diagnostic-normalization';
 import {
 	cloneDiagnosticValue,
 	normalizeConnectionIdentity,
-	normalizeTraceForPrompt,
 	redactDiagnosticText,
 	UNREADABLE_ERROR_MESSAGE,
 } from './connection-diagnostic-redaction';
