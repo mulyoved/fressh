@@ -137,6 +137,49 @@ void test('connectAndOpenShell disconnects diagnostic connections after shell fa
 	assert.equal(disconnected, 1);
 });
 
+void test('connectAndOpenShell preserves shell failure when diagnostic disconnect times out', async () => {
+	const events: unknown[] = [];
+
+	await assert.rejects(
+		connectAndOpenShell({
+			connectionDetails,
+			resolvedSecurity: { type: 'key', privateKey: 'secret' },
+			diagnosticMode: true,
+			abortSignalTimeoutMs: 5,
+			connect: async () =>
+				({
+					connectionId: 'conn-1',
+					disconnect: async () => {
+						await new Promise(() => {});
+					},
+					startShell: async () => {
+						throw new Error('shell failed');
+					},
+				}) as never,
+			saveConnection: async () => {},
+			navigate: () => {
+				throw new Error('diagnostic mode must not navigate');
+			},
+			trace: {
+				event: (event) => {
+					events.push(event);
+				},
+			},
+		}),
+		/shell failed/,
+	);
+
+	const eventTypes = events.map((event) => (event as { type: string }).type);
+	assert.deepEqual(eventTypes, [
+		'ssh.connect.started',
+		'ssh.connect.connected',
+		'ssh.shell.started',
+		'ssh.shell.failed',
+		'ssh.diagnostic.disconnect-failed',
+	]);
+	assert.match(JSON.stringify(events.at(-1)), /disconnect timed out/i);
+});
+
 void test('connectAndOpenShell records connect failure', async () => {
 	const events: unknown[] = [];
 

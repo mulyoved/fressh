@@ -20,6 +20,34 @@ import { AbortSignalTimeout } from './utils';
 const logger = rootLogger.extend('QueryFns');
 const DEFAULT_CONNECT_TIMEOUT_MS = 5_000;
 
+function diagnosticDisconnectTimeoutError(timeoutMs: number) {
+	return new Error(`Diagnostic SSH disconnect timed out after ${timeoutMs}ms`);
+}
+
+async function withDiagnosticDisconnectTimeout<T>(
+	promise: Promise<T>,
+	timeoutMs: number,
+): Promise<T> {
+	let timeoutId: ReturnType<typeof setTimeout> | null = null;
+	try {
+		return await Promise.race([
+			promise,
+			new Promise<never>((_, reject) => {
+				timeoutId = setTimeout(() => {
+					timeoutId = null;
+					reject(diagnosticDisconnectTimeoutError(timeoutMs));
+				}, timeoutMs);
+				const maybeNodeTimer = timeoutId as ReturnType<typeof setTimeout> & {
+					unref?: () => void;
+				};
+				maybeNodeTimer.unref?.();
+			}),
+		]);
+	} finally {
+		if (timeoutId !== null) clearTimeout(timeoutId);
+	}
+}
+
 export type ConnectAndOpenShellResult =
 	| {
 			status: 'connected';
@@ -165,7 +193,14 @@ export async function connectAndOpenShell(args: {
 	const cleanupDiagnosticConnection = async () => {
 		if (!args.diagnosticMode) return;
 		try {
-			await Promise.resolve(sshConnection.disconnect?.());
+			await withDiagnosticDisconnectTimeout(
+				Promise.resolve(
+					sshConnection.disconnect?.({
+						signal: AbortSignalTimeout(abortSignalTimeoutMs),
+					}),
+				),
+				abortSignalTimeoutMs,
+			);
 			traceEvent({
 				type: 'ssh.diagnostic.disconnected',
 				source: 'saved-entry',
