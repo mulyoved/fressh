@@ -66,3 +66,47 @@ void test('delivery falls back to clipboard when paste throws', async () => {
 	assert.equal(calls[0], 'copy:debug prompt');
 	assert.match(calls[1] ?? '', /paste failed/i);
 });
+
+void test('delivery reports copy failure when no shell exists', async () => {
+	const calls: string[] = [];
+
+	const result = await deliverConnectionDiagnosticPrompt({
+		prompt: 'debug prompt',
+		hasShell: false,
+		pasteIntoTerminal: () => {
+			throw new Error('paste should not run');
+		},
+		copyToClipboard: async () => {
+			throw new Error('copy failed');
+		},
+		showAlert: (title, message) => {
+			calls.push(`alert:${title}:${message}`);
+		},
+	});
+
+	assert.deepEqual(result, { status: 'copy-failed', error: 'copy failed' });
+	assert.match(calls[0] ?? '', /Connection debug prompt copy failed/);
+	assert.match(calls[0] ?? '', /copy failed/);
+});
+
+void test('delivery reports copy failure after paste failure', async () => {
+	const calls: string[] = [];
+
+	const result = await deliverConnectionDiagnosticPrompt({
+		prompt: 'debug prompt',
+		hasShell: true,
+		pasteIntoTerminal: () => {
+			throw new Error('paste failed');
+		},
+		copyToClipboard: async () => {
+			throw new Error('copy failed');
+		},
+		showAlert: (title, message) => {
+			calls.push(`alert:${title}:${message}`);
+		},
+	});
+
+	assert.deepEqual(result, { status: 'copy-failed', error: 'copy failed' });
+	assert.match(calls[0] ?? '', /Connection debug prompt copy failed/);
+	assert.match(calls[0] ?? '', /copy failed/);
+});

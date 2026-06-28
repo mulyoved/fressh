@@ -11,6 +11,7 @@ import {
 	createAutoConnectReconnectController,
 	type AutoConnectReconnectController,
 } from './auto-connect-reconnect-controller';
+import { connectAndOpenShell } from './connect-and-open-shell';
 import {
 	connectionDiagnosticRecorder,
 	type ConnectionDiagnosticTraceHandle,
@@ -34,7 +35,6 @@ import {
 	useForegroundServiceRuntimeStore,
 } from './foreground-service-runtime';
 import { rootLogger } from './logger';
-import { connectAndOpenShell } from './query-fns';
 import {
 	secretsManager,
 	type StoredConnectionDetails,

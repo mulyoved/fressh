@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { connectAndOpenShell } from '../../src/lib/query-fns';
+import { connectAndOpenShell } from '../../src/lib/connect-and-open-shell';
 
 const connectionDetails = {
 	username: 'muly',
@@ -51,6 +51,7 @@ void test('connectAndOpenShell records connect and shell success events', async 
 
 void test('connectAndOpenShell disconnects diagnostic connections after success', async () => {
 	let disconnected = 0;
+	let saveCalls = 0;
 	const startShellOptions: unknown[] = [];
 
 	await connectAndOpenShell({
@@ -68,13 +69,17 @@ void test('connectAndOpenShell disconnects diagnostic connections after success'
 					return { channelId: 7 };
 				},
 			}) as never,
-		saveConnection: async () => {},
+		saveConnection: async () => {
+			saveCalls += 1;
+			throw new Error('diagnostic mode must not save connection metadata');
+		},
 		navigate: () => {
 			throw new Error('diagnostic mode must not navigate');
 		},
 	});
 
 	assert.equal(disconnected, 1);
+	assert.equal(saveCalls, 0);
 	assert.equal(
 		(startShellOptions[0] as { registerInStore?: boolean }).registerInStore,
 		false,

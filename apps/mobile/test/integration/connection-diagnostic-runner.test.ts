@@ -1,13 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { type ConnectAndOpenShellResult } from '../../src/lib/connect-and-open-shell';
 import { runManualConnectionDiagnostic } from '../../src/lib/connection-diagnostic-runner';
 import {
 	createConnectionDiagnosticRecorder,
 	formatConnectionDiagnosticPrompt,
 } from '../../src/lib/connection-diagnostics';
 import { type SavedConnectionEntry } from '../../src/lib/connection-utils';
-// eslint-disable-next-line import/consistent-type-specifier-style -- keep query-fns type-only so Node integration tests do not load React Native at runtime
-import type { ConnectAndOpenShellResult } from '../../src/lib/query-fns';
 
 const savedEntry: SavedConnectionEntry = {
 	id: 'saved-1',
@@ -166,6 +165,84 @@ void test('manual diagnostic records failed connection and produces prompt', asy
 	assert.match(result.prompt, /network unreachable/);
 	assert.match(result.prompt, /muly@dev\.tailnet\.ts\.net:22/);
 	assert.doesNotMatch(result.prompt, /secret/);
+});
+
+void test('manual diagnostic records missing saved key as failed trace', async () => {
+	const recorder = createConnectionDiagnosticRecorder({ now: () => 10 });
+
+	const result = await runManualConnectionDiagnostic({
+		recorder,
+		appState: {
+			platformOS: 'android',
+			isAutoConnecting: false,
+			isReconnecting: false,
+		},
+		loadLatestSavedConnection: async () => savedEntry,
+		resolveKeySecurity: async () => null,
+		connectSavedEntry: async () => {
+			throw new Error('connect should not run');
+		},
+		recovery: readyRecovery,
+		formatPrompt: formatConnectionDiagnosticPrompt,
+	});
+
+	assert.equal(result.status, 'failed');
+	assert.match(result.prompt, /manual-diagnostic\.key-missing/);
+	assert.equal(recorder.getLatestTrace()?.status, 'failed');
+});
+
+void test('manual diagnostic timeout releases single-flight state', async () => {
+	const recorder = createConnectionDiagnosticRecorder({ now: () => 10 });
+	let resolveLoad: (value: SavedConnectionEntry) => void = () => {};
+	let connectCalls = 0;
+
+	const timedOut = await runManualConnectionDiagnostic({
+		recorder,
+		appState: {
+			platformOS: 'android',
+			isAutoConnecting: false,
+			isReconnecting: false,
+		},
+		loadLatestSavedConnection: async () =>
+			new Promise((resolve) => {
+				resolveLoad = resolve;
+			}),
+		resolveKeySecurity: async () => {
+			throw new Error('key lookup should not run');
+		},
+		connectSavedEntry: async () => {
+			connectCalls += 1;
+			throw new Error('stale connect should not run');
+		},
+		recovery: readyRecovery,
+		formatPrompt: formatConnectionDiagnosticPrompt,
+		timeoutMs: 5,
+	});
+
+	assert.equal(timedOut.status, 'failed');
+	assert.match(timedOut.prompt, /manual-diagnostic\.timeout/);
+	assert.match(timedOut.prompt, /timed out after 5ms/);
+	resolveLoad(savedEntry);
+	await new Promise((resolve) => setTimeout(resolve, 0));
+	assert.equal(connectCalls, 0);
+
+	const next = await runManualConnectionDiagnostic({
+		recorder,
+		appState: {
+			platformOS: 'android',
+			isAutoConnecting: false,
+			isReconnecting: false,
+		},
+		loadLatestSavedConnection: async () => null,
+		resolveKeySecurity: async () => null,
+		connectSavedEntry: async () => {
+			throw new Error('connect should not run');
+		},
+		recovery: unsupportedRecovery,
+		formatPrompt: formatConnectionDiagnosticPrompt,
+	});
+
+	assert.equal(next.status, 'skipped');
 });
 
 void test('manual diagnostic start trace failure does not wedge single-flight state', async () => {

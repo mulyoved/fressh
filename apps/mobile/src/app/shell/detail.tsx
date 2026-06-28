@@ -50,6 +50,7 @@ import {
 } from '@/lib/agent-notification-visibility';
 import { useAutoConnectStore } from '@/lib/auto-connect';
 import { restartCodexWithBridge } from '@/lib/codex-restart';
+import { connectAndOpenShell } from '@/lib/connect-and-open-shell';
 import { deliverConnectionDiagnosticPrompt } from '@/lib/connection-diagnostic-delivery';
 import { runManualConnectionDiagnostic } from '@/lib/connection-diagnostic-runner';
 import { connectionDiagnosticRecorder } from '@/lib/connection-diagnostics';
@@ -80,7 +81,6 @@ import { rootLogger } from '@/lib/logger';
 import { resolveLucideIcon } from '@/lib/lucide-utils';
 import { OrderedWriter } from '@/lib/ordered-writer';
 import { preferences } from '@/lib/preferences';
-import { connectAndOpenShell } from '@/lib/query-fns';
 import {
 	configureScrollTraceEnabled,
 	emitScrollTrace,

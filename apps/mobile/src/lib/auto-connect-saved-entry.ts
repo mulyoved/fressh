@@ -1,9 +1,8 @@
+import { type ConnectAndOpenShellResult } from './connect-and-open-shell';
 import {
 	serializeConnectionDiagnosticError,
 	type ConnectionDiagnosticEventInput,
 } from './connection-diagnostics';
-// eslint-disable-next-line import/consistent-type-specifier-style -- Type-only import avoids loading query-fns' React Native dependencies in Node integration tests.
-import type { ConnectAndOpenShellResult } from './query-fns';
 import {
 	getTailscaleRecoveryAttentionMessage,
 	isNetworkLikeSshError,

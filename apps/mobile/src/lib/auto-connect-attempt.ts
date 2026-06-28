@@ -2,6 +2,7 @@ import {
 	attemptSavedEntryWithTailscaleRecovery,
 	type SavedEntryTailscaleRecovery,
 } from './auto-connect-saved-entry';
+import { type ConnectAndOpenShellResult } from './connect-and-open-shell';
 import {
 	serializeConnectionDiagnosticError,
 	type ConnectionDiagnosticConnectionIdentity,
@@ -11,8 +12,6 @@ import {
 	getStoredConnectionId,
 	type SavedConnectionEntry,
 } from './connection-utils';
-// eslint-disable-next-line import/consistent-type-specifier-style -- keep query-fns fully type-only so Node integration tests do not load React Native at runtime
-import type { ConnectAndOpenShellResult } from './query-fns';
 // eslint-disable-next-line import/consistent-type-specifier-style -- keep secrets-manager fully type-only so Node integration tests do not load React Native at runtime
 import type {
 	InputConnectionDetails,
