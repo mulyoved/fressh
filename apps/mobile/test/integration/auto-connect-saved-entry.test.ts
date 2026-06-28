@@ -466,3 +466,58 @@ void test('readiness cooldown and notStarted mark reachability after failed SSH 
 		assert.equal(context.clearAttentionCount, 0);
 	}
 });
+
+void test('records Tailscale recovery retry trace events', async () => {
+	const events: unknown[] = [];
+	let connectCalls = 0;
+
+	const result = await attemptSavedEntryWithTailscaleRecovery({
+		platformOS: 'android',
+		recovery: {
+			ensureReady: async () => ({
+				kind: 'ready' as const,
+				attempted: true as const,
+				available: true as const,
+			}),
+			recoverAfterFailure: async () => ({
+				kind: 'recovered' as const,
+				attempted: true as const,
+				networkLikeFailure: true as const,
+				available: true as const,
+			}),
+		},
+		connectSavedEntry: async () => {
+			connectCalls += 1;
+			if (connectCalls === 1) throw new Error('network unreachable');
+			return {
+				status: 'connected',
+				sshConnection: {} as never,
+				shellHandle: {} as never,
+				connectionId: 'conn-2',
+				channelId: 3,
+			};
+		},
+		markTailscaleAttention: () => {},
+		clearTailscaleAttention: () => {},
+		logTmuxAttachFailure: () => {},
+		logWarning: () => {},
+		trace: {
+			event: (event) => {
+				events.push(event);
+			},
+		},
+	});
+
+	assert.deepEqual(result, { connected: true });
+	assert.deepEqual(
+		events.map((event) => (event as { type: string }).type),
+		[
+			'tailscale.ensure-ready.result',
+			'auto-connect.saved-entry.connect.started',
+			'auto-connect.saved-entry.connect.threw',
+			'tailscale.recovery.result',
+			'auto-connect.saved-entry.retry.started',
+			'auto-connect.saved-entry.connect.connected',
+		],
+	);
+});

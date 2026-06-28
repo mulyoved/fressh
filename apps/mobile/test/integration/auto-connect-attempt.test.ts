@@ -462,3 +462,62 @@ void test('saved-entry path skips when key security cannot resolve', async () =>
 
 	assert.equal(connected, false);
 });
+
+void test('records saved-entry failure trace events', async () => {
+	const events: unknown[] = [];
+	const { logger } = createLogger();
+
+	const connected = await attemptAutoConnectSource({
+		platformOS: 'android',
+		pathname: '/(tabs)',
+		latestShell: null,
+		connections: {},
+		openSavedEntryShell: async () => {
+			throw new Error('network unreachable');
+		},
+		loadLatestSavedConnection: async () => createSavedEntry(),
+		resolveKeySecurity: async () => ({
+			type: 'key',
+			privateKey: 'SECRET_PRIVATE_KEY',
+		}),
+		navigateToShell: () => {},
+		recovery: {
+			ensureReady: async () => ({
+				kind: 'ready' as const,
+				attempted: true as const,
+				available: true as const,
+			}),
+			recoverAfterFailure: async () => ({
+				kind: 'failed' as const,
+				attempted: true as const,
+				networkLikeFailure: true as const,
+				available: true,
+			}),
+		},
+		markTailscaleAttention: () => {},
+		clearTailscaleAttention: () => {},
+		logger,
+		trace: {
+			event: (event) => {
+				events.push(event);
+			},
+		},
+	});
+
+	assert.equal(connected, false);
+	assert.deepEqual(
+		events.map((event) => (event as { type: string }).type),
+		[
+			'auto-connect.source.missing-latest-shell',
+			'auto-connect.source.missing-active-connection',
+			'auto-connect.saved-entry.selected',
+			'auto-connect.saved-entry.key-resolved',
+			'tailscale.ensure-ready.result',
+			'auto-connect.saved-entry.connect.started',
+			'auto-connect.saved-entry.connect.threw',
+			'tailscale.recovery.result',
+			'auto-connect.saved-entry.connect.failed',
+		],
+	);
+	assert.doesNotMatch(JSON.stringify(events), /SECRET_PRIVATE_KEY/);
+});

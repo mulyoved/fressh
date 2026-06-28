@@ -3,6 +3,11 @@ import {
 	type SavedEntryTailscaleRecovery,
 } from './auto-connect-saved-entry';
 import {
+	serializeConnectionDiagnosticError,
+	type ConnectionDiagnosticConnectionIdentity,
+	type ConnectionDiagnosticEventInput,
+} from './connection-diagnostics';
+import {
 	getStoredConnectionId,
 	type SavedConnectionEntry,
 } from './connection-utils';
@@ -59,6 +64,10 @@ type TmuxSettings = {
 	tmuxSessionName: string;
 };
 
+type AutoConnectTrace = {
+	event: (event: ConnectionDiagnosticEventInput) => void;
+};
+
 export type AutoConnectAttemptSourceArgs = {
 	platformOS: string;
 	pathname: string;
@@ -77,6 +86,7 @@ export type AutoConnectAttemptSourceArgs = {
 	loadTmuxSettings?: (
 		storedConnectionId: string,
 	) => Promise<TmuxSettings | null>;
+	trace?: AutoConnectTrace;
 };
 
 const loadStoredTmuxSettings = async (
@@ -103,6 +113,19 @@ const pickLatestActiveConnection = (
 	);
 };
 
+const getSavedEntryConnectionIdentity = (
+	id: string,
+	details: StoredConnectionDetails,
+): ConnectionDiagnosticConnectionIdentity => ({
+	savedConnectionId: id,
+	username: details.username,
+	host: details.host,
+	port: details.port,
+	keyId: details.security.keyId,
+	useTmux: details.useTmux,
+	tmuxSessionName: details.tmuxSessionName,
+});
+
 export async function attemptAutoConnectSource({
 	platformOS,
 	pathname,
@@ -117,8 +140,23 @@ export async function attemptAutoConnectSource({
 	clearTailscaleAttention,
 	logger,
 	loadTmuxSettings = loadStoredTmuxSettings,
+	trace,
 }: AutoConnectAttemptSourceArgs): Promise<boolean> {
+	const traceEvent = (event: ConnectionDiagnosticEventInput) => {
+		try {
+			trace?.event(event);
+		} catch (error) {
+			logger.warn('Auto-connect trace event failed', error);
+		}
+	};
+
 	if (latestShell) {
+		traceEvent({
+			type: 'auto-connect.source.latest-shell',
+			source: 'latest-shell',
+			connection: { connectionId: latestShell.connectionId },
+			details: { channelId: latestShell.channelId, pathname },
+		});
 		if (pathname !== '/shell/detail') {
 			navigateToShell(latestShell.connectionId, latestShell.channelId);
 		}
@@ -126,8 +164,23 @@ export async function attemptAutoConnectSource({
 		return true;
 	}
 
+	traceEvent({
+		type: 'auto-connect.source.missing-latest-shell',
+		source: 'latest-shell',
+		details: { pathname },
+	});
 	const activeConnection = pickLatestActiveConnection(connections);
 	if (activeConnection) {
+		traceEvent({
+			type: 'auto-connect.active-connection.selected',
+			source: 'active-connection',
+			connection: {
+				connectionId: activeConnection.connectionId,
+				username: activeConnection.connectionDetails.username,
+				host: activeConnection.connectionDetails.host,
+				port: activeConnection.connectionDetails.port,
+			},
+		});
 		const storedConnectionId = getStoredConnectionId(
 			activeConnection.connectionDetails,
 		);
@@ -144,6 +197,18 @@ export async function attemptAutoConnectSource({
 		}
 
 		try {
+			traceEvent({
+				type: 'auto-connect.active-connection.shell-started',
+				source: 'active-connection',
+				connection: {
+					connectionId: activeConnection.connectionId,
+					username: activeConnection.connectionDetails.username,
+					host: activeConnection.connectionDetails.host,
+					port: activeConnection.connectionDetails.port,
+					useTmux,
+					tmuxSessionName,
+				},
+			});
 			const shellHandle = await activeConnection.startShell({
 				term: 'Xterm',
 				useTmux,
@@ -154,11 +219,27 @@ export async function attemptAutoConnectSource({
 				connectionId: activeConnection.connectionId,
 				channelId: shellHandle.channelId,
 			});
+			traceEvent({
+				type: 'auto-connect.active-connection.shell-connected',
+				source: 'active-connection',
+				connection: { connectionId: activeConnection.connectionId },
+				details: { channelId: shellHandle.channelId },
+			});
 			navigateToShell(activeConnection.connectionId, shellHandle.channelId);
 			clearTailscaleAttention();
 			return true;
 		} catch (error) {
 			const tmuxAttachFailureReason = extractTmuxAttachFailureReason(error);
+			traceEvent({
+				type:
+					tmuxAttachFailureReason !== null
+						? 'auto-connect.active-connection.tmux-attach-failed'
+						: 'auto-connect.active-connection.shell-failed',
+				source: 'active-connection',
+				connection: { connectionId: activeConnection.connectionId },
+				error: serializeConnectionDiagnosticError(error),
+				details: { tmuxAttachFailureReason, tmuxSessionName },
+			});
 			if (tmuxAttachFailureReason !== null) {
 				logger.info(
 					'Tmux attach failed while reopening shell on active connection',
@@ -172,16 +253,41 @@ export async function attemptAutoConnectSource({
 				logger.warn('Failed to reopen shell on active connection', error);
 			}
 		}
+	} else {
+		traceEvent({
+			type: 'auto-connect.source.missing-active-connection',
+			source: 'active-connection',
+		});
 	}
 
 	const latestEntry = await loadLatestSavedConnection();
-	if (!latestEntry) return false;
+	if (!latestEntry) {
+		traceEvent({
+			type: 'auto-connect.saved-entry.missing',
+			source: 'saved-entry',
+		});
+		return false;
+	}
 
 	const details = latestEntry.value;
+	traceEvent({
+		type: 'auto-connect.saved-entry.selected',
+		source: 'saved-entry',
+		connection: getSavedEntryConnectionIdentity(latestEntry.id, details),
+	});
 	if (
 		typeof details.useTmux !== 'boolean' ||
 		typeof details.tmuxSessionName !== 'string'
 	) {
+		traceEvent({
+			type: 'auto-connect.saved-entry.invalid-tmux-settings',
+			source: 'saved-entry',
+			connection: getSavedEntryConnectionIdentity(latestEntry.id, details),
+			details: {
+				useTmuxType: typeof details.useTmux,
+				tmuxSessionNameType: typeof details.tmuxSessionName,
+			},
+		});
 		return false;
 	}
 
@@ -192,7 +298,19 @@ export async function attemptAutoConnectSource({
 		autoConnect: details.autoConnect ?? false,
 	};
 	const resolvedSecurity = await resolveKeySecurity(details);
-	if (!resolvedSecurity) return false;
+	if (!resolvedSecurity) {
+		traceEvent({
+			type: 'auto-connect.saved-entry.key-missing',
+			source: 'saved-entry',
+			connection: getSavedEntryConnectionIdentity(latestEntry.id, details),
+		});
+		return false;
+	}
+	traceEvent({
+		type: 'auto-connect.saved-entry.key-resolved',
+		source: 'saved-entry',
+		connection: getSavedEntryConnectionIdentity(latestEntry.id, details),
+	});
 
 	const connectSavedEntry = () =>
 		openSavedEntryShell({
@@ -225,6 +343,14 @@ export async function attemptAutoConnectSource({
 		logWarning: (message, error) => {
 			logger.warn(message, error);
 		},
+		trace,
 	});
+	if (!result.connected) {
+		traceEvent({
+			type: 'auto-connect.saved-entry.connect.failed',
+			source: 'saved-entry',
+			connection: getSavedEntryConnectionIdentity(latestEntry.id, details),
+		});
+	}
 	return result.connected;
 }
