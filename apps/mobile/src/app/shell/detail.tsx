@@ -50,8 +50,10 @@ import {
 } from '@/lib/agent-notification-visibility';
 import { useAutoConnectStore } from '@/lib/auto-connect';
 import { restartCodexWithBridge } from '@/lib/codex-restart';
-import { deliverConnectionDiagnosticPrompt } from '@/lib/connection-diagnostic-delivery';
-import { runManualConnectionDiagnostic } from '@/lib/connection-diagnostic-runner';
+import {
+	buildConnectionDebugCommandArgs,
+	runConnectionDebugCommand,
+} from '@/lib/connection-debug-command';
 import { connectionDiagnosticRecorder } from '@/lib/connection-diagnostics';
 import {
 	getStoredConnectionId,
@@ -2492,53 +2494,40 @@ function ShellDetail() {
 	}, []);
 
 	const handleDebugConnectionInCodex = useCallback(async () => {
-		commandMenuModal.onClose();
 		const autoState = useAutoConnectStore.getState();
-		const result = await runManualConnectionDiagnostic({
-			recorder: connectionDiagnosticRecorder,
-			appState: {
-				platformOS: Platform.OS,
-				isAutoConnecting: autoState.isAutoConnecting,
-				isReconnecting: autoState.isReconnecting,
-				pathname: '/shell/detail',
-				appActive: isAppActiveRef.current,
-			},
-			loadLatestSavedConnection: loadLatestSavedConnectionForDiagnostic,
-			resolveKeySecurity: async (details) => {
-				try {
-					const keyEntry = await secretsManager.keys.utils.getPrivateKey(
-						details.security.keyId,
-					);
-					return { type: 'key', privateKey: keyEntry.value };
-				} catch (error) {
-					logger.warn('Connection diagnostic key resolution failed', error);
-					return null;
-				}
-			},
-			connectSavedEntry: async ({
-				connectionDetails,
-				resolvedSecurity,
-				trace,
-			}) =>
-				await runDiagnosticShellProbe({
-					connectionDetails,
-					resolvedSecurity,
-					trace,
-					connect: RnRussh.connect,
-				}),
-			recovery: tailscaleRecovery,
-		});
-		await deliverConnectionDiagnosticPrompt({
-			prompt: result.prompt,
-			hasShell: Boolean(shell),
-			pasteIntoTerminal: sendTextRaw,
-			copyToClipboard: async (value) => {
-				await Clipboard.setStringAsync(value);
-			},
-			showAlert: (title, message) => {
-				Alert.alert(title, message);
-			},
-		});
+		await runConnectionDebugCommand(
+			buildConnectionDebugCommandArgs({
+				recorder: connectionDiagnosticRecorder,
+				appState: {
+					platformOS: Platform.OS,
+					isAutoConnecting: autoState.isAutoConnecting,
+					isReconnecting: autoState.isReconnecting,
+					pathname: '/shell/detail',
+					appActive: isAppActiveRef.current,
+				},
+				closeMenu: () => {
+					commandMenuModal.onClose();
+				},
+				loadLatestSavedConnection: loadLatestSavedConnectionForDiagnostic,
+				resolvePrivateKey: async (keyId) => {
+					const keyEntry =
+						await secretsManager.keys.utils.getPrivateKey(keyId);
+					return keyEntry.value;
+				},
+				runDiagnosticShellProbe,
+				connect: RnRussh.connect,
+				recovery: tailscaleRecovery,
+				hasShell: Boolean(shell),
+				pasteIntoTerminal: sendTextRaw,
+				copyToClipboard: async (value) => {
+					await Clipboard.setStringAsync(value);
+				},
+				showAlert: (title, message) => {
+					Alert.alert(title, message);
+				},
+				logger,
+			}),
+		);
 	}, [
 		commandMenuModal,
 		loadLatestSavedConnectionForDiagnostic,
