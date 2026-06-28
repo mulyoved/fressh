@@ -62,7 +62,7 @@ export type ConnectionDiagnosticTrace = {
 };
 
 export type ConnectionDiagnosticTraceHandle = {
-	trace: ConnectionDiagnosticTrace;
+	readonly trace: ConnectionDiagnosticTrace;
 	event: (input: ConnectionDiagnosticEventInput) => ConnectionDiagnosticEvent;
 	finish: (status: Exclude<ConnectionDiagnosticStatus, 'running'>) => void;
 };
@@ -322,7 +322,9 @@ export function createConnectionDiagnosticRecorder(
 			latestTrace = trace;
 
 			return {
-				trace,
+				get trace() {
+					return cloneTrace(trace);
+				},
 				event: (input) => {
 					const sanitizedInput = sanitizeEventInput(input);
 					const atMs = now();
@@ -332,7 +334,7 @@ export function createConnectionDiagnosticRecorder(
 						elapsedMs: atMs - trace.startedAtMs,
 					};
 					trace.events.push(event);
-					return event;
+					return cloneDiagnosticValue(event);
 				},
 				finish: (status) => {
 					trace.status = status;
@@ -394,25 +396,48 @@ export function formatConnectionDiagnosticPrompt(
 	options: FormatPromptOptions = {},
 ): string {
 	const connection = findPrimaryConnectionIdentity(trace);
-	const appStateLines = options.appState
-		? [
-				'App state:',
-				`- platformOS: ${options.appState.platformOS}`,
-				`- pathname: ${options.appState.pathname}`,
-				`- isAutoConnecting: ${String(options.appState.isAutoConnecting)}`,
-				`- isReconnecting: ${String(options.appState.isReconnecting)}`,
+	const appStateLines: string[] = [];
+
+	if (options.appState) {
+		appStateLines.push(
+			'App state:',
+			`- platformOS: ${options.appState.platformOS}`,
+			`- isAutoConnecting: ${String(options.appState.isAutoConnecting)}`,
+			`- isReconnecting: ${String(options.appState.isReconnecting)}`,
+		);
+
+		if (options.appState.pathname !== undefined) {
+			appStateLines.push(`- pathname: ${options.appState.pathname}`);
+		}
+
+		if (options.appState.foregroundServiceStarted !== undefined) {
+			appStateLines.push(
 				`- foregroundServiceStarted: ${String(
 					options.appState.foregroundServiceStarted,
 				)}`,
+			);
+		}
+
+		if (options.appState.backgroundWorkAllowed !== undefined) {
+			appStateLines.push(
 				`- backgroundWorkAllowed: ${String(
 					options.appState.backgroundWorkAllowed,
 				)}`,
+			);
+		}
+
+		if (options.appState.foregroundServiceRequired !== undefined) {
+			appStateLines.push(
 				`- foregroundServiceRequired: ${String(
 					options.appState.foregroundServiceRequired,
 				)}`,
-				`- appActive: ${String(options.appState.appActive)}`,
-			]
-		: [];
+			);
+		}
+
+		if (options.appState.appActive !== undefined) {
+			appStateLines.push(`- appActive: ${String(options.appState.appActive)}`);
+		}
+	}
 
 	return [
 		'Debug this Fressh mobile SSH connection failure.',

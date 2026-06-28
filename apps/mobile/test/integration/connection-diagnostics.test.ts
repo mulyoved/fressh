@@ -235,6 +235,84 @@ void test('recorder snapshots event inputs and returned traces', () => {
 	assert.equal(freshDetails.nested?.phase, 'connect');
 });
 
+void test('recorder handle snapshots stay isolated from caller mutations', () => {
+	let currentNow = 800;
+	const recorder = createConnectionDiagnosticRecorder({
+		now: () => currentNow,
+		maxHistory: 5,
+	});
+	const handle = recorder.startTrace({
+		trigger: 'manual-diagnostic',
+		reason: 'snapshot-isolation',
+	});
+
+	const returnedEvent = handle.event({
+		type: 'ssh.connect.failed',
+		source: 'active-connection',
+		details: {
+			nested: {
+				phase: 'connect',
+				attempts: 1,
+			},
+		},
+	});
+
+	(handle.trace as ConnectionDiagnosticTrace).reason = 'mutated';
+	const handleEventDetails = handle.trace.events[0]?.details as {
+		nested?: { phase?: string; attempts?: number };
+	};
+	assert.ok(handleEventDetails.nested);
+	handleEventDetails.nested.phase = 'caller-mutated';
+	handleEventDetails.nested.attempts = 99;
+
+	const latestBeforeFinish = recorder.getLatestTrace();
+	assert.ok(latestBeforeFinish);
+	assert.equal(latestBeforeFinish.reason, 'snapshot-isolation');
+	assert.deepEqual(latestBeforeFinish.events[0]?.details, {
+		nested: {
+			phase: 'connect',
+			attempts: 1,
+		},
+	});
+
+	const returnedEventDetails = returnedEvent.details as {
+		nested?: { phase?: string; attempts?: number };
+	};
+	assert.ok(returnedEventDetails.nested);
+	returnedEventDetails.nested.phase = 'returned-mutated';
+	returnedEventDetails.nested.attempts = 42;
+
+	const latestAfterReturnedEventMutation = recorder.getLatestTrace();
+	assert.ok(latestAfterReturnedEventMutation);
+	assert.deepEqual(latestAfterReturnedEventMutation.events[0]?.details, {
+		nested: {
+			phase: 'connect',
+			attempts: 1,
+		},
+	});
+
+	currentNow = 850;
+	handle.finish('failed');
+
+	(handle.trace as ConnectionDiagnosticTrace).reason = 'history-mutated';
+	const postFinishHandleDetails = handle.trace.events[0]?.details as {
+		nested?: { phase?: string; attempts?: number };
+	};
+	assert.ok(postFinishHandleDetails.nested);
+	postFinishHandleDetails.nested.phase = 'history-mutated';
+	postFinishHandleDetails.nested.attempts = -1;
+
+	const history = recorder.getHistory();
+	assert.equal(history.length, 1);
+	assert.equal(history[0]?.reason, 'snapshot-isolation');
+	assert.deepEqual(history[0]?.events[0]?.details, {
+		nested: {
+			phase: 'connect',
+			attempts: 1,
+		},
+	});
+});
+
 void test('recorder safely snapshots messy details without throwing', () => {
 	let currentNow = 700;
 	const recorder = createConnectionDiagnosticRecorder({
@@ -327,6 +405,36 @@ void test('prompt summary prefers the richest later connection identity', () => 
 		connectionLine,
 		'- connection: muly@dev.tailnet.ts.net:22 | savedConnectionId=saved-22 | connectionId=connection-9 | useTmux=true | tmuxSessionName=workspace | keyId=key-9',
 	);
+});
+
+void test('prompt omits optional app state lines when values are absent', () => {
+	const trace: ConnectionDiagnosticTrace = {
+		id: 'trace-optional-app-state',
+		trigger: 'manual-diagnostic',
+		reason: 'prompt-optional-fields',
+		status: 'failed',
+		startedAtMs: 200,
+		finishedAtMs: 260,
+		events: [],
+	};
+
+	const prompt = formatConnectionDiagnosticPrompt(trace, {
+		appState: {
+			platformOS: 'android',
+			isAutoConnecting: false,
+			isReconnecting: true,
+		},
+	});
+
+	assert.match(prompt, /- platformOS: android/);
+	assert.match(prompt, /- isAutoConnecting: false/);
+	assert.match(prompt, /- isReconnecting: true/);
+	assert.doesNotMatch(prompt, /undefined/);
+	assert.doesNotMatch(prompt, /- pathname:/);
+	assert.doesNotMatch(prompt, /- foregroundServiceStarted:/);
+	assert.doesNotMatch(prompt, /- backgroundWorkAllowed:/);
+	assert.doesNotMatch(prompt, /- foregroundServiceRequired:/);
+	assert.doesNotMatch(prompt, /- appActive:/);
 });
 
 void test('error serializer preserves useful non-secret details', () => {
