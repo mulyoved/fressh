@@ -1,4 +1,4 @@
-import { type ListenerEvent } from '@fressh/react-native-uniffi-russh';
+import { RnRussh, type ListenerEvent } from '@fressh/react-native-uniffi-russh';
 import {
 	XtermJsWebView,
 	type XtermWebViewHandle,
@@ -504,7 +504,6 @@ function ShellDetail() {
 	const shell = useSshStore(
 		(s) => s.shells[`${connectionId}-${channelId}` as const],
 	);
-	const connect = useSshStore((s) => s.connect);
 	const connection = useSshStore((s) => s.connections[connectionId]);
 	const connectionStoredConnectionId = connection
 		? getStoredConnectionId(connection.connectionDetails)
@@ -2526,7 +2525,7 @@ function ShellDetail() {
 					resolvedSecurity,
 					trace,
 					diagnosticMode: true,
-					connect,
+					connect: RnRussh.connect,
 					navigate: () => {},
 				}),
 			recovery: tailscaleRecovery,
@@ -2544,7 +2543,6 @@ function ShellDetail() {
 		});
 	}, [
 		commandMenuModal,
-		connect,
 		loadLatestSavedConnectionForDiagnostic,
 		sendTextRaw,
 		shell,

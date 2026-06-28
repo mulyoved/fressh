@@ -25,6 +25,7 @@ void test('shell detail wires debug connection action to manual diagnostic runne
 
 	assert.match(source, /runManualConnectionDiagnostic/);
 	assert.match(source, /deliverConnectionDiagnosticPrompt/);
+	assert.match(source, /connect:\s*RnRussh\.connect/);
 	assert.match(
 		source,
 		/debugConnectionInCodex:\s*handleDebugConnectionInCodex/,

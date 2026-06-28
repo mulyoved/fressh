@@ -79,6 +79,9 @@ void test('manual diagnostic records no saved connection as skipped trace', asyn
 
 void test('manual diagnostic is single-flight', async () => {
 	const recorder = createConnectionDiagnosticRecorder({ now: () => 10 });
+	const competingRecorder = createConnectionDiagnosticRecorder({
+		now: () => 50,
+	});
 	let resolveConnect: (value: ConnectAndOpenShellResult) => void = () => {};
 	let notifyConnectStarted: () => void = () => {};
 	const connectStarted = new Promise<void>((resolve) => {
@@ -105,7 +108,7 @@ void test('manual diagnostic is single-flight', async () => {
 	await connectStarted;
 
 	const second = await runManualConnectionDiagnostic({
-		recorder,
+		recorder: competingRecorder,
 		appState: {
 			platformOS: 'android',
 			isAutoConnecting: false,
@@ -122,6 +125,7 @@ void test('manual diagnostic is single-flight', async () => {
 
 	assert.equal(second.status, 'busy');
 	assert.match(second.prompt, /diagnostic is already running/i);
+	assert.equal(second.trace?.id, recorder.getLatestTrace()?.id);
 	resolveConnect({
 		status: 'connected',
 		sshConnection: {} as never,

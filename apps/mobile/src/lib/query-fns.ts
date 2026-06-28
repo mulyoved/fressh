@@ -15,6 +15,7 @@ import { type InputConnectionDetails } from './connection-storage';
 import { rootLogger } from './logger';
 import { connectAndRememberConnection } from './ssh-connect-flow';
 import { extractTmuxAttachFailureReason } from './ssh-error-details';
+import { type RegisteredStartShellOptions } from './ssh-registry-store';
 import { AbortSignalTimeout } from './utils';
 
 const logger = rootLogger.extend('QueryFns');
@@ -222,12 +223,14 @@ export async function connectAndOpenShell(args: {
 			source: 'saved-entry',
 			connection: connectedIdentity,
 		});
-		shellHandle = await sshConnection.startShell({
+		const startShellOptions: RegisteredStartShellOptions = {
 			term: 'Xterm',
 			useTmux: connectionDetails.useTmux,
 			tmuxSessionName: connectionDetails.tmuxSessionName,
 			abortSignal: AbortSignalTimeout(abortSignalTimeoutMs),
-		});
+			...(args.diagnosticMode ? { registerInStore: false } : {}),
+		};
+		shellHandle = await sshConnection.startShell(startShellOptions);
 	} catch (error) {
 		const tmuxAttachFailureReason = extractTmuxAttachFailureReason(error);
 		traceEvent({

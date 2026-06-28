@@ -51,6 +51,7 @@ void test('connectAndOpenShell records connect and shell success events', async 
 
 void test('connectAndOpenShell disconnects diagnostic connections after success', async () => {
 	let disconnected = 0;
+	const startShellOptions: unknown[] = [];
 
 	await connectAndOpenShell({
 		connectionDetails,
@@ -62,7 +63,10 @@ void test('connectAndOpenShell disconnects diagnostic connections after success'
 				disconnect: () => {
 					disconnected += 1;
 				},
-				startShell: async () => ({ channelId: 7 }),
+				startShell: async (options: unknown) => {
+					startShellOptions.push(options);
+					return { channelId: 7 };
+				},
 			}) as never,
 		saveConnection: async () => {},
 		navigate: () => {
@@ -71,6 +75,10 @@ void test('connectAndOpenShell disconnects diagnostic connections after success'
 	});
 
 	assert.equal(disconnected, 1);
+	assert.equal(
+		(startShellOptions[0] as { registerInStore?: boolean }).registerInStore,
+		false,
+	);
 });
 
 void test('connectAndOpenShell disconnects diagnostic connections after tmux attach failure without navigating', async () => {

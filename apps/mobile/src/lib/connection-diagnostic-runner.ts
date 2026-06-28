@@ -1,4 +1,7 @@
-import { attemptSavedEntryWithTailscaleRecovery } from './auto-connect-saved-entry';
+import {
+	attemptSavedEntryWithTailscaleRecovery,
+	type SavedEntryTailscaleRecovery,
+} from './auto-connect-saved-entry';
 import {
 	formatConnectionDiagnosticPrompt,
 	serializeConnectionDiagnosticError,
@@ -37,13 +40,12 @@ export type ManualConnectionDiagnosticArgs = {
 		resolvedSecurity: ResolvedKeySecurity;
 		trace: ConnectionDiagnosticTraceHandle;
 	}) => Promise<ConnectAndOpenShellResult>;
-	recovery: Parameters<
-		typeof attemptSavedEntryWithTailscaleRecovery
-	>[0]['recovery'];
+	recovery: SavedEntryTailscaleRecovery;
 	formatPrompt?: typeof formatConnectionDiagnosticPrompt;
 };
 
 let running = false;
+let activeTrace: ConnectionDiagnosticTrace | null = null;
 
 function getConnectionIdentity(
 	id: string,
@@ -102,7 +104,7 @@ export async function runManualConnectionDiagnostic(
 	args: ManualConnectionDiagnosticArgs,
 ): Promise<ManualConnectionDiagnosticResult> {
 	if (running) {
-		const latestTrace = args.recorder.getLatestTrace();
+		const latestTrace = activeTrace ?? args.recorder.getLatestTrace();
 		const prompt = [
 			'A Fressh connection diagnostic is already running. Try again after it finishes.',
 			latestTrace ? promptForTrace(latestTrace, args) : null,
@@ -120,6 +122,7 @@ export async function runManualConnectionDiagnostic(
 			trigger: 'manual-diagnostic',
 			reason: 'command-menu',
 		});
+		activeTrace = handle.trace;
 		const traceHandle = handle;
 		const latestEntry = await args.loadLatestSavedConnection();
 		if (!latestEntry) {
@@ -219,6 +222,7 @@ export async function runManualConnectionDiagnostic(
 		});
 		return finish(handle, 'failed', args);
 	} finally {
+		activeTrace = null;
 		running = false;
 	}
 }
