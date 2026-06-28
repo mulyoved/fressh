@@ -12,7 +12,10 @@ import {
 	type ConnectionDiagnosticTraceHandle,
 } from './connection-diagnostics';
 import { type SavedConnectionEntry } from './connection-utils';
-import { type DiagnosticShellProbeResult } from './diagnostic-shell-probe';
+import {
+	isDiagnosticShellCleanupError,
+	type DiagnosticShellProbeResult,
+} from './diagnostic-shell-probe';
 // eslint-disable-next-line import/consistent-type-specifier-style -- keep secrets-manager type-only so Node integration tests do not load React Native at runtime
 import type { InputConnectionDetails } from './secrets-manager';
 
@@ -260,6 +263,8 @@ export async function runManualConnectionDiagnostic(
 							error: serializeConnectionDiagnosticError(error),
 						});
 					},
+					shouldRecoverAfterFailure: (error) =>
+						!isDiagnosticShellCleanupError(error),
 					trace: traceHandle,
 				});
 

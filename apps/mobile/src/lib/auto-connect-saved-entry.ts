@@ -49,6 +49,7 @@ export type AttemptSavedEntryWithTailscaleRecoveryArgs = {
 	clearTailscaleAttention: () => void;
 	logTmuxAttachFailure: (result: TmuxAttachFailedResult) => void;
 	logWarning: (message: string, error: unknown) => void;
+	shouldRecoverAfterFailure?: (error: unknown) => boolean;
 	trace?: SavedEntryTrace;
 };
 
@@ -117,6 +118,7 @@ export async function attemptSavedEntryWithTailscaleRecovery({
 	clearTailscaleAttention,
 	logTmuxAttachFailure,
 	logWarning,
+	shouldRecoverAfterFailure = () => true,
 	trace,
 }: AttemptSavedEntryWithTailscaleRecoveryArgs) {
 	const traceEvent = (event: ConnectionDiagnosticEventInput) => {
@@ -178,6 +180,9 @@ export async function attemptSavedEntryWithTailscaleRecovery({
 			source: 'saved-entry',
 			error: serializeConnectionDiagnosticError(error),
 		});
+		if (!shouldRecoverAfterFailure(error)) {
+			throw error;
+		}
 		const recoveryResult = await recovery.recoverAfterFailure(error);
 		traceEvent({
 			type: 'tailscale.recovery.result',
@@ -214,6 +219,9 @@ export async function attemptSavedEntryWithTailscaleRecovery({
 				source: 'saved-entry',
 				error: serializeConnectionDiagnosticError(retryError),
 			});
+			if (!shouldRecoverAfterFailure(retryError)) {
+				throw retryError;
+			}
 			if (!isNetworkLikeSshError(retryError)) {
 				throw retryError;
 			}

@@ -6,7 +6,10 @@ import {
 	formatConnectionDiagnosticPrompt,
 } from '../../src/lib/connection-diagnostics';
 import { type SavedConnectionEntry } from '../../src/lib/connection-utils';
-import { type DiagnosticShellProbeResult } from '../../src/lib/diagnostic-shell-probe';
+import {
+	DiagnosticShellCleanupError,
+	type DiagnosticShellProbeResult,
+} from '../../src/lib/diagnostic-shell-probe';
 
 const savedEntry: SavedConnectionEntry = {
 	id: 'saved-1',
@@ -163,6 +166,89 @@ void test('manual diagnostic records failed connection and produces prompt', asy
 	assert.match(result.prompt, /network unreachable/);
 	assert.match(result.prompt, /muly@dev\.tailnet\.ts\.net:22/);
 	assert.doesNotMatch(result.prompt, /secret/);
+});
+
+void test('manual diagnostic does not retry diagnostic cleanup failures', async () => {
+	const recorder = createConnectionDiagnosticRecorder({ now: () => 10 });
+	let connectCalls = 0;
+	let recoveryCalls = 0;
+
+	const result = await runManualConnectionDiagnostic({
+		recorder,
+		appState: {
+			platformOS: 'android',
+			isAutoConnecting: false,
+			isReconnecting: true,
+		},
+		loadLatestSavedConnection: async () => savedEntry,
+		resolveKeySecurity: async () => ({ type: 'key', privateKey: 'secret' }),
+		connectSavedEntry: async () => {
+			connectCalls += 1;
+			throw new DiagnosticShellCleanupError(
+				new Error('connection reset during disconnect'),
+			);
+		},
+		recovery: {
+			...readyRecovery,
+			recoverAfterFailure: async () => {
+				recoveryCalls += 1;
+				return {
+					kind: 'recovered',
+					attempted: true,
+					networkLikeFailure: true,
+					available: true,
+				};
+			},
+		},
+		formatPrompt: formatConnectionDiagnosticPrompt,
+	});
+
+	assert.equal(result.status, 'failed');
+	assert.equal(connectCalls, 1);
+	assert.equal(recoveryCalls, 0);
+	assert.match(result.prompt, /DiagnosticShellCleanupError/);
+	assert.match(result.prompt, /connection reset during disconnect/);
+});
+
+void test('manual diagnostic preserves cleanup failure after Tailscale retry', async () => {
+	const recorder = createConnectionDiagnosticRecorder({ now: () => 10 });
+	let connectCalls = 0;
+
+	const result = await runManualConnectionDiagnostic({
+		recorder,
+		appState: {
+			platformOS: 'android',
+			isAutoConnecting: false,
+			isReconnecting: true,
+		},
+		loadLatestSavedConnection: async () => savedEntry,
+		resolveKeySecurity: async () => ({ type: 'key', privateKey: 'secret' }),
+		connectSavedEntry: async () => {
+			connectCalls += 1;
+			if (connectCalls === 1) {
+				throw new Error('No route to host');
+			}
+			throw new DiagnosticShellCleanupError(
+				new Error('connection reset during disconnect'),
+			);
+		},
+		recovery: {
+			...readyRecovery,
+			recoverAfterFailure: async () => ({
+				kind: 'recovered',
+				attempted: true,
+				networkLikeFailure: true,
+				available: true,
+			}),
+		},
+		formatPrompt: formatConnectionDiagnosticPrompt,
+	});
+
+	assert.equal(result.status, 'failed');
+	assert.equal(connectCalls, 2);
+	assert.match(result.prompt, /auto-connect\.saved-entry\.retry\.threw/);
+	assert.match(result.prompt, /DiagnosticShellCleanupError/);
+	assert.doesNotMatch(result.prompt, /restart failed/i);
 });
 
 void test('manual diagnostic records tmux attach failures in the prompt', async () => {

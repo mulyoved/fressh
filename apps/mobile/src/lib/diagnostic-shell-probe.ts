@@ -28,6 +28,23 @@ type ProbeTrace = {
 	event: (event: ConnectionDiagnosticEventInput) => void;
 };
 
+export class DiagnosticShellCleanupError extends Error {
+	constructor(readonly cleanupError: unknown) {
+		super(
+			cleanupError instanceof Error
+				? `Diagnostic SSH cleanup failed: ${cleanupError.message}`
+				: 'Diagnostic SSH cleanup failed',
+		);
+		this.name = 'DiagnosticShellCleanupError';
+	}
+}
+
+export function isDiagnosticShellCleanupError(
+	error: unknown,
+): error is DiagnosticShellCleanupError {
+	return error instanceof DiagnosticShellCleanupError;
+}
+
 function diagnosticDisconnectTimeoutError(timeoutMs: number) {
 	return new Error(`Diagnostic SSH disconnect timed out after ${timeoutMs}ms`);
 }
@@ -208,7 +225,7 @@ export async function runDiagnosticShellProbe(args: {
 
 	const cleanupError = await cleanupDiagnosticConnection();
 	if (cleanupError !== null) {
-		throw cleanupError;
+		throw new DiagnosticShellCleanupError(cleanupError);
 	}
 
 	return {

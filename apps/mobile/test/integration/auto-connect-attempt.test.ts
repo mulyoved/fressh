@@ -239,13 +239,11 @@ void test('saved-entry path delegates through Tailscale recovery and injected op
 			openerCalls.push(args);
 			const { navigate } = args;
 			navigate({ connectionId: 'conn-2', channelId: 3 });
-			return {
-				status: 'connected',
-				sshConnection: {} as never,
-				shellHandle: {} as never,
-				connectionId: 'conn-2',
-				channelId: 3,
-			};
+				return {
+					status: 'connected',
+					connectionId: 'conn-2',
+					channelId: 3,
+				};
 		},
 		loadLatestSavedConnection: async () => createSavedEntry(savedDetails),
 		resolveKeySecurity: async () => ({
@@ -301,13 +299,11 @@ void test('active shell failure falls through to saved-entry connection', async 
 		},
 		openSavedEntryShell: async ({ navigate }) => {
 			navigate({ connectionId: 'saved-2', channelId: 9 });
-			return {
-				status: 'connected',
-				sshConnection: {} as never,
-				shellHandle: {} as never,
-				connectionId: 'saved-2',
-				channelId: 9,
-			};
+				return {
+					status: 'connected',
+					connectionId: 'saved-2',
+					channelId: 9,
+				};
 		},
 		loadTmuxSettings: async () => ({
 			useTmux: true,

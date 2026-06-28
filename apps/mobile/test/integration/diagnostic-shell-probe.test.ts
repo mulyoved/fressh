@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { runDiagnosticShellProbe } from '../../src/lib/diagnostic-shell-probe';
+import {
+	DiagnosticShellCleanupError,
+	runDiagnosticShellProbe,
+} from '../../src/lib/diagnostic-shell-probe';
 
 const connectionDetails = {
 	username: 'muly',
@@ -78,7 +81,7 @@ void test('diagnostic probe fails successful probes when disconnect fails', asyn
 				},
 			},
 		}),
-		/disconnect failed/,
+		DiagnosticShellCleanupError,
 	);
 
 	assert.deepEqual(
