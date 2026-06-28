@@ -1,11 +1,23 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+	connectionDiagnosticRecorder,
 	createConnectionDiagnosticRecorder,
 	formatConnectionDiagnosticPrompt,
 	serializeConnectionDiagnosticError,
 	type ConnectionDiagnosticTrace,
 } from '../../src/lib/connection-diagnostics';
+
+void test('barrel exports the production recorder singleton', () => {
+	connectionDiagnosticRecorder.clear();
+
+	assert.equal(typeof connectionDiagnosticRecorder.startTrace, 'function');
+	assert.equal(typeof connectionDiagnosticRecorder.getLatestTrace, 'function');
+	assert.equal(typeof connectionDiagnosticRecorder.getHistory, 'function');
+	assert.equal(typeof connectionDiagnosticRecorder.clear, 'function');
+	assert.equal(connectionDiagnosticRecorder.getLatestTrace(), null);
+	assert.deepEqual(connectionDiagnosticRecorder.getHistory(), []);
+});
 
 void test('recorder keeps latest trace and bounded history', () => {
 	const recorder = createConnectionDiagnosticRecorder({
