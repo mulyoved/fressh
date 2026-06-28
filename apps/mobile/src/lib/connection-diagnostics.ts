@@ -102,6 +102,22 @@ const DEFAULT_MAX_HISTORY = 20;
 let traceSequence = 0;
 
 const CIRCULAR_PLACEHOLDER = '[Circular]';
+const REDACTED_PLACEHOLDER = '[REDACTED]';
+const UNREADABLE_ERROR_MESSAGE = '[Unserializable error]';
+
+function isSecretDiagnosticKey(key: string): boolean {
+	const normalizedKey = key.toLowerCase().replace(/[^a-z0-9]/gu, '');
+	return [
+		'privatekey',
+		'password',
+		'passphrase',
+		'token',
+		'secret',
+		'apikey',
+		'authorization',
+		'credential',
+	].some((secretName) => normalizedKey.includes(secretName));
+}
 
 function nextTraceId(now: number): string {
 	traceSequence += 1;
@@ -131,9 +147,7 @@ function snapshotDiagnosticValue(
 		}
 
 		if (typeof value === 'function') {
-			return value.name
-				? `[Function ${value.name}]`
-				: '[Function anonymous]';
+			return value.name ? `[Function ${value.name}]` : '[Function anonymous]';
 		}
 
 		if (typeof value === 'symbol') {
@@ -161,8 +175,8 @@ function snapshotDiagnosticValue(
 			const snapshot: Record<string, unknown> = {};
 			seen.set(value, snapshot);
 			for (const [key, entryValue] of Object.entries(value)) {
-				snapshot[key] = /privateKey/i.test(key)
-					? '[REDACTED]'
+				snapshot[key] = isSecretDiagnosticKey(key)
+					? REDACTED_PLACEHOLDER
 					: snapshotDiagnosticValue(entryValue, seen);
 			}
 			return snapshot;
@@ -193,7 +207,9 @@ function sanitizeEventInput(
 	};
 }
 
-function cloneTrace(trace: ConnectionDiagnosticTrace): ConnectionDiagnosticTrace {
+function cloneTrace(
+	trace: ConnectionDiagnosticTrace,
+): ConnectionDiagnosticTrace {
 	return {
 		...trace,
 		events: trace.events.map((event) => cloneDiagnosticValue(event)),
@@ -241,9 +257,7 @@ function formatEvent(event: ConnectionDiagnosticEvent): string {
 		event.connection
 			? `connection=${formatConnectionIdentity(event.connection)}`
 			: null,
-		event.error
-			? `error=${event.error.name}: ${event.error.message}`
-			: null,
+		event.error ? `error=${event.error.name}: ${event.error.message}` : null,
 	];
 
 	if (event.details) {
@@ -263,10 +277,17 @@ export function serializeConnectionDiagnosticError(
 	error: unknown,
 ): ConnectionDiagnosticError {
 	if (error instanceof Error) {
+		const name = readErrorStringField(error, 'name', 'Error');
+		const message = readErrorStringField(
+			error,
+			'message',
+			UNREADABLE_ERROR_MESSAGE,
+		);
+		const stack = readErrorStringField(error, 'stack', undefined);
 		return {
-			name: error.name || 'Error',
-			message: error.message,
-			stack: error.stack,
+			name: name || 'Error',
+			message: message ?? UNREADABLE_ERROR_MESSAGE,
+			stack,
 		};
 	}
 
@@ -274,13 +295,26 @@ export function serializeConnectionDiagnosticError(
 	try {
 		message = typeof error === 'string' ? error : String(error);
 	} catch {
-		message = '[Unserializable error]';
+		message = UNREADABLE_ERROR_MESSAGE;
 	}
 
 	return {
 		name: 'NonError',
 		message,
 	};
+}
+
+function readErrorStringField(
+	error: Error,
+	field: 'name' | 'message' | 'stack',
+	fallback: string | undefined,
+): string | undefined {
+	try {
+		const value = error[field];
+		return typeof value === 'string' ? value : fallback;
+	} catch {
+		return fallback;
+	}
 }
 
 export function createConnectionDiagnosticRecorder(

@@ -191,6 +191,10 @@ void test('recorder snapshots event inputs and returned traces', () => {
 	};
 	const details = {
 		attempts: [{ count: 1, privateKeyPreview: 'SECRET' }],
+		password: 'PASSWORD_SECRET',
+		passphrase: 'PASSPHRASE_SECRET',
+		apiKey: 'API_KEY_SECRET',
+		Authorization: 'Bearer AUTH_SECRET',
 		nested: { phase: 'connect' },
 	};
 
@@ -216,6 +220,10 @@ void test('recorder snapshots event inputs and returned traces', () => {
 	assert.equal(latestTrace.events[0]?.error?.message, 'original failure');
 	assert.deepEqual(latestTrace.events[0]?.details, {
 		attempts: [{ count: 1, privateKeyPreview: '[REDACTED]' }],
+		password: '[REDACTED]',
+		passphrase: '[REDACTED]',
+		apiKey: '[REDACTED]',
+		Authorization: '[REDACTED]',
 		nested: { phase: 'connect' },
 	});
 
@@ -544,14 +552,16 @@ void test('prompt formatting tolerates direct messy trace details', () => {
 		self?: unknown;
 		bigint: bigint;
 		handler: () => string;
-		token: symbol;
+		diagnosticSymbol: symbol;
+		accessToken: string;
 		nested: { privateKeyPreview: string };
 	} = {
 		bigint: 123n,
 		handler: function refreshConnection() {
 			return 'ok';
 		},
-		token: Symbol('diagnostic-token'),
+		diagnosticSymbol: Symbol('diagnostic-token'),
+		accessToken: 'ACCESS_TOKEN_SECRET',
 		nested: { privateKeyPreview: 'SECRET_PREVIEW' },
 	};
 	cyclicDetails.self = cyclicDetails;
@@ -582,6 +592,7 @@ void test('prompt formatting tolerates direct messy trace details', () => {
 	assert.match(prompt, /\[Function refreshConnection\]/);
 	assert.match(prompt, /\[Symbol diagnostic-token\]/);
 	assert.doesNotMatch(prompt, /SECRET_PREVIEW/);
+	assert.doesNotMatch(prompt, /ACCESS_TOKEN_SECRET/);
 });
 
 void test('error serializer preserves useful non-secret details', () => {
@@ -615,4 +626,28 @@ void test('error serializer preserves useful non-secret details', () => {
 			message: '[Unserializable error]',
 		},
 	);
+
+	const hostileError = Object.create(Error.prototype, {
+		name: {
+			get() {
+				throw new Error('name failed');
+			},
+		},
+		message: {
+			get() {
+				throw new Error('message failed');
+			},
+		},
+		stack: {
+			get() {
+				throw new Error('stack failed');
+			},
+		},
+	}) as Error;
+
+	assert.deepEqual(serializeConnectionDiagnosticError(hostileError), {
+		name: 'Error',
+		message: '[Unserializable error]',
+		stack: undefined,
+	});
 });
