@@ -276,7 +276,7 @@ function formatEvent(event: ConnectionDiagnosticEvent): string {
 export function serializeConnectionDiagnosticError(
 	error: unknown,
 ): ConnectionDiagnosticError {
-	if (error instanceof Error) {
+	if (isErrorLike(error)) {
 		const name = readErrorStringField(error, 'name', 'Error');
 		const message = readErrorStringField(
 			error,
@@ -302,6 +302,14 @@ export function serializeConnectionDiagnosticError(
 		name: 'NonError',
 		message,
 	};
+}
+
+function isErrorLike(error: unknown): error is Error {
+	try {
+		return error instanceof Error;
+	} catch {
+		return false;
+	}
 }
 
 function readErrorStringField(

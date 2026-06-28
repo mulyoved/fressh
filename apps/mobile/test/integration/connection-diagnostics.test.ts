@@ -650,4 +650,13 @@ void test('error serializer preserves useful non-secret details', () => {
 		message: '[Unserializable error]',
 		stack: undefined,
 	});
+
+	const { proxy, revoke } = Proxy.revocable(new Error('revoked'), {});
+	revoke();
+
+	assert.doesNotThrow(() => serializeConnectionDiagnosticError(proxy));
+	assert.deepEqual(serializeConnectionDiagnosticError(proxy), {
+		name: 'NonError',
+		message: '[Unserializable error]',
+	});
 });
