@@ -117,9 +117,26 @@ const DIAGNOSTIC_SECRET_TEXT_PATTERN =
 	/(^|[^\w])((?:access[_-]?token)|(?:api[_-]?key)|auth|authorization|client[_-]?secret|code|credential|id[_-]?token|key|passphrase|password|private[_-]?key|refresh[_-]?token|secret|session|sig|signature|token)\s*([:=])\s*(?:"[^"]*"|'[^']*'|[^\n]*)/giu;
 const DIAGNOSTIC_AUTH_SCHEME_PATTERN =
 	/(^|[^\w])((?:Bearer|Basic|Token))\s+(?:"[^"]*"|'[^']*'|[^\s"',;]+)/gu;
+const DIAGNOSTIC_SECRET_TERMS = [
+	'accesstoken',
+	'apikey',
+	'auth',
+	'authorization',
+	'clientsecret',
+	'credential',
+	'idtoken',
+	'passphrase',
+	'password',
+	'privatekey',
+	'refreshtoken',
+	'secret',
+	'session',
+	'signature',
+	'token',
+];
 
 function redactDiagnosticText(value: string): string {
-	return redactBrowserActionErrorText(
+	const redacted = redactBrowserActionErrorText(
 		value
 			.replace(
 				DIAGNOSTIC_SECRET_TEXT_PATTERN,
@@ -160,6 +177,17 @@ function redactDiagnosticText(value: string): string {
 				return `${prefix}${name}: ${quote}[redacted]${quote}`;
 			},
 		);
+
+	return containsDiagnosticSecretTerm(redacted)
+		? REDACTED_PLACEHOLDER
+		: redacted;
+}
+
+function containsDiagnosticSecretTerm(value: string): boolean {
+	const normalizedValue = value.toLowerCase().replace(/[^a-z0-9]/gu, '');
+	return DIAGNOSTIC_SECRET_TERMS.some((secretName) =>
+		normalizedValue.includes(secretName),
+	);
 }
 
 function isSecretDiagnosticKey(key: string): boolean {
@@ -237,7 +265,7 @@ function snapshotDiagnosticValue(
 			const snapshot: Record<string, unknown> = {};
 			seen.set(value, snapshot);
 			for (const [key, entryValue] of Object.entries(value)) {
-				const safeKey = redactDiagnosticText(key);
+				const safeKey = isSecretDiagnosticKey(key) ? REDACTED_PLACEHOLDER : key;
 				snapshot[safeKey] = isSecretDiagnosticKey(key)
 					? REDACTED_PLACEHOLDER
 					: snapshotDiagnosticValue(entryValue, seen);

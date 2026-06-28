@@ -218,14 +218,24 @@ void test('recorder snapshots event inputs and returned traces', () => {
 	assert.equal(latestTrace.events[0]?.connection?.host, 'dev.tailnet.ts.net');
 	assert.equal(latestTrace.events[0]?.connection?.tmuxSessionName, 'main');
 	assert.equal(latestTrace.events[0]?.error?.message, 'original failure');
-	assert.deepEqual(latestTrace.events[0]?.details, {
-		attempts: [{ count: 1, privateKeyPreview: '[REDACTED]' }],
-		password: '[REDACTED]',
-		passphrase: '[REDACTED]',
-		apiKey: '[REDACTED]',
-		Authorization: '[REDACTED]',
-		nested: { phase: 'connect' },
+	assert.deepEqual(latestTrace.events[0]?.details?.attempts, [
+		{ count: 1, '[REDACTED]': '[REDACTED]' },
+	]);
+	assert.deepEqual(latestTrace.events[0]?.details?.nested, {
+		phase: 'connect',
 	});
+	assert.equal(latestTrace.events[0]?.details?.['[REDACTED]'], '[REDACTED]');
+	for (const secretKey of [
+		'password',
+		'passphrase',
+		'apiKey',
+		'Authorization',
+	]) {
+		assert.equal(
+			Object.hasOwn(latestTrace.events[0]?.details ?? {}, secretKey),
+			false,
+		);
+	}
 
 	const returnedTrace = recorder.getLatestTrace();
 	assert.ok(returnedTrace);
@@ -360,7 +370,7 @@ void test('recorder safely snapshots messy details without throwing', () => {
 		self: '[Circular]',
 		bigint: '123n',
 		handler: '[Function refreshConnection]',
-		nested: { privateKeyPreview: '[REDACTED]' },
+		nested: { '[REDACTED]': '[REDACTED]' },
 	});
 });
 
@@ -598,7 +608,7 @@ void test('prompt formatting tolerates direct messy trace details', () => {
 			return 'ok';
 		},
 		secretFunction: tokenSECRET,
-		diagnosticSymbol: Symbol('diagnostic-token'),
+		diagnosticSymbol: Symbol('diagnostic-marker'),
 		secretSymbol: Symbol('Bearer SYMBOL_SECRET'),
 		accessToken: 'ACCESS_TOKEN_SECRET',
 		nested: { privateKeyPreview: 'SECRET_PREVIEW' },
@@ -629,7 +639,7 @@ void test('prompt formatting tolerates direct messy trace details', () => {
 	assert.match(prompt, /\[Circular\]/);
 	assert.match(prompt, /123n/);
 	assert.match(prompt, /\[Function refreshConnection\]/);
-	assert.match(prompt, /\[Symbol diagnostic-token\]/);
+	assert.match(prompt, /\[Symbol diagnostic-marker\]/);
 	assert.doesNotMatch(prompt, /SECRET_PREVIEW/);
 	assert.doesNotMatch(prompt, /ACCESS_TOKEN_SECRET/);
 	assert.doesNotMatch(prompt, /tokenSECRET/);
@@ -638,7 +648,7 @@ void test('prompt formatting tolerates direct messy trace details', () => {
 
 void test('prompt redacts credential text inside generic string fields', () => {
 	const trace: ConnectionDiagnosticTrace = {
-		id: 'trace-token=TRACE_ID_SECRET beta gamma',
+		id: 'trace-token=TRACE_ID_SECRET beta gamma access_token TRACE_ACCESS_SECRET next',
 		trigger: 'manual-diagnostic',
 		reason: 'apiKey=TRACE_REASON_SECRET privateKey=TRACE_PRIVATE_KEY_SECRET',
 		status: 'failed',
@@ -648,10 +658,10 @@ void test('prompt redacts credential text inside generic string fields', () => {
 			{
 				atMs: 320,
 				elapsedMs: 20,
-				type: 'ssh.connect.failed privateKey=EVENT_TYPE_PRIVATE_KEY_SECRET beta gamma',
+				type: 'ssh.connect.failed privateKey=EVENT_TYPE_PRIVATE_KEY_SECRET beta gamma client_secret EVENT_TYPE_CLIENT_SECRET next',
 				source: 'active-connection',
 				message:
-					'Authorization: Bearer EVENT_MESSAGE_SECRET passphrase=EVENT_PASSPHRASE_SECRET',
+					'Authorization: Bearer EVENT_MESSAGE_SECRET passphrase=EVENT_PASSPHRASE_SECRET auth EVENT_AUTH_SECRET next',
 				error: {
 					name: 'Error',
 					message:
@@ -664,10 +674,12 @@ void test('prompt redacts credential text inside generic string fields', () => {
 					generic:
 						'privateKey=DETAIL_PRIVATE_KEY_SECRET passphrase: DETAIL_PASSPHRASE_SECRET',
 					multiWord:
-						'password: MULTI_WORD_PASSWORD_SECRET beta gamma token=MULTI_WORD_TOKEN_SECRET beta gamma apiKey=MULTI_WORD_API_KEY_SECRET beta gamma access_token=ACCESS_TWO beta gamma refresh_token=REFRESH_TWO beta gamma client_secret=CLIENT_TWO beta gamma credential=CREDENTIAL_TWO beta gamma secret=SECRET_TWO beta gamma session=SESSION_TWO beta gamma sig=SIG_TWO beta gamma signature=SIGNATURE_TWO beta gamma auth=AUTH_TWO beta gamma',
+						'password: MULTI_WORD_PASSWORD_SECRET beta gamma token=MULTI_WORD_TOKEN_SECRET beta gamma apiKey=MULTI_WORD_API_KEY_SECRET beta gamma access_token=ACCESS_TWO beta gamma refresh_token=REFRESH_TWO beta gamma client_secret=CLIENT_TWO beta gamma credential=CREDENTIAL_TWO beta gamma secret=SECRET_TWO beta gamma session=SESSION_TWO beta gamma sig=SIG_TWO beta gamma signature=SIGNATURE_TWO beta gamma auth=AUTH_TWO beta gamma password is PLAIN_PASSWORD_SECRET',
 					bareAuth:
 						'Bearer BARE_BEARER_SECRET Basic BARE_BASIC_SECRET Token BARE_TOKEN_SECRET',
 					'Authorization: Bearer DETAIL_KEY_SECRET': 'redacted key',
+					tokenSECRET: 'redacted key',
+					'client_secret LEAK_KEY_SECRET': 'redacted key',
 					pem: [
 						'-----BEGIN OPENSSH PRIVATE KEY-----',
 						'PRIVATE_KEY_BODY_SECRET',
@@ -690,10 +702,13 @@ void test('prompt redacts credential text inside generic string fields', () => {
 	for (const secret of [
 		'TRACE_REASON_SECRET',
 		'TRACE_ID_SECRET',
+		'TRACE_ACCESS_SECRET',
 		'TRACE_PRIVATE_KEY_SECRET',
 		'EVENT_TYPE_PRIVATE_KEY_SECRET',
+		'EVENT_TYPE_CLIENT_SECRET',
 		'EVENT_MESSAGE_SECRET',
 		'EVENT_PASSPHRASE_SECRET',
+		'EVENT_AUTH_SECRET',
 		'ERROR_URL_SECRET',
 		'ERROR_PRIVATE_KEY_SECRET',
 		'DETAIL_LOG_SECRET',
@@ -713,10 +728,13 @@ void test('prompt redacts credential text inside generic string fields', () => {
 		'SIG_TWO',
 		'SIGNATURE_TWO',
 		'AUTH_TWO',
+		'PLAIN_PASSWORD_SECRET',
 		'BARE_BEARER_SECRET',
 		'BARE_BASIC_SECRET',
 		'BARE_TOKEN_SECRET',
 		'DETAIL_KEY_SECRET',
+		'tokenSECRET',
+		'LEAK_KEY_SECRET',
 		'beta gamma',
 		'PRIVATE_KEY_BODY_SECRET',
 		'APP_STATE_SECRET',
@@ -724,7 +742,6 @@ void test('prompt redacts credential text inside generic string fields', () => {
 		assert.doesNotMatch(prompt, new RegExp(secret));
 	}
 
-	assert.match(prompt, /\[redacted\]/);
 	assert.match(prompt, /\[REDACTED\]/);
 });
 
