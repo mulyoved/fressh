@@ -1,0 +1,101 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { connectAndOpenShell } from '../../src/lib/query-fns';
+
+const connectionDetails = {
+	username: 'muly',
+	host: 'dev.tailnet.ts.net',
+	port: 22,
+	useTmux: true,
+	tmuxSessionName: 'main',
+	autoConnect: true,
+	security: { type: 'key' as const, keyId: 'key-1' },
+};
+
+void test('connectAndOpenShell records connect and shell success events', async () => {
+	const events: unknown[] = [];
+	const navigations: unknown[] = [];
+
+	const result = await connectAndOpenShell({
+		connectionDetails,
+		resolvedSecurity: { type: 'key', privateKey: 'secret' },
+		connect: async () =>
+			({
+				connectionId: 'conn-1',
+				startShell: async () => ({ channelId: 7 }),
+			}) as never,
+		saveConnection: async () => {},
+		navigate: (params) => {
+			navigations.push(params);
+		},
+		trace: {
+			event: (event) => {
+				events.push(event);
+			},
+		},
+	});
+
+	assert.equal(result.status, 'connected');
+	assert.deepEqual(navigations, [{ connectionId: 'conn-1', channelId: 7 }]);
+	assert.deepEqual(
+		events.map((event) => (event as { type: string }).type),
+		[
+			'ssh.connect.started',
+			'ssh.connect.connected',
+			'ssh.shell.started',
+			'ssh.shell.connected',
+		],
+	);
+	assert.doesNotMatch(JSON.stringify(events), /secret/);
+});
+
+void test('connectAndOpenShell disconnects diagnostic connections after success', async () => {
+	let disconnected = 0;
+
+	await connectAndOpenShell({
+		connectionDetails,
+		resolvedSecurity: { type: 'key', privateKey: 'secret' },
+		diagnosticMode: true,
+		connect: async () =>
+			({
+				connectionId: 'conn-1',
+				disconnect: () => {
+					disconnected += 1;
+				},
+				startShell: async () => ({ channelId: 7 }),
+			}) as never,
+		saveConnection: async () => {},
+		navigate: () => {
+			throw new Error('diagnostic mode must not navigate');
+		},
+	});
+
+	assert.equal(disconnected, 1);
+});
+
+void test('connectAndOpenShell records connect failure', async () => {
+	const events: unknown[] = [];
+
+	await assert.rejects(
+		connectAndOpenShell({
+			connectionDetails,
+			resolvedSecurity: { type: 'key', privateKey: 'secret' },
+			connect: async () => {
+				throw new Error('network unreachable');
+			},
+			saveConnection: async () => {},
+			navigate: () => {},
+			trace: {
+				event: (event) => {
+					events.push(event);
+				},
+			},
+		}),
+		/network unreachable/,
+	);
+
+	assert.deepEqual(
+		events.map((event) => (event as { type: string }).type),
+		['ssh.connect.started', 'ssh.connect.failed'],
+	);
+});
