@@ -106,6 +106,12 @@ void test('manual diagnostic is single-flight', async () => {
 	});
 
 	await connectStarted;
+	recorder.getLatestTrace()?.events.push({
+		type: 'caller-mutation-ignored',
+		source: 'manual-diagnostic',
+		atMs: 10,
+		elapsedMs: 0,
+	});
 
 	const second = await runManualConnectionDiagnostic({
 		recorder: competingRecorder,
@@ -125,6 +131,7 @@ void test('manual diagnostic is single-flight', async () => {
 
 	assert.equal(second.status, 'busy');
 	assert.match(second.prompt, /diagnostic is already running/i);
+	assert.match(second.prompt, /auto-connect\.saved-entry\.connect\.started/);
 	assert.equal(second.trace?.id, recorder.getLatestTrace()?.id);
 	resolveConnect({
 		status: 'connected',

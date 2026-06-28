@@ -45,7 +45,7 @@ export type ManualConnectionDiagnosticArgs = {
 };
 
 let running = false;
-let activeTrace: ConnectionDiagnosticTrace | null = null;
+let activeTraceHandle: ConnectionDiagnosticTraceHandle | null = null;
 
 function getConnectionIdentity(
 	id: string,
@@ -104,7 +104,8 @@ export async function runManualConnectionDiagnostic(
 	args: ManualConnectionDiagnosticArgs,
 ): Promise<ManualConnectionDiagnosticResult> {
 	if (running) {
-		const latestTrace = activeTrace ?? args.recorder.getLatestTrace();
+		const latestTrace =
+			activeTraceHandle?.trace ?? args.recorder.getLatestTrace();
 		const prompt = [
 			'A Fressh connection diagnostic is already running. Try again after it finishes.',
 			latestTrace ? promptForTrace(latestTrace, args) : null,
@@ -122,7 +123,7 @@ export async function runManualConnectionDiagnostic(
 			trigger: 'manual-diagnostic',
 			reason: 'command-menu',
 		});
-		activeTrace = handle.trace;
+		activeTraceHandle = handle;
 		const traceHandle = handle;
 		const latestEntry = await args.loadLatestSavedConnection();
 		if (!latestEntry) {
@@ -222,7 +223,7 @@ export async function runManualConnectionDiagnostic(
 		});
 		return finish(handle, 'failed', args);
 	} finally {
-		activeTrace = null;
+		activeTraceHandle = null;
 		running = false;
 	}
 }
