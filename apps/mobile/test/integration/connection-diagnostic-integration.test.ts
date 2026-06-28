@@ -30,5 +30,5 @@ void test('shell detail wires debug connection action to manual diagnostic runne
 		source,
 		/debugConnectionInCodex:\s*handleDebugConnectionInCodex/,
 	);
-	assert.match(source, /diagnosticMode:\s*true/);
+	assert.match(source, /runDiagnosticShellProbe/);
 });
