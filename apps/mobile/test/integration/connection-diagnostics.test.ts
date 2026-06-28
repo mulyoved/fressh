@@ -655,6 +655,8 @@ void test('prompt redacts credential text inside generic string fields', () => {
 						'privateKey=DETAIL_PRIVATE_KEY_SECRET passphrase: DETAIL_PASSPHRASE_SECRET',
 					multiWord:
 						'password: MULTI_WORD_PASSWORD_SECRET beta gamma token=MULTI_WORD_TOKEN_SECRET beta gamma apiKey=MULTI_WORD_API_KEY_SECRET beta gamma',
+					bareAuth:
+						'Bearer BARE_BEARER_SECRET Basic BARE_BASIC_SECRET Token BARE_TOKEN_SECRET',
 					pem: [
 						'-----BEGIN OPENSSH PRIVATE KEY-----',
 						'PRIVATE_KEY_BODY_SECRET',
@@ -691,6 +693,9 @@ void test('prompt redacts credential text inside generic string fields', () => {
 		'MULTI_WORD_PASSWORD_SECRET',
 		'MULTI_WORD_TOKEN_SECRET',
 		'MULTI_WORD_API_KEY_SECRET',
+		'BARE_BEARER_SECRET',
+		'BARE_BASIC_SECRET',
+		'BARE_TOKEN_SECRET',
 		'beta gamma',
 		'PRIVATE_KEY_BODY_SECRET',
 		'APP_STATE_SECRET',

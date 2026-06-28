@@ -115,14 +115,22 @@ const REDACTED_PLACEHOLDER = '[REDACTED]';
 const UNREADABLE_ERROR_MESSAGE = '[Unserializable error]';
 const DIAGNOSTIC_SECRET_TEXT_PATTERN =
 	/(^|[^\w])((?:private[_-]?key)|passphrase|password|token|api[_-]?key|authorization)\s*([:=])\s*(?:"[^"]*"|'[^']*'|[^\n]*)/giu;
+const DIAGNOSTIC_AUTH_SCHEME_PATTERN =
+	/(^|[^\w])((?:Bearer|Basic|Token))\s+(?:"[^"]*"|'[^']*'|[^\s"',;]+)/gu;
 
 function redactDiagnosticText(value: string): string {
 	return redactBrowserActionErrorText(
-		value.replace(
-			DIAGNOSTIC_SECRET_TEXT_PATTERN,
-			(_match, prefix: string, name: string, separator: string) =>
-				`${prefix}${name}${separator} [redacted]`,
-		),
+		value
+			.replace(
+				DIAGNOSTIC_SECRET_TEXT_PATTERN,
+				(_match, prefix: string, name: string, separator: string) =>
+					`${prefix}${name}${separator} [redacted]`,
+			)
+			.replace(
+				DIAGNOSTIC_AUTH_SCHEME_PATTERN,
+				(_match, prefix: string, scheme: string) =>
+					`${prefix}${scheme} [redacted]`,
+			),
 	)
 		.replace(
 			/-----BEGIN [^-]*PRIVATE KEY-----[\s\S]*?-----END [^-]*PRIVATE KEY-----/gu,
