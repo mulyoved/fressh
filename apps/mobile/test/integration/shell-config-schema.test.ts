@@ -250,6 +250,11 @@ void test('runtime shell config accepts command menu action entries', () => {
 			label: 'Fit terminal to device',
 			actionId: 'FIT_TERMINAL_TO_DEVICE',
 		},
+		{
+			type: 'action',
+			label: 'Debug connection in Codex',
+			actionId: 'DEBUG_CONNECTION_IN_CODEX',
+		},
 	];
 
 	const parsed = parseShellConfigData(config);
@@ -264,6 +269,11 @@ void test('runtime shell config accepts command menu action entries', () => {
 			type: 'action',
 			label: 'Fit terminal to device',
 			actionId: 'FIT_TERMINAL_TO_DEVICE',
+		},
+		{
+			type: 'action',
+			label: 'Debug connection in Codex',
+			actionId: 'DEBUG_CONNECTION_IN_CODEX',
 		},
 	]);
 });

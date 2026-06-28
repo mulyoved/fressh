@@ -455,18 +455,7 @@
 					},
 					null
 				],
-				[
-					null,
-					null,
-					null,
-					null,
-					null,
-					null,
-					null,
-					null,
-					null,
-					null
-				]
+				[null, null, null, null, null, null, null, null, null, null]
 			]
 		},
 		{
@@ -1089,6 +1078,11 @@
 					"type": "action",
 					"label": "Fit terminal to device",
 					"actionId": "FIT_TERMINAL_TO_DEVICE"
+				},
+				{
+					"type": "action",
+					"label": "Debug connection in Codex",
+					"actionId": "DEBUG_CONNECTION_IN_CODEX"
 				},
 				{
 					"type": "preset",
