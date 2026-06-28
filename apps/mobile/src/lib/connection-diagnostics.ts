@@ -174,28 +174,6 @@ function snapshotDiagnosticValue(
 	}
 }
 
-function sanitizeDiagnosticValue(value: unknown): unknown {
-	if (Array.isArray(value)) {
-		return value.map((entry) => sanitizeDiagnosticValue(entry));
-	}
-
-	if (!value || typeof value !== 'object') {
-		return value;
-	}
-
-	const sanitizedEntries = Object.entries(value as Record<string, unknown>).map(
-		([key, entryValue]) => {
-			if (/privateKey/i.test(key)) {
-				return [key, '[REDACTED]'] as const;
-			}
-
-			return [key, sanitizeDiagnosticValue(entryValue)] as const;
-		},
-	);
-
-	return Object.fromEntries(sanitizedEntries);
-}
-
 function cloneDiagnosticValue<T>(value: T): T {
 	return snapshotDiagnosticValue(value) as T;
 }
@@ -210,9 +188,7 @@ function sanitizeEventInput(
 			: undefined,
 		error: input.error ? cloneDiagnosticValue(input.error) : undefined,
 		details: input.details
-			? (sanitizeDiagnosticValue(
-					cloneDiagnosticValue(input.details),
-				) as Record<string, unknown>)
+			? (cloneDiagnosticValue(input.details) as Record<string, unknown>)
 			: undefined,
 	};
 }
@@ -273,7 +249,7 @@ function formatEvent(event: ConnectionDiagnosticEvent): string {
 	if (event.details) {
 		parts.push(
 			`details=${JSON.stringify(
-				sanitizeDiagnosticValue(event.details),
+				cloneDiagnosticValue(event.details),
 				null,
 				2,
 			).replace(/\n/g, ' ')}`,
@@ -320,6 +296,7 @@ export function createConnectionDiagnosticRecorder(
 				events: [],
 			};
 			latestTrace = trace;
+			let finished = false;
 
 			return {
 				get trace() {
@@ -333,10 +310,17 @@ export function createConnectionDiagnosticRecorder(
 						atMs,
 						elapsedMs: atMs - trace.startedAtMs,
 					};
+					if (finished) {
+						return cloneDiagnosticValue(event);
+					}
 					trace.events.push(event);
 					return cloneDiagnosticValue(event);
 				},
 				finish: (status) => {
+					if (finished) {
+						return;
+					}
+					finished = true;
 					trace.status = status;
 					trace.finishedAtMs = now();
 					latestTrace = trace;

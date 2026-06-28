@@ -356,6 +356,58 @@ void test('recorder safely snapshots messy details without throwing', () => {
 	});
 });
 
+void test('trace handle finalization is terminal and idempotent', () => {
+	let currentNow = 1000;
+	const recorder = createConnectionDiagnosticRecorder({
+		now: () => currentNow,
+	});
+	const handle = recorder.startTrace({
+		trigger: 'manual-diagnostic',
+		reason: 'post-finish-noop',
+	});
+
+	handle.event({
+		type: 'ssh.connect.failed',
+		source: 'active-connection',
+		message: 'Initial failure',
+	});
+
+	currentNow = 1050;
+	handle.finish('failed');
+
+	const finishedSnapshot = recorder.getLatestTrace();
+	assert.ok(finishedSnapshot);
+	assert.equal(finishedSnapshot.status, 'failed');
+	assert.equal(finishedSnapshot.events.length, 1);
+	assert.equal(finishedSnapshot.finishedAtMs, 1050);
+
+	currentNow = 1100;
+	const postFinishEvent = handle.event({
+		type: 'ssh.connect.retry',
+		source: 'active-connection',
+		message: 'Should not append',
+	});
+	handle.finish('connected');
+
+	assert.equal(postFinishEvent.type, 'ssh.connect.retry');
+	assert.equal(postFinishEvent.message, 'Should not append');
+	assert.equal(postFinishEvent.atMs, 1100);
+	assert.equal(postFinishEvent.elapsedMs, 100);
+
+	const latestTrace = recorder.getLatestTrace();
+	assert.ok(latestTrace);
+	assert.equal(latestTrace.status, 'failed');
+	assert.equal(latestTrace.events.length, 1);
+	assert.equal(latestTrace.finishedAtMs, 1050);
+	assert.equal(latestTrace.events[0]?.message, 'Initial failure');
+
+	const history = recorder.getHistory();
+	assert.equal(history.length, 1);
+	assert.equal(history[0]?.status, 'failed');
+	assert.equal(history[0]?.events.length, 1);
+	assert.equal(history[0]?.finishedAtMs, 1050);
+});
+
 void test('prompt summary prefers the richest later connection identity', () => {
 	const trace: ConnectionDiagnosticTrace = {
 		id: 'trace-richer-identity',
@@ -435,6 +487,51 @@ void test('prompt omits optional app state lines when values are absent', () => 
 	assert.doesNotMatch(prompt, /- backgroundWorkAllowed:/);
 	assert.doesNotMatch(prompt, /- foregroundServiceRequired:/);
 	assert.doesNotMatch(prompt, /- appActive:/);
+});
+
+void test('prompt formatting tolerates direct messy trace details', () => {
+	const cyclicDetails: {
+		self?: unknown;
+		bigint: bigint;
+		handler: () => string;
+		token: symbol;
+		nested: { privateKeyPreview: string };
+	} = {
+		bigint: 123n,
+		handler: function refreshConnection() {
+			return 'ok';
+		},
+		token: Symbol('diagnostic-token'),
+		nested: { privateKeyPreview: 'SECRET_PREVIEW' },
+	};
+	cyclicDetails.self = cyclicDetails;
+
+	const trace: ConnectionDiagnosticTrace = {
+		id: 'trace-messy-direct',
+		trigger: 'manual-diagnostic',
+		reason: 'direct-trace-formatting',
+		status: 'failed',
+		startedAtMs: 200,
+		finishedAtMs: 260,
+		events: [
+			{
+				atMs: 220,
+				elapsedMs: 20,
+				type: 'ssh.connect.failed',
+				source: 'active-connection',
+				details: cyclicDetails as Record<string, unknown>,
+			},
+		],
+	};
+
+	assert.doesNotThrow(() => formatConnectionDiagnosticPrompt(trace));
+
+	const prompt = formatConnectionDiagnosticPrompt(trace);
+	assert.match(prompt, /\[Circular\]/);
+	assert.match(prompt, /123n/);
+	assert.match(prompt, /\[Function refreshConnection\]/);
+	assert.match(prompt, /\[Symbol diagnostic-token\]/);
+	assert.doesNotMatch(prompt, /SECRET_PREVIEW/);
 });
 
 void test('error serializer preserves useful non-secret details', () => {
