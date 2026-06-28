@@ -408,6 +408,56 @@ void test('trace handle finalization is terminal and idempotent', () => {
 	assert.equal(history[0]?.finishedAtMs, 1050);
 });
 
+void test('older trace finish does not replace newer latest trace', () => {
+	let currentNow = 1200;
+	const recorder = createConnectionDiagnosticRecorder({
+		now: () => currentNow,
+	});
+
+	const first = recorder.startTrace({
+		trigger: 'reconnect',
+		reason: 'first-attempt',
+	});
+
+	currentNow = 1210;
+	const second = recorder.startTrace({
+		trigger: 'manual-diagnostic',
+		reason: 'second-attempt',
+	});
+
+	currentNow = 1220;
+	first.finish('failed');
+
+	assert.equal(recorder.getLatestTrace()?.id, second.trace.id);
+	assert.equal(recorder.getLatestTrace()?.status, 'running');
+});
+
+void test('clear prevents stale trace handles from repopulating recorder state', () => {
+	let currentNow = 1300;
+	const recorder = createConnectionDiagnosticRecorder({
+		now: () => currentNow,
+	});
+
+	const handle = recorder.startTrace({
+		trigger: 'manual-diagnostic',
+		reason: 'clear-race',
+	});
+
+	handle.event({
+		type: 'ssh.connect.start',
+		source: 'manual-diagnostic',
+	});
+
+	recorder.clear();
+
+	currentNow = 1310;
+	handle.finish('failed');
+
+	assert.equal(recorder.getLatestTrace(), null);
+	assert.deepEqual(recorder.getHistory(), []);
+	assert.equal(handle.trace.status, 'failed');
+});
+
 void test('prompt summary prefers the richest later connection identity', () => {
 	const trace: ConnectionDiagnosticTrace = {
 		id: 'trace-richer-identity',
@@ -553,4 +603,16 @@ void test('error serializer preserves useful non-secret details', () => {
 		name: 'NonError',
 		message: 'plain failure',
 	});
+
+	assert.deepEqual(
+		serializeConnectionDiagnosticError({
+			toString() {
+				throw new Error('stringify failed');
+			},
+		}),
+		{
+			name: 'NonError',
+			message: '[Unserializable error]',
+		},
+	);
 });

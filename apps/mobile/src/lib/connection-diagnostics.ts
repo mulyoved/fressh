@@ -270,9 +270,16 @@ export function serializeConnectionDiagnosticError(
 		};
 	}
 
+	let message: string;
+	try {
+		message = typeof error === 'string' ? error : String(error);
+	} catch {
+		message = '[Unserializable error]';
+	}
+
 	return {
 		name: 'NonError',
-		message: typeof error === 'string' ? error : String(error),
+		message,
 	};
 }
 
@@ -283,10 +290,12 @@ export function createConnectionDiagnosticRecorder(
 	const maxHistory = Math.max(1, options.maxHistory ?? DEFAULT_MAX_HISTORY);
 	let latestTrace: ConnectionDiagnosticTrace | null = null;
 	let history: ConnectionDiagnosticTrace[] = [];
+	let recorderGeneration = 0;
 
 	return {
 		startTrace: ({ trigger, reason }) => {
 			const startedAtMs = now();
+			const traceGeneration = recorderGeneration;
 			const trace: ConnectionDiagnosticTrace = {
 				id: nextTraceId(startedAtMs),
 				trigger,
@@ -323,14 +332,16 @@ export function createConnectionDiagnosticRecorder(
 					finished = true;
 					trace.status = status;
 					trace.finishedAtMs = now();
-					latestTrace = trace;
-					history = [...history, cloneTrace(trace)].slice(-maxHistory);
+					if (traceGeneration === recorderGeneration) {
+						history = [...history, cloneTrace(trace)].slice(-maxHistory);
+					}
 				},
 			};
 		},
 		getLatestTrace: () => (latestTrace ? cloneTrace(latestTrace) : null),
 		getHistory: () => history.map((trace) => cloneTrace(trace)),
 		clear: () => {
+			recorderGeneration += 1;
 			latestTrace = null;
 			history = [];
 		},
