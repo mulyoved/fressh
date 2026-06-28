@@ -110,10 +110,35 @@ const REDACTED_PLACEHOLDER = '[REDACTED]';
 const UNREADABLE_ERROR_MESSAGE = '[Unserializable error]';
 
 function redactDiagnosticText(value: string): string {
-	return redactBrowserActionErrorText(value).replace(
-		/-----BEGIN [^-]*PRIVATE KEY-----[\s\S]*?-----END [^-]*PRIVATE KEY-----/gu,
-		REDACTED_PLACEHOLDER,
-	);
+	return redactBrowserActionErrorText(value)
+		.replace(
+			/-----BEGIN [^-]*PRIVATE KEY-----[\s\S]*?-----END [^-]*PRIVATE KEY-----/gu,
+			REDACTED_PLACEHOLDER,
+		)
+		.replace(
+			/(^|[^\w-])((?:private[_-]?key)|passphrase)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"';&|]+))/giu,
+			(_match, prefix: string, name: string, doubleQuoted, singleQuoted) => {
+				const quote =
+					doubleQuoted !== undefined
+						? '"'
+						: singleQuoted !== undefined
+							? "'"
+							: '';
+				return `${prefix}${name}=${quote}[redacted]${quote}`;
+			},
+		)
+		.replace(
+			/(^|[^\w-])((?:private[_-]?key)|passphrase)\s*:\s*(?:"([^"]*)"|'([^']*)'|([^\s"',;]+))/giu,
+			(_match, prefix: string, name: string, doubleQuoted, singleQuoted) => {
+				const quote =
+					doubleQuoted !== undefined
+						? '"'
+						: singleQuoted !== undefined
+							? "'"
+							: '';
+				return `${prefix}${name}: ${quote}[redacted]${quote}`;
+			},
+		);
 }
 
 function isSecretDiagnosticKey(key: string): boolean {
@@ -323,30 +348,21 @@ export function serializeConnectionDiagnosticError(
 	error: unknown,
 ): ConnectionDiagnosticError {
 	if (isErrorLike(error)) {
-		const name = readErrorStringField(error, 'name', 'Error');
-		const message = readErrorStringField(
-			error,
-			'message',
-			UNREADABLE_ERROR_MESSAGE,
-		);
-		const stack = readErrorStringField(error, 'stack', undefined);
-		const tag = readErrorStringField(error, 'tag', undefined);
-		const inner = readObjectField(error, 'inner');
-		const serializedError: ConnectionDiagnosticError = {
-			name: name || 'Error',
-			message: message ?? UNREADABLE_ERROR_MESSAGE,
-			stack,
-		};
+		return createSerializedErrorFromFields(error, {
+			defaultName: 'Error',
+			defaultMessage: UNREADABLE_ERROR_MESSAGE,
+			includeStack: true,
+		});
+	}
 
-		if (tag !== undefined) {
-			serializedError.tag = tag;
-		}
-
-		if (inner !== undefined) {
-			serializedError.inner = cloneDiagnosticValue(inner);
-		}
-
-		return serializedError;
+	const tag = readErrorStringField(error, 'tag', undefined);
+	const inner = readObjectField(error, 'inner');
+	if (tag !== undefined || inner !== undefined) {
+		return createSerializedErrorFromFields(error, {
+			defaultName: 'NonError',
+			defaultMessage: tag ?? UNREADABLE_ERROR_MESSAGE,
+			includeStack: false,
+		});
 	}
 
 	let message: string;
@@ -365,6 +381,43 @@ export function serializeConnectionDiagnosticError(
 	};
 }
 
+function createSerializedErrorFromFields(
+	error: unknown,
+	options: {
+		defaultName: string;
+		defaultMessage: string;
+		includeStack: boolean;
+	},
+): ConnectionDiagnosticError {
+	const name =
+		readErrorStringField(error, 'name', undefined) ?? options.defaultName;
+	const message =
+		readErrorStringField(error, 'message', undefined) ?? options.defaultMessage;
+	const tag = readErrorStringField(error, 'tag', undefined);
+	const inner = readObjectField(error, 'inner');
+	const serializedError: ConnectionDiagnosticError = {
+		name: name || options.defaultName,
+		message,
+	};
+
+	if (options.includeStack) {
+		const stack = readErrorStringField(error, 'stack', undefined);
+		if (stack !== undefined) {
+			serializedError.stack = stack;
+		}
+	}
+
+	if (tag !== undefined) {
+		serializedError.tag = tag;
+	}
+
+	if (inner !== undefined) {
+		serializedError.inner = cloneDiagnosticValue(inner);
+	}
+
+	return serializedError;
+}
+
 function isErrorLike(error: unknown): error is Error {
 	try {
 		return error instanceof Error;
@@ -374,7 +427,7 @@ function isErrorLike(error: unknown): error is Error {
 }
 
 function readErrorStringField(
-	error: Error,
+	error: unknown,
 	field: string,
 	fallback: string | undefined,
 ): string | undefined {

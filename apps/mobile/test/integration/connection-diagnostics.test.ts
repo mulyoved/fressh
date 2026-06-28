@@ -599,7 +599,7 @@ void test('prompt redacts credential text inside generic string fields', () => {
 	const trace: ConnectionDiagnosticTrace = {
 		id: 'trace-string-redaction',
 		trigger: 'manual-diagnostic',
-		reason: 'apiKey=TRACE_REASON_SECRET',
+		reason: 'apiKey=TRACE_REASON_SECRET privateKey=TRACE_PRIVATE_KEY_SECRET',
 		status: 'failed',
 		startedAtMs: 300,
 		finishedAtMs: 360,
@@ -609,16 +609,19 @@ void test('prompt redacts credential text inside generic string fields', () => {
 				elapsedMs: 20,
 				type: 'ssh.connect.failed',
 				source: 'active-connection',
-				message: 'Authorization: Bearer EVENT_MESSAGE_SECRET',
+				message:
+					'Authorization: Bearer EVENT_MESSAGE_SECRET passphrase=EVENT_PASSPHRASE_SECRET',
 				error: {
 					name: 'Error',
 					message:
-						'https://user:password@example.test/path?token=ERROR_URL_SECRET',
+						'https://user:password@example.test/path?token=ERROR_URL_SECRET private-key=ERROR_PRIVATE_KEY_SECRET',
 				},
 				details: {
 					log: 'Authorization: Bearer DETAIL_LOG_SECRET',
 					url: 'https://user:password@example.test/path?token=DETAIL_URL_SECRET',
 					note: 'apiKey=DETAIL_NOTE_SECRET',
+					generic:
+						'privateKey=DETAIL_PRIVATE_KEY_SECRET passphrase: DETAIL_PASSPHRASE_SECRET',
 					pem: [
 						'-----BEGIN OPENSSH PRIVATE KEY-----',
 						'PRIVATE_KEY_BODY_SECRET',
@@ -640,11 +643,16 @@ void test('prompt redacts credential text inside generic string fields', () => {
 
 	for (const secret of [
 		'TRACE_REASON_SECRET',
+		'TRACE_PRIVATE_KEY_SECRET',
 		'EVENT_MESSAGE_SECRET',
+		'EVENT_PASSPHRASE_SECRET',
 		'ERROR_URL_SECRET',
+		'ERROR_PRIVATE_KEY_SECRET',
 		'DETAIL_LOG_SECRET',
 		'DETAIL_URL_SECRET',
 		'DETAIL_NOTE_SECRET',
+		'DETAIL_PRIVATE_KEY_SECRET',
+		'DETAIL_PASSPHRASE_SECRET',
 		'PRIVATE_KEY_BODY_SECRET',
 		'APP_STATE_SECRET',
 	]) {
@@ -708,7 +716,6 @@ void test('error serializer preserves useful non-secret details', () => {
 	assert.deepEqual(serializeConnectionDiagnosticError(hostileError), {
 		name: 'Error',
 		message: '[Unserializable error]',
-		stack: undefined,
 	});
 
 	const { proxy, revoke } = Proxy.revocable(new Error('revoked'), {});
@@ -734,6 +741,19 @@ void test('error serializer preserves useful non-secret details', () => {
 		inner: ['No route to host'],
 	});
 
+	assert.deepEqual(
+		serializeConnectionDiagnosticError({
+			tag: 'Russh',
+			inner: ['No route to host'],
+		}),
+		{
+			name: 'NonError',
+			message: 'Russh',
+			tag: 'Russh',
+			inner: ['No route to host'],
+		},
+	);
+
 	const prompt = formatConnectionDiagnosticPrompt({
 		id: 'trace-uniffi-error',
 		trigger: 'manual-diagnostic',
@@ -747,7 +767,10 @@ void test('error serializer preserves useful non-secret details', () => {
 				elapsedMs: 10,
 				type: 'ssh.connect.failed',
 				source: 'active-connection',
-				error: serializeConnectionDiagnosticError(uniffiError),
+				error: serializeConnectionDiagnosticError({
+					tag: 'Russh',
+					inner: ['No route to host'],
+				}),
 			},
 		],
 	});
