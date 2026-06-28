@@ -383,3 +383,141 @@ void test('retry backoff progresses and caps at the final configured delay', asy
 	await context.runTimer(context.timers[1]!);
 	assert.equal(context.timers[2]?.delayMs, 20);
 });
+
+void test('records reconnect lifecycle trace events', async () => {
+	const context = harness({ attemptResults: [false], delaysMs: [10] });
+	const events: unknown[] = [];
+	const tracedController = createAutoConnectReconnectController({
+		delaysMs: [10],
+		windowMs: 100,
+		now: () => 0,
+		setTimeout: (callback, delayMs) => {
+			const timer = {
+				id: 100,
+				delayMs,
+				callback,
+				cleared: false,
+			};
+			context.timers.push(timer);
+			return timer;
+		},
+		clearTimeout: (timer) => {
+			(timer as Timer).cleared = true;
+		},
+		getSnapshot: () => ({
+			...context.snapshot,
+			isReconnecting: false,
+		}),
+		setReconnecting: () => {},
+		attemptAutoConnect: async () => false,
+		logger: {
+			info: () => {},
+			warn: () => {},
+		},
+		trace: {
+			event: (event) => {
+				events.push(event);
+			},
+		},
+	});
+
+	assert.equal(tracedController.start('shell-drop'), true);
+	await flushPromises();
+
+	assert.deepEqual(
+		events.map((event) => (event as { type: string }).type),
+		[
+			'reconnect.started',
+			'reconnect.attempt.started',
+			'reconnect.attempt.failed',
+			'reconnect.retry.scheduled',
+		],
+	);
+	assert.deepEqual(events[0], {
+		type: 'reconnect.started',
+		source: 'reconnect-controller',
+		message: 'shell-drop',
+		details: {
+			reason: 'shell-drop',
+			delaysMs: [10],
+			windowMs: 100,
+		},
+	});
+});
+
+void test('records blocked reconnect start trace event', () => {
+	const events: unknown[] = [];
+	const context = harness({ isAutoConnecting: true });
+	const blockedController = createAutoConnectReconnectController({
+		delaysMs: [10],
+		windowMs: 100,
+		now: () => 0,
+		setTimeout: context.controller.start as never,
+		clearTimeout: () => {},
+		getSnapshot: () => ({
+			...context.snapshot,
+			isAutoConnecting: true,
+		}),
+		setReconnecting: () => {},
+		attemptAutoConnect: async () => false,
+		logger: {
+			info: () => {},
+			warn: () => {},
+		},
+		trace: {
+			event: (event) => {
+				events.push(event);
+			},
+		},
+	});
+
+	assert.equal(blockedController.start('shell-drop'), false);
+	assert.deepEqual(events, [
+		{
+			type: 'reconnect.start.blocked',
+			source: 'reconnect-controller',
+			message: 'shell-drop',
+			details: {
+				reason: 'shell-drop',
+				isAutoConnecting: true,
+				isReconnecting: false,
+				resetInFlight: false,
+			},
+		},
+	]);
+});
+
+void test('swallows reconnect trace event failures', async () => {
+	const context = harness({ attemptResults: [true] });
+	const warnings: unknown[] = [];
+	const controller = createAutoConnectReconnectController({
+		delaysMs: [10],
+		windowMs: 100,
+		now: () => 0,
+		setTimeout: context.controller.start as never,
+		clearTimeout: () => {},
+		getSnapshot: () => ({
+			...context.snapshot,
+			isReconnecting: false,
+		}),
+		setReconnecting: () => {},
+		attemptAutoConnect: async () => true,
+		logger: {
+			info: () => {},
+			warn: (_message, context) => {
+				warnings.push(context);
+			},
+		},
+		trace: {
+			event: () => {
+				throw new Error('trace sink failed');
+			},
+		},
+	});
+
+	assert.equal(controller.start('shell-drop'), true);
+	await flushPromises();
+
+	assert.equal(controller.isRunning(), false);
+	assert.equal(warnings.length > 0, true);
+});
