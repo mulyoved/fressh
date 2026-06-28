@@ -2,40 +2,21 @@
 import type {
 	ConnectionDetails,
 	RnRussh,
-	SshConnection,
 	SshConnectionProgress,
-	SshShell,
 } from '@fressh/react-native-uniffi-russh';
-import {
-	serializeConnectionDiagnosticError,
-	type ConnectionDiagnosticConnectionIdentity,
-	type ConnectionDiagnosticEventInput,
-} from './connection-diagnostics';
+import { type ConnectionDiagnosticEventInput } from './connection-diagnostics';
 import { type InputConnectionDetails } from './connection-storage';
 import { rootLogger } from './logger';
 import { connectAndRememberConnection } from './ssh-connect-flow';
-import { extractTmuxAttachFailureReason } from './ssh-error-details';
-import { type RegisteredStartShellOptions } from './ssh-registry-store';
-import { AbortSignalTimeout } from './utils';
+import {
+	runSshShellLifecycle,
+	type SshShellLifecycleResult,
+} from './ssh-shell-lifecycle';
 
 const logger = rootLogger.extend('ConnectAndOpenShell');
 const DEFAULT_CONNECT_TIMEOUT_MS = 5_000;
 
-export type ConnectAndOpenShellResult =
-	| {
-			status: 'connected';
-			sshConnection: SshConnection;
-			shellHandle: SshShell;
-			connectionId: string;
-			channelId: number;
-	  }
-	| {
-			status: 'tmux_attach_failed';
-			connectionId: string;
-			tmuxAttachFailureReason: string | null;
-			tmuxSessionName: string;
-			storedConnectionId: string;
-	  };
+export type ConnectAndOpenShellResult = SshShellLifecycleResult;
 
 type SaveConnection = (params: {
 	details: InputConnectionDetails;
@@ -104,129 +85,46 @@ export async function connectAndOpenShell(args: {
 			logger.warn('Connect trace event failed', error);
 		}
 	};
-	const connectionIdentity: ConnectionDiagnosticConnectionIdentity = {
-		username: connectionDetails.username,
-		host: connectionDetails.host,
-		port: connectionDetails.port,
-		keyId: connectionDetails.security.keyId,
-		useTmux: connectionDetails.useTmux,
-		tmuxSessionName: connectionDetails.tmuxSessionName,
-	};
 	const security =
 		resolvedSecurity ?? (await resolveSecurityFromDetails(connectionDetails));
 
-	traceEvent({
-		type: 'ssh.connect.started',
-		source: 'saved-entry',
-		connection: connectionIdentity,
+	const result = await runSshShellLifecycle({
+		connectionDetails,
+		abortSignalTimeoutMs,
+		traceEvent,
+		onConnectionProgress: (progressEvent) => {
+			logger.info('SSH connect progress event', progressEvent);
+			onConnectionProgress?.(progressEvent);
+		},
+		connectConnection: async ({ onConnectionProgress }) =>
+			await connectAndRememberConnection({
+				connectionDetails,
+				connect,
+				onConnectionProgress,
+				abortSignalTimeoutMs,
+				resolvedSecurity: security,
+				saveConnection,
+			}),
 	});
-	let rememberedConnection: {
-		sshConnection: SshConnection;
-		storedConnectionId: string;
-	};
-	try {
-		rememberedConnection = await connectAndRememberConnection({
-			connectionDetails,
-			connect,
-			onConnectionProgress: (progressEvent: SshConnectionProgress) => {
-				logger.info('SSH connect progress event', progressEvent);
-				traceEvent({
-					type: 'ssh.connect.progress',
-					source: 'saved-entry',
-					connection: connectionIdentity,
-					details: { progressEvent },
-				});
-				onConnectionProgress?.(progressEvent);
-			},
-			abortSignalTimeoutMs,
-			resolvedSecurity: security,
-			saveConnection,
+	if (result.status === 'tmux_attach_failed') {
+		args.navigateWithError?.({
+			connectionId: result.connectionId,
+			tmuxAttachFailureReason: result.tmuxAttachFailureReason,
+			tmuxSessionName: result.tmuxSessionName,
+			storedConnectionId: result.storedConnectionId,
 		});
-	} catch (error) {
-		traceEvent({
-			type: 'ssh.connect.failed',
-			source: 'saved-entry',
-			connection: connectionIdentity,
-			error: serializeConnectionDiagnosticError(error),
-		});
-		throw error;
+		return result;
 	}
-	const { sshConnection, storedConnectionId } = rememberedConnection;
-	const connectedIdentity = {
-		...connectionIdentity,
-		connectionId: sshConnection.connectionId,
-	};
-	traceEvent({
-		type: 'ssh.connect.connected',
-		source: 'saved-entry',
-		connection: connectedIdentity,
-		details: { storedConnectionId },
-	});
-	let shellHandle: Awaited<ReturnType<typeof sshConnection.startShell>>;
-	try {
-		traceEvent({
-			type: 'ssh.shell.started',
-			source: 'saved-entry',
-			connection: connectedIdentity,
-		});
-		const startShellOptions: RegisteredStartShellOptions = {
-			term: 'Xterm',
-			useTmux: connectionDetails.useTmux,
-			tmuxSessionName: connectionDetails.tmuxSessionName,
-			abortSignal: AbortSignalTimeout(abortSignalTimeoutMs),
-		};
-		shellHandle = await sshConnection.startShell(startShellOptions);
-	} catch (error) {
-		const tmuxAttachFailureReason = extractTmuxAttachFailureReason(error);
-		traceEvent({
-			type:
-				tmuxAttachFailureReason !== null
-					? 'ssh.shell.tmux-attach-failed'
-					: 'ssh.shell.failed',
-			source: 'saved-entry',
-			connection: connectedIdentity,
-			error: serializeConnectionDiagnosticError(error),
-			details: { tmuxAttachFailureReason, storedConnectionId },
-		});
-		if (tmuxAttachFailureReason !== null) {
-			args.navigateWithError?.({
-				connectionId: sshConnection.connectionId,
-				tmuxAttachFailureReason,
-				tmuxSessionName: connectionDetails.tmuxSessionName,
-				storedConnectionId,
-			});
-			return {
-				status: 'tmux_attach_failed',
-				connectionId: sshConnection.connectionId,
-				tmuxAttachFailureReason,
-				tmuxSessionName: connectionDetails.tmuxSessionName,
-				storedConnectionId,
-			};
-		}
-		throw error;
-	}
-	traceEvent({
-		type: 'ssh.shell.connected',
-		source: 'saved-entry',
-		connection: connectedIdentity,
-		details: { channelId: shellHandle.channelId, storedConnectionId },
-	});
 
 	logger.info(
 		'Connected to SSH server',
-		sshConnection.connectionId,
-		shellHandle.channelId,
+		result.sshConnection.connectionId,
+		result.shellHandle.channelId,
 	);
 	navigate({
-		connectionId: sshConnection.connectionId,
-		channelId: shellHandle.channelId,
+		connectionId: result.sshConnection.connectionId,
+		channelId: result.shellHandle.channelId,
 	});
 
-	return {
-		status: 'connected',
-		sshConnection,
-		shellHandle,
-		connectionId: sshConnection.connectionId,
-		channelId: shellHandle.channelId,
-	};
+	return result;
 }

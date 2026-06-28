@@ -96,6 +96,48 @@ void test('diagnostic probe fails successful probes when disconnect fails', asyn
 	);
 });
 
+void test('diagnostic probe records and forwards connect progress', async () => {
+	const events: unknown[] = [];
+	const progressEvents: unknown[] = [];
+
+	const result = await runDiagnosticShellProbe({
+		connectionDetails,
+		resolvedSecurity: { type: 'key', privateKey: 'secret' },
+		connect: async (params) => {
+			params.onConnectionProgress?.({ phase: 'auth' } as never);
+			return {
+				connectionId: 'conn-1',
+				disconnect: () => {},
+				startShell: async () => ({ channelId: 7 }),
+			} as never;
+		},
+		onConnectionProgress: (event) => {
+			progressEvents.push(event);
+		},
+		trace: {
+			event: (event) => {
+				events.push(event);
+			},
+		},
+	});
+
+	assert.equal(result.status, 'connected');
+	assert.deepEqual(progressEvents, [{ phase: 'auth' }]);
+	assert.deepEqual(events[1], {
+		type: 'ssh.connect.progress',
+		source: 'saved-entry',
+		connection: {
+			username: 'muly',
+			host: 'dev.tailnet.ts.net',
+			port: 22,
+			keyId: 'key-1',
+			useTmux: true,
+			tmuxSessionName: 'main',
+		},
+		details: { progressEvent: { phase: 'auth' } },
+	});
+});
+
 void test('diagnostic probe disconnects after tmux attach failure without throwing', async () => {
 	let disconnected = 0;
 	const events: unknown[] = [];

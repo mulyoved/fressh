@@ -8,15 +8,16 @@ import type {
 import { type SavedEntryConnectResult } from './auto-connect-saved-entry';
 import {
 	serializeConnectionDiagnosticError,
-	type ConnectionDiagnosticConnectionIdentity,
 	type ConnectionDiagnosticEventInput,
 } from './connection-diagnostics';
 import { type InputConnectionDetails } from './connection-storage';
 import { getStoredConnectionId } from './connection-utils';
 import { rootLogger } from './logger';
 import { connectWithoutRemembering } from './ssh-connect-flow';
-import { extractTmuxAttachFailureReason } from './ssh-error-details';
-import { type RegisteredStartShellOptions } from './ssh-registry-store';
+import {
+	getSshShellLifecycleConnectionIdentity,
+	runSshShellLifecycle,
+} from './ssh-shell-lifecycle';
 import { AbortSignalTimeout } from './utils';
 
 const logger = rootLogger.extend('DiagnosticShellProbe');
@@ -95,61 +96,13 @@ export async function runDiagnosticShellProbe(args: {
 			logger.warn('Diagnostic probe trace event failed', error);
 		}
 	};
-	const connectionIdentity: ConnectionDiagnosticConnectionIdentity = {
-		username: connectionDetails.username,
-		host: connectionDetails.host,
-		port: connectionDetails.port,
-		keyId: connectionDetails.security.keyId,
-		useTmux: connectionDetails.useTmux,
-		tmuxSessionName: connectionDetails.tmuxSessionName,
-	};
 	const storedConnectionId = getStoredConnectionId(connectionDetails);
 
-	traceEvent({
-		type: 'ssh.connect.started',
-		source: 'saved-entry',
-		connection: connectionIdentity,
-	});
-
-	let sshConnection: SshConnection;
-	try {
-		sshConnection = await connectWithoutRemembering({
-			connectionDetails,
-			connect,
-			onConnectionProgress: (progressEvent) => {
-				traceEvent({
-					type: 'ssh.connect.progress',
-					source: 'saved-entry',
-					connection: connectionIdentity,
-					details: { progressEvent },
-				});
-				onConnectionProgress?.(progressEvent);
-			},
-			abortSignalTimeoutMs,
-			resolvedSecurity,
-		});
-	} catch (error) {
-		traceEvent({
-			type: 'ssh.connect.failed',
-			source: 'saved-entry',
-			connection: connectionIdentity,
-			error: serializeConnectionDiagnosticError(error),
-		});
-		throw error;
-	}
-
-	const connectedIdentity = {
-		...connectionIdentity,
-		connectionId: sshConnection.connectionId,
-	};
-	traceEvent({
-		type: 'ssh.connect.connected',
-		source: 'saved-entry',
-		connection: connectedIdentity,
-		details: { storedConnectionId },
-	});
-
-	const cleanupDiagnosticConnection = async () => {
+	const cleanupDiagnosticConnection = async (sshConnection: SshConnection) => {
+		const connectedIdentity = {
+			...getSshShellLifecycleConnectionIdentity(connectionDetails),
+			connectionId: sshConnection.connectionId,
+		};
 		try {
 			await withDiagnosticDisconnectTimeout(
 				Promise.resolve(
@@ -176,61 +129,37 @@ export async function runDiagnosticShellProbe(args: {
 		}
 	};
 
-	let shellHandle: Awaited<ReturnType<typeof sshConnection.startShell>>;
-	try {
-		traceEvent({
-			type: 'ssh.shell.started',
-			source: 'saved-entry',
-			connection: connectedIdentity,
-		});
-		const startShellOptions: RegisteredStartShellOptions = {
-			term: 'Xterm',
-			useTmux: connectionDetails.useTmux,
-			tmuxSessionName: connectionDetails.tmuxSessionName,
-			abortSignal: AbortSignalTimeout(abortSignalTimeoutMs),
-			registerInStore: false,
-		};
-		shellHandle = await sshConnection.startShell(startShellOptions);
-	} catch (error) {
-		const tmuxAttachFailureReason = extractTmuxAttachFailureReason(error);
-		traceEvent({
-			type:
-				tmuxAttachFailureReason !== null
-					? 'ssh.shell.tmux-attach-failed'
-					: 'ssh.shell.failed',
-			source: 'saved-entry',
-			connection: connectedIdentity,
-			error: serializeConnectionDiagnosticError(error),
-			details: { tmuxAttachFailureReason, storedConnectionId },
-		});
-		await cleanupDiagnosticConnection();
-		if (tmuxAttachFailureReason !== null) {
-			return {
-				status: 'tmux_attach_failed',
-				connectionId: sshConnection.connectionId,
-				tmuxAttachFailureReason,
-				tmuxSessionName: connectionDetails.tmuxSessionName,
-				storedConnectionId,
-			};
-		}
-		throw error;
-	}
-
-	traceEvent({
-		type: 'ssh.shell.connected',
-		source: 'saved-entry',
-		connection: connectedIdentity,
-		details: { channelId: shellHandle.channelId, storedConnectionId },
+	const result = await runSshShellLifecycle({
+		connectionDetails,
+		abortSignalTimeoutMs,
+		registerInStore: false,
+		traceEvent,
+		onConnectionProgress,
+		connectConnection: async ({ onConnectionProgress }) => {
+			const sshConnection = await connectWithoutRemembering({
+				connectionDetails,
+				connect,
+				onConnectionProgress,
+				abortSignalTimeoutMs,
+				resolvedSecurity,
+			});
+			return { sshConnection, storedConnectionId };
+		},
+		afterShellFailure: async ({ sshConnection }) => {
+			await cleanupDiagnosticConnection(sshConnection);
+		},
 	});
 
-	const cleanupError = await cleanupDiagnosticConnection();
+	if (result.status === 'tmux_attach_failed') return result;
+
+	const cleanupError = await cleanupDiagnosticConnection(result.sshConnection);
 	if (cleanupError !== null) {
 		throw new DiagnosticShellCleanupError(cleanupError);
 	}
 
 	return {
 		status: 'connected',
-		connectionId: sshConnection.connectionId,
-		channelId: shellHandle.channelId,
+		connectionId: result.connectionId,
+		channelId: result.channelId,
 	};
 }
