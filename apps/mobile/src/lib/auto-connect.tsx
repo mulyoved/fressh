@@ -11,6 +11,10 @@ import {
 	createAutoConnectReconnectController,
 	type AutoConnectReconnectController,
 } from './auto-connect-reconnect-controller';
+import {
+	connectionDiagnosticRecorder,
+	type ConnectionDiagnosticTraceHandle,
+} from './connection-diagnostics';
 import { pickLatestConnection } from './connection-utils';
 import {
 	startForegroundService,
@@ -59,6 +63,18 @@ type TailscaleRecoveryUiState = TailscaleRecoveryBannerState;
 const hiddenTailscaleRecoveryState: TailscaleRecoveryUiState = {
 	phase: 'hidden',
 };
+
+function finishTrace(
+	trace: ConnectionDiagnosticTraceHandle | null,
+	status: 'connected' | 'failed' | 'skipped',
+) {
+	if (!trace) return;
+	try {
+		trace.finish(status);
+	} catch (error) {
+		logger.warn('Connection diagnostic trace finish failed', error);
+	}
+}
 
 type AutoConnectState = {
 	isAutoConnecting: boolean;
@@ -134,6 +150,8 @@ export function AutoConnectManager() {
 	);
 	const reconnectControllerRef =
 		React.useRef<AutoConnectReconnectController | null>(null);
+	const activeDiagnosticTraceRef =
+		React.useRef<ConnectionDiagnosticTraceHandle | null>(null);
 	const prevShellCountRef = React.useRef(shells.length);
 	const isActiveRef = React.useRef(isActiveState(AppState.currentState));
 	const foregroundKeyRef = React.useRef<string | null>(null);
@@ -305,9 +323,18 @@ export function AutoConnectManager() {
 		if (inFlightRef.current) return false;
 		inFlightRef.current = true;
 		setAutoConnecting(true);
+		const existingTrace = activeDiagnosticTraceRef.current;
+		const ownsTrace = existingTrace === null;
+		const trace =
+			existingTrace ??
+			connectionDiagnosticRecorder.startTrace({
+				trigger: 'initial-auto-connect',
+				reason: 'auto-connect-attempt',
+			});
+		activeDiagnosticTraceRef.current = trace;
 
 		try {
-			return await attemptAutoConnectSource({
+			const connected = await attemptAutoConnectSource({
 				platformOS: Platform.OS,
 				pathname,
 				latestShell,
@@ -322,6 +349,7 @@ export function AutoConnectManager() {
 						resolvedSecurity,
 						connect,
 						navigate,
+						trace,
 					}),
 				loadLatestSavedConnection,
 				resolveKeySecurity,
@@ -330,13 +358,24 @@ export function AutoConnectManager() {
 				markTailscaleAttention,
 				clearTailscaleAttention,
 				logger,
+				trace,
 			});
+			if (ownsTrace) {
+				finishTrace(trace, connected ? 'connected' : 'failed');
+			}
+			return connected;
 		} catch (error) {
 			logger.warn('Auto-connect attempt failed', error);
+			if (ownsTrace) {
+				finishTrace(trace, 'failed');
+			}
 			return false;
 		} finally {
 			setAutoConnecting(false);
 			inFlightRef.current = false;
+			if (ownsTrace && activeDiagnosticTraceRef.current === trace) {
+				activeDiagnosticTraceRef.current = null;
+			}
 		}
 	}, [
 		connect,
@@ -384,6 +423,35 @@ export function AutoConnectManager() {
 			attemptAutoConnect: async () =>
 				(await attemptAutoConnectRef.current?.()) ?? false,
 			logger,
+			trace: {
+				event: (event) => {
+					let trace = activeDiagnosticTraceRef.current;
+					if (!trace) {
+						trace = connectionDiagnosticRecorder.startTrace({
+							trigger: 'reconnect',
+							reason: 'reconnect-controller',
+						});
+						activeDiagnosticTraceRef.current = trace;
+					}
+					trace.event(event);
+					if (event.type === 'reconnect.start.blocked') {
+						finishTrace(trace, 'skipped');
+						if (activeDiagnosticTraceRef.current === trace) {
+							activeDiagnosticTraceRef.current = null;
+						}
+						return;
+					}
+					if (event.type === 'reconnect.stopped') {
+						finishTrace(
+							trace,
+							event.message === 'reconnected' ? 'connected' : 'failed',
+						);
+						if (activeDiagnosticTraceRef.current === trace) {
+							activeDiagnosticTraceRef.current = null;
+						}
+					}
+				},
+			},
 		});
 	}
 

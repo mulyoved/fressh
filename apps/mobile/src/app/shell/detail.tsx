@@ -50,7 +50,13 @@ import {
 } from '@/lib/agent-notification-visibility';
 import { useAutoConnectStore } from '@/lib/auto-connect';
 import { restartCodexWithBridge } from '@/lib/codex-restart';
-import { getStoredConnectionId } from '@/lib/connection-utils';
+import { deliverConnectionDiagnosticPrompt } from '@/lib/connection-diagnostic-delivery';
+import { runManualConnectionDiagnostic } from '@/lib/connection-diagnostic-runner';
+import { connectionDiagnosticRecorder } from '@/lib/connection-diagnostics';
+import {
+	getStoredConnectionId,
+	pickLatestConnection,
+} from '@/lib/connection-utils';
 import {
 	planDetectedOpenShortcutPress,
 	runDetectedOpenCallback,
@@ -74,6 +80,7 @@ import { rootLogger } from '@/lib/logger';
 import { resolveLucideIcon } from '@/lib/lucide-utils';
 import { OrderedWriter } from '@/lib/ordered-writer';
 import { preferences } from '@/lib/preferences';
+import { connectAndOpenShell } from '@/lib/query-fns';
 import {
 	configureScrollTraceEnabled,
 	emitScrollTrace,
@@ -107,6 +114,7 @@ import {
 } from '@/lib/shell-modals';
 import { executeSideChannelCommand } from '@/lib/ssh-side-channel';
 import { useSshStore } from '@/lib/ssh-store';
+import { tailscaleRecovery } from '@/lib/tailscale-recovery';
 import {
 	createManualTerminalFitRunner,
 	type TerminalFitSize,
@@ -496,6 +504,7 @@ function ShellDetail() {
 	const shell = useSshStore(
 		(s) => s.shells[`${connectionId}-${channelId}` as const],
 	);
+	const connect = useSshStore((s) => s.connect);
 	const connection = useSshStore((s) => s.connections[connectionId]);
 	const connectionStoredConnectionId = connection
 		? getStoredConnectionId(connection.connectionDetails)
@@ -2475,6 +2484,72 @@ function ShellDetail() {
 		void manualTerminalFitRunner.run();
 	}, [commandMenuModal, manualTerminalFitRunner]);
 
+	const loadLatestSavedConnectionForDiagnostic = useCallback(async () => {
+		const entries = await queryClient.fetchQuery(
+			secretsManager.connections.query.list,
+		);
+		const eligible = entries?.filter((entry) => entry.value.autoConnect);
+		return pickLatestConnection(eligible);
+	}, []);
+
+	const handleDebugConnectionInCodex = useCallback(async () => {
+		commandMenuModal.onClose();
+		const autoState = useAutoConnectStore.getState();
+		const result = await runManualConnectionDiagnostic({
+			recorder: connectionDiagnosticRecorder,
+			appState: {
+				platformOS: Platform.OS,
+				isAutoConnecting: autoState.isAutoConnecting,
+				isReconnecting: autoState.isReconnecting,
+				pathname: '/shell/detail',
+				appActive: isAppActiveRef.current,
+			},
+			loadLatestSavedConnection: loadLatestSavedConnectionForDiagnostic,
+			resolveKeySecurity: async (details) => {
+				try {
+					const keyEntry = await secretsManager.keys.utils.getPrivateKey(
+						details.security.keyId,
+					);
+					return { type: 'key', privateKey: keyEntry.value };
+				} catch (error) {
+					logger.warn('Connection diagnostic key resolution failed', error);
+					return null;
+				}
+			},
+			connectSavedEntry: async ({
+				connectionDetails,
+				resolvedSecurity,
+				trace,
+			}) =>
+				await connectAndOpenShell({
+					connectionDetails,
+					resolvedSecurity,
+					trace,
+					diagnosticMode: true,
+					connect,
+					navigate: () => {},
+				}),
+			recovery: tailscaleRecovery,
+		});
+		await deliverConnectionDiagnosticPrompt({
+			prompt: result.prompt,
+			hasShell: Boolean(shell),
+			pasteIntoTerminal: sendTextRaw,
+			copyToClipboard: async (value) => {
+				await Clipboard.setStringAsync(value);
+			},
+			showAlert: (title, message) => {
+				Alert.alert(title, message);
+			},
+		});
+	}, [
+		commandMenuModal,
+		connect,
+		loadLatestSavedConnectionForDiagnostic,
+		sendTextRaw,
+		shell,
+	]);
+
 	const handleRestartCodex = useCallback(
 		async (options?: { timeoutMs?: number }) => {
 			commandMenuModal.onClose();
@@ -2548,6 +2623,7 @@ function ShellDetail() {
 			copySelection: handleCopySelection,
 			fitTerminalToDevice: handleFitTerminalToDevice,
 			restartCodex: handleRestartCodex,
+			debugConnectionInCodex: handleDebugConnectionInCodex,
 			toggleCommandMenu: () => {
 				browserActions.invalidateHostUrlReads();
 				commanderModal.onClose();
@@ -2594,6 +2670,7 @@ function ShellDetail() {
 			handleCloseTextEntry,
 			handlePasteClipboard,
 			handleFitTerminalToDevice,
+			handleDebugConnectionInCodex,
 			handleRestartCodex,
 			handleOpenWisprTextEditor,
 			openConfigDialog,
