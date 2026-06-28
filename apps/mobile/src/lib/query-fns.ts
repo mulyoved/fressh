@@ -162,6 +162,24 @@ export async function connectAndOpenShell(args: {
 		connection: connectedIdentity,
 		details: { storedConnectionId },
 	});
+	const cleanupDiagnosticConnection = async () => {
+		if (!args.diagnosticMode) return;
+		try {
+			await Promise.resolve(sshConnection.disconnect?.());
+			traceEvent({
+				type: 'ssh.diagnostic.disconnected',
+				source: 'saved-entry',
+				connection: connectedIdentity,
+			});
+		} catch (error) {
+			traceEvent({
+				type: 'ssh.diagnostic.disconnect-failed',
+				source: 'saved-entry',
+				connection: connectedIdentity,
+				error: serializeConnectionDiagnosticError(error),
+			});
+		}
+	};
 	let shellHandle: Awaited<ReturnType<typeof sshConnection.startShell>>;
 	try {
 		traceEvent({
@@ -188,12 +206,15 @@ export async function connectAndOpenShell(args: {
 			details: { tmuxAttachFailureReason, storedConnectionId },
 		});
 		if (tmuxAttachFailureReason !== null) {
-			args.navigateWithError?.({
-				connectionId: sshConnection.connectionId,
-				tmuxAttachFailureReason,
-				tmuxSessionName: connectionDetails.tmuxSessionName,
-				storedConnectionId,
-			});
+			if (!args.diagnosticMode) {
+				args.navigateWithError?.({
+					connectionId: sshConnection.connectionId,
+					tmuxAttachFailureReason,
+					tmuxSessionName: connectionDetails.tmuxSessionName,
+					storedConnectionId,
+				});
+			}
+			await cleanupDiagnosticConnection();
 			return {
 				status: 'tmux_attach_failed',
 				connectionId: sshConnection.connectionId,
@@ -202,6 +223,7 @@ export async function connectAndOpenShell(args: {
 				storedConnectionId,
 			};
 		}
+		await cleanupDiagnosticConnection();
 		throw error;
 	}
 	traceEvent({
@@ -223,23 +245,7 @@ export async function connectAndOpenShell(args: {
 		});
 	}
 
-	if (args.diagnosticMode) {
-		try {
-			await Promise.resolve(sshConnection.disconnect?.());
-			traceEvent({
-				type: 'ssh.diagnostic.disconnected',
-				source: 'saved-entry',
-				connection: connectedIdentity,
-			});
-		} catch (error) {
-			traceEvent({
-				type: 'ssh.diagnostic.disconnect-failed',
-				source: 'saved-entry',
-				connection: connectedIdentity,
-				error: serializeConnectionDiagnosticError(error),
-			});
-		}
-	}
+	await cleanupDiagnosticConnection();
 
 	return {
 		status: 'connected',

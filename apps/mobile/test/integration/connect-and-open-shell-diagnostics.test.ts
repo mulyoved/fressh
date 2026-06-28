@@ -73,6 +73,70 @@ void test('connectAndOpenShell disconnects diagnostic connections after success'
 	assert.equal(disconnected, 1);
 });
 
+void test('connectAndOpenShell disconnects diagnostic connections after tmux attach failure without navigating', async () => {
+	let disconnected = 0;
+	let navigatedWithError = 0;
+
+	const result = await connectAndOpenShell({
+		connectionDetails,
+		resolvedSecurity: { type: 'key', privateKey: 'secret' },
+		diagnosticMode: true,
+		connect: async () =>
+			({
+				connectionId: 'conn-1',
+				disconnect: () => {
+					disconnected += 1;
+				},
+				startShell: async () => {
+					throw {
+						tag: 'TmuxAttachFailed',
+						inner: ['missing session'],
+					};
+				},
+			}) as never,
+		saveConnection: async () => {},
+		navigate: () => {
+			throw new Error('diagnostic mode must not navigate');
+		},
+		navigateWithError: () => {
+			navigatedWithError += 1;
+		},
+	});
+
+	assert.equal(result.status, 'tmux_attach_failed');
+	assert.equal(disconnected, 1);
+	assert.equal(navigatedWithError, 0);
+});
+
+void test('connectAndOpenShell disconnects diagnostic connections after shell failure', async () => {
+	let disconnected = 0;
+
+	await assert.rejects(
+		connectAndOpenShell({
+			connectionDetails,
+			resolvedSecurity: { type: 'key', privateKey: 'secret' },
+			diagnosticMode: true,
+			connect: async () =>
+				({
+					connectionId: 'conn-1',
+					disconnect: () => {
+						disconnected += 1;
+					},
+					startShell: async () => {
+						throw new Error('shell failed');
+					},
+				}) as never,
+			saveConnection: async () => {},
+			navigate: () => {
+				throw new Error('diagnostic mode must not navigate');
+			},
+		}),
+		/shell failed/,
+	);
+
+	assert.equal(disconnected, 1);
+});
+
 void test('connectAndOpenShell records connect failure', async () => {
 	const events: unknown[] = [];
 
