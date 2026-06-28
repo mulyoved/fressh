@@ -146,7 +146,7 @@ export function createAutoConnectReconnectController({
 			type: 'reconnect.started',
 			source: 'reconnect-controller',
 			message: reason,
-			details: { reason, delaysMs, windowMs },
+			details: { reason, delaysMs: [...delaysMs], windowMs },
 		});
 
 		const attemptWithBackoff = async () => {

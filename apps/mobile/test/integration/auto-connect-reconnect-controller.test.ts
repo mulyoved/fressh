@@ -521,3 +521,159 @@ void test('swallows reconnect trace event failures', async () => {
 	assert.equal(controller.isRunning(), false);
 	assert.equal(warnings.length > 0, true);
 });
+
+void test('trace payload mutation cannot change reconnect backoff', async () => {
+	const context = harness({ attemptResults: [false] });
+	const controller = createAutoConnectReconnectController({
+		delaysMs: [10],
+		windowMs: 100,
+		now: () => 0,
+		setTimeout: (callback, delayMs) => {
+			const timer = {
+				id: 100,
+				delayMs,
+				callback,
+				cleared: false,
+			};
+			context.timers.push(timer);
+			return timer;
+		},
+		clearTimeout: (timer) => {
+			(timer as Timer).cleared = true;
+		},
+		getSnapshot: () => ({
+			...context.snapshot,
+			isReconnecting: false,
+		}),
+		setReconnecting: () => {},
+		attemptAutoConnect: async () => false,
+		logger: {
+			info: () => {},
+			warn: () => {},
+		},
+		trace: {
+			event: (event) => {
+				if (event.type !== 'reconnect.started') return;
+				const details = event.details as { delaysMs?: number[] };
+				if (details.delaysMs) details.delaysMs[0] = 999;
+			},
+		},
+	});
+
+	assert.equal(controller.start('shell-drop'), true);
+	await flushPromises();
+
+	assert.equal(context.timers[0]?.delayMs, 10);
+});
+
+void test('records reconnect timeout and stopped trace events', async () => {
+	const context = harness({ attemptResults: [false], windowMs: 15 });
+	const events: unknown[] = [];
+	const controller = createAutoConnectReconnectController({
+		delaysMs: [10],
+		windowMs: 15,
+		now: () => (context.timers.length ? 20 : 0),
+		setTimeout: (callback, delayMs) => {
+			const timer = {
+				id: 100 + context.timers.length,
+				delayMs,
+				callback,
+				cleared: false,
+			};
+			context.timers.push(timer);
+			return timer;
+		},
+		clearTimeout: (timer) => {
+			(timer as Timer).cleared = true;
+		},
+		getSnapshot: () => ({
+			...context.snapshot,
+			isReconnecting: false,
+		}),
+		setReconnecting: () => {},
+		attemptAutoConnect: async () => false,
+		logger: {
+			info: () => {},
+			warn: () => {},
+		},
+		trace: {
+			event: (event) => {
+				events.push(event);
+			},
+		},
+	});
+
+	assert.equal(controller.start('shell-drop'), true);
+	await flushPromises();
+	await context.runTimer(context.timers[0]!);
+
+	assert.deepEqual(
+		events.map((event) => (event as { type: string }).type),
+		[
+			'reconnect.started',
+			'reconnect.attempt.started',
+			'reconnect.attempt.failed',
+			'reconnect.retry.scheduled',
+			'reconnect.timeout',
+			'reconnect.stopped',
+		],
+	);
+	assert.deepEqual(events.at(-1), {
+		type: 'reconnect.stopped',
+		source: 'reconnect-controller',
+		message: 'retry-timeout',
+		details: { reason: 'retry-timeout' },
+	});
+});
+
+void test('records successful reconnect trace events', async () => {
+	const events: unknown[] = [];
+	const controller = createAutoConnectReconnectController({
+		delaysMs: [10],
+		windowMs: 100,
+		now: () => 0,
+		setTimeout: () => {
+			throw new Error('retry should not schedule');
+		},
+		clearTimeout: () => {},
+		getSnapshot: () => ({
+			isAutoConnecting: false,
+			isReconnecting: false,
+			resetInFlight: false,
+			platformOS: 'ios',
+			appActive: true,
+			backgroundWorkAllowed: false,
+			foregroundServiceRequired: false,
+		}),
+		setReconnecting: () => {},
+		attemptAutoConnect: async () => true,
+		logger: {
+			info: () => {},
+			warn: () => {},
+		},
+		trace: {
+			event: (event) => {
+				events.push(event);
+			},
+		},
+	});
+
+	assert.equal(controller.start('shell-drop'), true);
+	await flushPromises();
+
+	assert.deepEqual(
+		events.map((event) => (event as { type: string }).type),
+		[
+			'reconnect.started',
+			'reconnect.attempt.started',
+			'reconnect.attempt.connected',
+			'reconnect.stopped',
+		],
+	);
+	assert.deepEqual(events.at(-1), {
+		type: 'reconnect.stopped',
+		source: 'reconnect-controller',
+		message: 'reconnected',
+		details: { reason: 'reconnected' },
+	});
+});
