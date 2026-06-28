@@ -756,6 +756,8 @@ void test('prompt redacts credential text inside generic string fields', () => {
 					name: 'Error',
 					message:
 						'https://user:password@example.test/path?token=ERROR_URL_SECRET private-key=ERROR_PRIVATE_KEY_SECRET',
+					stack:
+						'Error: failed\n    at sshConnect token=STACK_TOKEN_SECRET\n    at auth Bearer STACK_BEARER_SECRET\n-----BEGIN OPENSSH PRIVATE KEY-----\nSTACK_PRIVATE_KEY_SECRET\n-----END OPENSSH PRIVATE KEY-----',
 				},
 				details: {
 					log: 'Authorization: Bearer DETAIL_LOG_SECRET',
@@ -807,6 +809,9 @@ void test('prompt redacts credential text inside generic string fields', () => {
 		'EVENT_AUTH_SECRET',
 		'ERROR_URL_SECRET',
 		'ERROR_PRIVATE_KEY_SECRET',
+		'STACK_TOKEN_SECRET',
+		'STACK_BEARER_SECRET',
+		'STACK_PRIVATE_KEY_SECRET',
 		'DETAIL_LOG_SECRET',
 		'DETAIL_URL_SECRET',
 		'DETAIL_NOTE_SECRET',
