@@ -50,7 +50,6 @@ import {
 } from '@/lib/agent-notification-visibility';
 import { useAutoConnectStore } from '@/lib/auto-connect';
 import { restartCodexWithBridge } from '@/lib/codex-restart';
-import { connectAndOpenShell } from '@/lib/connect-and-open-shell';
 import { deliverConnectionDiagnosticPrompt } from '@/lib/connection-diagnostic-delivery';
 import { runManualConnectionDiagnostic } from '@/lib/connection-diagnostic-runner';
 import { connectionDiagnosticRecorder } from '@/lib/connection-diagnostics';
@@ -62,6 +61,7 @@ import {
 	planDetectedOpenShortcutPress,
 	runDetectedOpenCallback,
 } from '@/lib/detected-open-actions';
+import { runDiagnosticShellProbe } from '@/lib/diagnostic-shell-probe';
 import {
 	isFocusedActiveRequestCurrent,
 	shouldShowFocusedActiveFeedback,
@@ -2520,13 +2520,11 @@ function ShellDetail() {
 				resolvedSecurity,
 				trace,
 			}) =>
-				await connectAndOpenShell({
+				await runDiagnosticShellProbe({
 					connectionDetails,
 					resolvedSecurity,
 					trace,
-					diagnosticMode: true,
 					connect: RnRussh.connect,
-					navigate: () => {},
 				}),
 			recovery: tailscaleRecovery,
 		});

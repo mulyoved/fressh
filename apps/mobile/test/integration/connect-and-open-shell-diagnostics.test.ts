@@ -49,57 +49,15 @@ void test('connectAndOpenShell records connect and shell success events', async 
 	assert.doesNotMatch(JSON.stringify(events), /secret/);
 });
 
-void test('connectAndOpenShell disconnects diagnostic connections after success', async () => {
-	let disconnected = 0;
-	let saveCalls = 0;
-	const startShellOptions: unknown[] = [];
-
-	await connectAndOpenShell({
-		connectionDetails,
-		resolvedSecurity: { type: 'key', privateKey: 'secret' },
-		diagnosticMode: true,
-		connect: async () =>
-			({
-				connectionId: 'conn-1',
-				disconnect: () => {
-					disconnected += 1;
-				},
-				startShell: async (options: unknown) => {
-					startShellOptions.push(options);
-					return { channelId: 7 };
-				},
-			}) as never,
-		saveConnection: async () => {
-			saveCalls += 1;
-			throw new Error('diagnostic mode must not save connection metadata');
-		},
-		navigate: () => {
-			throw new Error('diagnostic mode must not navigate');
-		},
-	});
-
-	assert.equal(disconnected, 1);
-	assert.equal(saveCalls, 0);
-	assert.equal(
-		(startShellOptions[0] as { registerInStore?: boolean }).registerInStore,
-		false,
-	);
-});
-
-void test('connectAndOpenShell disconnects diagnostic connections after tmux attach failure without navigating', async () => {
-	let disconnected = 0;
-	let navigatedWithError = 0;
+void test('connectAndOpenShell navigates with tmux attach failure metadata', async () => {
+	const navigatedWithError: unknown[] = [];
 
 	const result = await connectAndOpenShell({
 		connectionDetails,
 		resolvedSecurity: { type: 'key', privateKey: 'secret' },
-		diagnosticMode: true,
 		connect: async () =>
 			({
 				connectionId: 'conn-1',
-				disconnect: () => {
-					disconnected += 1;
-				},
 				startShell: async () => {
 					throw {
 						tag: 'TmuxAttachFailed',
@@ -109,88 +67,22 @@ void test('connectAndOpenShell disconnects diagnostic connections after tmux att
 			}) as never,
 		saveConnection: async () => {},
 		navigate: () => {
-			throw new Error('diagnostic mode must not navigate');
+			throw new Error('success navigation should not run');
 		},
-		navigateWithError: () => {
-			navigatedWithError += 1;
+		navigateWithError: (params) => {
+			navigatedWithError.push(params);
 		},
 	});
 
 	assert.equal(result.status, 'tmux_attach_failed');
-	assert.equal(disconnected, 1);
-	assert.equal(navigatedWithError, 0);
-});
-
-void test('connectAndOpenShell disconnects diagnostic connections after shell failure', async () => {
-	let disconnected = 0;
-
-	await assert.rejects(
-		connectAndOpenShell({
-			connectionDetails,
-			resolvedSecurity: { type: 'key', privateKey: 'secret' },
-			diagnosticMode: true,
-			connect: async () =>
-				({
-					connectionId: 'conn-1',
-					disconnect: () => {
-						disconnected += 1;
-					},
-					startShell: async () => {
-						throw new Error('shell failed');
-					},
-				}) as never,
-			saveConnection: async () => {},
-			navigate: () => {
-				throw new Error('diagnostic mode must not navigate');
-			},
-		}),
-		/shell failed/,
-	);
-
-	assert.equal(disconnected, 1);
-});
-
-void test('connectAndOpenShell preserves shell failure when diagnostic disconnect times out', async () => {
-	const events: unknown[] = [];
-
-	await assert.rejects(
-		connectAndOpenShell({
-			connectionDetails,
-			resolvedSecurity: { type: 'key', privateKey: 'secret' },
-			diagnosticMode: true,
-			abortSignalTimeoutMs: 5,
-			connect: async () =>
-				({
-					connectionId: 'conn-1',
-					disconnect: async () => {
-						await new Promise(() => {});
-					},
-					startShell: async () => {
-						throw new Error('shell failed');
-					},
-				}) as never,
-			saveConnection: async () => {},
-			navigate: () => {
-				throw new Error('diagnostic mode must not navigate');
-			},
-			trace: {
-				event: (event) => {
-					events.push(event);
-				},
-			},
-		}),
-		/shell failed/,
-	);
-
-	const eventTypes = events.map((event) => (event as { type: string }).type);
-	assert.deepEqual(eventTypes, [
-		'ssh.connect.started',
-		'ssh.connect.connected',
-		'ssh.shell.started',
-		'ssh.shell.failed',
-		'ssh.diagnostic.disconnect-failed',
+	assert.deepEqual(navigatedWithError, [
+		{
+			connectionId: 'conn-1',
+			tmuxAttachFailureReason: 'missing session',
+			tmuxSessionName: 'main',
+			storedConnectionId: 'muly-dev_tailnet_ts_net-22',
+		},
 	]);
-	assert.match(JSON.stringify(events.at(-1)), /disconnect timed out/i);
 });
 
 void test('connectAndOpenShell records connect failure', async () => {

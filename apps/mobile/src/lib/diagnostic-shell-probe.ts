@@ -12,16 +12,16 @@ import {
 	type ConnectionDiagnosticEventInput,
 } from './connection-diagnostics';
 import { type InputConnectionDetails } from './connection-storage';
+import { getStoredConnectionId } from './connection-utils';
 import { rootLogger } from './logger';
-import { connectAndRememberConnection } from './ssh-connect-flow';
 import { extractTmuxAttachFailureReason } from './ssh-error-details';
 import { type RegisteredStartShellOptions } from './ssh-registry-store';
 import { AbortSignalTimeout } from './utils';
 
-const logger = rootLogger.extend('ConnectAndOpenShell');
+const logger = rootLogger.extend('DiagnosticShellProbe');
 const DEFAULT_CONNECT_TIMEOUT_MS = 5_000;
 
-export type ConnectAndOpenShellResult =
+export type DiagnosticShellProbeResult =
 	| {
 			status: 'connected';
 			sshConnection: SshConnection;
@@ -37,71 +37,58 @@ export type ConnectAndOpenShellResult =
 			storedConnectionId: string;
 	  };
 
-type SaveConnection = (params: {
-	details: InputConnectionDetails;
-	priority: number;
-	label?: string;
-}) => Promise<unknown>;
-
-type ConnectTrace = {
+type ProbeTrace = {
 	event: (event: ConnectionDiagnosticEventInput) => void;
 };
 
-const getSecretsManager = async () => {
-	const { secretsManager } = await import('./secrets-manager');
-	return secretsManager;
-};
-
-const defaultSaveConnection: SaveConnection = async (params) => {
-	const secretsManager = await getSecretsManager();
-	return await secretsManager.connections.utils.upsertConnection(params);
-};
-
-// Shared resolver for turning stored details into a connect-ready security object.
-async function resolveSecurityFromDetails(
-	connectionDetails: InputConnectionDetails,
-): Promise<ConnectionDetails['security']> {
-	const secretsManager = await getSecretsManager();
-	const privateKey = await secretsManager.keys.utils
-		.getPrivateKey(connectionDetails.security.keyId)
-		.then((e) => e.value);
-	return {
-		type: 'key',
-		privateKey,
-	};
+function diagnosticDisconnectTimeoutError(timeoutMs: number) {
+	return new Error(`Diagnostic SSH disconnect timed out after ${timeoutMs}ms`);
 }
 
-// Shared connect flow used by saved-entry and silent auto-connect.
-export async function connectAndOpenShell(args: {
+async function withDiagnosticDisconnectTimeout<T>(
+	promise: Promise<T>,
+	timeoutMs: number,
+): Promise<T> {
+	let timeoutId: ReturnType<typeof setTimeout> | null = null;
+	try {
+		return await Promise.race([
+			promise,
+			new Promise<never>((_, reject) => {
+				timeoutId = setTimeout(() => {
+					timeoutId = null;
+					reject(diagnosticDisconnectTimeoutError(timeoutMs));
+				}, timeoutMs);
+				const maybeNodeTimer = timeoutId as ReturnType<typeof setTimeout> & {
+					unref?: () => void;
+				};
+				maybeNodeTimer.unref?.();
+			}),
+		]);
+	} finally {
+		if (timeoutId !== null) clearTimeout(timeoutId);
+	}
+}
+
+export async function runDiagnosticShellProbe(args: {
 	connectionDetails: InputConnectionDetails;
 	connect: typeof RnRussh.connect;
-	navigate: (params: { connectionId: string; channelId: number }) => void;
-	navigateWithError?: (params: {
-		connectionId: string;
-		tmuxAttachFailureReason: string | null;
-		tmuxSessionName: string;
-		storedConnectionId: string;
-	}) => void;
+	resolvedSecurity: ConnectionDetails['security'];
 	onConnectionProgress?: (progressEvent: SshConnectionProgress) => void;
 	abortSignalTimeoutMs?: number;
-	resolvedSecurity?: ConnectionDetails['security'];
-	saveConnection?: SaveConnection;
-	trace?: ConnectTrace;
-}): Promise<ConnectAndOpenShellResult> {
+	trace?: ProbeTrace;
+}): Promise<DiagnosticShellProbeResult> {
 	const {
 		connectionDetails,
 		connect,
-		navigate,
+		resolvedSecurity,
 		onConnectionProgress,
 		abortSignalTimeoutMs = DEFAULT_CONNECT_TIMEOUT_MS,
-		resolvedSecurity,
-		saveConnection = defaultSaveConnection,
 	} = args;
 	const traceEvent = (event: ConnectionDiagnosticEventInput) => {
 		try {
 			args.trace?.event(event);
 		} catch (error) {
-			logger.warn('Connect trace event failed', error);
+			logger.warn('Diagnostic probe trace event failed', error);
 		}
 	};
 	const connectionIdentity: ConnectionDiagnosticConnectionIdentity = {
@@ -112,24 +99,22 @@ export async function connectAndOpenShell(args: {
 		useTmux: connectionDetails.useTmux,
 		tmuxSessionName: connectionDetails.tmuxSessionName,
 	};
-	const security =
-		resolvedSecurity ?? (await resolveSecurityFromDetails(connectionDetails));
+	const storedConnectionId = getStoredConnectionId(connectionDetails);
 
 	traceEvent({
 		type: 'ssh.connect.started',
 		source: 'saved-entry',
 		connection: connectionIdentity,
 	});
-	let rememberedConnection: {
-		sshConnection: SshConnection;
-		storedConnectionId: string;
-	};
+
+	let sshConnection: SshConnection;
 	try {
-		rememberedConnection = await connectAndRememberConnection({
-			connectionDetails,
-			connect,
-			onConnectionProgress: (progressEvent: SshConnectionProgress) => {
-				logger.info('SSH connect progress event', progressEvent);
+		sshConnection = await connect({
+			host: connectionDetails.host,
+			port: connectionDetails.port,
+			username: connectionDetails.username,
+			security: resolvedSecurity,
+			onConnectionProgress: (progressEvent) => {
 				traceEvent({
 					type: 'ssh.connect.progress',
 					source: 'saved-entry',
@@ -138,9 +123,8 @@ export async function connectAndOpenShell(args: {
 				});
 				onConnectionProgress?.(progressEvent);
 			},
-			abortSignalTimeoutMs,
-			resolvedSecurity: security,
-			saveConnection,
+			onServerKey: async () => true,
+			abortSignal: AbortSignalTimeout(abortSignalTimeoutMs),
 		});
 	} catch (error) {
 		traceEvent({
@@ -151,7 +135,7 @@ export async function connectAndOpenShell(args: {
 		});
 		throw error;
 	}
-	const { sshConnection, storedConnectionId } = rememberedConnection;
+
 	const connectedIdentity = {
 		...connectionIdentity,
 		connectionId: sshConnection.connectionId,
@@ -162,6 +146,32 @@ export async function connectAndOpenShell(args: {
 		connection: connectedIdentity,
 		details: { storedConnectionId },
 	});
+
+	const cleanupDiagnosticConnection = async () => {
+		try {
+			await withDiagnosticDisconnectTimeout(
+				Promise.resolve(
+					sshConnection.disconnect?.({
+						signal: AbortSignalTimeout(abortSignalTimeoutMs),
+					}),
+				),
+				abortSignalTimeoutMs,
+			);
+			traceEvent({
+				type: 'ssh.diagnostic.disconnected',
+				source: 'saved-entry',
+				connection: connectedIdentity,
+			});
+		} catch (error) {
+			traceEvent({
+				type: 'ssh.diagnostic.disconnect-failed',
+				source: 'saved-entry',
+				connection: connectedIdentity,
+				error: serializeConnectionDiagnosticError(error),
+			});
+		}
+	};
+
 	let shellHandle: Awaited<ReturnType<typeof sshConnection.startShell>>;
 	try {
 		traceEvent({
@@ -174,6 +184,7 @@ export async function connectAndOpenShell(args: {
 			useTmux: connectionDetails.useTmux,
 			tmuxSessionName: connectionDetails.tmuxSessionName,
 			abortSignal: AbortSignalTimeout(abortSignalTimeoutMs),
+			registerInStore: false,
 		};
 		shellHandle = await sshConnection.startShell(startShellOptions);
 	} catch (error) {
@@ -188,13 +199,8 @@ export async function connectAndOpenShell(args: {
 			error: serializeConnectionDiagnosticError(error),
 			details: { tmuxAttachFailureReason, storedConnectionId },
 		});
+		await cleanupDiagnosticConnection();
 		if (tmuxAttachFailureReason !== null) {
-			args.navigateWithError?.({
-				connectionId: sshConnection.connectionId,
-				tmuxAttachFailureReason,
-				tmuxSessionName: connectionDetails.tmuxSessionName,
-				storedConnectionId,
-			});
 			return {
 				status: 'tmux_attach_failed',
 				connectionId: sshConnection.connectionId,
@@ -205,6 +211,7 @@ export async function connectAndOpenShell(args: {
 		}
 		throw error;
 	}
+
 	traceEvent({
 		type: 'ssh.shell.connected',
 		source: 'saved-entry',
@@ -212,15 +219,7 @@ export async function connectAndOpenShell(args: {
 		details: { channelId: shellHandle.channelId, storedConnectionId },
 	});
 
-	logger.info(
-		'Connected to SSH server',
-		sshConnection.connectionId,
-		shellHandle.channelId,
-	);
-	navigate({
-		connectionId: sshConnection.connectionId,
-		channelId: shellHandle.channelId,
-	});
+	await cleanupDiagnosticConnection();
 
 	return {
 		status: 'connected',
