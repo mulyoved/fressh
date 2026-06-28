@@ -440,6 +440,37 @@ void test('older trace finish does not replace newer latest trace', () => {
 	assert.equal(recorder.getLatestTrace()?.status, 'running');
 });
 
+void test('older trace finish does not evict newer bounded history entry', () => {
+	let currentNow = 1250;
+	const recorder = createConnectionDiagnosticRecorder({
+		now: () => currentNow,
+		maxHistory: 1,
+	});
+
+	const first = recorder.startTrace({
+		trigger: 'reconnect',
+		reason: 'older-overlap',
+	});
+
+	currentNow = 1260;
+	const second = recorder.startTrace({
+		trigger: 'manual-diagnostic',
+		reason: 'newer-overlap',
+	});
+
+	currentNow = 1270;
+	second.finish('connected');
+
+	currentNow = 1280;
+	first.finish('failed');
+
+	assert.equal(recorder.getLatestTrace()?.id, second.trace.id);
+	assert.deepEqual(
+		recorder.getHistory().map((trace) => trace.id),
+		[second.trace.id],
+	);
+});
+
 void test('clear prevents stale trace handles from repopulating recorder state', () => {
 	let currentNow = 1300;
 	const recorder = createConnectionDiagnosticRecorder({
@@ -597,7 +628,7 @@ void test('prompt formatting tolerates direct messy trace details', () => {
 
 void test('prompt redacts credential text inside generic string fields', () => {
 	const trace: ConnectionDiagnosticTrace = {
-		id: 'trace-string-redaction',
+		id: 'trace-token=TRACE_ID_SECRET beta gamma',
 		trigger: 'manual-diagnostic',
 		reason: 'apiKey=TRACE_REASON_SECRET privateKey=TRACE_PRIVATE_KEY_SECRET',
 		status: 'failed',
@@ -607,7 +638,7 @@ void test('prompt redacts credential text inside generic string fields', () => {
 			{
 				atMs: 320,
 				elapsedMs: 20,
-				type: 'ssh.connect.failed',
+				type: 'ssh.connect.failed privateKey=EVENT_TYPE_PRIVATE_KEY_SECRET beta gamma',
 				source: 'active-connection',
 				message:
 					'Authorization: Bearer EVENT_MESSAGE_SECRET passphrase=EVENT_PASSPHRASE_SECRET',
@@ -622,6 +653,8 @@ void test('prompt redacts credential text inside generic string fields', () => {
 					note: 'apiKey=DETAIL_NOTE_SECRET',
 					generic:
 						'privateKey=DETAIL_PRIVATE_KEY_SECRET passphrase: DETAIL_PASSPHRASE_SECRET',
+					multiWord:
+						'password: MULTI_WORD_PASSWORD_SECRET beta gamma token=MULTI_WORD_TOKEN_SECRET beta gamma apiKey=MULTI_WORD_API_KEY_SECRET beta gamma',
 					pem: [
 						'-----BEGIN OPENSSH PRIVATE KEY-----',
 						'PRIVATE_KEY_BODY_SECRET',
@@ -643,7 +676,9 @@ void test('prompt redacts credential text inside generic string fields', () => {
 
 	for (const secret of [
 		'TRACE_REASON_SECRET',
+		'TRACE_ID_SECRET',
 		'TRACE_PRIVATE_KEY_SECRET',
+		'EVENT_TYPE_PRIVATE_KEY_SECRET',
 		'EVENT_MESSAGE_SECRET',
 		'EVENT_PASSPHRASE_SECRET',
 		'ERROR_URL_SECRET',
@@ -653,6 +688,10 @@ void test('prompt redacts credential text inside generic string fields', () => {
 		'DETAIL_NOTE_SECRET',
 		'DETAIL_PRIVATE_KEY_SECRET',
 		'DETAIL_PASSPHRASE_SECRET',
+		'MULTI_WORD_PASSWORD_SECRET',
+		'MULTI_WORD_TOKEN_SECRET',
+		'MULTI_WORD_API_KEY_SECRET',
+		'beta gamma',
 		'PRIVATE_KEY_BODY_SECRET',
 		'APP_STATE_SECRET',
 	]) {

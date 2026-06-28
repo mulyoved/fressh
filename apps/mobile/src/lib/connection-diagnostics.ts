@@ -97,6 +97,11 @@ type RecorderOptions = {
 	maxHistory?: number;
 };
 
+type HistoryEntry = {
+	order: number;
+	trace: ConnectionDiagnosticTrace;
+};
+
 type FormatPromptOptions = {
 	appState?: ConnectionDiagnosticAppState;
 };
@@ -108,9 +113,17 @@ let traceSequence = 0;
 const CIRCULAR_PLACEHOLDER = '[Circular]';
 const REDACTED_PLACEHOLDER = '[REDACTED]';
 const UNREADABLE_ERROR_MESSAGE = '[Unserializable error]';
+const DIAGNOSTIC_SECRET_TEXT_PATTERN =
+	/(^|[^\w])((?:private[_-]?key)|passphrase|password|token|api[_-]?key|authorization)\s*([:=])\s*(?:"[^"]*"|'[^']*'|[^\n]*)/giu;
 
 function redactDiagnosticText(value: string): string {
-	return redactBrowserActionErrorText(value)
+	return redactBrowserActionErrorText(
+		value.replace(
+			DIAGNOSTIC_SECRET_TEXT_PATTERN,
+			(_match, prefix: string, name: string, separator: string) =>
+				`${prefix}${name}${separator} [redacted]`,
+		),
+	)
 		.replace(
 			/-----BEGIN [^-]*PRIVATE KEY-----[\s\S]*?-----END [^-]*PRIVATE KEY-----/gu,
 			REDACTED_PLACEHOLDER,
@@ -304,7 +317,7 @@ function formatConnectionIdentity(
 
 function formatEvent(event: ConnectionDiagnosticEvent): string {
 	const parts = [
-		`- +${event.elapsedMs}ms ${event.type}`,
+		`- +${event.elapsedMs}ms ${redactDiagnosticText(event.type)}`,
 		`source=${event.source}`,
 		event.message ? `message=${redactDiagnosticText(event.message)}` : null,
 		event.connection
@@ -460,13 +473,16 @@ export function createConnectionDiagnosticRecorder(
 	const now = options.now ?? Date.now;
 	const maxHistory = Math.max(1, options.maxHistory ?? DEFAULT_MAX_HISTORY);
 	let latestTrace: ConnectionDiagnosticTrace | null = null;
-	let history: ConnectionDiagnosticTrace[] = [];
+	let history: HistoryEntry[] = [];
 	let recorderGeneration = 0;
+	let traceOrderSequence = 0;
 
 	return {
 		startTrace: ({ trigger, reason }) => {
 			const startedAtMs = now();
 			const traceGeneration = recorderGeneration;
+			traceOrderSequence += 1;
+			const traceOrder = traceOrderSequence;
 			const trace: ConnectionDiagnosticTrace = {
 				id: nextTraceId(startedAtMs),
 				trigger,
@@ -504,13 +520,18 @@ export function createConnectionDiagnosticRecorder(
 					trace.status = status;
 					trace.finishedAtMs = now();
 					if (traceGeneration === recorderGeneration) {
-						history = [...history, cloneTrace(trace)].slice(-maxHistory);
+						history = [
+							...history.filter((entry) => entry.trace.id !== trace.id),
+							{ order: traceOrder, trace: cloneTrace(trace) },
+						]
+							.sort((left, right) => left.order - right.order)
+							.slice(-maxHistory);
 					}
 				},
 			};
 		},
 		getLatestTrace: () => (latestTrace ? cloneTrace(latestTrace) : null),
-		getHistory: () => history.map((trace) => cloneTrace(trace)),
+		getHistory: () => history.map((entry) => cloneTrace(entry.trace)),
 		clear: () => {
 			recorderGeneration += 1;
 			latestTrace = null;
@@ -611,7 +632,7 @@ export function formatConnectionDiagnosticPrompt(
 		'Debug this Fressh mobile SSH connection failure.',
 		'',
 		'Trace summary:',
-		`- traceId: ${trace.id}`,
+		`- traceId: ${redactDiagnosticText(trace.id)}`,
 		`- trigger: ${trace.trigger}`,
 		`- reason: ${redactDiagnosticText(trace.reason)}`,
 		`- status: ${trace.status}`,
