@@ -595,6 +595,66 @@ void test('prompt formatting tolerates direct messy trace details', () => {
 	assert.doesNotMatch(prompt, /ACCESS_TOKEN_SECRET/);
 });
 
+void test('prompt redacts credential text inside generic string fields', () => {
+	const trace: ConnectionDiagnosticTrace = {
+		id: 'trace-string-redaction',
+		trigger: 'manual-diagnostic',
+		reason: 'apiKey=TRACE_REASON_SECRET',
+		status: 'failed',
+		startedAtMs: 300,
+		finishedAtMs: 360,
+		events: [
+			{
+				atMs: 320,
+				elapsedMs: 20,
+				type: 'ssh.connect.failed',
+				source: 'active-connection',
+				message: 'Authorization: Bearer EVENT_MESSAGE_SECRET',
+				error: {
+					name: 'Error',
+					message:
+						'https://user:password@example.test/path?token=ERROR_URL_SECRET',
+				},
+				details: {
+					log: 'Authorization: Bearer DETAIL_LOG_SECRET',
+					url: 'https://user:password@example.test/path?token=DETAIL_URL_SECRET',
+					note: 'apiKey=DETAIL_NOTE_SECRET',
+					pem: [
+						'-----BEGIN OPENSSH PRIVATE KEY-----',
+						'PRIVATE_KEY_BODY_SECRET',
+						'-----END OPENSSH PRIVATE KEY-----',
+					].join('\n'),
+				},
+			},
+		],
+	};
+
+	const prompt = formatConnectionDiagnosticPrompt(trace, {
+		appState: {
+			platformOS: 'android',
+			pathname: '/shell/detail?access_token=APP_STATE_SECRET',
+			isAutoConnecting: false,
+			isReconnecting: true,
+		},
+	});
+
+	for (const secret of [
+		'TRACE_REASON_SECRET',
+		'EVENT_MESSAGE_SECRET',
+		'ERROR_URL_SECRET',
+		'DETAIL_LOG_SECRET',
+		'DETAIL_URL_SECRET',
+		'DETAIL_NOTE_SECRET',
+		'PRIVATE_KEY_BODY_SECRET',
+		'APP_STATE_SECRET',
+	]) {
+		assert.doesNotMatch(prompt, new RegExp(secret));
+	}
+
+	assert.match(prompt, /\[redacted\]/);
+	assert.match(prompt, /\[REDACTED\]/);
+});
+
 void test('error serializer preserves useful non-secret details', () => {
 	const error = new Error('connection timed out');
 	error.name = 'TimeoutError';
@@ -659,4 +719,39 @@ void test('error serializer preserves useful non-secret details', () => {
 		name: 'NonError',
 		message: '[Unserializable error]',
 	});
+
+	const uniffiError = Object.assign(new Error('Russh'), {
+		name: 'SshError',
+		tag: 'Russh',
+		inner: ['No route to host'],
+	});
+
+	assert.deepEqual(serializeConnectionDiagnosticError(uniffiError), {
+		name: 'SshError',
+		message: 'Russh',
+		stack: uniffiError.stack,
+		tag: 'Russh',
+		inner: ['No route to host'],
+	});
+
+	const prompt = formatConnectionDiagnosticPrompt({
+		id: 'trace-uniffi-error',
+		trigger: 'manual-diagnostic',
+		reason: 'uniffi-error',
+		status: 'failed',
+		startedAtMs: 10,
+		finishedAtMs: 20,
+		events: [
+			{
+				atMs: 20,
+				elapsedMs: 10,
+				type: 'ssh.connect.failed',
+				source: 'active-connection',
+				error: serializeConnectionDiagnosticError(uniffiError),
+			},
+		],
+	});
+
+	assert.match(prompt, /errorTag=Russh/);
+	assert.match(prompt, /No route to host/);
 });

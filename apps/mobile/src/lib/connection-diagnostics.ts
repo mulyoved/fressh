@@ -1,3 +1,5 @@
+import { redactBrowserActionErrorText } from './browser-action-error-report';
+
 export type ConnectionDiagnosticTrigger =
 	| 'initial-auto-connect'
 	| 'reconnect'
@@ -35,6 +37,8 @@ export type ConnectionDiagnosticError = {
 	name: string;
 	message: string;
 	stack?: string;
+	tag?: string;
+	inner?: unknown;
 };
 
 export type ConnectionDiagnosticEventInput = {
@@ -105,6 +109,13 @@ const CIRCULAR_PLACEHOLDER = '[Circular]';
 const REDACTED_PLACEHOLDER = '[REDACTED]';
 const UNREADABLE_ERROR_MESSAGE = '[Unserializable error]';
 
+function redactDiagnosticText(value: string): string {
+	return redactBrowserActionErrorText(value).replace(
+		/-----BEGIN [^-]*PRIVATE KEY-----[\s\S]*?-----END [^-]*PRIVATE KEY-----/gu,
+		REDACTED_PLACEHOLDER,
+	);
+}
+
 function isSecretDiagnosticKey(key: string): boolean {
 	const normalizedKey = key.toLowerCase().replace(/[^a-z0-9]/gu, '');
 	return [
@@ -131,11 +142,14 @@ function snapshotDiagnosticValue(
 	try {
 		if (
 			value === null ||
-			typeof value === 'string' ||
 			typeof value === 'number' ||
 			typeof value === 'boolean'
 		) {
 			return value;
+		}
+
+		if (typeof value === 'string') {
+			return redactDiagnosticText(value);
 		}
 
 		if (typeof value === 'bigint') {
@@ -197,6 +211,7 @@ function sanitizeEventInput(
 ): ConnectionDiagnosticEventInput {
 	return {
 		...input,
+		message: input.message ? redactDiagnosticText(input.message) : undefined,
 		connection: input.connection
 			? cloneDiagnosticValue(input.connection)
 			: undefined,
@@ -212,6 +227,7 @@ function cloneTrace(
 ): ConnectionDiagnosticTrace {
 	return {
 		...trace,
+		reason: redactDiagnosticText(trace.reason),
 		events: trace.events.map((event) => cloneDiagnosticValue(event)),
 	};
 }
@@ -221,18 +237,30 @@ function formatConnectionIdentity(
 ): string {
 	if (!connection) return 'unknown connection';
 
-	const username = connection.username?.trim();
-	const host = connection.host?.trim();
+	const username = connection.username
+		? redactDiagnosticText(connection.username.trim())
+		: undefined;
+	const host = connection.host
+		? redactDiagnosticText(connection.host.trim())
+		: undefined;
 	const port = connection.port;
 	const address =
 		username && host && typeof port === 'number'
 			? `${username}@${host}:${port}`
 			: null;
 
-	const savedId = connection.savedConnectionId?.trim();
-	const connectionId = connection.connectionId?.trim();
-	const keyId = connection.keyId?.trim();
-	const tmuxSessionName = connection.tmuxSessionName?.trim();
+	const savedId = connection.savedConnectionId
+		? redactDiagnosticText(connection.savedConnectionId.trim())
+		: undefined;
+	const connectionId = connection.connectionId
+		? redactDiagnosticText(connection.connectionId.trim())
+		: undefined;
+	const keyId = connection.keyId
+		? redactDiagnosticText(connection.keyId.trim())
+		: undefined;
+	const tmuxSessionName = connection.tmuxSessionName
+		? redactDiagnosticText(connection.tmuxSessionName.trim())
+		: undefined;
 	const parts = [
 		address,
 		savedId ? `savedConnectionId=${savedId}` : null,
@@ -253,12 +281,30 @@ function formatEvent(event: ConnectionDiagnosticEvent): string {
 	const parts = [
 		`- +${event.elapsedMs}ms ${event.type}`,
 		`source=${event.source}`,
-		event.message ? `message=${event.message}` : null,
+		event.message ? `message=${redactDiagnosticText(event.message)}` : null,
 		event.connection
 			? `connection=${formatConnectionIdentity(event.connection)}`
 			: null,
-		event.error ? `error=${event.error.name}: ${event.error.message}` : null,
+		event.error
+			? `error=${redactDiagnosticText(
+					event.error.name,
+				)}: ${redactDiagnosticText(event.error.message)}`
+			: null,
 	];
+
+	if (event.error?.tag) {
+		parts.push(`errorTag=${redactDiagnosticText(event.error.tag)}`);
+	}
+
+	if (event.error?.inner !== undefined) {
+		parts.push(
+			`errorInner=${JSON.stringify(
+				cloneDiagnosticValue(event.error.inner),
+				null,
+				2,
+			).replace(/\n/g, ' ')}`,
+		);
+	}
 
 	if (event.details) {
 		parts.push(
@@ -284,16 +330,31 @@ export function serializeConnectionDiagnosticError(
 			UNREADABLE_ERROR_MESSAGE,
 		);
 		const stack = readErrorStringField(error, 'stack', undefined);
-		return {
+		const tag = readErrorStringField(error, 'tag', undefined);
+		const inner = readObjectField(error, 'inner');
+		const serializedError: ConnectionDiagnosticError = {
 			name: name || 'Error',
 			message: message ?? UNREADABLE_ERROR_MESSAGE,
 			stack,
 		};
+
+		if (tag !== undefined) {
+			serializedError.tag = tag;
+		}
+
+		if (inner !== undefined) {
+			serializedError.inner = cloneDiagnosticValue(inner);
+		}
+
+		return serializedError;
 	}
 
 	let message: string;
 	try {
-		message = typeof error === 'string' ? error : String(error);
+		message =
+			typeof error === 'string'
+				? redactDiagnosticText(error)
+				: redactDiagnosticText(String(error));
 	} catch {
 		message = UNREADABLE_ERROR_MESSAGE;
 	}
@@ -314,14 +375,29 @@ function isErrorLike(error: unknown): error is Error {
 
 function readErrorStringField(
 	error: Error,
-	field: 'name' | 'message' | 'stack',
+	field: string,
 	fallback: string | undefined,
 ): string | undefined {
 	try {
-		const value = error[field];
-		return typeof value === 'string' ? value : fallback;
+		const value = readObjectField(error, field);
+		return typeof value === 'string' ? redactDiagnosticText(value) : fallback;
 	} catch {
 		return fallback;
+	}
+}
+
+function readObjectField(value: unknown, field: string): unknown {
+	try {
+		if (
+			value === null ||
+			(typeof value !== 'object' && typeof value !== 'function')
+		) {
+			return undefined;
+		}
+
+		return (value as Record<string, unknown>)[field];
+	} catch {
+		return undefined;
 	}
 }
 
@@ -438,13 +514,15 @@ export function formatConnectionDiagnosticPrompt(
 	if (options.appState) {
 		appStateLines.push(
 			'App state:',
-			`- platformOS: ${options.appState.platformOS}`,
+			`- platformOS: ${redactDiagnosticText(options.appState.platformOS)}`,
 			`- isAutoConnecting: ${String(options.appState.isAutoConnecting)}`,
 			`- isReconnecting: ${String(options.appState.isReconnecting)}`,
 		);
 
 		if (options.appState.pathname !== undefined) {
-			appStateLines.push(`- pathname: ${options.appState.pathname}`);
+			appStateLines.push(
+				`- pathname: ${redactDiagnosticText(options.appState.pathname)}`,
+			);
 		}
 
 		if (options.appState.foregroundServiceStarted !== undefined) {
@@ -482,7 +560,7 @@ export function formatConnectionDiagnosticPrompt(
 		'Trace summary:',
 		`- traceId: ${trace.id}`,
 		`- trigger: ${trace.trigger}`,
-		`- reason: ${trace.reason}`,
+		`- reason: ${redactDiagnosticText(trace.reason)}`,
 		`- status: ${trace.status}`,
 		`- startedAtMs: ${trace.startedAtMs}`,
 		`- finishedAtMs: ${trace.finishedAtMs ?? 'not-finished'}`,
