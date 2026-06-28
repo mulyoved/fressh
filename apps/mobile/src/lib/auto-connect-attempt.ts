@@ -125,6 +125,47 @@ const getSavedEntryConnectionIdentity = (
 	tmuxSessionName: details.tmuxSessionName,
 });
 
+function emitTrace(
+	trace: AutoConnectTrace | undefined,
+	logger: Logger,
+	event: ConnectionDiagnosticEventInput,
+) {
+	try {
+		trace?.event(event);
+	} catch (error) {
+		logger.warn('Auto-connect trace event failed', error);
+	}
+}
+
+function traceLatestShell(
+	trace: AutoConnectTrace | undefined,
+	logger: Logger,
+	latestShell: LatestShellSnapshot,
+	pathname: string,
+) {
+	emitTrace(trace, logger, {
+		type: 'auto-connect.source.latest-shell',
+		source: 'latest-shell',
+		connection: { connectionId: latestShell.connectionId },
+		details: { channelId: latestShell.channelId, pathname },
+	});
+}
+
+function traceSavedEntry(
+	trace: AutoConnectTrace | undefined,
+	logger: Logger,
+	type: string,
+	entry: SavedConnectionEntry,
+	details?: Record<string, unknown>,
+) {
+	emitTrace(trace, logger, {
+		type,
+		source: 'saved-entry',
+		connection: getSavedEntryConnectionIdentity(entry.id, entry.value),
+		details,
+	});
+}
+
 export async function attemptAutoConnectSource({
 	platformOS,
 	pathname,
@@ -142,20 +183,11 @@ export async function attemptAutoConnectSource({
 	trace,
 }: AutoConnectAttemptSourceArgs): Promise<boolean> {
 	const traceEvent = (event: ConnectionDiagnosticEventInput) => {
-		try {
-			trace?.event(event);
-		} catch (error) {
-			logger.warn('Auto-connect trace event failed', error);
-		}
+		emitTrace(trace, logger, event);
 	};
 
 	if (latestShell) {
-		traceEvent({
-			type: 'auto-connect.source.latest-shell',
-			source: 'latest-shell',
-			connection: { connectionId: latestShell.connectionId },
-			details: { channelId: latestShell.channelId, pathname },
-		});
+		traceLatestShell(trace, logger, latestShell, pathname);
 		if (pathname !== '/shell/detail') {
 			navigateToShell(latestShell.connectionId, latestShell.channelId);
 		}
@@ -269,24 +301,26 @@ export async function attemptAutoConnectSource({
 	}
 
 	const details = latestEntry.value;
-	traceEvent({
-		type: 'auto-connect.saved-entry.selected',
-		source: 'saved-entry',
-		connection: getSavedEntryConnectionIdentity(latestEntry.id, details),
-	});
+	traceSavedEntry(
+		trace,
+		logger,
+		'auto-connect.saved-entry.selected',
+		latestEntry,
+	);
 	if (
 		typeof details.useTmux !== 'boolean' ||
 		typeof details.tmuxSessionName !== 'string'
 	) {
-		traceEvent({
-			type: 'auto-connect.saved-entry.invalid-tmux-settings',
-			source: 'saved-entry',
-			connection: getSavedEntryConnectionIdentity(latestEntry.id, details),
-			details: {
+		traceSavedEntry(
+			trace,
+			logger,
+			'auto-connect.saved-entry.invalid-tmux-settings',
+			latestEntry,
+			{
 				useTmuxType: typeof details.useTmux,
 				tmuxSessionNameType: typeof details.tmuxSessionName,
 			},
-		});
+		);
 		return false;
 	}
 
@@ -298,18 +332,20 @@ export async function attemptAutoConnectSource({
 	};
 	const resolvedSecurity = await resolveKeySecurity(details);
 	if (!resolvedSecurity) {
-		traceEvent({
-			type: 'auto-connect.saved-entry.key-missing',
-			source: 'saved-entry',
-			connection: getSavedEntryConnectionIdentity(latestEntry.id, details),
-		});
+		traceSavedEntry(
+			trace,
+			logger,
+			'auto-connect.saved-entry.key-missing',
+			latestEntry,
+		);
 		return false;
 	}
-	traceEvent({
-		type: 'auto-connect.saved-entry.key-resolved',
-		source: 'saved-entry',
-		connection: getSavedEntryConnectionIdentity(latestEntry.id, details),
-	});
+	traceSavedEntry(
+		trace,
+		logger,
+		'auto-connect.saved-entry.key-resolved',
+		latestEntry,
+	);
 
 	const connectSavedEntry = () =>
 		openSavedEntryShell({
@@ -345,11 +381,12 @@ export async function attemptAutoConnectSource({
 		trace,
 	});
 	if (!result.connected) {
-		traceEvent({
-			type: 'auto-connect.saved-entry.connect.failed',
-			source: 'saved-entry',
-			connection: getSavedEntryConnectionIdentity(latestEntry.id, details),
-		});
+		traceSavedEntry(
+			trace,
+			logger,
+			'auto-connect.saved-entry.connect.failed',
+			latestEntry,
+		);
 	}
 	return result.connected;
 }

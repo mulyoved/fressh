@@ -443,6 +443,16 @@ void test('records reconnect lifecycle trace events', async () => {
 			windowMs: 100,
 		},
 	});
+	assert.deepEqual(events[2], {
+		type: 'reconnect.attempt.failed',
+		source: 'reconnect-controller',
+		details: { elapsedMs: 0 },
+	});
+	assert.deepEqual(events[3], {
+		type: 'reconnect.retry.scheduled',
+		source: 'reconnect-controller',
+		details: { attemptIndex: 0, delayMs: 10 },
+	});
 });
 
 void test('records blocked reconnect start trace event', () => {

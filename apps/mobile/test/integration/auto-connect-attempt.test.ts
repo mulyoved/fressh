@@ -279,6 +279,71 @@ void test('saved-entry path delegates through Tailscale recovery and injected op
 	assert.deepEqual(navigations, [['conn-3', 4]]);
 });
 
+void test('records saved-entry selection through trace sink', async () => {
+	const events: unknown[] = [];
+	const { logger } = createLogger();
+
+	await attemptAutoConnectSource({
+		platformOS: 'android',
+		pathname: '/(tabs)',
+		latestShell: null,
+		connections: {},
+		openSavedEntryShell: async () => ({
+			status: 'connected',
+			connectionId: 'conn-2',
+			channelId: 3,
+		}),
+		loadLatestSavedConnection: async () => createSavedEntry(),
+		resolveKeySecurity: async () => ({
+			type: 'key',
+			privateKey: 'private-key',
+		}),
+		navigateToShell: () => {},
+		recovery: readyRecovery,
+		markTailscaleAttention: () => {},
+		clearTailscaleAttention: () => {},
+		logger,
+		trace: {
+			event: (event) => {
+				events.push(event);
+			},
+		},
+	});
+
+	assert.deepEqual(
+		events.map((event) => (event as { type: string }).type),
+		[
+			'auto-connect.source.missing-latest-shell',
+			'auto-connect.source.missing-active-connection',
+			'auto-connect.saved-entry.selected',
+			'auto-connect.saved-entry.key-resolved',
+			'tailscale.ensure-ready.result',
+			'auto-connect.saved-entry.connect.started',
+			'auto-connect.saved-entry.connect.connected',
+		],
+	);
+	assert.deepEqual(
+		(events[2] as { source: string; connection: unknown }).connection,
+		{
+			savedConnectionId: 'saved-1',
+			username: 'muly',
+			host: 'host.example',
+			port: 22,
+			keyId: 'key-1',
+			useTmux: true,
+			tmuxSessionName: 'main',
+		},
+	);
+	assert.equal(
+		(events[2] as { source: string; connection: unknown }).source,
+		'saved-entry',
+	);
+	assert.deepEqual(
+		(events[3] as { source: string; connection: unknown }).connection,
+		(events[2] as { source: string; connection: unknown }).connection,
+	);
+});
+
 void test('active shell failure falls through to saved-entry connection', async () => {
 	const navigations: [string, number][] = [];
 	const { calls, logger } = createLogger();

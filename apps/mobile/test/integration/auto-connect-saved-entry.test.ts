@@ -510,6 +510,18 @@ void test('records Tailscale recovery retry trace events', async () => {
 			'auto-connect.saved-entry.connect.connected',
 		],
 	);
+	assert.deepEqual(events[3], {
+		type: 'tailscale.recovery.result',
+		source: 'tailscale-recovery',
+		details: {
+			recoveryResult: {
+				kind: 'recovered',
+				attempted: true,
+				networkLikeFailure: true,
+				available: true,
+			},
+		},
+	});
 });
 
 void test('trace payload mutation cannot bypass Tailscale readiness block', async () => {

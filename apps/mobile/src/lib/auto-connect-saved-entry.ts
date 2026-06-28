@@ -110,6 +110,33 @@ function snapshotConnectResult(result: SavedEntryConnectResult) {
 	};
 }
 
+function emitTrace(
+	trace: SavedEntryTrace | undefined,
+	logWarning: (message: string, error: unknown) => void,
+	event: ConnectionDiagnosticEventInput,
+) {
+	try {
+		trace?.event(event);
+	} catch (error) {
+		logWarning('Saved-entry trace event failed', error);
+	}
+}
+
+function traceRecoveryResult(
+	trace: SavedEntryTrace | undefined,
+	logWarning: (message: string, error: unknown) => void,
+	recoveryResult: TailscaleRecoverAfterFailureResult,
+) {
+	emitTrace(trace, logWarning, {
+		type: 'tailscale.recovery.result',
+		source: 'tailscale-recovery',
+		details: {
+			recoveryResult:
+				snapshotTailscaleRecoverAfterFailureResult(recoveryResult),
+		},
+	});
+}
+
 export async function attemptSavedEntryWithTailscaleRecovery({
 	platformOS,
 	recovery,
@@ -122,11 +149,7 @@ export async function attemptSavedEntryWithTailscaleRecovery({
 	trace,
 }: AttemptSavedEntryWithTailscaleRecoveryArgs) {
 	const traceEvent = (event: ConnectionDiagnosticEventInput) => {
-		try {
-			trace?.event(event);
-		} catch (error) {
-			logWarning('Saved-entry trace event failed', error);
-		}
+		emitTrace(trace, logWarning, event);
 	};
 
 	const readiness = await recovery.ensureReady();
@@ -184,14 +207,7 @@ export async function attemptSavedEntryWithTailscaleRecovery({
 			throw error;
 		}
 		const recoveryResult = await recovery.recoverAfterFailure(error);
-		traceEvent({
-			type: 'tailscale.recovery.result',
-			source: 'tailscale-recovery',
-			details: {
-				recoveryResult:
-					snapshotTailscaleRecoverAfterFailureResult(recoveryResult),
-			},
-		});
+		traceRecoveryResult(trace, logWarning, recoveryResult);
 		if (!recoveryResult.networkLikeFailure) {
 			throw error;
 		}

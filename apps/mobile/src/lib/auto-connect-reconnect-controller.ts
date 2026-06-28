@@ -78,13 +78,48 @@ export function createAutoConnectReconnectController({
 		}
 	};
 
-	const stop = (reason: string) => {
+	const traceStop = (reason: string) =>
 		traceEvent({
 			type: 'reconnect.stopped',
 			source: 'reconnect-controller',
 			message: reason,
 			details: { reason },
 		});
+
+	const traceScheduledRetry = (attemptIndex: number, delayMs: number) =>
+		traceEvent({
+			type: 'reconnect.retry.scheduled',
+			source: 'reconnect-controller',
+			details: { attemptIndex, delayMs },
+		});
+
+	const traceBlockedStart = (
+		reason: string,
+		snapshot: AutoConnectReconnectSnapshot,
+	) =>
+		traceEvent({
+			type: 'reconnect.start.blocked',
+			source: 'reconnect-controller',
+			message: reason,
+			details: {
+				reason,
+				isAutoConnecting: snapshot.isAutoConnecting,
+				isReconnecting: snapshot.isReconnecting,
+				resetInFlight: snapshot.resetInFlight,
+			},
+		});
+
+	const traceAttemptResult = (success: boolean, elapsedMs: number) =>
+		traceEvent({
+			type: success
+				? 'reconnect.attempt.connected'
+				: 'reconnect.attempt.failed',
+			source: 'reconnect-controller',
+			details: { elapsedMs },
+		});
+
+	const stop = (reason: string) => {
+		traceStop(reason);
 		clearTimer();
 		generation += 1;
 		running = false;
@@ -102,11 +137,7 @@ export function createAutoConnectReconnectController({
 		const attempt = attemptIndex;
 		attemptIndex += 1;
 		const delayMs = delaysMs[Math.min(attempt, delaysMs.length - 1)] ?? 10_000;
-		traceEvent({
-			type: 'reconnect.retry.scheduled',
-			source: 'reconnect-controller',
-			details: { attemptIndex: attempt, delayMs },
-		});
+		traceScheduledRetry(attempt, delayMs);
 		timer = setTimeout(() => {
 			timer = null;
 			void attemptWithBackoff();
@@ -121,17 +152,7 @@ export function createAutoConnectReconnectController({
 			snapshot.isReconnecting ||
 			snapshot.isAutoConnecting
 		) {
-			traceEvent({
-				type: 'reconnect.start.blocked',
-				source: 'reconnect-controller',
-				message: reason,
-				details: {
-					reason,
-					isAutoConnecting: snapshot.isAutoConnecting,
-					isReconnecting: snapshot.isReconnecting,
-					resetInFlight: snapshot.resetInFlight,
-				},
-			});
+			traceBlockedStart(reason, snapshot);
 			return false;
 		}
 
@@ -199,13 +220,7 @@ export function createAutoConnectReconnectController({
 			});
 			const success = await attemptAutoConnect();
 			if (!isCurrentLoop(loopGeneration)) return;
-			traceEvent({
-				type: success
-					? 'reconnect.attempt.connected'
-					: 'reconnect.attempt.failed',
-				source: 'reconnect-controller',
-				details: { elapsedMs },
-			});
+			traceAttemptResult(success, elapsedMs);
 			if (success) {
 				logger.info('Reconnected successfully', { elapsedMs });
 				stop('reconnected');
