@@ -47,7 +47,7 @@ let running = false;
 
 function getConnectionIdentity(
 	id: string,
-	details: SavedConnectionEntry['value'],
+	details: InputConnectionDetails,
 ): ConnectionDiagnosticConnectionIdentity {
 	return {
 		savedConnectionId: id,
@@ -74,13 +74,28 @@ function finish(
 	status: 'connected' | 'failed' | 'skipped',
 	args: ManualConnectionDiagnosticArgs,
 ): ManualConnectionDiagnosticResult {
-	handle.finish(status);
+	try {
+		handle.finish(status);
+	} catch {
+		// Diagnostics are best-effort; callers still need a result.
+	}
 	const trace = handle.trace;
 	return {
 		status,
 		trace,
 		prompt: promptForTrace(trace, args),
 	};
+}
+
+function safeTraceEvent(
+	handle: ConnectionDiagnosticTraceHandle,
+	event: Parameters<ConnectionDiagnosticTraceHandle['event']>[0],
+) {
+	try {
+		handle.event(event);
+	} catch {
+		// Diagnostics are best-effort; tracing must not change the diagnostic flow.
+	}
 }
 
 export async function runManualConnectionDiagnostic(
@@ -98,25 +113,33 @@ export async function runManualConnectionDiagnostic(
 	}
 
 	running = true;
-	const handle = args.recorder.startTrace({
-		trigger: 'manual-diagnostic',
-		reason: 'command-menu',
-	});
+	let handle: ConnectionDiagnosticTraceHandle | null = null;
 
 	try {
+		handle = args.recorder.startTrace({
+			trigger: 'manual-diagnostic',
+			reason: 'command-menu',
+		});
+		const traceHandle = handle;
 		const latestEntry = await args.loadLatestSavedConnection();
 		if (!latestEntry) {
-			handle.event({
+			safeTraceEvent(traceHandle, {
 				type: 'manual-diagnostic.saved-entry.missing',
 				source: 'manual-diagnostic',
 				message: 'No eligible saved auto-connect connection was found.',
 			});
-			return finish(handle, 'skipped', args);
+			return finish(traceHandle, 'skipped', args);
 		}
 
 		const details = latestEntry.value;
-		const connection = getConnectionIdentity(latestEntry.id, details);
-		handle.event({
+		const normalizedDetails: InputConnectionDetails = {
+			...details,
+			useTmux: details.useTmux ?? true,
+			tmuxSessionName: details.tmuxSessionName?.trim() || 'main',
+			autoConnect: details.autoConnect ?? false,
+		};
+		const connection = getConnectionIdentity(latestEntry.id, normalizedDetails);
+		safeTraceEvent(traceHandle, {
 			type: 'manual-diagnostic.saved-entry.selected',
 			source: 'manual-diagnostic',
 			connection,
@@ -124,26 +147,19 @@ export async function runManualConnectionDiagnostic(
 
 		const resolvedSecurity = await args.resolveKeySecurity(details);
 		if (!resolvedSecurity) {
-			handle.event({
+			safeTraceEvent(traceHandle, {
 				type: 'manual-diagnostic.key-missing',
 				source: 'manual-diagnostic',
 				connection,
 			});
-			return finish(handle, 'failed', args);
+			return finish(traceHandle, 'failed', args);
 		}
 
-		handle.event({
+		safeTraceEvent(traceHandle, {
 			type: 'manual-diagnostic.key-resolved',
 			source: 'manual-diagnostic',
 			connection,
 		});
-
-		const normalizedDetails: InputConnectionDetails = {
-			...details,
-			useTmux: details.useTmux ?? true,
-			tmuxSessionName: details.tmuxSessionName?.trim() || 'main',
-			autoConnect: details.autoConnect ?? false,
-		};
 
 		const result = await attemptSavedEntryWithTailscaleRecovery({
 			platformOS: args.appState.platformOS,
@@ -152,23 +168,23 @@ export async function runManualConnectionDiagnostic(
 				args.connectSavedEntry({
 					connectionDetails: normalizedDetails,
 					resolvedSecurity,
-					trace: handle,
+					trace: traceHandle,
 				}),
 			markTailscaleAttention: (message) => {
-				handle.event({
+				safeTraceEvent(traceHandle, {
 					type: 'manual-diagnostic.tailscale.attention',
 					source: 'tailscale-recovery',
 					message,
 				});
 			},
 			clearTailscaleAttention: () => {
-				handle.event({
+				safeTraceEvent(traceHandle, {
 					type: 'manual-diagnostic.tailscale.attention-cleared',
 					source: 'tailscale-recovery',
 				});
 			},
 			logTmuxAttachFailure: (tmuxResult) => {
-				handle.event({
+				safeTraceEvent(traceHandle, {
 					type: 'manual-diagnostic.tmux-attach-failed',
 					source: 'manual-diagnostic',
 					connection: {
@@ -181,19 +197,22 @@ export async function runManualConnectionDiagnostic(
 				});
 			},
 			logWarning: (message, error) => {
-				handle.event({
+				safeTraceEvent(traceHandle, {
 					type: 'manual-diagnostic.warning',
 					source: 'manual-diagnostic',
 					message,
 					error: serializeConnectionDiagnosticError(error),
 				});
 			},
-			trace: handle,
+			trace: traceHandle,
 		});
 
-		return finish(handle, result.connected ? 'connected' : 'failed', args);
+		return finish(traceHandle, result.connected ? 'connected' : 'failed', args);
 	} catch (error) {
-		handle.event({
+		if (!handle) {
+			throw error;
+		}
+		safeTraceEvent(handle, {
 			type: 'manual-diagnostic.failed',
 			source: 'manual-diagnostic',
 			error: serializeConnectionDiagnosticError(error),
