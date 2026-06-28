@@ -2,8 +2,7 @@ export type ConnectionDiagnosticTrigger =
 	| 'initial-auto-connect'
 	| 'reconnect'
 	| 'manual-diagnostic'
-	| 'manual-connect'
-	| 'unknown';
+	| 'command-menu';
 
 export type ConnectionDiagnosticStatus =
 	| 'running'
@@ -12,17 +11,24 @@ export type ConnectionDiagnosticStatus =
 	| 'skipped';
 
 export type ConnectionDiagnosticSource =
+	| 'latest-shell'
+	| 'active-connection'
 	| 'saved-entry'
-	| 'active-shell'
-	| 'manual-entry'
-	| 'unknown';
+	| 'tailscale-recovery'
+	| 'reconnect-controller'
+	| 'manual-diagnostic'
+	| 'foreground-service'
+	| 'command-menu';
 
 export type ConnectionDiagnosticConnectionIdentity = {
 	savedConnectionId?: string;
+	connectionId?: string;
 	username?: string;
 	host?: string;
 	port?: number;
 	keyId?: string;
+	useTmux?: boolean;
+	tmuxSessionName?: string;
 };
 
 export type ConnectionDiagnosticError = {
@@ -31,26 +37,18 @@ export type ConnectionDiagnosticError = {
 	stack?: string;
 };
 
-type ConnectionDiagnosticDetails =
-	| Record<string, unknown>
-	| unknown[]
-	| string
-	| number
-	| boolean
-	| null;
-
 export type ConnectionDiagnosticEventInput = {
 	type: string;
-	source?: ConnectionDiagnosticSource;
+	source: ConnectionDiagnosticSource;
+	message?: string;
 	connection?: ConnectionDiagnosticConnectionIdentity;
 	error?: ConnectionDiagnosticError;
-	details?: ConnectionDiagnosticDetails;
+	details?: Record<string, unknown>;
 };
 
 export type ConnectionDiagnosticEvent = ConnectionDiagnosticEventInput & {
 	atMs: number;
 	elapsedMs: number;
-	details?: ConnectionDiagnosticDetails;
 };
 
 export type ConnectionDiagnosticTrace = {
@@ -71,11 +69,13 @@ export type ConnectionDiagnosticTraceHandle = {
 
 export type ConnectionDiagnosticAppState = {
 	platformOS: string;
-	pathname: string;
+	pathname?: string;
 	isAutoConnecting: boolean;
 	isReconnecting: boolean;
-	foregroundServiceStarted: boolean;
-	backgroundWorkAllowed: boolean;
+	foregroundServiceStarted?: boolean;
+	backgroundWorkAllowed?: boolean;
+	foregroundServiceRequired?: boolean;
+	appActive?: boolean;
 };
 
 export type ConnectionDiagnosticRecorder = {
@@ -128,23 +128,35 @@ function sanitizeDiagnosticValue(value: unknown): unknown {
 	return Object.fromEntries(sanitizedEntries);
 }
 
+function cloneDiagnosticValue<T>(value: T): T {
+	if (value === undefined) {
+		return value;
+	}
+
+	return JSON.parse(JSON.stringify(value)) as T;
+}
+
 function sanitizeEventInput(
 	input: ConnectionDiagnosticEventInput,
 ): ConnectionDiagnosticEventInput {
-	if (!input.details) {
-		return input;
-	}
-
 	return {
 		...input,
-		details: sanitizeDiagnosticValue(input.details) as ConnectionDiagnosticDetails,
+		connection: input.connection
+			? cloneDiagnosticValue(input.connection)
+			: undefined,
+		error: input.error ? cloneDiagnosticValue(input.error) : undefined,
+		details: input.details
+			? (sanitizeDiagnosticValue(
+					cloneDiagnosticValue(input.details),
+				) as Record<string, unknown>)
+			: undefined,
 	};
 }
 
 function cloneTrace(trace: ConnectionDiagnosticTrace): ConnectionDiagnosticTrace {
 	return {
 		...trace,
-		events: trace.events.map((event) => ({ ...event })),
+		events: trace.events.map((event) => cloneDiagnosticValue(event)),
 	};
 }
 
@@ -162,8 +174,18 @@ function formatConnectionIdentity(
 			: null;
 
 	const savedId = connection.savedConnectionId?.trim();
+	const connectionId = connection.connectionId?.trim();
 	const keyId = connection.keyId?.trim();
-	const parts = [address, savedId ? `savedConnectionId=${savedId}` : null];
+	const tmuxSessionName = connection.tmuxSessionName?.trim();
+	const parts = [
+		address,
+		savedId ? `savedConnectionId=${savedId}` : null,
+		connectionId ? `connectionId=${connectionId}` : null,
+		typeof connection.useTmux === 'boolean'
+			? `useTmux=${String(connection.useTmux)}`
+			: null,
+		tmuxSessionName ? `tmuxSessionName=${tmuxSessionName}` : null,
+	];
 	if (keyId) {
 		parts.push(`keyId=${keyId}`);
 	}
@@ -174,7 +196,8 @@ function formatConnectionIdentity(
 function formatEvent(event: ConnectionDiagnosticEvent): string {
 	const parts = [
 		`- +${event.elapsedMs}ms ${event.type}`,
-		event.source ? `source=${event.source}` : null,
+		`source=${event.source}`,
+		event.message ? `message=${event.message}` : null,
 		event.connection
 			? `connection=${formatConnectionIdentity(event.connection)}`
 			: null,
@@ -297,6 +320,10 @@ export function formatConnectionDiagnosticPrompt(
 				`- backgroundWorkAllowed: ${String(
 					options.appState.backgroundWorkAllowed,
 				)}`,
+				`- foregroundServiceRequired: ${String(
+					options.appState.foregroundServiceRequired,
+				)}`,
+				`- appActive: ${String(options.appState.appActive)}`,
 			]
 		: [];
 

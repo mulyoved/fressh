@@ -106,6 +106,135 @@ void test('prompt includes connection identity and omits private key material', 
 	assert.doesNotMatch(prompt, /SECRET_KEY_MATERIAL/);
 });
 
+void test('prompt supports planned contract fields and includes them in output', () => {
+	const trace: ConnectionDiagnosticTrace = {
+		id: 'trace-contract',
+		trigger: 'manual-diagnostic',
+		reason: 'command-menu',
+		status: 'failed',
+		startedAtMs: 100,
+		finishedAtMs: 160,
+		events: [
+			{
+				atMs: 100,
+				elapsedMs: 0,
+				type: 'connection.selected',
+				source: 'active-connection',
+				message: 'Selected current shell connection',
+				connection: {
+					savedConnectionId: 'saved-22',
+					connectionId: 'live-connection-9',
+					username: 'muly',
+					host: 'dev.tailnet.ts.net',
+					port: 22,
+					keyId: 'key-9',
+					useTmux: true,
+					tmuxSessionName: 'workspace',
+				},
+			},
+			{
+				atMs: 120,
+				elapsedMs: 20,
+				type: 'shell.snapshot',
+				source: 'latest-shell',
+				message: 'Loaded latest shell context',
+			},
+		],
+	};
+
+	const prompt = formatConnectionDiagnosticPrompt(trace, {
+		appState: {
+			platformOS: 'android',
+			pathname: '/shell/detail',
+			isAutoConnecting: false,
+			isReconnecting: true,
+			foregroundServiceRequired: true,
+			appActive: false,
+		},
+	});
+
+	assert.match(prompt, /source=active-connection/);
+	assert.match(prompt, /source=latest-shell/);
+	assert.match(prompt, /live-connection-9/);
+	assert.match(prompt, /useTmux=true/);
+	assert.match(prompt, /tmuxSessionName=workspace/);
+	assert.match(prompt, /foregroundServiceRequired: true/);
+	assert.match(prompt, /appActive: false/);
+	assert.match(prompt, /Selected current shell connection/);
+	assert.match(prompt, /Loaded latest shell context/);
+});
+
+void test('recorder snapshots event inputs and returned traces', () => {
+	let currentNow = 500;
+	const recorder = createConnectionDiagnosticRecorder({
+		now: () => currentNow,
+	});
+
+	const trace = recorder.startTrace({
+		trigger: 'manual-diagnostic',
+		reason: 'mutation-check',
+	});
+	const connection = {
+		savedConnectionId: 'saved-1',
+		connectionId: 'connection-1',
+		username: 'muly',
+		host: 'dev.tailnet.ts.net',
+		port: 22,
+		keyId: 'key-1',
+		useTmux: true,
+		tmuxSessionName: 'main',
+	};
+	const error = {
+		name: 'TimeoutError',
+		message: 'original failure',
+		stack: 'stack-1',
+	};
+	const details = {
+		attempts: [{ count: 1, privateKeyPreview: 'SECRET' }],
+		nested: { phase: 'connect' },
+	};
+
+	trace.event({
+		type: 'ssh.connect.failed',
+		source: 'active-connection',
+		message: 'Initial failure',
+		connection,
+		error,
+		details,
+	});
+
+	connection.host = 'changed.tailnet.ts.net';
+	connection.tmuxSessionName = 'mutated';
+	error.message = 'changed failure';
+	details.attempts[0]!.count = 99;
+	details.nested.phase = 'mutated';
+
+	const latestTrace = recorder.getLatestTrace();
+	assert.ok(latestTrace);
+	assert.equal(latestTrace.events[0]?.connection?.host, 'dev.tailnet.ts.net');
+	assert.equal(latestTrace.events[0]?.connection?.tmuxSessionName, 'main');
+	assert.equal(latestTrace.events[0]?.error?.message, 'original failure');
+	assert.deepEqual(latestTrace.events[0]?.details, {
+		attempts: [{ count: 1, privateKeyPreview: '[REDACTED]' }],
+		nested: { phase: 'connect' },
+	});
+
+	const returnedTrace = recorder.getLatestTrace();
+	assert.ok(returnedTrace);
+	const returnedDetails = returnedTrace.events[0]?.details as {
+		nested?: { phase?: string };
+	};
+	assert.ok(returnedDetails.nested);
+	returnedDetails.nested.phase = 'caller-mutated';
+
+	const freshTrace = recorder.getLatestTrace();
+	assert.ok(freshTrace);
+	const freshDetails = freshTrace.events[0]?.details as {
+		nested?: { phase?: string };
+	};
+	assert.equal(freshDetails.nested?.phase, 'connect');
+});
+
 void test('error serializer preserves useful non-secret details', () => {
 	const error = new Error('connection timed out');
 	error.name = 'TimeoutError';
