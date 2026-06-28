@@ -449,6 +449,15 @@ function formatEvent(event: ConnectionDiagnosticEvent): string {
 		parts.push(`errorTag=${redactDiagnosticText(event.error.tag)}`);
 	}
 
+	if (event.error?.stack) {
+		parts.push(
+			`errorStack=${redactDiagnosticText(event.error.stack).replace(
+				/\n/g,
+				' ',
+			)}`,
+		);
+	}
+
 	if (event.error?.inner !== undefined) {
 		parts.push(
 			`errorInner=${JSON.stringify(

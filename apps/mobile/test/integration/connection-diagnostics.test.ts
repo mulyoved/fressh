@@ -102,6 +102,7 @@ void test('prompt includes connection identity and omits private key material', 
 	assert.match(prompt, /muly@dev\.tailnet\.ts\.net:22/);
 	assert.match(prompt, /muly-dev-box-22/);
 	assert.match(prompt, /network unreachable/);
+	assert.match(prompt, /errorStack=Error: network unreachable/);
 	assert.match(prompt, /Private key material has been omitted/);
 	assert.doesNotMatch(prompt, /SECRET_KEY_MATERIAL/);
 });
