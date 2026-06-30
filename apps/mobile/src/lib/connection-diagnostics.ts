@@ -1,7 +1,5 @@
 export * from './connection-diagnostic-types';
-export {
-	serializeConnectionDiagnosticError,
-} from './connection-diagnostic-redaction';
+export { serializeConnectionDiagnosticError } from './connection-diagnostic-redaction';
 export {
 	connectionDiagnosticRecorder,
 	createConnectionDiagnosticRecorder,

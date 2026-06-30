@@ -6,10 +6,8 @@ import type {
 	SshConnectionProgress,
 } from '@fressh/react-native-uniffi-russh';
 import { type SavedEntryConnectResult } from './auto-connect-saved-entry';
-import {
-	serializeConnectionDiagnosticError,
-	type ConnectionDiagnosticEventInput,
-} from './connection-diagnostics';
+import { serializeConnectionDiagnosticError } from './connection-diagnostic-redaction';
+import { type ConnectionDiagnosticEventInput } from './connection-diagnostic-types';
 import { type InputConnectionDetails } from './connection-storage';
 import { getStoredConnectionId } from './connection-utils';
 import { rootLogger } from './logger';

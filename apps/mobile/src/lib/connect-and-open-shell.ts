@@ -4,7 +4,7 @@ import type {
 	RnRussh,
 	SshConnectionProgress,
 } from '@fressh/react-native-uniffi-russh';
-import { type ConnectionDiagnosticEventInput } from './connection-diagnostics';
+import { type ConnectionDiagnosticEventInput } from './connection-diagnostic-types';
 import { type InputConnectionDetails } from './connection-storage';
 import { rootLogger } from './logger';
 import { connectAndRememberConnection } from './ssh-connect-flow';
@@ -16,7 +16,18 @@ import {
 const logger = rootLogger.extend('ConnectAndOpenShell');
 const DEFAULT_CONNECT_TIMEOUT_MS = 5_000;
 
-export type ConnectAndOpenShellResult = SshShellLifecycleResult;
+type ConnectedSshShellLifecycleResult = Extract<
+	SshShellLifecycleResult,
+	{ status: 'connected' }
+>;
+type TmuxAttachFailedSshShellLifecycleResult = Extract<
+	SshShellLifecycleResult,
+	{ status: 'tmux_attach_failed' }
+>;
+
+export type ConnectAndOpenShellResult =
+	| Omit<ConnectedSshShellLifecycleResult, 'storedConnectionId'>
+	| TmuxAttachFailedSshShellLifecycleResult;
 
 type SaveConnection = (params: {
 	details: InputConnectionDetails;

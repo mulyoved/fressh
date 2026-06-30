@@ -1,4 +1,4 @@
-import { type ConnectionDiagnosticEventInput } from './connection-diagnostics';
+import { type ConnectionDiagnosticEventInput } from './connection-diagnostic-types';
 import {
 	canAttemptBackgroundReconnect,
 	shouldWaitForForegroundServiceCoverage,

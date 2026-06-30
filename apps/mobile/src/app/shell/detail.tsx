@@ -50,11 +50,8 @@ import {
 } from '@/lib/agent-notification-visibility';
 import { useAutoConnectStore } from '@/lib/auto-connect';
 import { restartCodexWithBridge } from '@/lib/codex-restart';
-import {
-	buildConnectionDebugCommandArgs,
-	runConnectionDebugCommand,
-} from '@/lib/connection-debug-command';
-import { connectionDiagnosticRecorder } from '@/lib/connection-diagnostics';
+import { runConnectionDebugCommand } from '@/lib/connection-debug-command';
+import { connectionDiagnosticRecorder } from '@/lib/connection-diagnostic-recorder';
 import {
 	getStoredConnectionId,
 	pickLatestConnection,
@@ -2495,39 +2492,36 @@ function ShellDetail() {
 
 	const handleDebugConnectionInCodex = useCallback(async () => {
 		const autoState = useAutoConnectStore.getState();
-		await runConnectionDebugCommand(
-			buildConnectionDebugCommandArgs({
-				recorder: connectionDiagnosticRecorder,
-				appState: {
-					platformOS: Platform.OS,
-					isAutoConnecting: autoState.isAutoConnecting,
-					isReconnecting: autoState.isReconnecting,
-					pathname: '/shell/detail',
-					appActive: isAppActiveRef.current,
-				},
-				closeMenu: () => {
-					commandMenuModal.onClose();
-				},
-				loadLatestSavedConnection: loadLatestSavedConnectionForDiagnostic,
-				resolvePrivateKey: async (keyId) => {
-					const keyEntry =
-						await secretsManager.keys.utils.getPrivateKey(keyId);
-					return keyEntry.value;
-				},
-				runDiagnosticShellProbe,
-				connect: RnRussh.connect,
-				recovery: tailscaleRecovery,
-				hasShell: Boolean(shell),
-				pasteIntoTerminal: sendTextRaw,
-				copyToClipboard: async (value) => {
-					await Clipboard.setStringAsync(value);
-				},
-				showAlert: (title, message) => {
-					Alert.alert(title, message);
-				},
-				logger,
-			}),
-		);
+		await runConnectionDebugCommand({
+			recorder: connectionDiagnosticRecorder,
+			appState: {
+				platformOS: Platform.OS,
+				isAutoConnecting: autoState.isAutoConnecting,
+				isReconnecting: autoState.isReconnecting,
+				pathname: '/shell/detail',
+				appActive: isAppActiveRef.current,
+			},
+			closeMenu: () => {
+				commandMenuModal.onClose();
+			},
+			loadLatestSavedConnection: loadLatestSavedConnectionForDiagnostic,
+			resolvePrivateKey: async (keyId) => {
+				const keyEntry = await secretsManager.keys.utils.getPrivateKey(keyId);
+				return keyEntry.value;
+			},
+			runDiagnosticShellProbe,
+			connect: RnRussh.connect,
+			recovery: tailscaleRecovery,
+			allowTerminalPaste: Boolean(shell),
+			pasteIntoTerminal: sendTextRaw,
+			copyToClipboard: async (value) => {
+				await Clipboard.setStringAsync(value);
+			},
+			showAlert: (title, message) => {
+				Alert.alert(title, message);
+			},
+			logger,
+		});
 	}, [
 		commandMenuModal,
 		loadLatestSavedConnectionForDiagnostic,

@@ -67,6 +67,19 @@ function extractHandleRestartCodexBlock(source: string): string {
 	return source.slice(callbackStart, callbackEnd);
 }
 
+function extractHandleDebugConnectionInCodexBlock(source: string): string {
+	const callbackStart = source.indexOf(
+		'const handleDebugConnectionInCodex = useCallback',
+	);
+	assert.notEqual(callbackStart, -1);
+	const callbackEnd = source.indexOf(
+		'const handleRestartCodex = useCallback',
+		callbackStart,
+	);
+	assert.notEqual(callbackEnd, -1);
+	return source.slice(callbackStart, callbackEnd);
+}
+
 function extractActionContextBlock(source: string): string {
 	const contextStart = source.indexOf('const actionContext = useMemo');
 	assert.notEqual(contextStart, -1);
@@ -268,6 +281,18 @@ void describe('shell detail Workmux control channel wiring', () => {
 		);
 	});
 
+	void test('allows explicit connection debug command to paste into an active shell', () => {
+		const source = readFileSync(detailSourcePath, 'utf8');
+		const block = extractHandleDebugConnectionInCodexBlock(source);
+
+		assert.match(block, /runConnectionDebugCommand\(\{/);
+		assert.match(block, /allowTerminalPaste:\s*Boolean\(shell\)/);
+		assert.match(
+			block,
+			/\[\s*commandMenuModal,[\s\S]*loadLatestSavedConnectionForDiagnostic,[\s\S]*sendTextRaw,[\s\S]*shell,[\s\S]*\]/,
+		);
+	});
+
 	void test('passes bridge handler into CommandMenuModal', () => {
 		const source = readFileSync(detailSourcePath, 'utf8');
 		const block = extractHandleCommandBridgeEntryBlock(source);
@@ -291,7 +316,10 @@ void describe('shell detail Workmux control channel wiring', () => {
 			source,
 			/import \{ runKeyboardActionSlot \} from '@\/lib\/keyboard-action-run-options'/,
 		);
-		assert.match(actionBlock, /\(actionId: ActionId, options\?: RunActionOptions\)/);
+		assert.match(
+			actionBlock,
+			/\(actionId: ActionId, options\?: RunActionOptions\)/,
+		);
 		assert.match(actionBlock, /runAction\(actionId, actionContext, options\)/);
 		assert.match(
 			block,

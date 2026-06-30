@@ -1,7 +1,5 @@
-import {
-	serializeConnectionDiagnosticError,
-	type ConnectionDiagnosticEventInput,
-} from './connection-diagnostics';
+import { serializeConnectionDiagnosticError } from './connection-diagnostic-redaction';
+import { type ConnectionDiagnosticEventInput } from './connection-diagnostic-types';
 import {
 	getTailscaleRecoveryAttentionMessage,
 	isNetworkLikeSshError,

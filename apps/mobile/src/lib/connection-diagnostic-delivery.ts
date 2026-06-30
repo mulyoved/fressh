@@ -9,18 +9,18 @@ function getErrorMessage(error: unknown): string {
 
 export async function deliverConnectionDiagnosticPrompt({
 	prompt,
-	hasShell,
+	allowTerminalPaste,
 	pasteIntoTerminal,
 	copyToClipboard,
 	showAlert,
 }: {
 	prompt: string;
-	hasShell: boolean;
+	allowTerminalPaste: boolean;
 	pasteIntoTerminal: (value: string) => void;
 	copyToClipboard: (value: string) => Promise<void>;
 	showAlert: (title: string, message: string) => void;
 }): Promise<ConnectionDiagnosticDeliveryResult> {
-	if (hasShell) {
+	if (allowTerminalPaste) {
 		try {
 			pasteIntoTerminal(prompt);
 			return { status: 'pasted' };
@@ -45,7 +45,7 @@ export async function deliverConnectionDiagnosticPrompt({
 		await copyToClipboard(prompt);
 		showAlert(
 			'Connection debug prompt copied',
-			'No active shell is available. Paste the copied prompt into Codex when you have a Codex TUI available.',
+			'Paste the copied prompt into Codex when you have a Codex TUI ready.',
 		);
 		return { status: 'copied' };
 	} catch (error) {

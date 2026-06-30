@@ -4,11 +4,11 @@ import type {
 	SshConnectionProgress,
 	SshShell,
 } from '@fressh/react-native-uniffi-russh';
+import { serializeConnectionDiagnosticError } from './connection-diagnostic-redaction';
 import {
-	serializeConnectionDiagnosticError,
 	type ConnectionDiagnosticConnectionIdentity,
 	type ConnectionDiagnosticEventInput,
-} from './connection-diagnostics';
+} from './connection-diagnostic-types';
 import { type InputConnectionDetails } from './connection-storage';
 import { extractTmuxAttachFailureReason } from './ssh-error-details';
 import { type RegisteredStartShellOptions } from './ssh-registry-store';
@@ -59,17 +59,13 @@ export function getSshShellLifecycleConnectionIdentity(
 export async function runSshShellLifecycle(args: {
 	connectionDetails: InputConnectionDetails;
 	connectConnection: (params: {
-		onConnectionProgress?: (
-			progressEvent: SshConnectionProgress,
-		) => void;
+		onConnectionProgress?: (progressEvent: SshConnectionProgress) => void;
 	}) => Promise<ConnectedSshConnection>;
 	onConnectionProgress?: (progressEvent: SshConnectionProgress) => void;
 	abortSignalTimeoutMs: number;
 	registerInStore?: boolean;
 	traceEvent: (event: ConnectionDiagnosticEventInput) => void;
-	afterShellFailure?: (
-		context: ShellLifecycleFailureContext,
-	) => Promise<void>;
+	afterShellFailure?: (context: ShellLifecycleFailureContext) => Promise<void>;
 }): Promise<SshShellLifecycleResult> {
 	const {
 		connectionDetails,

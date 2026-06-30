@@ -48,7 +48,8 @@ export function normalizeTraceForPrompt(
 		return {
 			id: readDiagnosticStringField(trace, 'id', undefined) ?? 'unknown-trace',
 			trigger: readConnectionDiagnosticTrigger(trace, 'trigger'),
-			reason: readDiagnosticStringField(trace, 'reason', undefined) ?? 'unknown',
+			reason:
+				readDiagnosticStringField(trace, 'reason', undefined) ?? 'unknown',
 			status: readConnectionDiagnosticStatus(trace, 'status'),
 			startedAtMs,
 			finishedAtMs: readNumberField(trace, 'finishedAtMs'),

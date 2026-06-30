@@ -2,15 +2,15 @@ import {
 	attemptSavedEntryWithTailscaleRecovery,
 	type SavedEntryTailscaleRecovery,
 } from './auto-connect-saved-entry';
+import { formatConnectionDiagnosticPrompt } from './connection-diagnostic-prompt';
+import { serializeConnectionDiagnosticError } from './connection-diagnostic-redaction';
 import {
-	formatConnectionDiagnosticPrompt,
-	serializeConnectionDiagnosticError,
 	type ConnectionDiagnosticAppState,
 	type ConnectionDiagnosticConnectionIdentity,
 	type ConnectionDiagnosticRecorder,
 	type ConnectionDiagnosticTrace,
 	type ConnectionDiagnosticTraceHandle,
-} from './connection-diagnostics';
+} from './connection-diagnostic-types';
 import { type SavedConnectionEntry } from './connection-utils';
 import {
 	isDiagnosticShellCleanupError,

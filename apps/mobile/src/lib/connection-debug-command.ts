@@ -10,15 +10,9 @@ import {
 import {
 	type ConnectionDiagnosticAppState,
 	type ConnectionDiagnosticRecorder,
-	type ConnectionDiagnosticTraceHandle,
-} from './connection-diagnostics';
+} from './connection-diagnostic-types';
 import { type SavedConnectionEntry } from './connection-utils';
-import {
-	type DiagnosticShellProbeResult,
-	type runDiagnosticShellProbe,
-} from './diagnostic-shell-probe';
-// eslint-disable-next-line import/consistent-type-specifier-style -- keep secrets-manager type-only so Node tests do not load React Native at runtime
-import type { InputConnectionDetails } from './secrets-manager';
+import { type runDiagnosticShellProbe } from './diagnostic-shell-probe';
 
 export type ConnectionDebugResolvedKeySecurity = {
 	type: 'key';
@@ -35,59 +29,15 @@ export type ConnectionDebugCommandArgs = {
 	closeMenu: () => void;
 	loadLatestSavedConnection: () => Promise<SavedConnectionEntry | null>;
 	resolvePrivateKey: (keyId: string) => Promise<string>;
-	runProbe: (args: {
-		connectionDetails: InputConnectionDetails;
-		resolvedSecurity: ConnectionDebugResolvedKeySecurity;
-		trace: ConnectionDiagnosticTraceHandle;
-	}) => Promise<DiagnosticShellProbeResult>;
-	recovery: SavedEntryTailscaleRecovery;
-	hasShell: boolean;
-	pasteIntoTerminal: (value: string) => void;
-	copyToClipboard: (value: string) => Promise<void>;
-	showAlert: (title: string, message: string) => void;
-	logger: ConnectionDebugLogger;
-};
-
-export type BuildConnectionDebugCommandArgsInput = {
-	recorder: ConnectionDiagnosticRecorder;
-	appState: ConnectionDiagnosticAppState;
-	closeMenu: () => void;
-	loadLatestSavedConnection: () => Promise<SavedConnectionEntry | null>;
-	resolvePrivateKey: (keyId: string) => Promise<string>;
 	runDiagnosticShellProbe: typeof runDiagnosticShellProbe;
 	connect: Parameters<typeof runDiagnosticShellProbe>[0]['connect'];
 	recovery: SavedEntryTailscaleRecovery;
-	hasShell: boolean;
+	allowTerminalPaste: boolean;
 	pasteIntoTerminal: (value: string) => void;
 	copyToClipboard: (value: string) => Promise<void>;
 	showAlert: (title: string, message: string) => void;
 	logger: ConnectionDebugLogger;
 };
-
-export function buildConnectionDebugCommandArgs(
-	input: BuildConnectionDebugCommandArgsInput,
-): ConnectionDebugCommandArgs {
-	return {
-		recorder: input.recorder,
-		appState: input.appState,
-		closeMenu: input.closeMenu,
-		loadLatestSavedConnection: input.loadLatestSavedConnection,
-		resolvePrivateKey: input.resolvePrivateKey,
-		runProbe: ({ connectionDetails, resolvedSecurity, trace }) =>
-			input.runDiagnosticShellProbe({
-				connectionDetails,
-				resolvedSecurity,
-				trace,
-				connect: input.connect,
-			}),
-		recovery: input.recovery,
-		hasShell: input.hasShell,
-		pasteIntoTerminal: input.pasteIntoTerminal,
-		copyToClipboard: input.copyToClipboard,
-		showAlert: input.showAlert,
-		logger: input.logger,
-	};
-}
 
 export async function runConnectionDebugCommand(
 	args: ConnectionDebugCommandArgs,
@@ -102,21 +52,25 @@ export async function runConnectionDebugCommand(
 		loadLatestSavedConnection: args.loadLatestSavedConnection,
 		resolveKeySecurity: async (details: SavedConnectionEntry['value']) => {
 			try {
-				const privateKey = await args.resolvePrivateKey(
-					details.security.keyId,
-				);
+				const privateKey = await args.resolvePrivateKey(details.security.keyId);
 				return { type: 'key', privateKey };
 			} catch (error) {
 				args.logger.warn('Connection diagnostic key resolution failed', error);
 				return null;
 			}
 		},
-		connectSavedEntry: args.runProbe,
+		connectSavedEntry: ({ connectionDetails, resolvedSecurity, trace }) =>
+			args.runDiagnosticShellProbe({
+				connectionDetails,
+				resolvedSecurity,
+				trace,
+				connect: args.connect,
+			}),
 		recovery: args.recovery,
 	});
 	const delivery = await deliverConnectionDiagnosticPrompt({
 		prompt: diagnostic.prompt,
-		hasShell: args.hasShell,
+		allowTerminalPaste: args.allowTerminalPaste,
 		pasteIntoTerminal: args.pasteIntoTerminal,
 		copyToClipboard: args.copyToClipboard,
 		showAlert: args.showAlert,

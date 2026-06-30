@@ -165,3 +165,48 @@ void test('connectAndOpenShell records connect failure', async () => {
 	assert.equal(saveCalls, 0);
 	assert.equal(navigations, 0);
 });
+
+void test('connectAndOpenShell records shell failure without navigation', async () => {
+	const events: unknown[] = [];
+	const saveCalls: unknown[] = [];
+	let navigations = 0;
+
+	await assert.rejects(
+		connectAndOpenShell({
+			connectionDetails,
+			resolvedSecurity: { type: 'key', privateKey: 'secret' },
+			connect: async () =>
+				({
+					connectionId: 'conn-1',
+					startShell: async () => {
+						throw new Error('shell failed');
+					},
+				}) as never,
+			saveConnection: async (params) => {
+				saveCalls.push(params);
+			},
+			navigate: () => {
+				navigations += 1;
+			},
+			trace: {
+				event: (event) => {
+					events.push(event);
+				},
+			},
+		}),
+		/shell failed/,
+	);
+
+	assert.equal(saveCalls.length, 1);
+	assert.equal(navigations, 0);
+	assert.deepEqual(
+		events.map((event) => (event as { type: string }).type),
+		[
+			'ssh.connect.started',
+			'ssh.connect.connected',
+			'ssh.shell.started',
+			'ssh.shell.failed',
+		],
+	);
+	assert.doesNotMatch(JSON.stringify(events), /secret/);
+});

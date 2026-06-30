@@ -1,9 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {
-	buildConnectionDebugCommandArgs,
-	runConnectionDebugCommand,
-} from '../../src/lib/connection-debug-command';
+import { runConnectionDebugCommand } from '../../src/lib/connection-debug-command';
 import { createConnectionDiagnosticRecorder } from '../../src/lib/connection-diagnostics';
 import { type SavedConnectionEntry } from '../../src/lib/connection-utils';
 
@@ -56,9 +53,17 @@ void test('debug command closes menu, probes latest saved entry, and pastes prom
 			calls.push(`resolve:${keyId}`);
 			return 'private-key';
 		},
-		runProbe: async ({ connectionDetails, resolvedSecurity, trace }) => {
+		runDiagnosticShellProbe: async ({
+			connectionDetails,
+			resolvedSecurity,
+			trace,
+		}) => {
 			calls.push(`probe:${connectionDetails.host}`);
+			assert.equal(resolvedSecurity.type, 'key');
 			assert.equal(resolvedSecurity.privateKey, 'private-key');
+			if (!trace) {
+				throw new Error('trace should be provided');
+			}
 			trace.event({
 				type: 'probe.called',
 				source: 'manual-diagnostic',
@@ -70,8 +75,11 @@ void test('debug command closes menu, probes latest saved entry, and pastes prom
 				channelId: 7,
 			};
 		},
+		connect: async () => {
+			throw new Error('connect should be passed to probe');
+		},
 		recovery: readyRecovery,
-		hasShell: true,
+		allowTerminalPaste: true,
 		pasteIntoTerminal: (prompt) => {
 			calls.push(`paste:${prompt.includes('probe.called')}`);
 		},
@@ -116,11 +124,14 @@ void test('debug command reports key resolution failure through prompt delivery'
 		resolvePrivateKey: async () => {
 			throw new Error('missing key');
 		},
-		runProbe: async () => {
+		runDiagnosticShellProbe: async () => {
 			throw new Error('probe should not run');
 		},
+		connect: async () => {
+			throw new Error('connect should not run');
+		},
 		recovery: readyRecovery,
-		hasShell: false,
+		allowTerminalPaste: false,
 		pasteIntoTerminal: () => {
 			throw new Error('paste should not run');
 		},
@@ -147,14 +158,15 @@ void test('debug command reports key resolution failure through prompt delivery'
 	]);
 });
 
-void test('debug command arg builder wires shell dependencies into probe and delivery', async () => {
+void test('debug command wires shell dependencies into probe and delivery', async () => {
 	const calls: string[] = [];
 	const recorder = createConnectionDiagnosticRecorder({ now: () => 10 });
 	const connect = async () => {
 		calls.push('connect');
 		return { connectionId: 'conn-1' } as never;
 	};
-	const args = buildConnectionDebugCommandArgs({
+
+	const result = await runConnectionDebugCommand({
 		recorder,
 		appState: {
 			platformOS: 'android',
@@ -185,7 +197,7 @@ void test('debug command arg builder wires shell dependencies into probe and del
 			assert.equal(receivedConnect, connect);
 			assert.ok(trace);
 			trace.event({
-				type: 'builder.probe.called',
+				type: 'command.probe.called',
 				source: 'manual-diagnostic',
 				connection: { host: connectionDetails.host },
 			});
@@ -197,9 +209,9 @@ void test('debug command arg builder wires shell dependencies into probe and del
 		},
 		connect,
 		recovery: readyRecovery,
-		hasShell: true,
+		allowTerminalPaste: true,
 		pasteIntoTerminal: (prompt) => {
-			calls.push(`paste:${prompt.includes('builder.probe.called')}`);
+			calls.push(`paste:${prompt.includes('command.probe.called')}`);
 		},
 		copyToClipboard: async (prompt) => {
 			calls.push(`copy:${prompt.length > 0}`);
@@ -214,21 +226,16 @@ void test('debug command arg builder wires shell dependencies into probe and del
 		},
 	});
 
-	const result = await runConnectionDebugCommand(args);
-
 	assert.equal(result.diagnostic.status, 'connected');
 	assert.deepEqual(result.delivery, { status: 'pasted' });
-	assert.deepEqual(calls, [
-		'closeMenu',
-		'resolve:key-1',
-		'paste:true',
-	]);
+	assert.deepEqual(calls, ['closeMenu', 'resolve:key-1', 'paste:true']);
 });
 
-void test('debug command arg builder wires logger, clipboard, and alert dependencies', async () => {
+void test('debug command wires logger, clipboard, and alert dependencies', async () => {
 	const calls: string[] = [];
 	const recorder = createConnectionDiagnosticRecorder({ now: () => 10 });
-	const args = buildConnectionDebugCommandArgs({
+
+	const result = await runConnectionDebugCommand({
 		recorder,
 		appState: {
 			platformOS: 'android',
@@ -247,7 +254,7 @@ void test('debug command arg builder wires logger, clipboard, and alert dependen
 		},
 		connect: async () => ({ connectionId: 'conn-1' }) as never,
 		recovery: readyRecovery,
-		hasShell: false,
+		allowTerminalPaste: false,
 		pasteIntoTerminal: () => {
 			throw new Error('paste should not run');
 		},
@@ -263,8 +270,6 @@ void test('debug command arg builder wires logger, clipboard, and alert dependen
 			},
 		},
 	});
-
-	const result = await runConnectionDebugCommand(args);
 
 	assert.equal(result.diagnostic.status, 'failed');
 	assert.deepEqual(result.delivery, { status: 'copied' });

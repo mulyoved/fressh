@@ -2,12 +2,12 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { deliverConnectionDiagnosticPrompt } from '../../src/lib/connection-diagnostic-delivery';
 
-void test('delivery pastes into terminal when shell exists', async () => {
+void test('delivery pastes into terminal when explicitly allowed', async () => {
 	const calls: string[] = [];
 
 	const result = await deliverConnectionDiagnosticPrompt({
 		prompt: 'debug prompt',
-		hasShell: true,
+		allowTerminalPaste: true,
 		pasteIntoTerminal: (value) => {
 			calls.push(`paste:${value}`);
 		},
@@ -23,12 +23,12 @@ void test('delivery pastes into terminal when shell exists', async () => {
 	assert.deepEqual(calls, ['paste:debug prompt']);
 });
 
-void test('delivery copies and alerts when no shell exists', async () => {
+void test('delivery copies and alerts when terminal paste is not allowed', async () => {
 	const calls: string[] = [];
 
 	const result = await deliverConnectionDiagnosticPrompt({
 		prompt: 'debug prompt',
-		hasShell: false,
+		allowTerminalPaste: false,
 		pasteIntoTerminal: () => {
 			throw new Error('paste should not run');
 		},
@@ -50,7 +50,7 @@ void test('delivery falls back to clipboard when paste throws', async () => {
 
 	const result = await deliverConnectionDiagnosticPrompt({
 		prompt: 'debug prompt',
-		hasShell: true,
+		allowTerminalPaste: true,
 		pasteIntoTerminal: () => {
 			throw new Error('paste failed');
 		},
@@ -72,7 +72,7 @@ void test('delivery reports copy failure when no shell exists', async () => {
 
 	const result = await deliverConnectionDiagnosticPrompt({
 		prompt: 'debug prompt',
-		hasShell: false,
+		allowTerminalPaste: false,
 		pasteIntoTerminal: () => {
 			throw new Error('paste should not run');
 		},
@@ -94,7 +94,7 @@ void test('delivery reports copy failure after paste failure', async () => {
 
 	const result = await deliverConnectionDiagnosticPrompt({
 		prompt: 'debug prompt',
-		hasShell: true,
+		allowTerminalPaste: true,
 		pasteIntoTerminal: () => {
 			throw new Error('paste failed');
 		},

@@ -3,11 +3,11 @@ import {
 	type SavedEntryConnectResult,
 	type SavedEntryTailscaleRecovery,
 } from './auto-connect-saved-entry';
+import { serializeConnectionDiagnosticError } from './connection-diagnostic-redaction';
 import {
-	serializeConnectionDiagnosticError,
 	type ConnectionDiagnosticConnectionIdentity,
 	type ConnectionDiagnosticEventInput,
-} from './connection-diagnostics';
+} from './connection-diagnostic-types';
 import {
 	getStoredConnectionId,
 	type SavedConnectionEntry,

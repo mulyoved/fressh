@@ -12,10 +12,8 @@ import {
 	type AutoConnectReconnectController,
 } from './auto-connect-reconnect-controller';
 import { connectAndOpenShell } from './connect-and-open-shell';
-import {
-	connectionDiagnosticRecorder,
-	type ConnectionDiagnosticTraceHandle,
-} from './connection-diagnostics';
+import { connectionDiagnosticRecorder } from './connection-diagnostic-recorder';
+import { type ConnectionDiagnosticTraceHandle } from './connection-diagnostic-types';
 import { pickLatestConnection } from './connection-utils';
 import {
 	startForegroundService,
