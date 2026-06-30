@@ -1,3 +1,5 @@
+import { type ConnectionDiagnosticEvent as TypedConnectionDiagnosticEvent } from './connection-diagnostic-events';
+
 export type ConnectionDiagnosticTrigger =
 	| 'initial-auto-connect'
 	| 'reconnect'
@@ -39,16 +41,7 @@ export type ConnectionDiagnosticError = {
 	inner?: unknown;
 };
 
-export type ConnectionDiagnosticEventInput = {
-	type: string;
-	source: ConnectionDiagnosticSource;
-	message?: string;
-	connection?: ConnectionDiagnosticConnectionIdentity;
-	error?: ConnectionDiagnosticError;
-	details?: Record<string, unknown>;
-};
-
-export type ConnectionDiagnosticEvent = ConnectionDiagnosticEventInput & {
+export type ConnectionDiagnosticTimedEvent = TypedConnectionDiagnosticEvent & {
 	atMs: number;
 	elapsedMs: number;
 };
@@ -60,14 +53,18 @@ export type ConnectionDiagnosticTrace = {
 	status: ConnectionDiagnosticStatus;
 	startedAtMs: number;
 	finishedAtMs?: number;
-	events: ConnectionDiagnosticEvent[];
+	events: ConnectionDiagnosticTimedEvent[];
 };
 
 export type ConnectionDiagnosticTraceHandle = {
 	readonly trace: ConnectionDiagnosticTrace;
-	event: (input: ConnectionDiagnosticEventInput) => ConnectionDiagnosticEvent;
+	event: (
+		input: TypedConnectionDiagnosticEvent,
+	) => ConnectionDiagnosticTimedEvent;
 	finish: (status: Exclude<ConnectionDiagnosticStatus, 'running'>) => void;
 };
+
+export type ConnectionDiagnosticEvent = TypedConnectionDiagnosticEvent;
 
 export type ConnectionDiagnosticAppState = {
 	platformOS: string;
