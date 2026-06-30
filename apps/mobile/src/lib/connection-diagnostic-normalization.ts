@@ -1,43 +1,90 @@
+import { diagnosticEvents } from './connection-diagnostic-events';
 import {
 	cloneDiagnosticValue,
-	createSerializedErrorFromFields,
 	normalizeConnectionIdentity,
-	redactDiagnosticText,
+	safeDiagnosticString,
 	serializeConnectionDiagnosticError,
 	UNREADABLE_ERROR_MESSAGE,
 } from './connection-diagnostic-redaction';
 import {
-	type ConnectionDiagnosticError,
+	type ConnectionDiagnosticConnectionIdentity,
 	type ConnectionDiagnosticEvent,
-	type ConnectionDiagnosticEventInput,
 	type ConnectionDiagnosticSource,
 	type ConnectionDiagnosticStatus,
+	type ConnectionDiagnosticTimedEvent,
 	type ConnectionDiagnosticTrace,
 	type ConnectionDiagnosticTrigger,
 } from './connection-diagnostic-types';
 
-export function createConnectionDiagnosticEvent(input: {
-	rawEvent: unknown;
-	startedAtMs: number;
-	atMs: number;
-}): ConnectionDiagnosticEvent {
-	try {
-		const sanitizedInput = sanitizeEventInput(input.rawEvent);
-		return {
-			...sanitizedInput,
-			atMs: input.atMs,
-			elapsedMs: input.atMs - input.startedAtMs,
-		};
-	} catch {
-		return {
-			type: 'diagnostic.event.unserializable',
-			source: 'manual-diagnostic',
-			message: UNREADABLE_ERROR_MESSAGE,
-			atMs: input.atMs,
-			elapsedMs: input.atMs - input.startedAtMs,
-		};
-	}
-}
+export type ConnectionDiagnosticPromptCompatibleTimedEvent =
+	ConnectionDiagnosticTimedEvent & {
+		type: string;
+	};
+
+const connectionDiagnosticEventKinds = new Set<string>([
+	'saved-entry.selected',
+	'saved-entry.missing',
+	'saved-entry.invalid-tmux-settings',
+	'key.resolved',
+	'key.missing',
+	'ssh.connect.started',
+	'ssh.connect.progress',
+	'ssh.connect.connected',
+	'ssh.connect.failed',
+	'ssh.shell.started',
+	'ssh.shell.connected',
+	'ssh.shell.failed',
+	'ssh.shell.tmux-attach-failed',
+	'ssh.diagnostic.disconnected',
+	'ssh.diagnostic.disconnect-failed',
+	'tailscale.ensure-ready.result',
+	'tailscale.recovery.result',
+	'reconnect.started',
+	'reconnect.stopped',
+	'reconnect.start.blocked',
+	'reconnect.retry.scheduled',
+	'reconnect.attempt.started',
+	'reconnect.attempt.connected',
+	'reconnect.attempt.failed',
+	'reconnect.timeout',
+	'manual-diagnostic.saved-entry.missing',
+	'manual-diagnostic.tailscale.attention',
+	'manual-diagnostic.tailscale.attention-cleared',
+	'manual-diagnostic.tmux-attach-failed',
+	'manual-diagnostic.warning',
+	'manual-diagnostic.timeout',
+	'manual-diagnostic.failed',
+	'auto-connect.latest-shell.selected',
+	'auto-connect.latest-shell.missing',
+	'auto-connect.active-connection.selected',
+	'auto-connect.active-connection.missing',
+	'auto-connect.active-connection.shell-started',
+	'auto-connect.active-connection.shell-connected',
+	'auto-connect.active-connection.shell-failed',
+	'auto-connect.active-connection.tmux-attach-failed',
+	'auto-connect.saved-entry.connect.started',
+	'auto-connect.saved-entry.connect.connected',
+	'auto-connect.saved-entry.connect.failed',
+	'auto-connect.saved-entry.connect.threw',
+	'auto-connect.saved-entry.connect.tmux-attach-failed',
+	'auto-connect.saved-entry.retry.started',
+	'auto-connect.saved-entry.retry.threw',
+]);
+
+const legacyTypeAliases = new Map<string, string>([
+	['connection.selected', 'saved-entry.selected'],
+	['manual-diagnostic.saved-entry.selected', 'saved-entry.selected'],
+	['auto-connect.source.latest-shell', 'auto-connect.latest-shell.selected'],
+	[
+		'auto-connect.source.missing-latest-shell',
+		'auto-connect.latest-shell.missing',
+	],
+	[
+		'auto-connect.source.missing-active-connection',
+		'auto-connect.active-connection.missing',
+	],
+	['auto-connect.saved-entry.missing', 'saved-entry.missing'],
+]);
 
 export function normalizeTraceForPrompt(
 	trace: ConnectionDiagnosticTrace,
@@ -46,19 +93,17 @@ export function normalizeTraceForPrompt(
 		const startedAtMs = readNumberField(trace, 'startedAtMs') ?? 0;
 		const events = readObjectField(trace, 'events');
 		return {
-			id: readDiagnosticStringField(trace, 'id', undefined) ?? 'unknown-trace',
+			id: readStringField(trace, 'id') ?? 'unknown-trace',
 			trigger: readConnectionDiagnosticTrigger(trace, 'trigger'),
-			reason:
-				readDiagnosticStringField(trace, 'reason', undefined) ?? 'unknown',
+			reason: readStringField(trace, 'reason') ?? 'unknown',
 			status: readConnectionDiagnosticStatus(trace, 'status'),
 			startedAtMs,
 			finishedAtMs: readNumberField(trace, 'finishedAtMs'),
 			events: Array.isArray(events)
 				? events.map((event) =>
-						createConnectionDiagnosticEvent({
-							rawEvent: event,
+						normalizeTimedConnectionDiagnosticEvent({
+							event,
 							startedAtMs,
-							atMs: readNumberField(event, 'atMs') ?? startedAtMs,
 						}),
 					)
 				: [],
@@ -75,55 +120,234 @@ export function normalizeTraceForPrompt(
 	}
 }
 
-function sanitizeEventInput(input: unknown): ConnectionDiagnosticEventInput {
-	const details = readObjectField(input, 'details');
-
-	return {
-		type:
-			readDiagnosticStringField(input, 'type', undefined) ??
-			'diagnostic.event.unserializable',
-		source: readConnectionDiagnosticSource(input, 'source'),
-		message: readDiagnosticStringField(input, 'message', undefined),
-		connection: normalizeConnectionIdentity(
-			readObjectField(input, 'connection'),
-		),
-		error: normalizeDiagnosticError(readObjectField(input, 'error')),
-		details:
-			details !== undefined
-				? (cloneDiagnosticValue(details) as Record<string, unknown>)
-				: undefined,
-	};
+export function normalizeTimedConnectionDiagnosticEvent(input: {
+	event: unknown;
+	startedAtMs: number;
+	atMs?: number;
+	elapsedMs?: number;
+}): ConnectionDiagnosticPromptCompatibleTimedEvent {
+	const atMs =
+		input.atMs ?? readNumberField(input.event, 'atMs') ?? input.startedAtMs;
+	const normalizedEvent = normalizeLegacyEvent(input.event);
+	return cloneDiagnosticValue({
+		...normalizedEvent,
+		type: normalizedEvent.kind,
+		atMs,
+		elapsedMs:
+			input.elapsedMs ??
+			readNumberField(input.event, 'elapsedMs') ??
+			atMs - input.startedAtMs,
+	});
 }
 
-function normalizeDiagnosticError(
-	value: unknown,
-): ConnectionDiagnosticError | undefined {
-	if (value === undefined) {
-		return undefined;
+export function normalizeLegacyEvent(
+	input: unknown,
+): ConnectionDiagnosticEvent {
+	const kind = readStringField(input, 'kind');
+	if (kind !== undefined && connectionDiagnosticEventKinds.has(kind)) {
+		const event = normalizeKnownDiagnosticEvent(input, kind);
+		if (event) return event;
 	}
 
-	const hasStructuredFields =
-		readDiagnosticStringField(value, 'name', undefined) !== undefined ||
-		readDiagnosticStringField(value, 'message', undefined) !== undefined ||
-		readDiagnosticStringField(value, 'tag', undefined) !== undefined ||
-		readObjectField(value, 'inner') !== undefined;
-
-	if (!hasStructuredFields) {
-		return serializeConnectionDiagnosticError(value);
+	const type = readStringField(input, 'type');
+	const source = readConnectionDiagnosticSource(input, 'source');
+	const message = readStringField(input, 'message');
+	const connection = readConnectionIdentity(input);
+	const canonicalType =
+		type === undefined ? undefined : (legacyTypeAliases.get(type) ?? type);
+	if (
+		canonicalType !== undefined &&
+		connectionDiagnosticEventKinds.has(canonicalType)
+	) {
+		const event = normalizeKnownDiagnosticEvent(input, canonicalType, type);
+		if (event) return event;
 	}
 
-	return createSerializedErrorFromFields(value, {
-		defaultName: 'Error',
-		defaultMessage: UNREADABLE_ERROR_MESSAGE,
-		includeStack: true,
+	switch (type) {
+		case 'connection.key-resolved':
+		case 'manual-diagnostic.key-resolved':
+			return diagnosticEvents.keyResolved({
+				source,
+				connection,
+			});
+		case 'connection.key-missing':
+		case 'manual-diagnostic.key-missing':
+			return diagnosticEvents.keyMissing({
+				source,
+				connection,
+			});
+		default:
+			return normalizeGenericLegacyEvent({
+				input,
+				type,
+				source,
+				message,
+				connection,
+			});
+	}
+}
+
+function normalizeKnownDiagnosticEvent(
+	input: unknown,
+	kind: string,
+	legacyType?: string,
+): ConnectionDiagnosticEvent | undefined {
+	const event = cloneDiagnosticValue(input);
+	if (!isRecord(event)) return undefined;
+
+	const source = readConnectionDiagnosticSource(input, 'source');
+	const connection = readConnectionIdentity(input);
+	const normalizedEvent: Record<string, unknown> = {
+		...event,
+		kind,
+		source,
+	};
+	delete normalizedEvent.type;
+	if (Object.keys(connection).length) {
+		normalizedEvent.connection = connection;
+	}
+	if (readObjectField(input, 'error') !== undefined) {
+		normalizedEvent.error = readLegacyDiagnosticError(input);
+	}
+	if (legacyType !== undefined) {
+		const details = readLegacyDetails(input, legacyType);
+		if (Object.keys(details).some((key) => key !== 'legacyType')) {
+			normalizedEvent.details = details;
+		}
+	}
+
+	return cloneDiagnosticValue(normalizedEvent) as ConnectionDiagnosticEvent;
+}
+
+function normalizeGenericLegacyEvent(input: {
+	input: unknown;
+	type: string | undefined;
+	source: ConnectionDiagnosticSource;
+	message: string | undefined;
+	connection: ConnectionDiagnosticConnectionIdentity;
+}): ConnectionDiagnosticEvent {
+	const details = readLegacyDetails(input.input, input.type);
+	const fallback = diagnosticEvents.manualDiagnosticWarning({
+		source: input.source,
+		message: formatLegacyEventMessage(input.type, input.message),
+		error: readGenericLegacyDiagnosticError(
+			input.input,
+			input.type,
+			input.message,
+		),
 	});
+
+	return cloneDiagnosticValue({
+		...fallback,
+		...(Object.keys(input.connection).length
+			? { connection: input.connection }
+			: {}),
+		details,
+	}) as ConnectionDiagnosticEvent;
+}
+
+function readLegacyDiagnosticError(input: unknown) {
+	const error = serializeConnectionDiagnosticError(
+		readObjectField(input, 'error') ?? readStringField(input, 'message'),
+	);
+	const details = readObjectField(input, 'details');
+
+	return details === undefined || error.inner !== undefined
+		? error
+		: {
+				...error,
+				inner: cloneDiagnosticValue(details),
+			};
+}
+
+function readGenericLegacyDiagnosticError(
+	input: unknown,
+	type: string | undefined,
+	message: string | undefined,
+) {
+	const error = readObjectField(input, 'error');
+	if (error !== undefined) {
+		return serializeConnectionDiagnosticError(error);
+	}
+
+	return serializeConnectionDiagnosticError({
+		name: 'LegacyConnectionDiagnosticEvent',
+		message: formatLegacyEventMessage(type, message),
+	});
+}
+
+function formatLegacyEventMessage(
+	type: string | undefined,
+	message: string | undefined,
+): string {
+	if (type && message) return `${type}: ${message}`;
+	return type ?? message ?? UNREADABLE_ERROR_MESSAGE;
+}
+
+function readLegacyDetails(
+	input: unknown,
+	type: string | undefined,
+): Record<string, unknown> {
+	const details: Record<string, unknown> = {
+		legacyType: type ?? 'unknown',
+	};
+	const explicitDetails = readObjectField(input, 'details');
+	if (explicitDetails !== undefined) {
+		details.details = cloneDiagnosticValue(explicitDetails);
+	}
+
+	for (const key of readLegacyExtraDetailKeys(input)) {
+		details[key] = cloneDiagnosticValue(readObjectField(input, key));
+	}
+
+	return details;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function readLegacyExtraDetailKeys(input: unknown): string[] {
+	try {
+		if (
+			input === null ||
+			(typeof input !== 'object' && typeof input !== 'function')
+		) {
+			return [];
+		}
+
+		return Object.keys(input).filter(
+			(key) =>
+				![
+					'atMs',
+					'connection',
+					'details',
+					'elapsedMs',
+					'error',
+					'kind',
+					'message',
+					'source',
+					'type',
+				].includes(key),
+		);
+	} catch {
+		return [];
+	}
+}
+
+function readConnectionIdentity(
+	input: unknown,
+): ConnectionDiagnosticConnectionIdentity {
+	return (
+		normalizeConnectionIdentity(readObjectField(input, 'connection')) ?? {}
+	);
 }
 
 function readConnectionDiagnosticSource(
 	value: unknown,
 	field: string,
 ): ConnectionDiagnosticSource {
-	const source = readDiagnosticStringField(value, field, undefined);
+	const source = readStringField(value, field);
 	switch (source) {
 		case 'latest-shell':
 		case 'active-connection':
@@ -143,7 +367,7 @@ function readConnectionDiagnosticTrigger(
 	value: unknown,
 	field: string,
 ): ConnectionDiagnosticTrigger {
-	const trigger = readDiagnosticStringField(value, field, undefined);
+	const trigger = readStringField(value, field);
 	switch (trigger) {
 		case 'initial-auto-connect':
 		case 'reconnect':
@@ -159,7 +383,7 @@ function readConnectionDiagnosticStatus(
 	value: unknown,
 	field: string,
 ): ConnectionDiagnosticStatus {
-	const status = readDiagnosticStringField(value, field, undefined);
+	const status = readStringField(value, field);
 	switch (status) {
 		case 'running':
 		case 'failed':
@@ -171,18 +395,14 @@ function readConnectionDiagnosticStatus(
 	}
 }
 
-function readDiagnosticStringField(
-	value: unknown,
-	field: string,
-	fallback: string | undefined,
-): string | undefined {
+function readStringField(value: unknown, field: string): string | undefined {
 	try {
 		const fieldValue = readObjectField(value, field);
 		return typeof fieldValue === 'string'
-			? redactDiagnosticText(fieldValue)
-			: fallback;
+			? safeDiagnosticString(fieldValue)
+			: undefined;
 	} catch {
-		return fallback;
+		return undefined;
 	}
 }
 

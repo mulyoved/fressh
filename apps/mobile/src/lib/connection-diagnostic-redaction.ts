@@ -1,263 +1,137 @@
-import { redactBrowserActionErrorText } from './browser-action-error-report';
 import {
 	type ConnectionDiagnosticConnectionIdentity,
 	type ConnectionDiagnosticError,
 } from './connection-diagnostic-types';
 
 const CIRCULAR_PLACEHOLDER = '[Circular]';
-const REDACTED_PLACEHOLDER = '[REDACTED]';
+const UNREADABLE_VALUE_MESSAGE = '[Unreadable]';
+const PRIVATE_KEY_OMITTED_MESSAGE = '[Private key material omitted]';
 export const UNREADABLE_ERROR_MESSAGE = '[Unserializable error]';
 
-const DIAGNOSTIC_SECRET_TEXT_PATTERN =
-	/(^|[^\w])((?:access[_-]?token)|(?:api[_-]?key)|auth|authorization|client[_-]?secret|code|credential|id[_-]?token|key|passphrase|password|private[_-]?key|refresh[_-]?token|secret|session|sig|signature|token)\s*([:=])\s*(?:"[^"]*"|'[^']*'|[^\n]*)/giu;
-const DIAGNOSTIC_AUTH_SCHEME_PATTERN =
-	/(^|[^\w])((?:Bearer|Basic|Token))\s+(?:"[^"]*"|'[^']*'|[^\s"',;]+)/gu;
-const DIAGNOSTIC_SECRET_TERMS = [
-	'accesstoken',
-	'apikey',
-	'auth',
-	'authorization',
-	'clientsecret',
-	'credential',
-	'idtoken',
-	'passphrase',
-	'password',
-	'privatekey',
-	'refreshtoken',
-	'secret',
-	'signature',
-	'token',
-];
-const DIAGNOSTIC_SECRET_KEY_TERMS = [
-	...DIAGNOSTIC_SECRET_TERMS,
-	'code',
-	'key',
-	'session',
-	'sig',
-];
-const CONNECTION_IDENTITY_KEYS = new Set([
-	'savedConnectionId',
-	'connectionId',
-	'username',
-	'host',
-	'port',
-	'keyId',
-	'useTmux',
-	'tmuxSessionName',
-]);
+const PRIVATE_KEY_BLOCK_PATTERN =
+	/-----BEGIN [^-]*PRIVATE KEY-----[\s\S]*?-----END [^-]*PRIVATE KEY-----/gu;
 
-export function redactDiagnosticText(value: string): string {
-	const redacted = redactBrowserActionErrorText(
-		value
-			.replace(
-				DIAGNOSTIC_SECRET_TEXT_PATTERN,
-				(_match, prefix: string, name: string, separator: string) =>
-					`${prefix}${name}${separator} [redacted]`,
-			)
-			.replace(
-				DIAGNOSTIC_AUTH_SCHEME_PATTERN,
-				(_match, prefix: string, scheme: string) =>
-					`${prefix}${scheme} [redacted]`,
-			),
-	)
-		.replace(
-			/-----BEGIN [^-]*PRIVATE KEY-----[\s\S]*?-----END [^-]*PRIVATE KEY-----/gu,
-			REDACTED_PLACEHOLDER,
-		)
-		.replace(
-			/(^|[^\w-])((?:private[_-]?key)|passphrase)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"';&|]+))/giu,
-			(_match, prefix: string, name: string, doubleQuoted, singleQuoted) => {
-				const quote =
-					doubleQuoted !== undefined
-						? '"'
-						: singleQuoted !== undefined
-							? "'"
-							: '';
-				return `${prefix}${name}=${quote}[redacted]${quote}`;
-			},
-		)
-		.replace(
-			/(^|[^\w-])((?:private[_-]?key)|passphrase)\s*:\s*(?:"([^"]*)"|'([^']*)'|([^\s"',;]+))/giu,
-			(_match, prefix: string, name: string, doubleQuoted, singleQuoted) => {
-				const quote =
-					doubleQuoted !== undefined
-						? '"'
-						: singleQuoted !== undefined
-							? "'"
-							: '';
-				return `${prefix}${name}: ${quote}[redacted]${quote}`;
-			},
-		);
-
-	return containsDiagnosticSecretTerm(redacted)
-		? REDACTED_PLACEHOLDER
-		: redacted;
+export function omitPrivateKeyMaterial(value: string): string {
+	return value.replace(PRIVATE_KEY_BLOCK_PATTERN, PRIVATE_KEY_OMITTED_MESSAGE);
 }
 
-function containsDiagnosticSecretTerm(value: string): boolean {
-	const normalizedValue = value.toLowerCase().replace(/[^a-z0-9]/gu, '');
-	return DIAGNOSTIC_SECRET_TERMS.some((secretName) =>
-		normalizedValue.includes(secretName),
-	);
-}
-
-function isSecretDiagnosticKey(key: string): boolean {
-	if (CONNECTION_IDENTITY_KEYS.has(key)) {
-		return false;
-	}
-
-	const normalizedKey = key.toLowerCase().replace(/[^a-z0-9]/gu, '');
-	return DIAGNOSTIC_SECRET_KEY_TERMS.some((secretName) =>
-		normalizedKey.includes(secretName),
-	);
-}
-
-function snapshotDiagnosticValue(
+export function safeDiagnosticString(
 	value: unknown,
-	seen = new WeakMap<object, unknown>(),
+	fallback = UNREADABLE_ERROR_MESSAGE,
+): string {
+	try {
+		if (typeof value === 'string') return omitPrivateKeyMaterial(value);
+		if (typeof value === 'number' || typeof value === 'boolean') {
+			return String(value);
+		}
+		if (typeof value === 'bigint') return `${value}n`;
+		if (typeof value === 'symbol') {
+			return `[Symbol ${value.description ?? ''}]`;
+		}
+		if (typeof value === 'undefined') return 'undefined';
+		if (value === null) return 'null';
+		return fallback;
+	} catch {
+		return fallback;
+	}
+}
+
+function cloneDiagnosticValueInternal(
+	value: unknown,
+	seen: WeakMap<object, unknown>,
 ): unknown {
 	try {
+		if (value === null) return null;
 		if (
-			value === null ||
 			typeof value === 'number' ||
-			typeof value === 'boolean'
+			typeof value === 'boolean' ||
+			typeof value === 'undefined'
 		) {
 			return value;
 		}
-
-		if (typeof value === 'string') {
-			return redactDiagnosticText(value);
-		}
-
-		if (typeof value === 'bigint') {
-			return `${value}n`;
-		}
-
-		if (typeof value === 'undefined') {
-			return undefined;
-		}
-
+		if (typeof value === 'string') return safeDiagnosticString(value);
+		if (typeof value === 'bigint') return `${value}n`;
 		if (typeof value === 'function') {
-			return redactDiagnosticText(
-				value.name ? `[Function ${value.name}]` : '[Function anonymous]',
-			);
+			return '[Function]';
 		}
-
 		if (typeof value === 'symbol') {
-			return redactDiagnosticText(`[Symbol ${value.description ?? ''}]`);
+			return safeDiagnosticString(`[Symbol ${value.description ?? ''}]`);
 		}
+		if (typeof value !== 'object') return safeDiagnosticString(value);
 
-		if (!value || typeof value !== 'object') {
-			return String(value);
-		}
-
-		if (seen.has(value)) {
-			return CIRCULAR_PLACEHOLDER;
-		}
+		if (seen.has(value)) return CIRCULAR_PLACEHOLDER;
 
 		if (Array.isArray(value)) {
-			const snapshot: unknown[] = [];
-			seen.set(value, snapshot);
-			for (const entry of value) {
-				snapshot.push(snapshotDiagnosticValue(entry, seen));
+			const copy: unknown[] = [];
+			seen.set(value, copy);
+			for (const item of value) {
+				copy.push(cloneDiagnosticValueInternal(item, seen));
 			}
-			return snapshot;
+			return copy;
 		}
 
-		if (Object.getPrototypeOf(value) === Object.prototype) {
-			const snapshot: Record<string, unknown> = {};
-			seen.set(value, snapshot);
-			for (const [key, entryValue] of Object.entries(value)) {
-				const safeKey = isSecretDiagnosticKey(key) ? REDACTED_PLACEHOLDER : key;
-				snapshot[safeKey] = isSecretDiagnosticKey(key)
-					? REDACTED_PLACEHOLDER
-					: snapshotDiagnosticValue(entryValue, seen);
-			}
-			return snapshot;
+		const prototype = Object.getPrototypeOf(value);
+		if (prototype !== Object.prototype && prototype !== null) {
+			return UNREADABLE_VALUE_MESSAGE;
 		}
 
-		return Object.prototype.toString.call(value);
+		const copy: Record<string, unknown> = {};
+		seen.set(value, copy);
+		for (const key of Object.keys(value)) {
+			try {
+				copy[safeDiagnosticString(key, key)] = cloneDiagnosticValueInternal(
+					(value as Record<string, unknown>)[key],
+					seen,
+				);
+			} catch {
+				copy[safeDiagnosticString(key, key)] = UNREADABLE_VALUE_MESSAGE;
+			}
+		}
+		return copy;
 	} catch {
-		return '[Unserializable]';
+		return UNREADABLE_VALUE_MESSAGE;
 	}
 }
 
 export function cloneDiagnosticValue<T>(value: T): T {
-	return snapshotDiagnosticValue(value) as T;
+	return cloneDiagnosticValueInternal(value, new WeakMap()) as T;
 }
 
 export function serializeConnectionDiagnosticError(
 	error: unknown,
 ): ConnectionDiagnosticError {
-	if (isErrorLike(error)) {
-		return createSerializedErrorFromFields(error, {
-			defaultName: 'Error',
-			defaultMessage: UNREADABLE_ERROR_MESSAGE,
-			includeStack: true,
-		});
-	}
-
-	const tag = readErrorStringField(error, 'tag', undefined);
+	const errorLike = isErrorLike(error);
+	const name = readStringField(error, 'name');
+	const message = readStringField(error, 'message');
+	const tag = readStringField(error, 'tag');
 	const inner = readObjectField(error, 'inner');
-	if (tag !== undefined || inner !== undefined) {
-		return createSerializedErrorFromFields(error, {
-			defaultName: 'NonError',
-			defaultMessage: tag ?? UNREADABLE_ERROR_MESSAGE,
-			includeStack: false,
-		});
-	}
 
-	let message: string;
-	try {
-		message =
-			typeof error === 'string'
-				? redactDiagnosticText(error)
-				: redactDiagnosticText(String(error));
-	} catch {
-		message = UNREADABLE_ERROR_MESSAGE;
+	if (
+		errorLike ||
+		name !== undefined ||
+		message !== undefined ||
+		tag !== undefined ||
+		inner !== undefined
+	) {
+		const defaultName = errorLike ? 'Error' : 'NonError';
+		const serializedError: ConnectionDiagnosticError = {
+			name: name && name.length > 0 ? name : defaultName,
+			message: message ?? tag ?? UNREADABLE_ERROR_MESSAGE,
+		};
+		const stack = readStringField(error, 'stack');
+
+		if (stack !== undefined) serializedError.stack = stack;
+		if (tag !== undefined) serializedError.tag = tag;
+		if (inner !== undefined)
+			serializedError.inner = cloneDiagnosticValue(inner);
+
+		return serializedError;
 	}
 
 	return {
 		name: 'NonError',
-		message,
+		message: safeDiagnosticString(error),
 	};
-}
-
-export function createSerializedErrorFromFields(
-	error: unknown,
-	options: {
-		defaultName: string;
-		defaultMessage: string;
-		includeStack: boolean;
-	},
-): ConnectionDiagnosticError {
-	const name =
-		readErrorStringField(error, 'name', undefined) ?? options.defaultName;
-	const message =
-		readErrorStringField(error, 'message', undefined) ?? options.defaultMessage;
-	const tag = readErrorStringField(error, 'tag', undefined);
-	const inner = readObjectField(error, 'inner');
-	const serializedError: ConnectionDiagnosticError = {
-		name: name || options.defaultName,
-		message,
-	};
-
-	if (options.includeStack) {
-		const stack = readErrorStringField(error, 'stack', undefined);
-		if (stack !== undefined) {
-			serializedError.stack = stack;
-		}
-	}
-
-	if (tag !== undefined) {
-		serializedError.tag = tag;
-	}
-
-	if (inner !== undefined) {
-		serializedError.inner = cloneDiagnosticValue(inner);
-	}
-
-	return serializedError;
 }
 
 function isErrorLike(error: unknown): error is Error {
@@ -268,16 +142,14 @@ function isErrorLike(error: unknown): error is Error {
 	}
 }
 
-function readErrorStringField(
-	error: unknown,
-	field: string,
-	fallback: string | undefined,
-): string | undefined {
+function readStringField(value: unknown, field: string): string | undefined {
 	try {
-		const value = readObjectField(error, field);
-		return typeof value === 'string' ? redactDiagnosticText(value) : fallback;
+		const fieldValue = readObjectField(value, field);
+		return typeof fieldValue === 'string'
+			? safeDiagnosticString(fieldValue)
+			: undefined;
 	} catch {
-		return fallback;
+		return undefined;
 	}
 }
 
@@ -305,22 +177,14 @@ export function normalizeConnectionIdentity(
 	value: unknown,
 ): ConnectionDiagnosticConnectionIdentity | undefined {
 	const identity: ConnectionDiagnosticConnectionIdentity = {};
-	const savedConnectionId = readErrorStringField(
-		value,
-		'savedConnectionId',
-		undefined,
-	);
-	const connectionId = readErrorStringField(value, 'connectionId', undefined);
-	const username = readErrorStringField(value, 'username', undefined);
-	const host = readErrorStringField(value, 'host', undefined);
+	const savedConnectionId = readStringField(value, 'savedConnectionId');
+	const connectionId = readStringField(value, 'connectionId');
+	const username = readStringField(value, 'username');
+	const host = readStringField(value, 'host');
 	const port = readNumberField(value, 'port');
-	const keyId = readErrorStringField(value, 'keyId', undefined);
+	const keyId = readStringField(value, 'keyId');
 	const useTmux = readBooleanField(value, 'useTmux');
-	const tmuxSessionName = readErrorStringField(
-		value,
-		'tmuxSessionName',
-		undefined,
-	);
+	const tmuxSessionName = readStringField(value, 'tmuxSessionName');
 
 	if (savedConnectionId !== undefined)
 		identity.savedConnectionId = savedConnectionId;

@@ -3,10 +3,32 @@ import test from 'node:test';
 import {
 	connectionDiagnosticRecorder,
 	createConnectionDiagnosticRecorder,
+	diagnosticEvents,
 	formatConnectionDiagnosticPrompt,
 	serializeConnectionDiagnosticError,
+	type ConnectionDiagnosticEvent,
+	type ConnectionDiagnosticTimedEvent,
 	type ConnectionDiagnosticTrace,
 } from '../../src/lib/connection-diagnostics';
+
+function timedEvent(
+	event: ConnectionDiagnosticEvent,
+	atMs: number,
+	elapsedMs: number,
+): ConnectionDiagnosticTimedEvent {
+	return {
+		...event,
+		atMs,
+		elapsedMs,
+	};
+}
+
+function assertEventKind<TKind extends ConnectionDiagnosticTimedEvent['kind']>(
+	event: ConnectionDiagnosticTimedEvent | undefined,
+	kind: TKind,
+): asserts event is Extract<ConnectionDiagnosticTimedEvent, { kind: TKind }> {
+	assert.equal(event?.kind, kind);
+}
 
 void test('barrel exports the production recorder singleton', () => {
 	connectionDiagnosticRecorder.clear();
@@ -29,17 +51,18 @@ void test('recorder keeps latest trace and bounded history', () => {
 		trigger: 'initial-auto-connect',
 		reason: 'app-start',
 	});
-	first.event({
-		type: 'connection.selected',
-		source: 'saved-entry',
-		connection: {
-			savedConnectionId: 'muly-dev-box-22',
-			username: 'muly',
-			host: 'dev.tailnet.ts.net',
-			port: 22,
-			keyId: 'key-1',
-		},
-	});
+	first.event(
+		diagnosticEvents.savedEntrySelected({
+			source: 'saved-entry',
+			connection: {
+				savedConnectionId: 'muly-dev-box-22',
+				username: 'muly',
+				host: 'dev.tailnet.ts.net',
+				port: 22,
+				keyId: 'key-1',
+			},
+		}),
+	);
 	first.finish('failed');
 
 	const second = recorder.startTrace({
@@ -72,30 +95,37 @@ void test('prompt includes connection identity and omits private key material', 
 		finishedAtMs: 20,
 		events: [
 			{
+				...diagnosticEvents.savedEntrySelected({
+					source: 'saved-entry',
+					connection: {
+						savedConnectionId: 'muly-dev-box-22',
+						username: 'muly',
+						host: 'dev.tailnet.ts.net',
+						port: 22,
+						keyId: 'key-1',
+					},
+				}),
 				atMs: 10,
 				elapsedMs: 0,
-				type: 'connection.selected',
-				source: 'saved-entry',
-				connection: {
-					savedConnectionId: 'muly-dev-box-22',
-					username: 'muly',
-					host: 'dev.tailnet.ts.net',
-					port: 22,
-					keyId: 'key-1',
-				},
 			},
-			{
-				atMs: 11,
-				elapsedMs: 1,
-				type: 'ssh.connect.failed',
-				source: 'saved-entry',
-				error: {
-					name: 'Error',
-					message: 'network unreachable',
-					stack: 'Error: network unreachable',
-				},
-				details: { privateKey: 'SECRET_KEY_MATERIAL' },
-			},
+			timedEvent(
+				diagnosticEvents.sshConnectFailed({
+					source: 'saved-entry',
+					connection: { host: 'dev.tailnet.ts.net' },
+					error: {
+						name: 'Error',
+						message: 'network unreachable',
+						stack: [
+							'Error: network unreachable',
+							'-----BEGIN OPENSSH PRIVATE KEY-----',
+							'SECRET_KEY_MATERIAL',
+							'-----END OPENSSH PRIVATE KEY-----',
+						].join('\n'),
+					},
+				}),
+				11,
+				1,
+			),
 		],
 	};
 
@@ -119,6 +149,165 @@ void test('prompt includes connection identity and omits private key material', 
 	assert.doesNotMatch(prompt, /SECRET_KEY_MATERIAL/);
 });
 
+void test('prompt renders typed event kind names without undefined fields', () => {
+	const trace: ConnectionDiagnosticTrace = {
+		id: 'trace-typed-prompt-event',
+		trigger: 'manual-diagnostic',
+		reason: 'typed-prompt-event',
+		status: 'failed',
+		startedAtMs: 10,
+		finishedAtMs: 20,
+		events: [
+			timedEvent(
+				diagnosticEvents.savedEntrySelected({
+					source: 'saved-entry',
+					connection: {
+						username: 'muly',
+						host: 'dev.tailnet.ts.net',
+						port: 22,
+					},
+				}),
+				10,
+				0,
+			),
+		],
+	};
+
+	const prompt = formatConnectionDiagnosticPrompt(trace);
+
+	assert.match(prompt, /\+0ms saved-entry\.selected/);
+	assert.doesNotMatch(prompt, /undefined/);
+});
+
+void test('prompt preserves legacy ssh connect failure evidence', () => {
+	const trace = {
+		id: 'trace-legacy-ssh-failure',
+		trigger: 'manual-diagnostic',
+		reason: 'legacy-ssh-failure',
+		status: 'failed',
+		startedAtMs: 100,
+		finishedAtMs: 130,
+		events: [
+			{
+				atMs: 125,
+				elapsedMs: 25,
+				type: 'ssh.connect.failed',
+				source: 'active-connection',
+				connection: {
+					username: 'muly',
+					host: 'dev.tailnet.ts.net',
+					port: 22,
+					keyId: 'key-legacy',
+				},
+				error: {
+					name: 'TimeoutError',
+					message: 'No route to host',
+					stack: 'TimeoutError: No route to host',
+				},
+			},
+		],
+	} as unknown as ConnectionDiagnosticTrace;
+
+	const prompt = formatConnectionDiagnosticPrompt(trace);
+
+	assert.match(prompt, /\+25ms ssh\.connect\.failed/);
+	assert.match(prompt, /muly@dev\.tailnet\.ts\.net:22/);
+	assert.match(prompt, /key-legacy/);
+	assert.match(prompt, /TimeoutError: No route to host/);
+	assert.match(prompt, /errorStack=TimeoutError: No route to host/);
+	assert.doesNotMatch(prompt, /Unsupported legacy diagnostic event/);
+	assert.doesNotMatch(prompt, /undefined/);
+});
+
+void test('prompt preserves unmapped legacy event evidence', () => {
+	const trace = {
+		id: 'trace-unmapped-legacy-events',
+		trigger: 'manual-diagnostic',
+		reason: 'unmapped-legacy-events',
+		status: 'failed',
+		startedAtMs: 200,
+		finishedAtMs: 260,
+		events: [
+			{
+				atMs: 210,
+				elapsedMs: 10,
+				type: 'manual-diagnostic.failed',
+				source: 'manual-diagnostic',
+				message: 'Manual diagnostic failed after probe',
+				error: {
+					name: 'ProbeError',
+					message: 'probe command failed',
+				},
+				details: {
+					probeExitCode: 255,
+				},
+			},
+			{
+				atMs: 220,
+				elapsedMs: 20,
+				type: 'manual-diagnostic.timeout',
+				source: 'manual-diagnostic',
+				message: 'Diagnostic timed out',
+				timeoutMs: 15000,
+			},
+			{
+				atMs: 230,
+				elapsedMs: 30,
+				type: 'ssh.diagnostic.disconnect-failed',
+				source: 'active-connection',
+				connection: {
+					username: 'muly',
+					host: 'dev.tailnet.ts.net',
+					port: 22,
+				},
+				error: {
+					name: 'DisconnectError',
+					message: 'channel close failed',
+				},
+			},
+			{
+				atMs: 240,
+				elapsedMs: 40,
+				type: 'auto-connect.source.latest-shell',
+				source: 'latest-shell',
+				message: 'Latest shell restored',
+				connection: {
+					connectionId: 'live-1',
+					username: 'muly',
+					host: 'dev.tailnet.ts.net',
+					port: 22,
+				},
+				details: {
+					pathname: '/shell/detail',
+					channelId: 7,
+				},
+			},
+		],
+	} as unknown as ConnectionDiagnosticTrace;
+
+	const prompt = formatConnectionDiagnosticPrompt(trace);
+
+	assert.match(prompt, /manual-diagnostic\.failed/);
+	assert.match(prompt, /Manual diagnostic failed after probe/);
+	assert.match(prompt, /ProbeError: probe command failed/);
+	assert.match(prompt, /probeExitCode/);
+	assert.match(prompt, /255/);
+	assert.match(prompt, /manual-diagnostic\.timeout/);
+	assert.match(prompt, /Diagnostic timed out/);
+	assert.match(prompt, /timeoutMs/);
+	assert.match(prompt, /15000/);
+	assert.match(prompt, /ssh\.diagnostic\.disconnect-failed/);
+	assert.match(prompt, /muly@dev\.tailnet\.ts\.net:22/);
+	assert.match(prompt, /DisconnectError: channel close failed/);
+	assert.match(prompt, /auto-connect\.source\.latest-shell/);
+	assert.match(prompt, /live-1/);
+	assert.match(prompt, /Latest shell restored/);
+	assert.match(prompt, /channelId/);
+	assert.match(prompt, /7/);
+	assert.doesNotMatch(prompt, /Unsupported legacy diagnostic event/);
+	assert.doesNotMatch(prompt, /undefined/);
+});
+
 void test('prompt supports planned contract fields and includes them in output', () => {
 	const trace: ConnectionDiagnosticTrace = {
 		id: 'trace-contract',
@@ -129,29 +318,32 @@ void test('prompt supports planned contract fields and includes them in output',
 		finishedAtMs: 160,
 		events: [
 			{
+				...diagnosticEvents.autoConnectActiveConnectionSelected({
+					source: 'active-connection',
+					message: 'Selected current shell connection',
+					connection: {
+						savedConnectionId: 'saved-22',
+						connectionId: 'live-connection-9',
+						username: 'muly',
+						host: 'dev.tailnet.ts.net',
+						port: 22,
+						keyId: 'key-9',
+						useTmux: true,
+						tmuxSessionName: 'workspace',
+					},
+				}),
 				atMs: 100,
 				elapsedMs: 0,
-				type: 'connection.selected',
-				source: 'active-connection',
-				message: 'Selected current shell connection',
-				connection: {
-					savedConnectionId: 'saved-22',
-					connectionId: 'live-connection-9',
-					username: 'muly',
-					host: 'dev.tailnet.ts.net',
-					port: 22,
-					keyId: 'key-9',
-					useTmux: true,
-					tmuxSessionName: 'workspace',
-				},
 			},
-			{
-				atMs: 120,
-				elapsedMs: 20,
-				type: 'shell.snapshot',
-				source: 'latest-shell',
-				message: 'Loaded latest shell context',
-			},
+			timedEvent(
+				diagnosticEvents.autoConnectLatestShellMissing({
+					source: 'latest-shell',
+					pathname: '/shell/detail',
+					message: 'Loaded latest shell context',
+				}),
+				120,
+				20,
+			),
 		],
 	};
 
@@ -202,7 +394,7 @@ void test('recorder snapshots event inputs and returned traces', () => {
 		message: 'original failure',
 		stack: 'stack-1',
 	};
-	const details = {
+	const inner = {
 		attempts: [{ count: 1, privateKeyPreview: 'SECRET' }],
 		password: 'PASSWORD_SECRET',
 		passphrase: 'PASSPHRASE_SECRET',
@@ -211,48 +403,48 @@ void test('recorder snapshots event inputs and returned traces', () => {
 		nested: { phase: 'connect' },
 	};
 
-	trace.event({
-		type: 'ssh.connect.failed',
-		source: 'active-connection',
-		message: 'Initial failure',
-		connection,
-		error,
-		details,
-	});
+	trace.event(
+		diagnosticEvents.sshConnectFailed({
+			source: 'active-connection',
+			connection,
+			error: { ...error, inner },
+		}),
+	);
 
 	connection.host = 'changed.tailnet.ts.net';
 	connection.tmuxSessionName = 'mutated';
 	error.message = 'changed failure';
-	details.attempts[0]!.count = 99;
-	details.nested.phase = 'mutated';
+	inner.attempts[0]!.count = 99;
+	inner.nested.phase = 'mutated';
 
 	const latestTrace = recorder.getLatestTrace();
 	assert.ok(latestTrace);
-	assert.equal(latestTrace.events[0]?.connection?.host, 'dev.tailnet.ts.net');
-	assert.equal(latestTrace.events[0]?.connection?.tmuxSessionName, 'main');
-	assert.equal(latestTrace.events[0]?.error?.message, 'original failure');
-	assert.deepEqual(latestTrace.events[0]?.details?.attempts, [
-		{ count: 1, '[REDACTED]': '[REDACTED]' },
+	const latestEvent = latestTrace.events[0];
+	assertEventKind(latestEvent, 'ssh.connect.failed');
+	const latestInner = latestEvent.error.inner as typeof inner;
+	assert.equal(latestEvent.connection.host, 'dev.tailnet.ts.net');
+	assert.equal(latestEvent.connection.tmuxSessionName, 'main');
+	assert.equal(latestEvent.error.message, 'original failure');
+	assert.deepEqual(latestInner.attempts, [
+		{ count: 1, privateKeyPreview: 'SECRET' },
 	]);
-	assert.deepEqual(latestTrace.events[0]?.details?.nested, {
+	assert.deepEqual(latestInner.nested, {
 		phase: 'connect',
 	});
-	assert.equal(latestTrace.events[0]?.details?.['[REDACTED]'], '[REDACTED]');
 	for (const secretKey of [
 		'password',
 		'passphrase',
 		'apiKey',
 		'Authorization',
 	]) {
-		assert.equal(
-			Object.hasOwn(latestTrace.events[0]?.details ?? {}, secretKey),
-			false,
-		);
+		assert.equal(Object.hasOwn(latestInner, secretKey), true);
 	}
 
 	const returnedTrace = recorder.getLatestTrace();
 	assert.ok(returnedTrace);
-	const returnedDetails = returnedTrace.events[0]?.details as {
+	const returnedEvent = returnedTrace.events[0];
+	assertEventKind(returnedEvent, 'ssh.connect.failed');
+	const returnedDetails = returnedEvent.error.inner as {
 		nested?: { phase?: string };
 	};
 	assert.ok(returnedDetails.nested);
@@ -260,7 +452,9 @@ void test('recorder snapshots event inputs and returned traces', () => {
 
 	const freshTrace = recorder.getLatestTrace();
 	assert.ok(freshTrace);
-	const freshDetails = freshTrace.events[0]?.details as {
+	const freshEvent = freshTrace.events[0];
+	assertEventKind(freshEvent, 'ssh.connect.failed');
+	const freshDetails = freshEvent.error.inner as {
 		nested?: { phase?: string };
 	};
 	assert.equal(freshDetails.nested?.phase, 'connect');
@@ -277,19 +471,27 @@ void test('recorder handle snapshots stay isolated from caller mutations', () =>
 		reason: 'snapshot-isolation',
 	});
 
-	const returnedEvent = handle.event({
-		type: 'ssh.connect.failed',
-		source: 'active-connection',
-		details: {
-			nested: {
-				phase: 'connect',
-				attempts: 1,
+	const returnedEvent = handle.event(
+		diagnosticEvents.manualDiagnosticWarning({
+			source: 'manual-diagnostic',
+			message: 'Initial failure',
+			error: {
+				name: 'Error',
+				message: 'Initial failure',
+				inner: {
+					nested: {
+						phase: 'connect',
+						attempts: 1,
+					},
+				},
 			},
-		},
-	});
+		}),
+	);
 
 	(handle.trace as ConnectionDiagnosticTrace).reason = 'mutated';
-	const handleEventDetails = handle.trace.events[0]?.details as {
+	const handleEvent = handle.trace.events[0];
+	assertEventKind(handleEvent, 'manual-diagnostic.warning');
+	const handleEventDetails = handleEvent.error.inner as {
 		nested?: { phase?: string; attempts?: number };
 	};
 	assert.ok(handleEventDetails.nested);
@@ -298,15 +500,18 @@ void test('recorder handle snapshots stay isolated from caller mutations', () =>
 
 	const latestBeforeFinish = recorder.getLatestTrace();
 	assert.ok(latestBeforeFinish);
+	const latestBeforeFinishEvent = latestBeforeFinish.events[0];
+	assertEventKind(latestBeforeFinishEvent, 'manual-diagnostic.warning');
 	assert.equal(latestBeforeFinish.reason, 'snapshot-isolation');
-	assert.deepEqual(latestBeforeFinish.events[0]?.details, {
+	assert.deepEqual(latestBeforeFinishEvent.error.inner, {
 		nested: {
 			phase: 'connect',
 			attempts: 1,
 		},
 	});
 
-	const returnedEventDetails = returnedEvent.details as {
+	assertEventKind(returnedEvent, 'manual-diagnostic.warning');
+	const returnedEventDetails = returnedEvent.error.inner as {
 		nested?: { phase?: string; attempts?: number };
 	};
 	assert.ok(returnedEventDetails.nested);
@@ -315,7 +520,9 @@ void test('recorder handle snapshots stay isolated from caller mutations', () =>
 
 	const latestAfterReturnedEventMutation = recorder.getLatestTrace();
 	assert.ok(latestAfterReturnedEventMutation);
-	assert.deepEqual(latestAfterReturnedEventMutation.events[0]?.details, {
+	const latestAfterReturnedEvent = latestAfterReturnedEventMutation.events[0];
+	assertEventKind(latestAfterReturnedEvent, 'manual-diagnostic.warning');
+	assert.deepEqual(latestAfterReturnedEvent.error.inner, {
 		nested: {
 			phase: 'connect',
 			attempts: 1,
@@ -326,7 +533,9 @@ void test('recorder handle snapshots stay isolated from caller mutations', () =>
 	handle.finish('failed');
 
 	(handle.trace as ConnectionDiagnosticTrace).reason = 'history-mutated';
-	const postFinishHandleDetails = handle.trace.events[0]?.details as {
+	const postFinishHandleEvent = handle.trace.events[0];
+	assertEventKind(postFinishHandleEvent, 'manual-diagnostic.warning');
+	const postFinishHandleDetails = postFinishHandleEvent.error.inner as {
 		nested?: { phase?: string; attempts?: number };
 	};
 	assert.ok(postFinishHandleDetails.nested);
@@ -336,54 +545,13 @@ void test('recorder handle snapshots stay isolated from caller mutations', () =>
 	const history = recorder.getHistory();
 	assert.equal(history.length, 1);
 	assert.equal(history[0]?.reason, 'snapshot-isolation');
-	assert.deepEqual(history[0]?.events[0]?.details, {
+	const historyEvent = history[0]?.events[0];
+	assertEventKind(historyEvent, 'manual-diagnostic.warning');
+	assert.deepEqual(historyEvent.error.inner, {
 		nested: {
 			phase: 'connect',
 			attempts: 1,
 		},
-	});
-});
-
-void test('recorder safely snapshots messy details without throwing', () => {
-	let currentNow = 700;
-	const recorder = createConnectionDiagnosticRecorder({
-		now: () => currentNow,
-	});
-	const trace = recorder.startTrace({
-		trigger: 'manual-diagnostic',
-		reason: 'safe-snapshot',
-	});
-	const cyclicDetails: {
-		self?: unknown;
-		bigint: bigint;
-		handler: () => string;
-		nested: { privateKeyPreview: string };
-	} = {
-		bigint: 123n,
-		handler: function refreshConnection() {
-			return 'ok';
-		},
-		nested: { privateKeyPreview: 'SECRET_PREVIEW' },
-	};
-	cyclicDetails.self = cyclicDetails;
-
-	assert.doesNotThrow(() => {
-		trace.event({
-			type: 'ssh.connect.failed',
-			source: 'active-connection',
-			details: cyclicDetails as Record<string, unknown>,
-		});
-	});
-
-	assert.doesNotThrow(() => recorder.getLatestTrace());
-
-	const latestTrace = recorder.getLatestTrace();
-	assert.ok(latestTrace);
-	assert.deepEqual(latestTrace.events[0]?.details, {
-		self: '[Circular]',
-		bigint: '123n',
-		handler: '[Function refreshConnection]',
-		nested: { '[REDACTED]': '[REDACTED]' },
 	});
 });
 
@@ -397,11 +565,16 @@ void test('trace handle finalization is terminal and idempotent', () => {
 		reason: 'post-finish-noop',
 	});
 
-	handle.event({
-		type: 'ssh.connect.failed',
-		source: 'active-connection',
-		message: 'Initial failure',
-	});
+	handle.event(
+		diagnosticEvents.manualDiagnosticWarning({
+			source: 'manual-diagnostic',
+			message: 'Initial failure',
+			error: {
+				name: 'Error',
+				message: 'Initial failure',
+			},
+		}),
+	);
 
 	currentNow = 1050;
 	handle.finish('failed');
@@ -413,14 +586,19 @@ void test('trace handle finalization is terminal and idempotent', () => {
 	assert.equal(finishedSnapshot.finishedAtMs, 1050);
 
 	currentNow = 1100;
-	const postFinishEvent = handle.event({
-		type: 'ssh.connect.retry',
-		source: 'active-connection',
-		message: 'Should not append',
-	});
+	const postFinishEvent = handle.event(
+		diagnosticEvents.manualDiagnosticWarning({
+			source: 'manual-diagnostic',
+			message: 'Should not append',
+			error: {
+				name: 'Error',
+				message: 'Should not append',
+			},
+		}),
+	);
 	handle.finish('connected');
 
-	assert.equal(postFinishEvent.type, 'ssh.connect.retry');
+	assert.equal(postFinishEvent.kind, 'manual-diagnostic.warning');
 	assert.equal(postFinishEvent.message, 'Should not append');
 	assert.equal(postFinishEvent.atMs, 1100);
 	assert.equal(postFinishEvent.elapsedMs, 100);
@@ -437,49 +615,6 @@ void test('trace handle finalization is terminal and idempotent', () => {
 	assert.equal(history[0]?.status, 'failed');
 	assert.equal(history[0]?.events.length, 1);
 	assert.equal(history[0]?.finishedAtMs, 1050);
-});
-
-void test('recorder tolerates hostile event inputs before and after finish', () => {
-	let currentNow = 1400;
-	const recorder = createConnectionDiagnosticRecorder({
-		now: () => currentNow,
-	});
-	const handle = recorder.startTrace({
-		trigger: 'manual-diagnostic',
-		reason: 'hostile-event-input',
-	});
-	const hostileEvent = Object.create(null, {
-		type: {
-			get() {
-				throw new Error('type getter failed');
-			},
-		},
-		source: {
-			get() {
-				throw new Error('source getter failed');
-			},
-		},
-		details: {
-			get() {
-				throw new Error('details getter failed');
-			},
-		},
-	}) as ConnectionDiagnosticTrace['events'][number];
-
-	assert.doesNotThrow(() => handle.event(hostileEvent));
-
-	const latestTrace = recorder.getLatestTrace();
-	assert.ok(latestTrace);
-	assert.equal(latestTrace.events[0]?.type, 'diagnostic.event.unserializable');
-	assert.equal(latestTrace.events[0]?.source, 'manual-diagnostic');
-
-	currentNow = 1450;
-	handle.finish('failed');
-
-	currentNow = 1500;
-	assert.doesNotThrow(() => handle.event(hostileEvent));
-
-	assert.equal(recorder.getLatestTrace()?.events.length, 1);
 });
 
 void test('older trace finish does not replace newer latest trace', () => {
@@ -548,10 +683,12 @@ void test('clear prevents stale trace handles from repopulating recorder state',
 		reason: 'clear-race',
 	});
 
-	handle.event({
-		type: 'ssh.connect.start',
-		source: 'manual-diagnostic',
-	});
+	handle.event(
+		diagnosticEvents.sshConnectStarted({
+			source: 'manual-diagnostic',
+			connection: {},
+		}),
+	);
 
 	recorder.clear();
 
@@ -573,33 +710,35 @@ void test('prompt summary prefers the richest later connection identity', () => 
 		finishedAtMs: 180,
 		events: [
 			{
+				...diagnosticEvents.savedEntrySelected({
+					source: 'saved-entry',
+					connection: {
+						savedConnectionId: 'saved-22',
+						username: 'muly',
+						host: 'dev.tailnet.ts.net',
+						port: 22,
+					},
+				}),
 				atMs: 100,
 				elapsedMs: 0,
-				type: 'connection.selected',
-				source: 'saved-entry',
-				connection: {
-					savedConnectionId: 'saved-22',
-					username: 'muly',
-					host: 'dev.tailnet.ts.net',
-					port: 22,
-				},
 			},
-			{
-				atMs: 140,
-				elapsedMs: 40,
-				type: 'connection.promoted',
-				source: 'active-connection',
-				connection: {
-					savedConnectionId: 'saved-22',
-					connectionId: 'connection-9',
-					username: 'muly',
-					host: 'dev.tailnet.ts.net',
-					port: 22,
-					keyId: 'key-9',
-					useTmux: true,
-					tmuxSessionName: 'workspace',
-				},
-			},
+			timedEvent(
+				diagnosticEvents.savedEntrySelected({
+					source: 'active-connection',
+					connection: {
+						savedConnectionId: 'saved-22',
+						connectionId: 'connection-9',
+						username: 'muly',
+						host: 'dev.tailnet.ts.net',
+						port: 22,
+						keyId: 'key-9',
+						useTmux: true,
+						tmuxSessionName: 'workspace',
+					},
+				}),
+				140,
+				40,
+			),
 		],
 	};
 
@@ -642,226 +781,6 @@ void test('prompt omits optional app state lines when values are absent', () => 
 	assert.doesNotMatch(prompt, /- backgroundWorkAllowed:/);
 	assert.doesNotMatch(prompt, /- foregroundServiceRequired:/);
 	assert.doesNotMatch(prompt, /- appActive:/);
-});
-
-void test('prompt formatting tolerates malformed direct trace input', () => {
-	const hostileTrace = Object.create(null, {
-		id: { value: 'trace-hostile' },
-		trigger: { value: 'manual-diagnostic' },
-		reason: { value: 'hostile-direct-trace' },
-		status: { value: 'failed' },
-		startedAtMs: { value: 10 },
-		events: {
-			get() {
-				throw new Error('events getter failed');
-			},
-		},
-	}) as ConnectionDiagnosticTrace;
-
-	assert.doesNotThrow(() => formatConnectionDiagnosticPrompt(hostileTrace));
-	assert.match(formatConnectionDiagnosticPrompt(hostileTrace), /trace-hostile/);
-
-	const malformedIdentityTrace = {
-		id: 'trace-malformed-identity',
-		trigger: 'manual-diagnostic',
-		reason: 'malformed-identity',
-		status: 'failed',
-		startedAtMs: 10,
-		events: [
-			{
-				atMs: 11,
-				elapsedMs: 1,
-				type: 'connection.selected',
-				source: 'active-connection',
-				connection: {
-					username: 42,
-					host: { nested: true },
-					port: 'bad-port',
-					keyId: 'key-1',
-					tmuxSessionName: false,
-				},
-			},
-		],
-	} as unknown as ConnectionDiagnosticTrace;
-
-	const prompt = formatConnectionDiagnosticPrompt(malformedIdentityTrace);
-	assert.match(prompt, /keyId=key-1/);
-	assert.doesNotMatch(prompt, /42/);
-	assert.doesNotMatch(prompt, /bad-port/);
-});
-
-void test('prompt formatting tolerates direct messy trace details', () => {
-	function tokenSECRET() {
-		return 'hidden';
-	}
-
-	const cyclicDetails: {
-		self?: unknown;
-		bigint: bigint;
-		handler: () => string;
-		secretFunction: () => string;
-		diagnosticSymbol: symbol;
-		secretSymbol: symbol;
-		accessToken: string;
-		nested: { privateKeyPreview: string };
-	} = {
-		bigint: 123n,
-		handler: function refreshConnection() {
-			return 'ok';
-		},
-		secretFunction: tokenSECRET,
-		diagnosticSymbol: Symbol('diagnostic-marker'),
-		secretSymbol: Symbol('Bearer SYMBOL_SECRET'),
-		accessToken: 'ACCESS_TOKEN_SECRET',
-		nested: { privateKeyPreview: 'SECRET_PREVIEW' },
-	};
-	cyclicDetails.self = cyclicDetails;
-
-	const trace: ConnectionDiagnosticTrace = {
-		id: 'trace-messy-direct',
-		trigger: 'manual-diagnostic',
-		reason: 'direct-trace-formatting',
-		status: 'failed',
-		startedAtMs: 200,
-		finishedAtMs: 260,
-		events: [
-			{
-				atMs: 220,
-				elapsedMs: 20,
-				type: 'ssh.connect.failed',
-				source: 'active-connection',
-				details: cyclicDetails as Record<string, unknown>,
-			},
-		],
-	};
-
-	assert.doesNotThrow(() => formatConnectionDiagnosticPrompt(trace));
-
-	const prompt = formatConnectionDiagnosticPrompt(trace);
-	assert.match(prompt, /\[Circular\]/);
-	assert.match(prompt, /123n/);
-	assert.match(prompt, /\[Function refreshConnection\]/);
-	assert.match(prompt, /\[Symbol diagnostic-marker\]/);
-	assert.doesNotMatch(prompt, /SECRET_PREVIEW/);
-	assert.doesNotMatch(prompt, /ACCESS_TOKEN_SECRET/);
-	assert.doesNotMatch(prompt, /tokenSECRET/);
-	assert.doesNotMatch(prompt, /SYMBOL_SECRET/);
-});
-
-void test('prompt redacts credential text inside generic string fields', () => {
-	const trace: ConnectionDiagnosticTrace = {
-		id: 'trace-token=TRACE_ID_SECRET beta gamma access_token TRACE_ACCESS_SECRET next',
-		trigger: 'manual-diagnostic',
-		reason: 'apiKey=TRACE_REASON_SECRET privateKey=TRACE_PRIVATE_KEY_SECRET',
-		status: 'failed',
-		startedAtMs: 300,
-		finishedAtMs: 360,
-		events: [
-			{
-				atMs: 320,
-				elapsedMs: 20,
-				type: 'ssh.connect.failed privateKey=EVENT_TYPE_PRIVATE_KEY_SECRET beta gamma client_secret EVENT_TYPE_CLIENT_SECRET next',
-				source: 'active-connection',
-				message:
-					'Authorization: Bearer EVENT_MESSAGE_SECRET passphrase=EVENT_PASSPHRASE_SECRET auth EVENT_AUTH_SECRET next',
-				error: {
-					name: 'Error',
-					message:
-						'https://user:password@example.test/path?token=ERROR_URL_SECRET private-key=ERROR_PRIVATE_KEY_SECRET',
-					stack:
-						'Error: failed\n    at sshConnect token=STACK_TOKEN_SECRET\n    at auth Bearer STACK_BEARER_SECRET\n-----BEGIN OPENSSH PRIVATE KEY-----\nSTACK_PRIVATE_KEY_SECRET\n-----END OPENSSH PRIVATE KEY-----',
-				},
-				details: {
-					log: 'Authorization: Bearer DETAIL_LOG_SECRET',
-					url: 'https://user:password@example.test/path?token=DETAIL_URL_SECRET',
-					note: 'apiKey=DETAIL_NOTE_SECRET',
-					generic:
-						'privateKey=DETAIL_PRIVATE_KEY_SECRET passphrase: DETAIL_PASSPHRASE_SECRET',
-					multiWord:
-						'password: MULTI_WORD_PASSWORD_SECRET beta gamma token=MULTI_WORD_TOKEN_SECRET beta gamma apiKey=MULTI_WORD_API_KEY_SECRET beta gamma access_token=ACCESS_TWO beta gamma refresh_token=REFRESH_TWO beta gamma client_secret=CLIENT_TWO beta gamma credential=CREDENTIAL_TWO beta gamma secret=SECRET_TWO beta gamma session=SESSION_TWO beta gamma sig=SIG_TWO beta gamma signature=SIGNATURE_TWO beta gamma auth=AUTH_TWO beta gamma password is PLAIN_PASSWORD_SECRET',
-					bareAuth:
-						'Bearer BARE_BEARER_SECRET Basic BARE_BASIC_SECRET Token BARE_TOKEN_SECRET',
-					'Authorization: Bearer DETAIL_KEY_SECRET': 'redacted key',
-					tokenSECRET: 'redacted key',
-					'client_secret LEAK_KEY_SECRET': 'redacted key',
-					auth: 'OPAQUE_AUTH_VALUE',
-					key: 'OPAQUE_KEY_VALUE',
-					code: 'OPAQUE_CODE_VALUE',
-					session: 'OPAQUE_SESSION_VALUE',
-					sig: 'OPAQUE_SIG_VALUE',
-					signature: 'OPAQUE_SIGNATURE_VALUE',
-					pem: [
-						'-----BEGIN OPENSSH PRIVATE KEY-----',
-						'PRIVATE_KEY_BODY_SECRET',
-						'-----END OPENSSH PRIVATE KEY-----',
-					].join('\n'),
-				},
-			},
-		],
-	};
-
-	const prompt = formatConnectionDiagnosticPrompt(trace, {
-		appState: {
-			platformOS: 'android',
-			pathname: '/shell/detail?access_token=APP_STATE_SECRET',
-			isAutoConnecting: false,
-			isReconnecting: true,
-		},
-	});
-
-	for (const secret of [
-		'TRACE_REASON_SECRET',
-		'TRACE_ID_SECRET',
-		'TRACE_ACCESS_SECRET',
-		'TRACE_PRIVATE_KEY_SECRET',
-		'EVENT_TYPE_PRIVATE_KEY_SECRET',
-		'EVENT_TYPE_CLIENT_SECRET',
-		'EVENT_MESSAGE_SECRET',
-		'EVENT_PASSPHRASE_SECRET',
-		'EVENT_AUTH_SECRET',
-		'ERROR_URL_SECRET',
-		'ERROR_PRIVATE_KEY_SECRET',
-		'STACK_TOKEN_SECRET',
-		'STACK_BEARER_SECRET',
-		'STACK_PRIVATE_KEY_SECRET',
-		'DETAIL_LOG_SECRET',
-		'DETAIL_URL_SECRET',
-		'DETAIL_NOTE_SECRET',
-		'DETAIL_PRIVATE_KEY_SECRET',
-		'DETAIL_PASSPHRASE_SECRET',
-		'MULTI_WORD_PASSWORD_SECRET',
-		'MULTI_WORD_TOKEN_SECRET',
-		'MULTI_WORD_API_KEY_SECRET',
-		'ACCESS_TWO',
-		'REFRESH_TWO',
-		'CLIENT_TWO',
-		'CREDENTIAL_TWO',
-		'SECRET_TWO',
-		'SESSION_TWO',
-		'SIG_TWO',
-		'SIGNATURE_TWO',
-		'AUTH_TWO',
-		'PLAIN_PASSWORD_SECRET',
-		'BARE_BEARER_SECRET',
-		'BARE_BASIC_SECRET',
-		'BARE_TOKEN_SECRET',
-		'DETAIL_KEY_SECRET',
-		'tokenSECRET',
-		'LEAK_KEY_SECRET',
-		'OPAQUE_AUTH_VALUE',
-		'OPAQUE_KEY_VALUE',
-		'OPAQUE_CODE_VALUE',
-		'OPAQUE_SESSION_VALUE',
-		'OPAQUE_SIG_VALUE',
-		'OPAQUE_SIGNATURE_VALUE',
-		'beta gamma',
-		'PRIVATE_KEY_BODY_SECRET',
-		'APP_STATE_SECRET',
-	]) {
-		assert.doesNotMatch(prompt, new RegExp(secret));
-	}
-
-	assert.match(prompt, /\[REDACTED\]/);
 });
 
 void test('error serializer preserves useful non-secret details', () => {
@@ -964,14 +883,16 @@ void test('error serializer preserves useful non-secret details', () => {
 		finishedAtMs: 20,
 		events: [
 			{
+				...diagnosticEvents.sshConnectFailed({
+					source: 'active-connection',
+					connection: {},
+					error: serializeConnectionDiagnosticError({
+						tag: 'Russh',
+						inner: ['No route to host'],
+					}),
+				}),
 				atMs: 20,
 				elapsedMs: 10,
-				type: 'ssh.connect.failed',
-				source: 'active-connection',
-				error: serializeConnectionDiagnosticError({
-					tag: 'Russh',
-					inner: ['No route to host'],
-				}),
 			},
 		],
 	});

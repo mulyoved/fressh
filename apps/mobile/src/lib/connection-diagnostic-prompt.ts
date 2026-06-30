@@ -2,7 +2,7 @@ import { normalizeTraceForPrompt } from './connection-diagnostic-normalization';
 import {
 	cloneDiagnosticValue,
 	normalizeConnectionIdentity,
-	redactDiagnosticText,
+	safeDiagnosticString,
 	UNREADABLE_ERROR_MESSAGE,
 } from './connection-diagnostic-redaction';
 import {
@@ -19,10 +19,10 @@ function formatConnectionIdentity(
 	if (!normalizedConnection) return 'unknown connection';
 
 	const username = normalizedConnection.username
-		? redactDiagnosticText(normalizedConnection.username.trim())
+		? safeDiagnosticString(normalizedConnection.username.trim())
 		: undefined;
 	const host = normalizedConnection.host
-		? redactDiagnosticText(normalizedConnection.host.trim())
+		? safeDiagnosticString(normalizedConnection.host.trim())
 		: undefined;
 	const port = normalizedConnection.port;
 	const address =
@@ -31,16 +31,16 @@ function formatConnectionIdentity(
 			: null;
 
 	const savedId = normalizedConnection.savedConnectionId
-		? redactDiagnosticText(normalizedConnection.savedConnectionId.trim())
+		? safeDiagnosticString(normalizedConnection.savedConnectionId.trim())
 		: undefined;
 	const connectionId = normalizedConnection.connectionId
-		? redactDiagnosticText(normalizedConnection.connectionId.trim())
+		? safeDiagnosticString(normalizedConnection.connectionId.trim())
 		: undefined;
 	const keyId = normalizedConnection.keyId
-		? redactDiagnosticText(normalizedConnection.keyId.trim())
+		? safeDiagnosticString(normalizedConnection.keyId.trim())
 		: undefined;
 	const tmuxSessionName = normalizedConnection.tmuxSessionName
-		? redactDiagnosticText(normalizedConnection.tmuxSessionName.trim())
+		? safeDiagnosticString(normalizedConnection.tmuxSessionName.trim())
 		: undefined;
 	const parts = [
 		address,
@@ -60,26 +60,26 @@ function formatConnectionIdentity(
 
 function formatEvent(event: ConnectionDiagnosticEvent): string {
 	const parts = [
-		`- +${event.elapsedMs}ms ${redactDiagnosticText(event.type)}`,
+		`- +${event.elapsedMs}ms ${safeDiagnosticString(event.type)}`,
 		`source=${event.source}`,
-		event.message ? `message=${redactDiagnosticText(event.message)}` : null,
+		event.message ? `message=${safeDiagnosticString(event.message)}` : null,
 		event.connection
 			? `connection=${formatConnectionIdentity(event.connection)}`
 			: null,
 		event.error
-			? `error=${redactDiagnosticText(
+			? `error=${safeDiagnosticString(
 					event.error.name,
-				)}: ${redactDiagnosticText(event.error.message)}`
+				)}: ${safeDiagnosticString(event.error.message)}`
 			: null,
 	];
 
 	if (event.error?.tag) {
-		parts.push(`errorTag=${redactDiagnosticText(event.error.tag)}`);
+		parts.push(`errorTag=${safeDiagnosticString(event.error.tag)}`);
 	}
 
 	if (event.error?.stack) {
 		parts.push(
-			`errorStack=${redactDiagnosticText(event.error.stack).replace(
+			`errorStack=${safeDiagnosticString(event.error.stack).replace(
 				/\n/g,
 				' ',
 			)}`,
@@ -155,14 +155,14 @@ export function formatConnectionDiagnosticPrompt(
 		if (options.appState) {
 			appStateLines.push(
 				'App state:',
-				`- platformOS: ${redactDiagnosticText(options.appState.platformOS)}`,
+				`- platformOS: ${safeDiagnosticString(options.appState.platformOS)}`,
 				`- isAutoConnecting: ${String(options.appState.isAutoConnecting)}`,
 				`- isReconnecting: ${String(options.appState.isReconnecting)}`,
 			);
 
 			if (options.appState.pathname !== undefined) {
 				appStateLines.push(
-					`- pathname: ${redactDiagnosticText(options.appState.pathname)}`,
+					`- pathname: ${safeDiagnosticString(options.appState.pathname)}`,
 				);
 			}
 
@@ -201,9 +201,9 @@ export function formatConnectionDiagnosticPrompt(
 			'Debug this Fressh mobile SSH connection failure.',
 			'',
 			'Trace summary:',
-			`- traceId: ${redactDiagnosticText(safeTrace.id)}`,
+			`- traceId: ${safeDiagnosticString(safeTrace.id)}`,
 			`- trigger: ${safeTrace.trigger}`,
-			`- reason: ${redactDiagnosticText(safeTrace.reason)}`,
+			`- reason: ${safeDiagnosticString(safeTrace.reason)}`,
 			`- status: ${safeTrace.status}`,
 			`- startedAtMs: ${safeTrace.startedAtMs}`,
 			`- finishedAtMs: ${safeTrace.finishedAtMs ?? 'not-finished'}`,

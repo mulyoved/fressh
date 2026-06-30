@@ -219,12 +219,51 @@ void test('diagnostic error inner snapshots are JSON-safe', () => {
 			},
 		],
 		big: '10n',
-		fn: '[Function namedDiagnosticHelper]',
+		fn: '[Function]',
 		symbol: '[Symbol diagnostic]',
-		date: '[object Date]',
+		date: '[Unreadable]',
 		nullValue: null,
 	});
 	assert.doesNotThrow(() => JSON.stringify(event));
+});
+
+void test('diagnostic error inner snapshots do not invoke coercion hooks', () => {
+	let coercionCalls = 0;
+	const nonPlainObject = Object.create({
+		get [Symbol.toStringTag]() {
+			coercionCalls += 1;
+			return 'HostileTag';
+		},
+	});
+	Object.assign(nonPlainObject, {
+		toString() {
+			coercionCalls += 1;
+			return 'hostile toString';
+		},
+		valueOf() {
+			coercionCalls += 1;
+			return 'hostile valueOf';
+		},
+		[Symbol.toPrimitive]() {
+			coercionCalls += 1;
+			return 'hostile primitive';
+		},
+	});
+
+	const event = diagnosticEvents.manualDiagnosticWarning({
+		source: 'manual-diagnostic',
+		message: 'Hostile object attached',
+		error: {
+			name: 'Error',
+			message: 'Failed',
+			inner: { nonPlainObject },
+		},
+	});
+
+	assert.equal(coercionCalls, 0);
+	assert.deepEqual(event.error.inner, {
+		nonPlainObject: '[Unreadable]',
+	});
 });
 
 void test('diagnostic error inner snapshots tolerate hostile objects', () => {

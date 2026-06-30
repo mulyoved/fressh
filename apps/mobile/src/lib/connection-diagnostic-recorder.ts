@@ -1,11 +1,13 @@
-import { createConnectionDiagnosticEvent } from './connection-diagnostic-normalization';
+import { normalizeTimedConnectionDiagnosticEvent } from './connection-diagnostic-normalization';
 import {
 	cloneDiagnosticValue,
-	redactDiagnosticText,
+	safeDiagnosticString,
 } from './connection-diagnostic-redaction';
 import {
+	type ConnectionDiagnosticEvent,
 	type ConnectionDiagnosticRecorder,
 	type ConnectionDiagnosticRecorderOptions,
+	type ConnectionDiagnosticTimedEvent,
 	type ConnectionDiagnosticTrace,
 } from './connection-diagnostic-types';
 
@@ -28,9 +30,23 @@ function cloneTrace(
 ): ConnectionDiagnosticTrace {
 	return {
 		...trace,
-		reason: redactDiagnosticText(trace.reason),
+		id: safeDiagnosticString(trace.id),
+		reason: safeDiagnosticString(trace.reason),
 		events: trace.events.map((event) => cloneDiagnosticValue(event)),
 	};
+}
+
+function timestampEvent(input: {
+	event: ConnectionDiagnosticEvent;
+	startedAtMs: number;
+	atMs: number;
+}): ConnectionDiagnosticTimedEvent {
+	return normalizeTimedConnectionDiagnosticEvent({
+		event: input.event,
+		startedAtMs: input.startedAtMs,
+		atMs: input.atMs,
+		elapsedMs: input.atMs - input.startedAtMs,
+	});
 }
 
 export function createConnectionDiagnosticRecorder(
@@ -52,7 +68,7 @@ export function createConnectionDiagnosticRecorder(
 			const trace: ConnectionDiagnosticTrace = {
 				id: nextTraceId(startedAtMs),
 				trigger,
-				reason,
+				reason: safeDiagnosticString(reason),
 				status: 'running',
 				startedAtMs,
 				events: [],
@@ -65,16 +81,14 @@ export function createConnectionDiagnosticRecorder(
 					return cloneTrace(trace);
 				},
 				event: (input) => {
-					const atMs = now();
-					const event = createConnectionDiagnosticEvent({
-						rawEvent: input,
+					const event = timestampEvent({
+						event: input,
 						startedAtMs: trace.startedAtMs,
-						atMs,
+						atMs: now(),
 					});
-					if (finished) {
-						return cloneDiagnosticValue(event);
+					if (!finished) {
+						trace.events.push(event);
 					}
-					trace.events.push(event);
 					return cloneDiagnosticValue(event);
 				},
 				finish: (status) => {

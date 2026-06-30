@@ -429,10 +429,10 @@ const copyDiagnosticInnerValue = (
 	if (typeof value === 'undefined') return undefined;
 	if (typeof value === 'bigint') return `${value}n`;
 	if (typeof value === 'function') {
-		return value.name ? `[Function ${value.name}]` : '[Function anonymous]';
+		return '[Function]';
 	}
 	if (typeof value === 'symbol') return `[Symbol ${value.description ?? ''}]`;
-	if (typeof value !== 'object') return String(value);
+	if (typeof value !== 'object') return '[Unreadable]';
 
 	if (path.has(value)) return CIRCULAR_DIAGNOSTIC_INNER_VALUE;
 	if (Array.isArray(value)) {
@@ -452,7 +452,7 @@ const copyDiagnosticInnerValue = (
 
 	const prototype = Object.getPrototypeOf(value);
 	if (prototype !== Object.prototype && prototype !== null) {
-		return Object.prototype.toString.call(value);
+		return '[Unreadable]';
 	}
 
 	const copy: Record<string, unknown> = {};
