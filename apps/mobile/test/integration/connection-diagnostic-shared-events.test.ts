@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import test from 'node:test';
 import {
 	buildActiveConnectionIdentity,
@@ -226,3 +228,26 @@ type DiagnosticEventBuildersExactlyCoverUnion = [
 
 const assertDiagnosticEventBuildersExactlyCoverUnion: DiagnosticEventBuildersExactlyCoverUnion = true;
 void assertDiagnosticEventBuildersExactlyCoverUnion;
+
+void test('diagnostics event source files stay below the hard size limit', () => {
+	const root = join(process.cwd(), 'src/lib/connection-diagnostics/events');
+	const files = [
+		'types.ts',
+		'snapshot.ts',
+		'identity.ts',
+		'prompt-format.ts',
+		'saved-entry.ts',
+		'ssh.ts',
+		'auto-connect.ts',
+		'manual.ts',
+		'tailscale.ts',
+		'reconnect.ts',
+		'index.ts',
+	];
+
+	for (const file of files) {
+		const source = readFileSync(join(root, file), 'utf8');
+		const lineCount = source.replace(/\n$/, '').split('\n').length;
+		assert.ok(lineCount <= 800, `${file} has ${lineCount} lines`);
+	}
+});
