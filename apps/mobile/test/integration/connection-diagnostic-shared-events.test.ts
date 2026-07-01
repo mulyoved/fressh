@@ -17,6 +17,8 @@ import {
 	omitPrivateKeyMaterial,
 	serializeConnectionDiagnosticError,
 	snapshotDiagnosticValue,
+	type connectionDiagnosticEventKinds,
+	type ConnectionDiagnosticEvent,
 } from '../../src/lib/connection-diagnostics/events';
 
 void test('identity helpers copy only diagnostic-safe connection fields', () => {
@@ -182,3 +184,23 @@ void test('connection identity formatter covers unknown and rich identities', ()
 		].join(' | '),
 	);
 });
+
+type ListedConnectionDiagnosticEventKind =
+	(typeof connectionDiagnosticEventKinds)[number];
+type MissingConnectionDiagnosticEventKind = Exclude<
+	ConnectionDiagnosticEvent['kind'],
+	ListedConnectionDiagnosticEventKind
+>;
+type ExtraConnectionDiagnosticEventKind = Exclude<
+	ListedConnectionDiagnosticEventKind,
+	ConnectionDiagnosticEvent['kind']
+>;
+type ConnectionDiagnosticEventKindsExactlyCoverUnion = [
+	MissingConnectionDiagnosticEventKind,
+	ExtraConnectionDiagnosticEventKind,
+] extends [never, never]
+	? true
+	: never;
+
+const assertConnectionDiagnosticEventKindsExactlyCoverUnion: ConnectionDiagnosticEventKindsExactlyCoverUnion = true;
+void assertConnectionDiagnosticEventKindsExactlyCoverUnion;
