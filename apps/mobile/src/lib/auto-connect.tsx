@@ -432,14 +432,14 @@ export function AutoConnectManager() {
 						activeDiagnosticTraceRef.current = trace;
 					}
 					trace.event(event);
-					if (event.type === 'reconnect.start.blocked') {
+					if (event.kind === 'reconnect.start.blocked') {
 						finishTrace(trace, 'skipped');
 						if (activeDiagnosticTraceRef.current === trace) {
 							activeDiagnosticTraceRef.current = null;
 						}
 						return;
 					}
-					if (event.type === 'reconnect.stopped') {
+					if (event.kind === 'reconnect.stopped') {
 						finishTrace(
 							trace,
 							event.message === 'reconnected' ? 'connected' : 'failed',

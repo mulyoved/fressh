@@ -62,25 +62,36 @@ function harness(opts?: {
 	const tmuxFailures: SavedEntryConnectResult[] = [];
 	const warnings: unknown[] = [];
 
-	const attempt = () =>
-		attemptSavedEntryWithTailscaleRecovery({
+	const attempt = async () => {
+		const result = await attemptSavedEntryWithTailscaleRecovery({
 			platformOS: opts?.platformOS ?? 'android',
 			recovery: opts?.recovery ?? recoveryFixture(),
 			connectSavedEntry:
 				opts?.connectSavedEntry ?? (async () => connectedResult()),
-			markTailscaleAttention: (message) => {
-				attention.push(message);
-			},
-			clearTailscaleAttention: () => {
-				clearAttentionCount += 1;
-			},
-			logTmuxAttachFailure: (result) => {
-				tmuxFailures.push(result);
-			},
-			logWarning: (_message, error) => {
-				warnings.push(error);
-			},
 		});
+		switch (result.status) {
+			case 'connected':
+				clearAttentionCount += 1;
+				return { connected: true };
+			case 'tmuxAttachFailed':
+				tmuxFailures.push(result.result);
+				return { connected: false };
+			case 'blocked':
+			case 'recoveryNotAttempted':
+				if (result.attentionMessage !== null) {
+					attention.push(result.attentionMessage);
+				}
+				return { connected: false };
+			case 'retryFailed':
+				if (result.attentionMessage !== null) {
+					attention.push(result.attentionMessage);
+				}
+				warnings.push(result.error);
+				return { connected: false };
+			case 'threw':
+				throw result.error;
+		}
+	};
 
 	return {
 		attempt,
@@ -106,6 +117,56 @@ void test('connects once when Tailscale is ready', async () => {
 	assert.equal(connectCount, 1);
 	assert.equal(context.clearAttentionCount, 1);
 	assert.deepEqual(context.attention, []);
+});
+
+void test('saved-entry retry policy returns blocked without UI callbacks', async () => {
+	const result = await attemptSavedEntryWithTailscaleRecovery({
+		platformOS: 'android',
+		recovery: {
+			ensureReady: async () => ({
+				kind: 'failed',
+				attempted: true,
+				available: true,
+			}),
+			recoverAfterFailure: async () => {
+				throw new Error('recover should not run');
+			},
+		},
+		connectSavedEntry: async () => {
+			throw new Error('connect should not run');
+		},
+	});
+
+	assert.equal(result.status, 'blocked');
+	if (result.status !== 'blocked') return;
+	assert.match(result.attentionMessage ?? '', /Tailscale/i);
+});
+
+void test('saved-entry retry policy returns retryFailed after recovery retry failure', async () => {
+	const retryError = new Error('No route to host');
+	const result = await attemptSavedEntryWithTailscaleRecovery({
+		platformOS: 'android',
+		recovery: {
+			ensureReady: async () => ({
+				kind: 'ready',
+				attempted: true,
+				available: true,
+			}),
+			recoverAfterFailure: async () => ({
+				kind: 'recovered',
+				attempted: true,
+				networkLikeFailure: true,
+				available: true,
+			}),
+		},
+		connectSavedEntry: async () => {
+			throw retryError;
+		},
+	});
+
+	assert.equal(result.status, 'retryFailed');
+	if (result.status !== 'retryFailed') return;
+	assert.equal(result.error, retryError);
 });
 
 void test('connects once when Tailscale readiness is unsupported', async () => {
@@ -279,7 +340,7 @@ void test('marks reachability attention without retry when recovery is cooldown 
 	}
 });
 
-void test('rethrows non-network failures', async () => {
+void test('returns false for non-network failures without attention', async () => {
 	const authError = new Error('Permission denied');
 	const context = harness({
 		recovery: recoveryFixture({
@@ -295,7 +356,7 @@ void test('rethrows non-network failures', async () => {
 		},
 	});
 
-	await assert.rejects(context.attempt, authError);
+	assert.deepEqual(await context.attempt(), { connected: false });
 	assert.deepEqual(context.attention, []);
 	assert.equal(context.clearAttentionCount, 0);
 });
@@ -487,20 +548,14 @@ void test('records Tailscale recovery retry trace events', async () => {
 				channelId: 3,
 			};
 		},
-		markTailscaleAttention: () => {},
-		clearTailscaleAttention: () => {},
-		logTmuxAttachFailure: () => {},
-		logWarning: () => {},
-		trace: {
-			event: (event) => {
-				events.push(event);
-			},
+		onEvent: (event) => {
+			events.push(event);
 		},
 	});
 
-	assert.deepEqual(result, { connected: true });
+	assert.equal(result.status, 'connected');
 	assert.deepEqual(
-		events.map((event) => (event as { type: string }).type),
+		events.map((event) => (event as { kind: string }).kind),
 		[
 			'tailscale.ensure-ready.result',
 			'auto-connect.saved-entry.connect.started',
@@ -511,15 +566,14 @@ void test('records Tailscale recovery retry trace events', async () => {
 		],
 	);
 	assert.deepEqual(events[3], {
-		type: 'tailscale.recovery.result',
+		kind: 'tailscale.recovery.result',
 		source: 'tailscale-recovery',
-		details: {
-			recoveryResult: {
-				kind: 'recovered',
-				attempted: true,
-				networkLikeFailure: true,
-				available: true,
-			},
+		message: undefined,
+		recoveryResult: {
+			kind: 'recovered',
+			attempted: true,
+			networkLikeFailure: true,
+			available: true,
 		},
 	});
 });
@@ -539,25 +593,14 @@ void test('trace payload mutation cannot bypass Tailscale readiness block', asyn
 			connectCalls += 1;
 			return connectedResult();
 		},
-		markTailscaleAttention: () => {},
-		clearTailscaleAttention: () => {},
-		logTmuxAttachFailure: () => {},
-		logWarning: () => {},
-		trace: {
-			event: (event) => {
-				if (event.type !== 'tailscale.ensure-ready.result') return;
-				const details = event.details as {
-					readiness?: { kind?: string; available?: boolean };
-				};
-				if (details.readiness) {
-					details.readiness.kind = 'ready';
-					details.readiness.available = true;
-				}
-			},
+		onEvent: (event) => {
+			if (event.kind !== 'tailscale.ensure-ready.result') return;
+			event.readiness.kind = 'ready';
+			event.readiness.available = true;
 		},
 	});
 
-	assert.deepEqual(result, { connected: false });
+	assert.equal(result.status, 'blocked');
 	assert.equal(connectCalls, 0);
 });
 
@@ -577,58 +620,33 @@ void test('trace payload mutation cannot force Tailscale retry', async () => {
 			connectCalls += 1;
 			throw new Error('No route to host');
 		},
-		markTailscaleAttention: () => {},
-		clearTailscaleAttention: () => {},
-		logTmuxAttachFailure: () => {},
-		logWarning: () => {},
-		trace: {
-			event: (event) => {
-				if (event.type !== 'tailscale.recovery.result') return;
-				const details = event.details as {
-					recoveryResult?: {
-						kind?: string;
-						networkLikeFailure?: boolean;
-					};
-				};
-				if (details.recoveryResult) {
-					details.recoveryResult.kind = 'recovered';
-					details.recoveryResult.networkLikeFailure = false;
-				}
-			},
+		onEvent: (event) => {
+			if (event.kind !== 'tailscale.recovery.result') return;
+			event.recoveryResult.kind = 'recovered';
+			event.recoveryResult.networkLikeFailure = false;
 		},
 	});
 
-	assert.deepEqual(result, { connected: false });
+	assert.equal(result.status, 'recoveryNotAttempted');
 	assert.equal(connectCalls, 1);
 });
 
 void test('trace payload mutation cannot convert tmux attach failure to success', async () => {
 	const tmuxResult = tmuxAttachFailedResult();
-	const tmuxFailures: SavedEntryConnectResult[] = [];
 
 	const result = await attemptSavedEntryWithTailscaleRecovery({
 		platformOS: 'android',
 		recovery: recoveryFixture(),
 		connectSavedEntry: async () => tmuxResult,
-		markTailscaleAttention: () => {},
-		clearTailscaleAttention: () => {},
-		logTmuxAttachFailure: (result) => {
-			tmuxFailures.push(result);
-		},
-		logWarning: () => {},
-		trace: {
-			event: (event) => {
-				if (
-					event.type !== 'auto-connect.saved-entry.connect.tmux-attach-failed'
-				) {
-					return;
-				}
-				const details = event.details as { status?: string };
-				details.status = 'connected';
-			},
+		onEvent: (event) => {
+			if (
+				event.kind !== 'auto-connect.saved-entry.connect.tmux-attach-failed'
+			) {
+				return;
+			}
+			event.connectionId = 'mutated';
 		},
 	});
 
-	assert.deepEqual(result, { connected: false });
-	assert.deepEqual(tmuxFailures, [tmuxResult]);
+	assert.deepEqual(result, { status: 'tmuxAttachFailed', result: tmuxResult });
 });

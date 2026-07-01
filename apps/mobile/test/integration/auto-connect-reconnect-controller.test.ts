@@ -425,7 +425,7 @@ void test('records reconnect lifecycle trace events', async () => {
 	await flushPromises();
 
 	assert.deepEqual(
-		events.map((event) => (event as { type: string }).type),
+		events.map((event) => (event as { kind: string }).kind),
 		[
 			'reconnect.started',
 			'reconnect.attempt.started',
@@ -434,24 +434,24 @@ void test('records reconnect lifecycle trace events', async () => {
 		],
 	);
 	assert.deepEqual(events[0], {
-		type: 'reconnect.started',
+		kind: 'reconnect.started',
 		source: 'reconnect-controller',
 		message: 'shell-drop',
-		details: {
-			reason: 'shell-drop',
-			delaysMs: [10],
-			windowMs: 100,
-		},
+		reason: 'shell-drop',
+		windowMs: 100,
 	});
 	assert.deepEqual(events[2], {
-		type: 'reconnect.attempt.failed',
+		kind: 'reconnect.attempt.failed',
 		source: 'reconnect-controller',
-		details: { elapsedMs: 0 },
+		message: undefined,
+		reconnectElapsedMs: 0,
 	});
 	assert.deepEqual(events[3], {
-		type: 'reconnect.retry.scheduled',
+		kind: 'reconnect.retry.scheduled',
 		source: 'reconnect-controller',
-		details: { attemptIndex: 0, delayMs: 10 },
+		message: undefined,
+		attemptIndex: 0,
+		delayMs: 10,
 	});
 });
 
@@ -484,15 +484,13 @@ void test('records blocked reconnect start trace event', () => {
 	assert.equal(blockedController.start('shell-drop'), false);
 	assert.deepEqual(events, [
 		{
-			type: 'reconnect.start.blocked',
+			kind: 'reconnect.start.blocked',
 			source: 'reconnect-controller',
 			message: 'shell-drop',
-			details: {
-				reason: 'shell-drop',
-				isAutoConnecting: true,
-				isReconnecting: false,
-				resetInFlight: false,
-			},
+			reason: 'shell-drop',
+			isAutoConnecting: true,
+			isReconnecting: false,
+			resetInFlight: false,
 		},
 	]);
 });
@@ -563,9 +561,8 @@ void test('trace payload mutation cannot change reconnect backoff', async () => 
 		},
 		trace: {
 			event: (event) => {
-				if (event.type !== 'reconnect.started') return;
-				const details = event.details as { delaysMs?: number[] };
-				if (details.delaysMs) details.delaysMs[0] = 999;
+				if (event.kind !== 'reconnect.started') return;
+				event.windowMs = 999;
 			},
 		},
 	});
@@ -618,7 +615,7 @@ void test('records reconnect timeout and stopped trace events', async () => {
 	await context.runTimer(context.timers[0]!);
 
 	assert.deepEqual(
-		events.map((event) => (event as { type: string }).type),
+		events.map((event) => (event as { kind: string }).kind),
 		[
 			'reconnect.started',
 			'reconnect.attempt.started',
@@ -629,10 +626,10 @@ void test('records reconnect timeout and stopped trace events', async () => {
 		],
 	);
 	assert.deepEqual(events.at(-1), {
-		type: 'reconnect.stopped',
+		kind: 'reconnect.stopped',
 		source: 'reconnect-controller',
 		message: 'retry-timeout',
-		details: { reason: 'retry-timeout' },
+		reason: 'retry-timeout',
 	});
 });
 
@@ -672,7 +669,7 @@ void test('records successful reconnect trace events', async () => {
 	await flushPromises();
 
 	assert.deepEqual(
-		events.map((event) => (event as { type: string }).type),
+		events.map((event) => (event as { kind: string }).kind),
 		[
 			'reconnect.started',
 			'reconnect.attempt.started',
@@ -681,9 +678,9 @@ void test('records successful reconnect trace events', async () => {
 		],
 	);
 	assert.deepEqual(events.at(-1), {
-		type: 'reconnect.stopped',
+		kind: 'reconnect.stopped',
 		source: 'reconnect-controller',
 		message: 'reconnected',
-		details: { reason: 'reconnected' },
+		reason: 'reconnected',
 	});
 });

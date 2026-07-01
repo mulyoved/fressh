@@ -1,5 +1,6 @@
+import { diagnosticEvents } from './connection-diagnostic-events';
 import { serializeConnectionDiagnosticError } from './connection-diagnostic-redaction';
-import { type ConnectionDiagnosticEventInput } from './connection-diagnostic-types';
+import { type ConnectionDiagnosticEvent } from './connection-diagnostic-types';
 import {
 	getTailscaleRecoveryAttentionMessage,
 	isNetworkLikeSshError,
@@ -23,7 +24,7 @@ export type SavedEntryConnectResult =
 			storedConnectionId: string;
 	  };
 
-type TmuxAttachFailedResult = Extract<
+export type TmuxAttachFailedResult = Extract<
 	SavedEntryConnectResult,
 	{ status: 'tmux_attach_failed' }
 >;
@@ -36,19 +37,40 @@ export type SavedEntryTailscaleRecovery = {
 };
 
 type SavedEntryTrace = {
-	event: (event: ConnectionDiagnosticEventInput) => void;
+	event: (event: ConnectionDiagnosticEvent) => void;
 };
+
+export type SavedEntryRecoveryOutcome =
+	| {
+			status: 'blocked';
+			readiness: TailscaleReadyResult;
+			attentionMessage: string | null;
+	  }
+	| {
+			status: 'connected';
+			result: Extract<SavedEntryConnectResult, { status: 'connected' }>;
+	  }
+	| { status: 'tmuxAttachFailed'; result: TmuxAttachFailedResult }
+	| {
+			status: 'recoveryNotAttempted';
+			error: unknown;
+			recoveryResult: TailscaleRecoverAfterFailureResult;
+			attentionMessage: string | null;
+	  }
+	| {
+			status: 'retryFailed';
+			error: unknown;
+			recoveryResult: TailscaleRecoverAfterFailureResult;
+			attentionMessage: string | null;
+	  }
+	| { status: 'threw'; error: unknown };
 
 export type AttemptSavedEntryWithTailscaleRecoveryArgs = {
 	platformOS: string;
 	recovery: SavedEntryTailscaleRecovery;
 	connectSavedEntry: () => Promise<SavedEntryConnectResult>;
-	markTailscaleAttention: (message: string) => void;
-	clearTailscaleAttention: () => void;
-	logTmuxAttachFailure: (result: TmuxAttachFailedResult) => void;
-	logWarning: (message: string, error: unknown) => void;
 	shouldRecoverAfterFailure?: (error: unknown) => boolean;
-	trace?: SavedEntryTrace;
+	onEvent?: (event: ConnectionDiagnosticEvent) => void;
 };
 
 function getTailscaleRecoveryFailureAttentionMessage(input: {
@@ -80,134 +102,109 @@ function shouldBlockBeforeSshProbe(readiness: TailscaleReadyResult) {
 	return readiness.kind !== 'cooldown' && readiness.kind !== 'notStarted';
 }
 
-function snapshotTailscaleReadyResult(readiness: TailscaleReadyResult) {
-	return { ...readiness };
-}
-
-function snapshotTailscaleRecoverAfterFailureResult(
-	recoveryResult: TailscaleRecoverAfterFailureResult,
-) {
-	return { ...recoveryResult };
-}
-
-function snapshotConnectResult(result: SavedEntryConnectResult) {
-	if (result.status === 'tmux_attach_failed') {
-		return {
-			status: result.status,
-			connectionId: result.connectionId,
-			tmuxAttachFailureReason: result.tmuxAttachFailureReason,
-			tmuxSessionName: result.tmuxSessionName,
-			storedConnectionId: result.storedConnectionId,
-		};
-	}
-
-	return {
-		status: result.status,
-		connectionId: result.connectionId,
-		channelId: result.channelId,
-	};
-}
-
 function emitTrace(
 	trace: SavedEntryTrace | undefined,
-	logWarning: (message: string, error: unknown) => void,
-	event: ConnectionDiagnosticEventInput,
+	event: ConnectionDiagnosticEvent,
 ) {
 	try {
 		trace?.event(event);
-	} catch (error) {
-		logWarning('Saved-entry trace event failed', error);
+	} catch {
+		// Diagnostic sinks must not affect the recovery policy outcome.
 	}
-}
-
-function traceRecoveryResult(
-	trace: SavedEntryTrace | undefined,
-	logWarning: (message: string, error: unknown) => void,
-	recoveryResult: TailscaleRecoverAfterFailureResult,
-) {
-	emitTrace(trace, logWarning, {
-		type: 'tailscale.recovery.result',
-		source: 'tailscale-recovery',
-		details: {
-			recoveryResult:
-				snapshotTailscaleRecoverAfterFailureResult(recoveryResult),
-		},
-	});
 }
 
 export async function attemptSavedEntryWithTailscaleRecovery({
 	platformOS,
 	recovery,
 	connectSavedEntry,
-	markTailscaleAttention,
-	clearTailscaleAttention,
-	logTmuxAttachFailure,
-	logWarning,
 	shouldRecoverAfterFailure = () => true,
-	trace,
-}: AttemptSavedEntryWithTailscaleRecoveryArgs) {
-	const traceEvent = (event: ConnectionDiagnosticEventInput) => {
-		emitTrace(trace, logWarning, event);
+	onEvent,
+}: AttemptSavedEntryWithTailscaleRecoveryArgs): Promise<SavedEntryRecoveryOutcome> {
+	const trace: SavedEntryTrace | undefined = onEvent
+		? { event: onEvent }
+		: undefined;
+	const traceEvent = (event: ConnectionDiagnosticEvent) => {
+		emitTrace(trace, event);
+	};
+	const handleConnectResult = (
+		result: SavedEntryConnectResult,
+	): SavedEntryRecoveryOutcome => {
+		if (result.status === 'tmux_attach_failed') {
+			traceEvent(
+				diagnosticEvents.autoConnectSavedEntryConnectTmuxAttachFailed({
+					source: 'saved-entry',
+					connection: {
+						connectionId: result.connectionId,
+						tmuxSessionName: result.tmuxSessionName,
+					},
+					connectionId: result.connectionId,
+					tmuxAttachFailureReason: result.tmuxAttachFailureReason,
+					tmuxSessionName: result.tmuxSessionName,
+					storedConnectionId: result.storedConnectionId,
+				}),
+			);
+			return { status: 'tmuxAttachFailed', result };
+		}
+
+		traceEvent(
+			diagnosticEvents.autoConnectSavedEntryConnectConnected({
+				source: 'saved-entry',
+				connection: { connectionId: result.connectionId },
+				connectionId: result.connectionId,
+				channelId: result.channelId,
+			}),
+		);
+		return { status: 'connected', result };
 	};
 
 	const readiness = await recovery.ensureReady();
-	traceEvent({
-		type: 'tailscale.ensure-ready.result',
-		source: 'tailscale-recovery',
-		details: {
+	traceEvent(
+		diagnosticEvents.tailscaleEnsureReadyResult({
+			source: 'tailscale-recovery',
 			platformOS,
-			readiness: snapshotTailscaleReadyResult(readiness),
-		},
-	});
+			readiness,
+		}),
+	);
 	const readinessMessage = getTailscaleRecoveryAttentionMessage(readiness);
 	if (readinessMessage !== null && shouldBlockBeforeSshProbe(readiness)) {
-		markTailscaleAttention(readinessMessage);
-		return { connected: false };
+		return {
+			status: 'blocked',
+			readiness,
+			attentionMessage: readinessMessage,
+		};
 	}
 
-	const handleConnectResult = (result: SavedEntryConnectResult) => {
-		traceEvent({
-			type:
-				result.status === 'tmux_attach_failed'
-					? 'auto-connect.saved-entry.connect.tmux-attach-failed'
-					: 'auto-connect.saved-entry.connect.connected',
-			source: 'saved-entry',
-			connection:
-				result.status === 'tmux_attach_failed'
-					? {
-							connectionId: result.connectionId,
-							tmuxSessionName: result.tmuxSessionName,
-						}
-					: { connectionId: result.connectionId },
-			details: snapshotConnectResult(result),
-		});
-		if (result.status === 'tmux_attach_failed') {
-			logTmuxAttachFailure(result);
-			return { connected: false };
-		}
-		clearTailscaleAttention();
-		return { connected: true };
-	};
-
 	try {
-		traceEvent({
-			type: 'auto-connect.saved-entry.connect.started',
-			source: 'saved-entry',
-		});
+		traceEvent(
+			diagnosticEvents.autoConnectSavedEntryConnectStarted({
+				source: 'saved-entry',
+			}),
+		);
 		return handleConnectResult(await connectSavedEntry());
 	} catch (error) {
-		traceEvent({
-			type: 'auto-connect.saved-entry.connect.threw',
-			source: 'saved-entry',
-			error: serializeConnectionDiagnosticError(error),
-		});
+		traceEvent(
+			diagnosticEvents.autoConnectSavedEntryConnectThrew({
+				source: 'saved-entry',
+				error: serializeConnectionDiagnosticError(error),
+			}),
+		);
 		if (!shouldRecoverAfterFailure(error)) {
-			throw error;
+			return { status: 'threw', error };
 		}
 		const recoveryResult = await recovery.recoverAfterFailure(error);
-		traceRecoveryResult(trace, logWarning, recoveryResult);
+		traceEvent(
+			diagnosticEvents.tailscaleRecoveryResult({
+				source: 'tailscale-recovery',
+				recoveryResult,
+			}),
+		);
 		if (!recoveryResult.networkLikeFailure) {
-			throw error;
+			return {
+				status: 'recoveryNotAttempted',
+				error,
+				recoveryResult,
+				attentionMessage: null,
+			};
 		}
 
 		if (!shouldRetryAfterTailscaleRecovery(recoveryResult)) {
@@ -215,43 +212,45 @@ export async function attemptSavedEntryWithTailscaleRecovery({
 				platformOS,
 				result: recoveryResult,
 			});
-			if (attentionMessage !== null) {
-				markTailscaleAttention(attentionMessage);
-			}
-			return { connected: false };
+			return {
+				status: 'recoveryNotAttempted',
+				error,
+				recoveryResult,
+				attentionMessage,
+			};
 		}
 
 		try {
-			traceEvent({
-				type: 'auto-connect.saved-entry.retry.started',
-				source: 'saved-entry',
-			});
+			traceEvent(
+				diagnosticEvents.autoConnectSavedEntryRetryStarted({
+					source: 'saved-entry',
+				}),
+			);
 			return handleConnectResult(await connectSavedEntry());
 		} catch (retryError) {
-			traceEvent({
-				type: 'auto-connect.saved-entry.retry.threw',
-				source: 'saved-entry',
-				error: serializeConnectionDiagnosticError(retryError),
-			});
+			traceEvent(
+				diagnosticEvents.autoConnectSavedEntryRetryThrew({
+					source: 'saved-entry',
+					error: serializeConnectionDiagnosticError(retryError),
+				}),
+			);
 			if (!shouldRecoverAfterFailure(retryError)) {
-				throw retryError;
+				return { status: 'threw', error: retryError };
 			}
 			if (!isNetworkLikeSshError(retryError)) {
-				throw retryError;
+				return { status: 'threw', error: retryError };
 			}
 
 			const attentionMessage = getTailscaleRecoveryFailureAttentionMessage({
 				platformOS,
 				result: recoveryResult,
 			});
-			if (attentionMessage !== null) {
-				markTailscaleAttention(attentionMessage);
-			}
-			logWarning(
-				'Auto-connect failed after Tailscale recovery retry',
-				retryError,
-			);
-			return { connected: false };
+			return {
+				status: 'retryFailed',
+				error: retryError,
+				recoveryResult,
+				attentionMessage,
+			};
 		}
 	}
 }

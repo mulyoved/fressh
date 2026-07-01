@@ -311,12 +311,12 @@ void test('records saved-entry selection through trace sink', async () => {
 	});
 
 	assert.deepEqual(
-		events.map((event) => (event as { type: string }).type),
+		events.map((event) => (event as { kind: string }).kind),
 		[
-			'auto-connect.source.missing-latest-shell',
-			'auto-connect.source.missing-active-connection',
-			'auto-connect.saved-entry.selected',
-			'auto-connect.saved-entry.key-resolved',
+			'auto-connect.latest-shell.missing',
+			'auto-connect.active-connection.missing',
+			'saved-entry.selected',
+			'key.resolved',
 			'tailscale.ensure-ready.result',
 			'auto-connect.saved-entry.connect.started',
 			'auto-connect.saved-entry.connect.connected',
@@ -567,12 +567,12 @@ void test('records saved-entry failure trace events', async () => {
 
 	assert.equal(connected, false);
 	assert.deepEqual(
-		events.map((event) => (event as { type: string }).type),
+		events.map((event) => (event as { kind: string }).kind),
 		[
-			'auto-connect.source.missing-latest-shell',
-			'auto-connect.source.missing-active-connection',
-			'auto-connect.saved-entry.selected',
-			'auto-connect.saved-entry.key-resolved',
+			'auto-connect.latest-shell.missing',
+			'auto-connect.active-connection.missing',
+			'saved-entry.selected',
+			'key.resolved',
 			'tailscale.ensure-ready.result',
 			'auto-connect.saved-entry.connect.started',
 			'auto-connect.saved-entry.connect.threw',
