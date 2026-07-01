@@ -6,10 +6,6 @@ import {
 } from './connection-diagnostics/events';
 
 export type * from './connection-diagnostics/events';
-export type {
-	ActiveConnectionEvent,
-	SavedEntryConnectEvent,
-} from './connection-diagnostic-events';
 
 export type ConnectionDiagnosticTraceHandle =
 	ConnectionDiagnosticTraceHandleOf<ConnectionDiagnosticEvent>;

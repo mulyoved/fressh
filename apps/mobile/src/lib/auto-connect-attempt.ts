@@ -4,13 +4,13 @@ import {
 	type SavedEntryConnectResult,
 	type SavedEntryTailscaleRecovery,
 } from './auto-connect-saved-entry';
-import { diagnosticEvents } from './connection-diagnostic-events';
 import {
 	type ConnectionDiagnosticConnectionIdentity,
 	type ConnectionDiagnosticEvent,
 } from './connection-diagnostic-types';
 import {
 	autoConnectEvents,
+	savedEntryEvents,
 	serializeConnectionDiagnosticError,
 } from './connection-diagnostics/events';
 import {
@@ -157,7 +157,7 @@ function traceLatestShell(
 	emitTrace(
 		trace,
 		logger,
-		diagnosticEvents.autoConnectLatestShellSelected({
+		autoConnectEvents.latestShellSelected({
 			source: 'latest-shell',
 			connection: { connectionId: latestShell.connectionId },
 			channelId: latestShell.channelId,
@@ -196,7 +196,7 @@ export async function attemptAutoConnectSource({
 	}
 
 	traceEvent(
-		diagnosticEvents.autoConnectLatestShellMissing({
+		autoConnectEvents.latestShellMissing({
 			source: 'latest-shell',
 			pathname,
 		}),
@@ -210,7 +210,7 @@ export async function attemptAutoConnectSource({
 			port: activeConnection.connectionDetails.port,
 		};
 		traceEvent(
-			diagnosticEvents.autoConnectActiveConnectionSelected({
+			autoConnectEvents.activeConnectionSelected({
 				source: 'active-connection',
 				connection: activeConnectionIdentity,
 			}),
@@ -232,7 +232,7 @@ export async function attemptAutoConnectSource({
 
 		try {
 			traceEvent(
-				diagnosticEvents.autoConnectActiveConnectionShellStarted({
+				autoConnectEvents.activeConnectionShellStarted({
 					source: 'active-connection',
 					connection: {
 						...activeConnectionIdentity,
@@ -252,7 +252,7 @@ export async function attemptAutoConnectSource({
 				channelId: shellHandle.channelId,
 			});
 			traceEvent(
-				diagnosticEvents.autoConnectActiveConnectionShellConnected({
+				autoConnectEvents.activeConnectionShellConnected({
 					source: 'active-connection',
 					connection: activeConnectionIdentity,
 					channelId: shellHandle.channelId,
@@ -266,14 +266,14 @@ export async function attemptAutoConnectSource({
 			const tmuxAttachFailureReason = extractTmuxAttachFailureReason(error);
 			traceEvent(
 				tmuxAttachFailureReason !== null
-					? diagnosticEvents.autoConnectActiveConnectionTmuxAttachFailed({
+					? autoConnectEvents.activeConnectionTmuxAttachFailed({
 							source: 'active-connection',
 							connection: activeConnectionIdentity,
 							error: serializeConnectionDiagnosticError(error),
 							tmuxAttachFailureReason,
 							tmuxSessionName,
 						})
-					: diagnosticEvents.autoConnectActiveConnectionShellFailed({
+					: autoConnectEvents.activeConnectionShellFailed({
 							source: 'active-connection',
 							connection: activeConnectionIdentity,
 							error: serializeConnectionDiagnosticError(error),
@@ -295,7 +295,7 @@ export async function attemptAutoConnectSource({
 		}
 	} else {
 		traceEvent(
-			diagnosticEvents.autoConnectActiveConnectionMissing({
+			autoConnectEvents.activeConnectionMissing({
 				source: 'active-connection',
 			}),
 		);
@@ -304,7 +304,7 @@ export async function attemptAutoConnectSource({
 	const latestEntry = await loadLatestSavedConnection();
 	if (!latestEntry) {
 		traceEvent(
-			diagnosticEvents.savedEntryMissing({
+			savedEntryEvents.missing({
 				source: 'saved-entry',
 			}),
 		);
@@ -317,7 +317,7 @@ export async function attemptAutoConnectSource({
 		latestEntry.value,
 	);
 	traceEvent(
-		diagnosticEvents.savedEntrySelected({
+		savedEntryEvents.selected({
 			source: 'saved-entry',
 			connection: latestEntryConnection,
 		}),
@@ -327,7 +327,7 @@ export async function attemptAutoConnectSource({
 		typeof details.tmuxSessionName !== 'string'
 	) {
 		traceEvent(
-			diagnosticEvents.savedEntryInvalidTmuxSettings({
+			savedEntryEvents.invalidTmuxSettings({
 				source: 'saved-entry',
 				connection: latestEntryConnection,
 				useTmuxType: typeof details.useTmux,
@@ -346,7 +346,7 @@ export async function attemptAutoConnectSource({
 	const resolvedSecurity = await resolveKeySecurity(details);
 	if (!resolvedSecurity) {
 		traceEvent(
-			diagnosticEvents.keyMissing({
+			savedEntryEvents.keyMissing({
 				source: 'saved-entry',
 				connection: latestEntryConnection,
 			}),
@@ -354,7 +354,7 @@ export async function attemptAutoConnectSource({
 		return false;
 	}
 	traceEvent(
-		diagnosticEvents.keyResolved({
+		savedEntryEvents.keyResolved({
 			source: 'saved-entry',
 			connection: latestEntryConnection,
 		}),

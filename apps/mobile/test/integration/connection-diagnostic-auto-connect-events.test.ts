@@ -169,3 +169,29 @@ void test('auto-connect saved-entry retry errors copy optional identity and seri
 	assert.equal('secret' in retry.error, false);
 	assert.equal('privateKey' in retry.error, false);
 });
+
+void test('auto-connect optional saved-entry events preserve omitted connection as undefined', () => {
+	const started = autoConnectEvents.savedEntryConnectStarted({
+		source: 'saved-entry',
+	});
+	const failed = autoConnectEvents.savedEntryConnectFailed({
+		source: 'saved-entry',
+	});
+	const threw = autoConnectEvents.savedEntryConnectThrew({
+		source: 'saved-entry',
+		error: new Error('connect threw'),
+	});
+	const retryStarted = autoConnectEvents.savedEntryRetryStarted({
+		source: 'saved-entry',
+	});
+	const retryThrew = autoConnectEvents.savedEntryRetryThrew({
+		source: 'saved-entry',
+		error: new Error('retry threw'),
+	});
+
+	assert.equal(started.connection, undefined);
+	assert.equal(failed.connection, undefined);
+	assert.equal(threw.connection, undefined);
+	assert.equal(retryStarted.connection, undefined);
+	assert.equal(retryThrew.connection, undefined);
+});

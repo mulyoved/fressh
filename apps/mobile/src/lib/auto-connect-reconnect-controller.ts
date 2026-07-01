@@ -1,5 +1,5 @@
-import { diagnosticEvents } from './connection-diagnostic-events';
 import { type ConnectionDiagnosticEvent } from './connection-diagnostic-types';
+import { reconnectEvents } from './connection-diagnostics/events';
 import {
 	canAttemptBackgroundReconnect,
 	shouldWaitForForegroundServiceCoverage,
@@ -81,8 +81,7 @@ export function createAutoConnectReconnectController({
 
 	const traceStop = (reason: string) =>
 		traceEvent(
-			diagnosticEvents.reconnect({
-				kind: 'reconnect.stopped',
+			reconnectEvents.stopped({
 				source: 'reconnect-controller',
 				message: reason,
 				reason,
@@ -91,8 +90,7 @@ export function createAutoConnectReconnectController({
 
 	const traceScheduledRetry = (attemptIndex: number, delayMs: number) =>
 		traceEvent(
-			diagnosticEvents.reconnect({
-				kind: 'reconnect.retry.scheduled',
+			reconnectEvents.retryScheduled({
 				source: 'reconnect-controller',
 				attemptIndex,
 				delayMs,
@@ -104,8 +102,7 @@ export function createAutoConnectReconnectController({
 		snapshot: AutoConnectReconnectSnapshot,
 	) =>
 		traceEvent(
-			diagnosticEvents.reconnect({
-				kind: 'reconnect.start.blocked',
+			reconnectEvents.startBlocked({
 				source: 'reconnect-controller',
 				message: reason,
 				reason,
@@ -117,13 +114,15 @@ export function createAutoConnectReconnectController({
 
 	const traceAttemptResult = (success: boolean, elapsedMs: number) =>
 		traceEvent(
-			diagnosticEvents.reconnect({
-				kind: success
-					? 'reconnect.attempt.connected'
-					: 'reconnect.attempt.failed',
-				source: 'reconnect-controller',
-				reconnectElapsedMs: elapsedMs,
-			}),
+			success
+				? reconnectEvents.attemptConnected({
+						source: 'reconnect-controller',
+						reconnectElapsedMs: elapsedMs,
+					})
+				: reconnectEvents.attemptFailed({
+						source: 'reconnect-controller',
+						reconnectElapsedMs: elapsedMs,
+					}),
 		);
 
 	const stop = (reason: string) => {
@@ -172,8 +171,7 @@ export function createAutoConnectReconnectController({
 		setReconnecting(true);
 		logger.info('Reconnect cycle started', { reason });
 		traceEvent(
-			diagnosticEvents.reconnect({
-				kind: 'reconnect.started',
+			reconnectEvents.started({
 				source: 'reconnect-controller',
 				message: reason,
 				reason,
@@ -188,8 +186,7 @@ export function createAutoConnectReconnectController({
 			if (elapsedMs >= windowMs) {
 				logger.warn('Reconnect timeout reached', { elapsedMs });
 				traceEvent(
-					diagnosticEvents.reconnect({
-						kind: 'reconnect.timeout',
+					reconnectEvents.timeout({
 						source: 'reconnect-controller',
 						reconnectElapsedMs: elapsedMs,
 						windowMs,
@@ -228,8 +225,7 @@ export function createAutoConnectReconnectController({
 			}
 
 			traceEvent(
-				diagnosticEvents.reconnect({
-					kind: 'reconnect.attempt.started',
+				reconnectEvents.attemptStarted({
 					source: 'reconnect-controller',
 					reconnectElapsedMs: elapsedMs,
 				}),

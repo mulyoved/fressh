@@ -160,6 +160,7 @@ void test('active shell does not navigate when already on shell detail', async (
 void test('latest active connection loads tmux settings, starts shell, and navigates', async () => {
 	const navigations: [string, number][] = [];
 	const shellStarts: unknown[] = [];
+	const events: unknown[] = [];
 	let clearAttentionCount = 0;
 	const { logger } = createLogger();
 
@@ -204,11 +205,60 @@ void test('latest active connection loads tmux settings, starts shell, and navig
 			clearAttentionCount += 1;
 		},
 		logger,
+		trace: {
+			event: (event) => {
+				events.push(event);
+			},
+		},
 	});
 
 	assert.equal(connected, true);
 	assert.deepEqual(navigations, [['newer', 44]]);
 	assert.equal(clearAttentionCount, 1);
+	assert.deepEqual(eventKinds(events), [
+		'auto-connect.latest-shell.missing',
+		'auto-connect.active-connection.selected',
+		'auto-connect.active-connection.shell-started',
+		'auto-connect.active-connection.shell-connected',
+	]);
+	assert.deepEqual(
+		(events[1] as { source: string; connection: unknown }).connection,
+		{
+			connectionId: 'newer',
+			username: 'muly',
+			host: 'host.example',
+			port: 22,
+		},
+	);
+	assert.equal(
+		(events[1] as { source: string; connection: unknown }).source,
+		'active-connection',
+	);
+	assert.deepEqual((events[2] as { connection: unknown }).connection, {
+		connectionId: 'newer',
+		username: 'muly',
+		host: 'host.example',
+		port: 22,
+		useTmux: false,
+		tmuxSessionName: 'ops',
+	});
+	assert.deepEqual(
+		{
+			channelId: (events[3] as { channelId: number }).channelId,
+			pathname: (events[3] as { pathname: string }).pathname,
+			connection: (events[3] as { connection: unknown }).connection,
+		},
+		{
+			channelId: 44,
+			pathname: '/(tabs)',
+			connection: {
+				connectionId: 'newer',
+				username: 'muly',
+				host: 'host.example',
+				port: 22,
+			},
+		},
+	);
 	assert.equal(shellStarts.length, 1);
 	assert.deepEqual(
 		{

@@ -5,20 +5,13 @@ import {
 	createConnectionDiagnosticRecorder,
 	formatConnectionDiagnosticPrompt,
 	savedEntryEvents,
-	type ActiveConnectionEvent,
 	type ConnectionDiagnosticRecorder,
 	type ConnectionDiagnosticTraceHandle,
-	type SavedEntryConnectEvent,
 } from '../../src/lib/connection-diagnostics';
 
 type ExpectedBarrelTypeExports = [
 	ConnectionDiagnosticRecorder,
 	ConnectionDiagnosticTraceHandle,
-	Extract<ActiveConnectionEvent, { kind: 'auto-connect.latest-shell.selected' }>,
-	Extract<
-		SavedEntryConnectEvent,
-		{ kind: 'auto-connect.saved-entry.connect.started' }
-	>,
 ];
 
 const assertBarrelTypeExports: ExpectedBarrelTypeExports | null = null;

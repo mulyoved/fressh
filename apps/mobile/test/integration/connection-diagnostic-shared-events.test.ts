@@ -76,6 +76,44 @@ void test('snapshot helper is circular-safe and omits private key blocks', () =>
 	assert.match(serialized, /token=abc stays/);
 });
 
+void test('snapshot helper handles non-JSON values and unreadable fields', () => {
+	const shared = { label: 'shared' };
+	const value: {
+		bigint: bigint;
+		callback: () => string;
+		symbol: symbol;
+		date: Date;
+		first: typeof shared;
+		second: typeof shared;
+		throws?: unknown;
+	} = {
+		bigint: 7n,
+		callback: () => 'ignored',
+		symbol: Symbol('diagnostic'),
+		date: new Date('2026-07-01T00:00:00.000Z'),
+		first: shared,
+		second: shared,
+	};
+	Object.defineProperty(value, 'throws', {
+		enumerable: true,
+		get() {
+			throw new Error('getter failed');
+		},
+	});
+
+	const snapshot = snapshotDiagnosticValue(value);
+
+	assert.equal(snapshot.bigint, '7n');
+	assert.equal(snapshot.callback, '[Function]');
+	assert.equal(snapshot.symbol, '[Symbol diagnostic]');
+	assert.equal(snapshot.date, '[Unreadable]');
+	assert.deepEqual(snapshot.first, { label: 'shared' });
+	assert.deepEqual(snapshot.second, { label: 'shared' });
+	assert.notEqual(snapshot.first, snapshot.second);
+	assert.equal(snapshot.throws, '[Unreadable]');
+	assert.doesNotThrow(() => JSON.stringify(snapshot));
+});
+
 void test('error serializer keeps useful fields and omits private key material', () => {
 	const error = serializeConnectionDiagnosticError({
 		name: 'SshError',

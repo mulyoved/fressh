@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { runConnectionDebugCommand } from '../../src/lib/connection-debug-command';
-import { diagnosticEvents } from '../../src/lib/connection-diagnostic-events';
-import { createConnectionDiagnosticRecorder } from '../../src/lib/connection-diagnostics';
+import {
+	createConnectionDiagnosticRecorder,
+	sshEvents,
+} from '../../src/lib/connection-diagnostics';
 import { type SavedConnectionEntry } from '../../src/lib/connection-utils';
 
 const savedEntry: SavedConnectionEntry = {
@@ -66,7 +68,7 @@ void test('debug command closes menu, probes latest saved entry, and pastes prom
 				throw new Error('trace should be provided');
 			}
 			trace.event(
-				diagnosticEvents.sshConnectProgress({
+				sshEvents.connectProgress({
 					source: 'manual-diagnostic',
 					connection: { host: connectionDetails.host },
 					phase: 'probe.called',
@@ -201,7 +203,7 @@ void test('debug command wires shell dependencies into probe and delivery', asyn
 			assert.equal(receivedConnect, connect);
 			assert.ok(trace);
 			trace.event(
-				diagnosticEvents.sshConnectProgress({
+				sshEvents.connectProgress({
 					source: 'manual-diagnostic',
 					connection: { host: connectionDetails.host },
 					phase: 'command.probe.called',
