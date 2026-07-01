@@ -13,6 +13,7 @@ import {
 	DiagnosticShellCleanupError,
 	type DiagnosticShellProbeResult,
 } from '../../src/lib/diagnostic-shell-probe';
+import { TAILSCALE_UNAVAILABLE_MESSAGE } from '../../src/lib/tailscale-recovery-core';
 
 const savedEntry: SavedConnectionEntry = {
 	id: 'saved-1',
@@ -182,7 +183,8 @@ void test('manual diagnostic is single-flight', async () => {
 
 	assert.equal(second.status, 'busy');
 	assert.match(second.prompt, /diagnostic is already running/i);
-	assert.match(second.prompt, /auto-connect\.saved-entry\.connect\.started/);
+	assert.match(second.prompt, /tailscale\.ensure-ready\.result/);
+	assert.doesNotMatch(second.prompt, /auto-connect\./);
 	assert.equal(second.trace?.id, recorder.getLatestTrace()?.id);
 	resolveConnect({
 		status: 'connected',
@@ -213,8 +215,55 @@ void test('manual diagnostic records failed connection and produces prompt', asy
 
 	assert.equal(result.status, 'failed');
 	assert.match(result.prompt, /network unreachable/);
+	assert.match(result.prompt, /manual-diagnostic\.warning/);
+	assert.ok(result.prompt.includes('Saved-entry connection threw.'));
+	assert.doesNotMatch(result.prompt, /auto-connect\./);
 	assert.match(result.prompt, /muly@dev\.tailnet\.ts\.net:22/);
 	assert.doesNotMatch(result.prompt, /secret/);
+	const initialWarning = result.trace?.events.find(
+		(event) =>
+			event.kind === 'manual-diagnostic.warning' &&
+			event.message === 'Saved-entry connection threw.',
+	);
+	assert.equal(initialWarning?.message, 'Saved-entry connection threw.');
+});
+
+void test('manual diagnostic records Tailscale attention without auto-connect events', async () => {
+	const recorder = createConnectionDiagnosticRecorder({ now: () => 10 });
+
+	const result = await runManualConnectionDiagnostic({
+		recorder,
+		appState: {
+			platformOS: 'android',
+			isAutoConnecting: false,
+			isReconnecting: true,
+		},
+		loadLatestSavedConnection: async () => savedEntry,
+		resolveKeySecurity: async () => ({ type: 'key', privateKey: 'secret' }),
+		connectSavedEntry: async () => {
+			throw new Error('connect should not run');
+		},
+		recovery: {
+			ensureReady: async () => ({
+				kind: 'unavailable' as const,
+				attempted: false as const,
+				available: false as const,
+			}),
+			recoverAfterFailure: async () => {
+				throw new Error('recovery should not run');
+			},
+		},
+		formatPrompt: formatConnectionDiagnosticPrompt,
+	});
+
+	assert.equal(result.status, 'failed');
+	assert.match(result.prompt, /manual-diagnostic\.tailscale\.attention/);
+	assert.ok(result.prompt.includes(TAILSCALE_UNAVAILABLE_MESSAGE));
+	assert.doesNotMatch(result.prompt, /auto-connect\./);
+	const attentionEvent = result.trace?.events.find(
+		(event) => event.kind === 'manual-diagnostic.tailscale.attention',
+	);
+	assert.equal(attentionEvent?.message, TAILSCALE_UNAVAILABLE_MESSAGE);
 });
 
 void test('manual diagnostic does not retry diagnostic cleanup failures', async () => {
@@ -257,6 +306,7 @@ void test('manual diagnostic does not retry diagnostic cleanup failures', async 
 	assert.equal(recoveryCalls, 0);
 	assert.match(result.prompt, /DiagnosticShellCleanupError/);
 	assert.match(result.prompt, /connection reset during disconnect/);
+	assert.doesNotMatch(result.prompt, /auto-connect\./);
 });
 
 void test('manual diagnostic preserves cleanup failure after Tailscale retry', async () => {
@@ -295,9 +345,17 @@ void test('manual diagnostic preserves cleanup failure after Tailscale retry', a
 
 	assert.equal(result.status, 'failed');
 	assert.equal(connectCalls, 2);
-	assert.match(result.prompt, /auto-connect\.saved-entry\.retry\.threw/);
+	assert.match(result.prompt, /manual-diagnostic\.warning/);
+	assert.ok(result.prompt.includes('Saved-entry retry threw.'));
 	assert.match(result.prompt, /DiagnosticShellCleanupError/);
+	assert.doesNotMatch(result.prompt, /auto-connect\./);
 	assert.doesNotMatch(result.prompt, /restart failed/i);
+	const retryWarning = result.trace?.events.find(
+		(event) =>
+			event.kind === 'manual-diagnostic.warning' &&
+			event.message === 'Saved-entry retry threw.',
+	);
+	assert.equal(retryWarning?.message, 'Saved-entry retry threw.');
 });
 
 void test('manual diagnostic records tmux attach failures in the prompt', async () => {
@@ -326,10 +384,11 @@ void test('manual diagnostic records tmux attach failures in the prompt', async 
 	assert.equal(result.status, 'failed');
 	assert.match(
 		result.prompt,
-		/auto-connect\.saved-entry\.connect\.tmux-attach-failed/,
+		/manual-diagnostic\.tmux-attach-failed/,
 	);
 	assert.match(result.prompt, /missing session/);
 	assert.match(result.prompt, /tmuxSessionName=main/);
+	assert.doesNotMatch(result.prompt, /auto-connect\./);
 	assert.doesNotMatch(result.prompt, /secret/);
 });
 

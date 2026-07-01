@@ -2,9 +2,11 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
 	attemptSavedEntryWithTailscaleRecovery,
+	type SavedEntryConnectAttemptPhase,
 	type SavedEntryConnectResult,
 	type SavedEntryTailscaleRecovery,
 } from '../../src/lib/auto-connect-saved-entry';
+import { createSavedEntryTailscaleDiagnosticRecovery } from '../../src/lib/saved-entry-tailscale-diagnostic-recovery';
 import {
 	TAILSCALE_REACHABILITY_MESSAGE,
 	TAILSCALE_RESTART_FAILED_MESSAGE,
@@ -54,7 +56,9 @@ function recoveryFixture(opts?: {
 
 function harness(opts?: {
 	recovery?: SavedEntryTailscaleRecovery;
-	connectSavedEntry?: () => Promise<SavedEntryConnectResult>;
+	connectSavedEntry?: (
+		phase: SavedEntryConnectAttemptPhase,
+	) => Promise<SavedEntryConnectResult>;
 	platformOS?: string;
 }) {
 	const attention: string[] = [];
@@ -117,6 +121,37 @@ void test('connects once when Tailscale is ready', async () => {
 	assert.equal(connectCount, 1);
 	assert.equal(context.clearAttentionCount, 1);
 	assert.deepEqual(context.attention, []);
+});
+
+void test('saved-entry recovery helper returns connected outcome', async () => {
+	const args = {
+		platformOS: 'android',
+		recovery: recoveryFixture(),
+		connectSavedEntry: async () => connectedResult(),
+	};
+	const result = await attemptSavedEntryWithTailscaleRecovery(args);
+
+	assert.equal(result.status, 'connected');
+	if (result.status !== 'connected') return;
+	assert.deepEqual(result.result, connectedResult());
+});
+
+void test('Tailscale diagnostic recovery ignores ensure-ready emit failures', async () => {
+	const result = await attemptSavedEntryWithTailscaleRecovery({
+		platformOS: 'android',
+		recovery: createSavedEntryTailscaleDiagnosticRecovery({
+			platformOS: 'android',
+			recovery: recoveryFixture(),
+			emit: () => {
+				throw new Error('trace failed');
+			},
+		}),
+		connectSavedEntry: async () => connectedResult(),
+	});
+
+	assert.equal(result.status, 'connected');
+	if (result.status !== 'connected') return;
+	assert.deepEqual(result.result, connectedResult());
 });
 
 void test('saved-entry retry policy returns blocked without UI callbacks', async () => {
@@ -261,6 +296,32 @@ void test('retries once after recovered network-like failure', async () => {
 	assert.deepEqual(calls, ['connect', 'connect']);
 	assert.equal(context.clearAttentionCount, 1);
 	assert.deepEqual(context.attention, []);
+});
+
+void test('passes explicit connect attempt phases to saved-entry connector', async () => {
+	const phases: unknown[] = [];
+	let connectCalls = 0;
+
+	const result = await attemptSavedEntryWithTailscaleRecovery({
+		platformOS: 'android',
+		recovery: recoveryFixture({
+			afterFailure: {
+				kind: 'recovered',
+				attempted: true,
+				networkLikeFailure: true,
+				available: true,
+			},
+		}),
+		connectSavedEntry: async (phase) => {
+			phases.push(phase);
+			connectCalls += 1;
+			if (connectCalls === 1) throw new Error('No route to host');
+			return connectedResult();
+		},
+	});
+
+	assert.equal(result.status, 'connected');
+	assert.deepEqual(phases, ['initial', 'retry']);
 });
 
 void test('retries once when readiness preflight already nudged Tailscale', async () => {
@@ -520,11 +581,10 @@ void test('readiness cooldown and notStarted mark reachability after failed SSH 
 	}
 });
 
-void test('records Tailscale recovery retry trace events', async () => {
-	const events: unknown[] = [];
+void test('saved-entry recovery retry returns connected outcome', async () => {
 	let connectCalls = 0;
 
-	const result = await attemptSavedEntryWithTailscaleRecovery({
+	const args = {
 		platformOS: 'android',
 		recovery: {
 			ensureReady: async () => ({
@@ -542,111 +602,46 @@ void test('records Tailscale recovery retry trace events', async () => {
 		connectSavedEntry: async () => {
 			connectCalls += 1;
 			if (connectCalls === 1) throw new Error('network unreachable');
-			return {
-				status: 'connected',
-				connectionId: 'conn-2',
-				channelId: 3,
-			};
+			return connectedResult('conn-2');
 		},
-		onEvent: (event) => {
-			events.push(event);
+	};
+	const result = await attemptSavedEntryWithTailscaleRecovery(args);
+
+	assert.equal(result.status, 'connected');
+	assert.equal(connectCalls, 2);
+	if (result.status !== 'connected') return;
+	assert.deepEqual(result.result, connectedResult('conn-2'));
+});
+
+void test('Tailscale diagnostic recovery ignores recovery emit failures', async () => {
+	let connectCalls = 0;
+	const result = await attemptSavedEntryWithTailscaleRecovery({
+		platformOS: 'android',
+		recovery: createSavedEntryTailscaleDiagnosticRecovery({
+			platformOS: 'android',
+			recovery: recoveryFixture({
+				afterFailure: {
+					kind: 'recovered',
+					attempted: true,
+					networkLikeFailure: true,
+					available: true,
+				},
+			}),
+			emit: (event) => {
+				if (event.kind === 'tailscale.recovery.result') {
+					throw new Error('trace failed');
+				}
+			},
+		}),
+		connectSavedEntry: async (phase) => {
+			connectCalls += 1;
+			if (phase === 'initial') throw new Error('network unreachable');
+			return connectedResult('conn-2');
 		},
 	});
 
 	assert.equal(result.status, 'connected');
-	assert.deepEqual(
-		events.map((event) => (event as { kind: string }).kind),
-		[
-			'tailscale.ensure-ready.result',
-			'auto-connect.saved-entry.connect.started',
-			'auto-connect.saved-entry.connect.threw',
-			'tailscale.recovery.result',
-			'auto-connect.saved-entry.retry.started',
-			'auto-connect.saved-entry.connect.connected',
-		],
-	);
-	assert.deepEqual(events[3], {
-		kind: 'tailscale.recovery.result',
-		source: 'tailscale-recovery',
-		message: undefined,
-		recoveryResult: {
-			kind: 'recovered',
-			attempted: true,
-			networkLikeFailure: true,
-			available: true,
-		},
-	});
-});
-
-void test('trace payload mutation cannot bypass Tailscale readiness block', async () => {
-	let connectCalls = 0;
-	const result = await attemptSavedEntryWithTailscaleRecovery({
-		platformOS: 'android',
-		recovery: recoveryFixture({
-			ready: {
-				kind: 'unavailable',
-				attempted: false,
-				available: false,
-			},
-		}),
-		connectSavedEntry: async () => {
-			connectCalls += 1;
-			return connectedResult();
-		},
-		onEvent: (event) => {
-			if (event.kind !== 'tailscale.ensure-ready.result') return;
-			event.readiness.kind = 'ready';
-			event.readiness.available = true;
-		},
-	});
-
-	assert.equal(result.status, 'blocked');
-	assert.equal(connectCalls, 0);
-});
-
-void test('trace payload mutation cannot force Tailscale retry', async () => {
-	let connectCalls = 0;
-	const result = await attemptSavedEntryWithTailscaleRecovery({
-		platformOS: 'android',
-		recovery: recoveryFixture({
-			afterFailure: {
-				kind: 'failed',
-				attempted: true,
-				networkLikeFailure: true,
-				available: true,
-			},
-		}),
-		connectSavedEntry: async () => {
-			connectCalls += 1;
-			throw new Error('No route to host');
-		},
-		onEvent: (event) => {
-			if (event.kind !== 'tailscale.recovery.result') return;
-			event.recoveryResult.kind = 'recovered';
-			event.recoveryResult.networkLikeFailure = false;
-		},
-	});
-
-	assert.equal(result.status, 'recoveryNotAttempted');
-	assert.equal(connectCalls, 1);
-});
-
-void test('trace payload mutation cannot convert tmux attach failure to success', async () => {
-	const tmuxResult = tmuxAttachFailedResult();
-
-	const result = await attemptSavedEntryWithTailscaleRecovery({
-		platformOS: 'android',
-		recovery: recoveryFixture(),
-		connectSavedEntry: async () => tmuxResult,
-		onEvent: (event) => {
-			if (
-				event.kind !== 'auto-connect.saved-entry.connect.tmux-attach-failed'
-			) {
-				return;
-			}
-			event.connectionId = 'mutated';
-		},
-	});
-
-	assert.deepEqual(result, { status: 'tmuxAttachFailed', result: tmuxResult });
+	assert.equal(connectCalls, 2);
+	if (result.status !== 'connected') return;
+	assert.deepEqual(result.result, connectedResult('conn-2'));
 });

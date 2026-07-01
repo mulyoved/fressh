@@ -53,6 +53,10 @@ function createSavedEntry(
 	};
 }
 
+function eventKinds(events: unknown[]) {
+	return events.map((event) => (event as { kind: string }).kind);
+}
+
 const unsupportedRecovery = {
 	ensureReady: async () => ({
 		kind: 'unsupported' as const,
@@ -581,4 +585,205 @@ void test('records saved-entry failure trace events', async () => {
 		],
 	);
 	assert.doesNotMatch(JSON.stringify(events), /SECRET_PRIVATE_KEY/);
+});
+
+void test('records saved-entry recovery retry success trace events from caller', async () => {
+	const events: unknown[] = [];
+	const { logger } = createLogger();
+	let connectCalls = 0;
+
+	const connected = await attemptAutoConnectSource({
+		platformOS: 'android',
+		pathname: '/(tabs)',
+		latestShell: null,
+		connections: {},
+		openSavedEntryShell: async () => {
+			connectCalls += 1;
+			if (connectCalls === 1) {
+				throw new Error('network unreachable');
+			}
+			return {
+				status: 'connected',
+				connectionId: 'conn-retry',
+				channelId: 7,
+			};
+		},
+		loadLatestSavedConnection: async () => createSavedEntry(),
+		resolveKeySecurity: async () => ({
+			type: 'key',
+			privateKey: 'private-key',
+		}),
+		navigateToShell: () => {},
+		recovery: {
+			ensureReady: readyRecovery.ensureReady,
+			recoverAfterFailure: async () => ({
+				kind: 'recovered' as const,
+				attempted: true as const,
+				networkLikeFailure: true as const,
+				available: true as const,
+			}),
+		},
+		markTailscaleAttention: () => {},
+		clearTailscaleAttention: () => {},
+		logger,
+		trace: {
+			event: (event) => {
+				events.push(event);
+			},
+		},
+	});
+
+	assert.equal(connected, true);
+	assert.equal(connectCalls, 2);
+	assert.deepEqual(eventKinds(events), [
+		'auto-connect.latest-shell.missing',
+		'auto-connect.active-connection.missing',
+		'saved-entry.selected',
+		'key.resolved',
+		'tailscale.ensure-ready.result',
+		'auto-connect.saved-entry.connect.started',
+		'auto-connect.saved-entry.connect.threw',
+		'tailscale.recovery.result',
+		'auto-connect.saved-entry.retry.started',
+		'auto-connect.saved-entry.connect.connected',
+	]);
+});
+
+void test('records saved-entry recovery retry failure before connect failure', async () => {
+	const events: unknown[] = [];
+	const { logger } = createLogger();
+
+	const connected = await attemptAutoConnectSource({
+		platformOS: 'android',
+		pathname: '/(tabs)',
+		latestShell: null,
+		connections: {},
+		openSavedEntryShell: async () => {
+			throw new Error('No route to host');
+		},
+		loadLatestSavedConnection: async () => createSavedEntry(),
+		resolveKeySecurity: async () => ({
+			type: 'key',
+			privateKey: 'private-key',
+		}),
+		navigateToShell: () => {},
+		recovery: {
+			ensureReady: readyRecovery.ensureReady,
+			recoverAfterFailure: async () => ({
+				kind: 'recovered' as const,
+				attempted: true as const,
+				networkLikeFailure: true as const,
+				available: true as const,
+			}),
+		},
+		markTailscaleAttention: () => {},
+		clearTailscaleAttention: () => {},
+		logger,
+		trace: {
+			event: (event) => {
+				events.push(event);
+			},
+		},
+	});
+
+	assert.equal(connected, false);
+	assert.deepEqual(eventKinds(events), [
+		'auto-connect.latest-shell.missing',
+		'auto-connect.active-connection.missing',
+		'saved-entry.selected',
+		'key.resolved',
+		'tailscale.ensure-ready.result',
+		'auto-connect.saved-entry.connect.started',
+		'auto-connect.saved-entry.connect.threw',
+		'tailscale.recovery.result',
+		'auto-connect.saved-entry.retry.started',
+		'auto-connect.saved-entry.retry.threw',
+		'auto-connect.saved-entry.connect.failed',
+	]);
+});
+
+void test('records saved-entry tmux attach failure and connect failure payloads', async () => {
+	const events: unknown[] = [];
+	const { logger } = createLogger();
+
+	const connected = await attemptAutoConnectSource({
+		platformOS: 'android',
+		pathname: '/(tabs)',
+		latestShell: null,
+		connections: {},
+		openSavedEntryShell: async () => ({
+			status: 'tmux_attach_failed',
+			connectionId: 'conn-tmux',
+			tmuxAttachFailureReason: 'missing session',
+			tmuxSessionName: 'ops',
+			storedConnectionId: 'stored-tmux',
+		}),
+		loadLatestSavedConnection: async () => createSavedEntry(),
+		resolveKeySecurity: async () => ({
+			type: 'key',
+			privateKey: 'private-key',
+		}),
+		navigateToShell: () => {},
+		recovery: readyRecovery,
+		markTailscaleAttention: () => {},
+		clearTailscaleAttention: () => {},
+		logger,
+		trace: {
+			event: (event) => {
+				events.push(event);
+			},
+		},
+	});
+
+	assert.equal(connected, false);
+	assert.deepEqual(eventKinds(events), [
+		'auto-connect.latest-shell.missing',
+		'auto-connect.active-connection.missing',
+		'saved-entry.selected',
+		'key.resolved',
+		'tailscale.ensure-ready.result',
+		'auto-connect.saved-entry.connect.started',
+		'auto-connect.saved-entry.connect.tmux-attach-failed',
+		'auto-connect.saved-entry.connect.failed',
+	]);
+	const tmuxEvent = events.find(
+		(event) =>
+			(event as { kind: string }).kind ===
+			'auto-connect.saved-entry.connect.tmux-attach-failed',
+	) as {
+		connection: unknown;
+		connectionId: string;
+		tmuxAttachFailureReason: string | null;
+		tmuxSessionName: string;
+		storedConnectionId: string;
+	};
+	assert.deepEqual(tmuxEvent.connection, {
+		connectionId: 'conn-tmux',
+		tmuxSessionName: 'ops',
+	});
+	assert.equal(tmuxEvent.connectionId, 'conn-tmux');
+	assert.equal(tmuxEvent.tmuxAttachFailureReason, 'missing session');
+	assert.equal(tmuxEvent.tmuxSessionName, 'ops');
+	assert.equal(tmuxEvent.storedConnectionId, 'stored-tmux');
+
+	const failureEvent = events.find(
+		(event) =>
+			(event as { kind: string }).kind ===
+			'auto-connect.saved-entry.connect.failed',
+	) as {
+		connection: unknown;
+		connectionId: string;
+		storedConnectionId: string;
+	};
+	assert.deepEqual(failureEvent.connection, {
+		savedConnectionId: 'saved-1',
+		username: 'muly',
+		host: 'host.example',
+		port: 22,
+		keyId: 'key-1',
+		useTmux: true,
+		tmuxSessionName: 'main',
+	});
+	assert.equal(failureEvent.connectionId, 'conn-tmux');
+	assert.equal(failureEvent.storedConnectionId, 'stored-tmux');
 });
