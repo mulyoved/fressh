@@ -1,4 +1,4 @@
-import type { TouchScrollConfig } from '@fressh/react-native-xtermjs-webview';
+import { type TouchScrollConfig } from '@fressh/react-native-xtermjs-webview';
 
 export type ShellTouchScrollPolicy = {
 	ownsViewport: boolean;

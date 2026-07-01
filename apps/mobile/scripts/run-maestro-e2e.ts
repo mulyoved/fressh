@@ -1,4 +1,9 @@
-import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
+import {
+	spawn,
+	spawnSync,
+	type ChildProcess,
+	type SpawnSyncOptions,
+} from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 
 const APP_ID = 'com.finalapp.vibe2';
@@ -25,6 +30,7 @@ type ResolvedAdbServerTarget = {
 	source: 'adb-server-socket' | 'maestro-host';
 	target: AdbServerTarget;
 };
+type SpawnEnv = NonNullable<SpawnSyncOptions['env']>;
 
 export function parseAdbServerSocket(
 	socket: string | undefined,
@@ -125,7 +131,7 @@ function run(
 	opts?: { env?: MaestroE2eEnv; optional?: boolean },
 ) {
 	const result = spawnSync(command, args, {
-		env: opts?.env as NodeJS.ProcessEnv | undefined,
+		env: opts?.env as SpawnEnv | undefined,
 		stdio: opts?.optional ? 'ignore' : 'inherit',
 	});
 	if (result.status === 0) return;
@@ -139,7 +145,7 @@ function hasReachableAdbDevice(
 ): boolean {
 	const result = spawnSync('adb', [...adbTargetArgs, 'devices', '-l'], {
 		encoding: 'utf8',
-		env: env as NodeJS.ProcessEnv,
+		env: env as SpawnEnv,
 	});
 	if (result.status !== 0) return false;
 	return hasConnectedAdbDevice(result.stdout);

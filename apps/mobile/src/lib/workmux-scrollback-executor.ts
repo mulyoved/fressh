@@ -1,3 +1,4 @@
+import { type ScrollTraceSink } from './scroll-trace';
 import { formatWorkmuxAppBoundaryFailureMessage } from './workmux-app-commands';
 import { type WorkmuxControlChannel } from './workmux-control-channel';
 import {
@@ -5,7 +6,6 @@ import {
 	mergeWorkmuxScrollbackPageCommands,
 	type WorkmuxScrollbackPageCommand,
 } from './workmux-scrollback-batch';
-import { type ScrollTraceSink } from './scroll-trace';
 
 export type WorkmuxScrollbackCommandResult = {
 	success: boolean;

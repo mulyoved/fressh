@@ -3,9 +3,9 @@ import {
 	parseSkillDiscoveryResult,
 	type DiscoveredSkill,
 } from '@/lib/skill-discovery';
-import type {
-	SkillDiscoveryCache,
-	SkillDiscoveryCacheRecord,
+import {
+	type SkillDiscoveryCache,
+	type SkillDiscoveryCacheRecord,
 } from '@/lib/skill-discovery-cache';
 
 export type SkillSelectorCommandRunner = (command: string) => Promise<string>;

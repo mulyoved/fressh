@@ -93,9 +93,9 @@ export function DetectedOpenPickerModal({
 					</View>
 
 					<ScrollView>
-						{candidates.map((candidate, index) => (
+						{candidates.map((candidate) => (
 							<Pressable
-								key={`${candidate.kind}:${candidate.raw}:${index}`}
+								key={`${candidate.kind}:${candidate.raw}`}
 								accessibilityRole="button"
 								onPress={() => select(candidate)}
 								style={{

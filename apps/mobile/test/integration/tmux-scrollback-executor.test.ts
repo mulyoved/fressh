@@ -4,6 +4,7 @@ import {
 	registerTmuxScrollbackRemoteCopyModeExitCleanup,
 	resetTmuxScrollbackRuntimeState,
 } from '../../src/lib/tmux-scrollback';
+import { type WorkmuxControlChannel } from '../../src/lib/workmux-control-channel';
 import {
 	createTmuxScrollbackLineAccumulator,
 	type WorkmuxScrollbackPageCommand,
@@ -13,7 +14,6 @@ import {
 	type WorkmuxScrollbackCommandResult,
 } from '../../src/lib/workmux-scrollback-executor';
 import { createWorkmuxScrollbackLiveInputCleanupBarrier } from '../../src/lib/workmux-scrollback-live-input';
-import { type WorkmuxControlChannel } from '../../src/lib/workmux-control-channel';
 
 const page = (
 	count = 1,

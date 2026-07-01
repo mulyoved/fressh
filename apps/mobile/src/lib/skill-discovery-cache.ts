@@ -1,4 +1,4 @@
-import type { DiscoveredSkill } from '@/lib/skill-discovery';
+import { type DiscoveredSkill } from '@/lib/skill-discovery';
 
 export const SKILL_DISCOVERY_CACHE_VERSION = 1;
 
