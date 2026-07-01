@@ -73,7 +73,7 @@ void test('connectAndOpenShell records connect and shell success events', async 
 	);
 	assert.deepEqual(navigations, [{ connectionId: 'conn-1', channelId: 7 }]);
 	assert.deepEqual(
-		events.map((event) => (event as { type: string }).type),
+		events.map((event) => (event as { kind: string }).kind),
 		[
 			'ssh.connect.started',
 			'ssh.connect.progress',
@@ -159,7 +159,7 @@ void test('connectAndOpenShell records connect failure', async () => {
 	);
 
 	assert.deepEqual(
-		events.map((event) => (event as { type: string }).type),
+		events.map((event) => (event as { kind: string }).kind),
 		['ssh.connect.started', 'ssh.connect.failed'],
 	);
 	assert.equal(saveCalls, 0);
@@ -200,7 +200,7 @@ void test('connectAndOpenShell records shell failure without navigation', async 
 	assert.equal(saveCalls.length, 1);
 	assert.equal(navigations, 0);
 	assert.deepEqual(
-		events.map((event) => (event as { type: string }).type),
+		events.map((event) => (event as { kind: string }).kind),
 		[
 			'ssh.connect.started',
 			'ssh.connect.connected',

@@ -48,7 +48,7 @@ void test('diagnostic probe disconnects after success and never navigates or sav
 		false,
 	);
 	assert.deepEqual(
-		events.map((event) => (event as { type: string }).type),
+		events.map((event) => (event as { kind: string }).kind),
 		[
 			'ssh.connect.started',
 			'ssh.connect.connected',
@@ -85,7 +85,7 @@ void test('diagnostic probe fails successful probes when disconnect fails', asyn
 	);
 
 	assert.deepEqual(
-		events.map((event) => (event as { type: string }).type),
+		events.map((event) => (event as { kind: string }).kind),
 		[
 			'ssh.connect.started',
 			'ssh.connect.connected',
@@ -124,7 +124,7 @@ void test('diagnostic probe records and forwards connect progress', async () => 
 	assert.equal(result.status, 'connected');
 	assert.deepEqual(progressEvents, [{ phase: 'auth' }]);
 	assert.deepEqual(events[1], {
-		type: 'ssh.connect.progress',
+		kind: 'ssh.connect.progress',
 		source: 'saved-entry',
 		connection: {
 			username: 'muly',
@@ -134,7 +134,7 @@ void test('diagnostic probe records and forwards connect progress', async () => 
 			useTmux: true,
 			tmuxSessionName: 'main',
 		},
-		details: { progressEvent: { phase: 'auth' } },
+		phase: 'auth',
 	});
 });
 
@@ -172,7 +172,7 @@ void test('diagnostic probe disconnects after tmux attach failure without throwi
 	assert.equal(result.storedConnectionId, 'muly-dev_tailnet_ts_net-22');
 	assert.equal(disconnected, 1);
 	assert.deepEqual(
-		events.map((event) => (event as { type: string }).type),
+		events.map((event) => (event as { kind: string }).kind),
 		[
 			'ssh.connect.started',
 			'ssh.connect.connected',
@@ -211,7 +211,7 @@ void test('diagnostic probe preserves tmux result when disconnect fails', async 
 
 	assert.equal(result.status, 'tmux_attach_failed');
 	assert.deepEqual(
-		events.map((event) => (event as { type: string }).type),
+		events.map((event) => (event as { kind: string }).kind),
 		[
 			'ssh.connect.started',
 			'ssh.connect.connected',
@@ -274,7 +274,7 @@ void test('diagnostic probe records disconnect timeout without replacing shell f
 	);
 
 	assert.deepEqual(
-		events.map((event) => (event as { type: string }).type),
+		events.map((event) => (event as { kind: string }).kind),
 		[
 			'ssh.connect.started',
 			'ssh.connect.connected',
@@ -305,7 +305,7 @@ void test('diagnostic probe records connect failure', async () => {
 	);
 
 	assert.deepEqual(
-		events.map((event) => (event as { type: string }).type),
+		events.map((event) => (event as { kind: string }).kind),
 		['ssh.connect.started', 'ssh.connect.failed'],
 	);
 });

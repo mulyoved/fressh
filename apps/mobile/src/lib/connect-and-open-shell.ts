@@ -4,7 +4,7 @@ import type {
 	RnRussh,
 	SshConnectionProgress,
 } from '@fressh/react-native-uniffi-russh';
-import { type ConnectionDiagnosticEventInput } from './connection-diagnostic-types';
+import { type ConnectionDiagnosticEvent } from './connection-diagnostic-types';
 import { type InputConnectionDetails } from './connection-storage';
 import { rootLogger } from './logger';
 import { connectAndRememberConnection } from './ssh-connect-flow';
@@ -36,7 +36,7 @@ type SaveConnection = (params: {
 }) => Promise<unknown>;
 
 type ConnectTrace = {
-	event: (event: ConnectionDiagnosticEventInput) => void;
+	event: (event: ConnectionDiagnosticEvent) => void;
 };
 
 const getSecretsManager = async () => {
@@ -89,7 +89,7 @@ export async function connectAndOpenShell(args: {
 		resolvedSecurity,
 		saveConnection = defaultSaveConnection,
 	} = args;
-	const traceEvent = (event: ConnectionDiagnosticEventInput) => {
+	const traceEvent = (event: ConnectionDiagnosticEvent) => {
 		try {
 			args.trace?.event(event);
 		} catch (error) {

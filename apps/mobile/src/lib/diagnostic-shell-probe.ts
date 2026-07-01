@@ -6,8 +6,9 @@ import type {
 	SshConnectionProgress,
 } from '@fressh/react-native-uniffi-russh';
 import { type SavedEntryConnectResult } from './auto-connect-saved-entry';
+import { diagnosticEvents } from './connection-diagnostic-events';
 import { serializeConnectionDiagnosticError } from './connection-diagnostic-redaction';
-import { type ConnectionDiagnosticEventInput } from './connection-diagnostic-types';
+import { type ConnectionDiagnosticEvent } from './connection-diagnostic-types';
 import { type InputConnectionDetails } from './connection-storage';
 import { getStoredConnectionId } from './connection-utils';
 import { rootLogger } from './logger';
@@ -24,7 +25,7 @@ const DEFAULT_CONNECT_TIMEOUT_MS = 5_000;
 export type DiagnosticShellProbeResult = SavedEntryConnectResult;
 
 type ProbeTrace = {
-	event: (event: ConnectionDiagnosticEventInput) => void;
+	event: (event: ConnectionDiagnosticEvent) => void;
 };
 
 export class DiagnosticShellCleanupError extends Error {
@@ -87,7 +88,7 @@ export async function runDiagnosticShellProbe(args: {
 		onConnectionProgress,
 		abortSignalTimeoutMs = DEFAULT_CONNECT_TIMEOUT_MS,
 	} = args;
-	const traceEvent = (event: ConnectionDiagnosticEventInput) => {
+	const traceEvent = (event: ConnectionDiagnosticEvent) => {
 		try {
 			args.trace?.event(event);
 		} catch (error) {
@@ -110,19 +111,21 @@ export async function runDiagnosticShellProbe(args: {
 				),
 				abortSignalTimeoutMs,
 			);
-			traceEvent({
-				type: 'ssh.diagnostic.disconnected',
-				source: 'saved-entry',
-				connection: connectedIdentity,
-			});
+			traceEvent(
+				diagnosticEvents.diagnosticDisconnected({
+					source: 'saved-entry',
+					connection: connectedIdentity,
+				}),
+			);
 			return null;
 		} catch (error) {
-			traceEvent({
-				type: 'ssh.diagnostic.disconnect-failed',
-				source: 'saved-entry',
-				connection: connectedIdentity,
-				error: serializeConnectionDiagnosticError(error),
-			});
+			traceEvent(
+				diagnosticEvents.diagnosticDisconnectFailed({
+					source: 'saved-entry',
+					connection: connectedIdentity,
+					error: serializeConnectionDiagnosticError(error),
+				}),
+			);
 			return error;
 		}
 	};

@@ -4,10 +4,11 @@ import type {
 	SshConnectionProgress,
 	SshShell,
 } from '@fressh/react-native-uniffi-russh';
+import { diagnosticEvents } from './connection-diagnostic-events';
 import { serializeConnectionDiagnosticError } from './connection-diagnostic-redaction';
 import {
 	type ConnectionDiagnosticConnectionIdentity,
-	type ConnectionDiagnosticEventInput,
+	type ConnectionDiagnosticEvent,
 } from './connection-diagnostic-types';
 import { type InputConnectionDetails } from './connection-storage';
 import { extractTmuxAttachFailureReason } from './ssh-error-details';
@@ -43,6 +44,18 @@ type ShellLifecycleFailureContext = {
 	error: unknown;
 };
 
+function readSshConnectionProgressPhase(
+	progressEvent: SshConnectionProgress,
+): string | undefined {
+	const event = progressEvent as unknown;
+	return typeof event === 'object' &&
+		event !== null &&
+		'phase' in event &&
+		typeof event.phase === 'string'
+		? event.phase
+		: undefined;
+}
+
 export function getSshShellLifecycleConnectionIdentity(
 	connectionDetails: InputConnectionDetails,
 ): ConnectionDiagnosticConnectionIdentity {
@@ -64,7 +77,7 @@ export async function runSshShellLifecycle(args: {
 	onConnectionProgress?: (progressEvent: SshConnectionProgress) => void;
 	abortSignalTimeoutMs: number;
 	registerInStore?: boolean;
-	traceEvent: (event: ConnectionDiagnosticEventInput) => void;
+	traceEvent: (event: ConnectionDiagnosticEvent) => void;
 	afterShellFailure?: (context: ShellLifecycleFailureContext) => Promise<void>;
 }): Promise<SshShellLifecycleResult> {
 	const {
@@ -79,32 +92,35 @@ export async function runSshShellLifecycle(args: {
 	const connectionIdentity =
 		getSshShellLifecycleConnectionIdentity(connectionDetails);
 
-	traceEvent({
-		type: 'ssh.connect.started',
-		source: 'saved-entry',
-		connection: connectionIdentity,
-	});
+	traceEvent(
+		diagnosticEvents.sshConnectStarted({
+			source: 'saved-entry',
+			connection: connectionIdentity,
+		}),
+	);
 
 	let connected: ConnectedSshConnection;
 	try {
 		connected = await connectConnection({
 			onConnectionProgress: (progressEvent) => {
-				traceEvent({
-					type: 'ssh.connect.progress',
-					source: 'saved-entry',
-					connection: connectionIdentity,
-					details: { progressEvent },
-				});
+				traceEvent(
+					diagnosticEvents.sshConnectProgress({
+						source: 'saved-entry',
+						connection: connectionIdentity,
+						phase: readSshConnectionProgressPhase(progressEvent),
+					}),
+				);
 				onConnectionProgress?.(progressEvent);
 			},
 		});
 	} catch (error) {
-		traceEvent({
-			type: 'ssh.connect.failed',
-			source: 'saved-entry',
-			connection: connectionIdentity,
-			error: serializeConnectionDiagnosticError(error),
-		});
+		traceEvent(
+			diagnosticEvents.sshConnectFailed({
+				source: 'saved-entry',
+				connection: connectionIdentity,
+				error: serializeConnectionDiagnosticError(error),
+			}),
+		);
 		throw error;
 	}
 
@@ -113,20 +129,22 @@ export async function runSshShellLifecycle(args: {
 		...connectionIdentity,
 		connectionId: sshConnection.connectionId,
 	};
-	traceEvent({
-		type: 'ssh.connect.connected',
-		source: 'saved-entry',
-		connection: connectedIdentity,
-		details: { storedConnectionId },
-	});
+	traceEvent(
+		diagnosticEvents.sshConnectConnected({
+			source: 'saved-entry',
+			connection: connectedIdentity,
+			storedConnectionId,
+		}),
+	);
 
 	let shellHandle: Awaited<ReturnType<typeof sshConnection.startShell>>;
 	try {
-		traceEvent({
-			type: 'ssh.shell.started',
-			source: 'saved-entry',
-			connection: connectedIdentity,
-		});
+		traceEvent(
+			diagnosticEvents.sshShellStarted({
+				source: 'saved-entry',
+				connection: connectedIdentity,
+			}),
+		);
 		const startShellOptions: RegisteredStartShellOptions = {
 			term: 'Xterm',
 			useTmux: connectionDetails.useTmux,
@@ -139,16 +157,22 @@ export async function runSshShellLifecycle(args: {
 		shellHandle = await sshConnection.startShell(startShellOptions);
 	} catch (error) {
 		const tmuxAttachFailureReason = extractTmuxAttachFailureReason(error);
-		traceEvent({
-			type:
-				tmuxAttachFailureReason !== null
-					? 'ssh.shell.tmux-attach-failed'
-					: 'ssh.shell.failed',
-			source: 'saved-entry',
-			connection: connectedIdentity,
-			error: serializeConnectionDiagnosticError(error),
-			details: { tmuxAttachFailureReason, storedConnectionId },
-		});
+		traceEvent(
+			tmuxAttachFailureReason !== null
+				? diagnosticEvents.sshShellTmuxAttachFailed({
+						source: 'saved-entry',
+						connection: connectedIdentity,
+						error: serializeConnectionDiagnosticError(error),
+						tmuxAttachFailureReason,
+						storedConnectionId,
+					})
+				: diagnosticEvents.sshShellFailed({
+						source: 'saved-entry',
+						connection: connectedIdentity,
+						error: serializeConnectionDiagnosticError(error),
+						storedConnectionId,
+					}),
+		);
 		await afterShellFailure?.({
 			sshConnection,
 			storedConnectionId,
@@ -167,12 +191,14 @@ export async function runSshShellLifecycle(args: {
 		throw error;
 	}
 
-	traceEvent({
-		type: 'ssh.shell.connected',
-		source: 'saved-entry',
-		connection: connectedIdentity,
-		details: { channelId: shellHandle.channelId, storedConnectionId },
-	});
+	traceEvent(
+		diagnosticEvents.sshShellConnected({
+			source: 'saved-entry',
+			connection: connectedIdentity,
+			channelId: shellHandle.channelId,
+			storedConnectionId,
+		}),
+	);
 
 	return {
 		status: 'connected',
