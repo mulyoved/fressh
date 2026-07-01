@@ -105,6 +105,7 @@ void test('bundled command menu exposes the approved Issue 91 tree', () => {
 			children: [
 				{ label: 'Request a Feature', type: 'action' },
 				{ label: 'Fit terminal to device', type: 'action' },
+				{ label: 'Debug connection in Codex', type: 'action' },
 				{ label: 'Open Workspace', type: 'preset' },
 				{ label: 'Close Workspace', type: 'preset' },
 				{ label: 'Rename Workspace', type: 'preset' },
@@ -138,6 +139,19 @@ void test('mdev submenu routes feature request through a native app action', () 
 		label: 'Request a Feature',
 		actionId: 'OPEN_REPO_FEATURE_REQUEST',
 	});
+});
+
+void test('mdev submenu exposes connection diagnostic action', () => {
+	const commandMenus = getBundledShellConfig().commandMenus;
+
+	assert.deepEqual(
+		findEntry(commandMenus, ['mdev', 'Debug connection in Codex']),
+		{
+			type: 'action',
+			label: 'Debug connection in Codex',
+			actionId: 'DEBUG_CONNECTION_IN_CODEX',
+		},
+	);
 });
 
 void test('mdev workspace presets run existing tmux workspace commands', () => {

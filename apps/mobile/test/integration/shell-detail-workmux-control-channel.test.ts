@@ -268,6 +268,23 @@ void describe('shell detail Workmux control channel wiring', () => {
 		);
 	});
 
+	void test('delegates connection debug command wiring to hook', () => {
+		const source = readFileSync(detailSourcePath, 'utf8');
+
+		assert.match(
+			source,
+			/import \{ useConnectionDebugCommand \} from '@\/lib\/use-connection-debug-command'/,
+		);
+		assert.match(
+			source,
+			/const debugConnectionInCodex = useConnectionDebugCommand\(\{/,
+		);
+		assert.match(source, /allowTerminalPaste: false,/);
+		assert.match(source, /debugConnectionInCodex,\s*$/m);
+		assert.doesNotMatch(source, /runConnectionDebugCommand\(\{/);
+		assert.doesNotMatch(source, /loadLatestSavedConnectionForDiagnostic/);
+	});
+
 	void test('passes bridge handler into CommandMenuModal', () => {
 		const source = readFileSync(detailSourcePath, 'utf8');
 		const block = extractHandleCommandBridgeEntryBlock(source);
@@ -291,7 +308,10 @@ void describe('shell detail Workmux control channel wiring', () => {
 			source,
 			/import \{ runKeyboardActionSlot \} from '@\/lib\/keyboard-action-run-options'/,
 		);
-		assert.match(actionBlock, /\(actionId: ActionId, options\?: RunActionOptions\)/);
+		assert.match(
+			actionBlock,
+			/\(actionId: ActionId, options\?: RunActionOptions\)/,
+		);
 		assert.match(actionBlock, /runAction\(actionId, actionContext, options\)/);
 		assert.match(
 			block,

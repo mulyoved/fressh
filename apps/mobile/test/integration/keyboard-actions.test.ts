@@ -187,6 +187,30 @@ void test('restart Codex action delegates to the action context', async () => {
 	assert.equal(CONFIG_SUPPORTED_ACTION_IDS.includes('RESTART_CODEX'), true);
 });
 
+void test('connection diagnostic action delegates to action context', async () => {
+	let calls = 0;
+
+	await runAction('DEBUG_CONNECTION_IN_CODEX', {
+		availableKeyboardIds: new Set(),
+		selectKeyboard: () => {},
+		rotateKeyboard: () => {},
+		openConfigurator: () => {},
+		sendBytes: () => {},
+		pasteClipboard: async () => {},
+		copySelection: () => {},
+		debugConnectionInCodex: async () => {
+			calls += 1;
+		},
+	} as Parameters<typeof runAction>[1]);
+
+	assert.equal(calls, 1);
+	assert.equal(KNOWN_ACTION_IDS.includes('DEBUG_CONNECTION_IN_CODEX'), true);
+	assert.equal(
+		CONFIG_SUPPORTED_ACTION_IDS.includes('DEBUG_CONNECTION_IN_CODEX'),
+		true,
+	);
+});
+
 void test('legacy reflow terminal action aliases terminal fit', async () => {
 	let fitted = 0;
 
@@ -872,11 +896,29 @@ void test('Workmux keyboard runner appends scope for next/prev only', async () =
 
 	assert.deepEqual(argvCalls, [
 		{
-			argv: ['tmux', 'app', 'nav', 'next', '--session', 'main', '--scope', 'visible'],
+			argv: [
+				'tmux',
+				'app',
+				'nav',
+				'next',
+				'--session',
+				'main',
+				'--scope',
+				'visible',
+			],
 			timeoutMs: 10_000,
 		},
 		{
-			argv: ['tmux', 'app', 'nav', 'prev', '--session', 'main', '--scope', 'visible'],
+			argv: [
+				'tmux',
+				'app',
+				'nav',
+				'prev',
+				'--session',
+				'main',
+				'--scope',
+				'visible',
+			],
 			timeoutMs: 10_000,
 		},
 		{
@@ -907,8 +949,14 @@ void test('Workmux keyboard runner omits scope when getNavScope is not provided'
 	await runner.run({ type: 'nav', action: 'prev' });
 
 	assert.deepEqual(argvCalls, [
-		{ argv: ['tmux', 'app', 'nav', 'next', '--session', 'main'], timeoutMs: 10_000 },
-		{ argv: ['tmux', 'app', 'nav', 'prev', '--session', 'main'], timeoutMs: 10_000 },
+		{
+			argv: ['tmux', 'app', 'nav', 'next', '--session', 'main'],
+			timeoutMs: 10_000,
+		},
+		{
+			argv: ['tmux', 'app', 'nav', 'prev', '--session', 'main'],
+			timeoutMs: 10_000,
+		},
 	]);
 });
 

@@ -586,7 +586,7 @@ void test('mdev command menu exposes terminal fit action', () => {
 	assert.ok(mdevMenu);
 	assert.equal(mdevMenu.type, 'submenu');
 
-	assert.deepEqual(mdevMenu.entries.slice(0, 2), [
+	assert.deepEqual(mdevMenu.entries.slice(0, 3), [
 		{
 			type: 'action',
 			label: 'Request a Feature',
@@ -596,6 +596,11 @@ void test('mdev command menu exposes terminal fit action', () => {
 			type: 'action',
 			label: 'Fit terminal to device',
 			actionId: 'FIT_TERMINAL_TO_DEVICE',
+		},
+		{
+			type: 'action',
+			label: 'Debug connection in Codex',
+			actionId: 'DEBUG_CONNECTION_IN_CODEX',
 		},
 	]);
 });
@@ -642,8 +647,8 @@ void test('phone base Work key long-press sets the nav scope', () => {
 	assert.equal(workSlot?.type, 'action');
 	if (workSlot?.type !== 'action') return;
 	assert.equal(workSlot.actionId, 'WORKMUX_NAV_NEXT');
-	const optionActionIds = (workSlot.longPress?.options ?? []).flatMap((option) =>
-		option.type === 'action' ? [option.actionId] : [],
+	const optionActionIds = (workSlot.longPress?.options ?? []).flatMap(
+		(option) => (option.type === 'action' ? [option.actionId] : []),
 	);
 	assert.ok(optionActionIds.includes('WORKMUX_NAV_PREV'));
 	assert.ok(optionActionIds.includes('WORKMUX_NAV_NEXT'));

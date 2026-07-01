@@ -1,0 +1,652 @@
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+import {
+	attemptSavedEntryWithTailscaleRecovery,
+	type SavedEntryConnectResult,
+	type SavedEntryTailscaleRecovery,
+} from '../../src/lib/auto-connect-saved-entry';
+import {
+	TAILSCALE_REACHABILITY_MESSAGE,
+	TAILSCALE_RESTART_FAILED_MESSAGE,
+	TAILSCALE_UNAVAILABLE_MESSAGE,
+	type TailscaleReadyResult,
+	type TailscaleRecoverAfterFailureResult,
+} from '../../src/lib/tailscale-recovery-core';
+
+function connectedResult(
+	connectionId = 'connection-1',
+): SavedEntryConnectResult {
+	return {
+		status: 'connected',
+		connectionId,
+		channelId: 1,
+	};
+}
+
+function tmuxAttachFailedResult(
+	connectionId = 'connection-1',
+): SavedEntryConnectResult {
+	return {
+		status: 'tmux_attach_failed',
+		connectionId,
+		tmuxAttachFailureReason: 'no session',
+		tmuxSessionName: 'main',
+		storedConnectionId: 'stored-1',
+	};
+}
+
+function recoveryFixture(opts?: {
+	ready?: TailscaleReadyResult;
+	afterFailure?: TailscaleRecoverAfterFailureResult;
+}): SavedEntryTailscaleRecovery {
+	return {
+		ensureReady: async () =>
+			opts?.ready ?? { kind: 'ready', attempted: true, available: true },
+		recoverAfterFailure: async () =>
+			opts?.afterFailure ?? {
+				kind: 'nonNetworkFailure',
+				attempted: false,
+				networkLikeFailure: false,
+				available: true,
+			},
+	};
+}
+
+function harness(opts?: {
+	recovery?: SavedEntryTailscaleRecovery;
+	connectSavedEntry?: () => Promise<SavedEntryConnectResult>;
+	platformOS?: string;
+}) {
+	const attention: string[] = [];
+	let clearAttentionCount = 0;
+	const tmuxFailures: SavedEntryConnectResult[] = [];
+	const warnings: unknown[] = [];
+
+	const attempt = async () => {
+		const result = await attemptSavedEntryWithTailscaleRecovery({
+			platformOS: opts?.platformOS ?? 'android',
+			recovery: opts?.recovery ?? recoveryFixture(),
+			connectSavedEntry:
+				opts?.connectSavedEntry ?? (async () => connectedResult()),
+		});
+		switch (result.status) {
+			case 'connected':
+				clearAttentionCount += 1;
+				return { connected: true };
+			case 'tmuxAttachFailed':
+				tmuxFailures.push(result.result);
+				return { connected: false };
+			case 'blocked':
+			case 'recoveryNotAttempted':
+				if (result.attentionMessage !== null) {
+					attention.push(result.attentionMessage);
+				}
+				return { connected: false };
+			case 'retryFailed':
+				if (result.attentionMessage !== null) {
+					attention.push(result.attentionMessage);
+				}
+				warnings.push(result.error);
+				return { connected: false };
+			case 'threw':
+				throw result.error;
+		}
+	};
+
+	return {
+		attempt,
+		attention,
+		get clearAttentionCount() {
+			return clearAttentionCount;
+		},
+		tmuxFailures,
+		warnings,
+	};
+}
+
+void test('connects once when Tailscale is ready', async () => {
+	let connectCount = 0;
+	const context = harness({
+		connectSavedEntry: async () => {
+			connectCount += 1;
+			return connectedResult();
+		},
+	});
+
+	assert.deepEqual(await context.attempt(), { connected: true });
+	assert.equal(connectCount, 1);
+	assert.equal(context.clearAttentionCount, 1);
+	assert.deepEqual(context.attention, []);
+});
+
+void test('saved-entry retry policy returns blocked without UI callbacks', async () => {
+	const result = await attemptSavedEntryWithTailscaleRecovery({
+		platformOS: 'android',
+		recovery: {
+			ensureReady: async () => ({
+				kind: 'failed',
+				attempted: true,
+				available: true,
+			}),
+			recoverAfterFailure: async () => {
+				throw new Error('recover should not run');
+			},
+		},
+		connectSavedEntry: async () => {
+			throw new Error('connect should not run');
+		},
+	});
+
+	assert.equal(result.status, 'blocked');
+	if (result.status !== 'blocked') return;
+	assert.match(result.attentionMessage ?? '', /Tailscale/i);
+});
+
+void test('saved-entry retry policy returns retryFailed after recovery retry failure', async () => {
+	const retryError = new Error('No route to host');
+	const result = await attemptSavedEntryWithTailscaleRecovery({
+		platformOS: 'android',
+		recovery: {
+			ensureReady: async () => ({
+				kind: 'ready',
+				attempted: true,
+				available: true,
+			}),
+			recoverAfterFailure: async () => ({
+				kind: 'recovered',
+				attempted: true,
+				networkLikeFailure: true,
+				available: true,
+			}),
+		},
+		connectSavedEntry: async () => {
+			throw retryError;
+		},
+	});
+
+	assert.equal(result.status, 'retryFailed');
+	if (result.status !== 'retryFailed') return;
+	assert.equal(result.error, retryError);
+});
+
+void test('connects once when Tailscale readiness is unsupported', async () => {
+	let connectCount = 0;
+	const context = harness({
+		platformOS: 'ios',
+		recovery: recoveryFixture({
+			ready: {
+				kind: 'unsupported',
+				attempted: false,
+				available: false,
+			},
+		}),
+		connectSavedEntry: async () => {
+			connectCount += 1;
+			return connectedResult();
+		},
+	});
+
+	assert.deepEqual(await context.attempt(), { connected: true });
+	assert.equal(connectCount, 1);
+	assert.equal(context.clearAttentionCount, 1);
+	assert.deepEqual(context.attention, []);
+});
+
+void test('marks unavailable before SSH connect', async () => {
+	let connectCount = 0;
+	const context = harness({
+		recovery: recoveryFixture({
+			ready: {
+				kind: 'unavailable',
+				attempted: false,
+				available: false,
+			},
+		}),
+		connectSavedEntry: async () => {
+			connectCount += 1;
+			return connectedResult();
+		},
+	});
+
+	assert.deepEqual(await context.attempt(), { connected: false });
+	assert.equal(connectCount, 0);
+	assert.deepEqual(context.attention, [TAILSCALE_UNAVAILABLE_MESSAGE]);
+	assert.equal(context.clearAttentionCount, 0);
+});
+
+void test('marks failed readiness before SSH connect', async () => {
+	let connectCount = 0;
+	const context = harness({
+		recovery: recoveryFixture({
+			ready: {
+				kind: 'failed',
+				attempted: true,
+				available: true,
+			},
+		}),
+		connectSavedEntry: async () => {
+			connectCount += 1;
+			return connectedResult();
+		},
+	});
+
+	assert.deepEqual(await context.attempt(), { connected: false });
+	assert.equal(connectCount, 0);
+	assert.deepEqual(context.attention, [TAILSCALE_RESTART_FAILED_MESSAGE]);
+	assert.equal(context.clearAttentionCount, 0);
+});
+
+void test('retries once after recovered network-like failure', async () => {
+	const calls: string[] = [];
+	const networkError = new Error('No route to host');
+	const context = harness({
+		recovery: recoveryFixture({
+			afterFailure: {
+				kind: 'recovered',
+				attempted: true,
+				networkLikeFailure: true,
+				available: true,
+			},
+		}),
+		connectSavedEntry: async () => {
+			calls.push('connect');
+			if (calls.length === 1) {
+				throw networkError;
+			}
+			return connectedResult();
+		},
+	});
+
+	assert.deepEqual(await context.attempt(), { connected: true });
+	assert.deepEqual(calls, ['connect', 'connect']);
+	assert.equal(context.clearAttentionCount, 1);
+	assert.deepEqual(context.attention, []);
+});
+
+void test('retries once when readiness preflight already nudged Tailscale', async () => {
+	const calls: string[] = [];
+	const networkError = new Error('No route to host');
+	const context = harness({
+		recovery: recoveryFixture({
+			afterFailure: {
+				kind: 'preflightReady',
+				attempted: false,
+				networkLikeFailure: true,
+				available: true,
+			},
+		}),
+		connectSavedEntry: async () => {
+			calls.push('connect');
+			if (calls.length === 1) {
+				throw networkError;
+			}
+			return connectedResult();
+		},
+	});
+
+	assert.deepEqual(await context.attempt(), { connected: true });
+	assert.deepEqual(calls, ['connect', 'connect']);
+	assert.equal(context.clearAttentionCount, 1);
+	assert.deepEqual(context.attention, []);
+});
+
+void test('marks attention without retry when network recovery fails', async () => {
+	let connectCount = 0;
+	const networkError = new Error('No route to host');
+	const context = harness({
+		recovery: recoveryFixture({
+			afterFailure: {
+				kind: 'failed',
+				attempted: true,
+				networkLikeFailure: true,
+				available: true,
+			},
+		}),
+		connectSavedEntry: async () => {
+			connectCount += 1;
+			throw networkError;
+		},
+	});
+
+	assert.deepEqual(await context.attempt(), { connected: false });
+	assert.equal(connectCount, 1);
+	assert.deepEqual(context.attention, [TAILSCALE_RESTART_FAILED_MESSAGE]);
+	assert.equal(context.clearAttentionCount, 0);
+});
+
+void test('marks reachability attention without retry when recovery is cooldown or notStarted', async () => {
+	for (const kind of ['cooldown', 'notStarted'] as const) {
+		let connectCount = 0;
+		const networkError = new Error('No route to host');
+		const context = harness({
+			recovery: recoveryFixture({
+				afterFailure: {
+					kind,
+					attempted: false,
+					networkLikeFailure: true,
+					available: true,
+				},
+			}),
+			connectSavedEntry: async () => {
+				connectCount += 1;
+				throw networkError;
+			},
+		});
+
+		assert.deepEqual(await context.attempt(), { connected: false });
+		assert.equal(connectCount, 1);
+		assert.deepEqual(context.attention, [TAILSCALE_REACHABILITY_MESSAGE]);
+		assert.equal(context.clearAttentionCount, 0);
+	}
+});
+
+void test('returns false for non-network failures without attention', async () => {
+	const authError = new Error('Permission denied');
+	const context = harness({
+		recovery: recoveryFixture({
+			afterFailure: {
+				kind: 'nonNetworkFailure',
+				attempted: false,
+				networkLikeFailure: false,
+				available: true,
+			},
+		}),
+		connectSavedEntry: async () => {
+			throw authError;
+		},
+	});
+
+	assert.deepEqual(await context.attempt(), { connected: false });
+	assert.deepEqual(context.attention, []);
+	assert.equal(context.clearAttentionCount, 0);
+});
+
+void test('marks restart-failed attention when retry fails', async () => {
+	const retryError = new Error('No route to host');
+	const context = harness({
+		recovery: recoveryFixture({
+			afterFailure: {
+				kind: 'recovered',
+				attempted: true,
+				networkLikeFailure: true,
+				available: true,
+			},
+		}),
+		connectSavedEntry: async () => {
+			throw retryError;
+		},
+	});
+
+	assert.deepEqual(await context.attempt(), { connected: false });
+	assert.deepEqual(context.attention, [TAILSCALE_RESTART_FAILED_MESSAGE]);
+	assert.equal(context.clearAttentionCount, 0);
+	assert.deepEqual(context.warnings, [retryError]);
+});
+
+void test('rethrows non-network failure from recovery retry', async () => {
+	let connectCount = 0;
+	const retryError = new Error('Permission denied');
+	const context = harness({
+		recovery: recoveryFixture({
+			afterFailure: {
+				kind: 'recovered',
+				attempted: true,
+				networkLikeFailure: true,
+				available: true,
+			},
+		}),
+		connectSavedEntry: async () => {
+			connectCount += 1;
+			if (connectCount === 1) {
+				throw new Error('No route to host');
+			}
+			throw retryError;
+		},
+	});
+
+	await assert.rejects(context.attempt, retryError);
+	assert.equal(connectCount, 2);
+	assert.deepEqual(context.attention, []);
+	assert.equal(context.clearAttentionCount, 0);
+	assert.deepEqual(context.warnings, []);
+});
+
+void test('marks restart-failed attention when preflight retry fails', async () => {
+	const retryError = new Error('No route to host');
+	const context = harness({
+		recovery: recoveryFixture({
+			afterFailure: {
+				kind: 'preflightReady',
+				attempted: false,
+				networkLikeFailure: true,
+				available: true,
+			},
+		}),
+		connectSavedEntry: async () => {
+			throw retryError;
+		},
+	});
+
+	assert.deepEqual(await context.attempt(), { connected: false });
+	assert.deepEqual(context.attention, [TAILSCALE_RESTART_FAILED_MESSAGE]);
+	assert.equal(context.clearAttentionCount, 0);
+	assert.deepEqual(context.warnings, [retryError]);
+});
+
+void test('handles tmux_attach_failed before recovery without clearing attention', async () => {
+	const tmuxResult = tmuxAttachFailedResult();
+	const context = harness({
+		connectSavedEntry: async () => tmuxResult,
+	});
+
+	assert.deepEqual(await context.attempt(), { connected: false });
+	assert.deepEqual(context.tmuxFailures, [tmuxResult]);
+	assert.equal(context.clearAttentionCount, 0);
+});
+
+void test('handles tmux_attach_failed after recovery without clearing attention', async () => {
+	let connectCount = 0;
+	const networkError = new Error('No route to host');
+	const tmuxResult = tmuxAttachFailedResult();
+	const context = harness({
+		recovery: recoveryFixture({
+			afterFailure: {
+				kind: 'recovered',
+				attempted: true,
+				networkLikeFailure: true,
+				available: true,
+			},
+		}),
+		connectSavedEntry: async () => {
+			connectCount += 1;
+			if (connectCount === 1) {
+				throw networkError;
+			}
+			return tmuxResult;
+		},
+	});
+
+	assert.deepEqual(await context.attempt(), { connected: false });
+	assert.deepEqual(context.tmuxFailures, [tmuxResult]);
+	assert.equal(context.clearAttentionCount, 0);
+	assert.deepEqual(context.attention, []);
+});
+
+void test('readiness cooldown and notStarted still allow SSH probe', async () => {
+	for (const ready of [
+		{ kind: 'cooldown', attempted: false, available: true },
+		{ kind: 'notStarted', attempted: false, available: true },
+	] as const) {
+		let connectCount = 0;
+		const context = harness({
+			recovery: recoveryFixture({ ready }),
+			connectSavedEntry: async () => {
+				connectCount += 1;
+				return connectedResult();
+			},
+		});
+
+		assert.deepEqual(await context.attempt(), { connected: true });
+		assert.equal(connectCount, 1);
+		assert.deepEqual(context.attention, []);
+		assert.equal(context.clearAttentionCount, 1);
+	}
+});
+
+void test('readiness cooldown and notStarted mark reachability after failed SSH probe', async () => {
+	for (const kind of ['cooldown', 'notStarted'] as const) {
+		let connectCount = 0;
+		const networkError = new Error('No route to host');
+		const context = harness({
+			recovery: recoveryFixture({
+				ready: { kind, attempted: false, available: true },
+				afterFailure: {
+					kind,
+					attempted: false,
+					networkLikeFailure: true,
+					available: true,
+				},
+			}),
+			connectSavedEntry: async () => {
+				connectCount += 1;
+				throw networkError;
+			},
+		});
+
+		assert.deepEqual(await context.attempt(), { connected: false });
+		assert.equal(connectCount, 1);
+		assert.deepEqual(context.attention, [TAILSCALE_REACHABILITY_MESSAGE]);
+		assert.equal(context.clearAttentionCount, 0);
+	}
+});
+
+void test('records Tailscale recovery retry trace events', async () => {
+	const events: unknown[] = [];
+	let connectCalls = 0;
+
+	const result = await attemptSavedEntryWithTailscaleRecovery({
+		platformOS: 'android',
+		recovery: {
+			ensureReady: async () => ({
+				kind: 'ready' as const,
+				attempted: true as const,
+				available: true as const,
+			}),
+			recoverAfterFailure: async () => ({
+				kind: 'recovered' as const,
+				attempted: true as const,
+				networkLikeFailure: true as const,
+				available: true as const,
+			}),
+		},
+		connectSavedEntry: async () => {
+			connectCalls += 1;
+			if (connectCalls === 1) throw new Error('network unreachable');
+			return {
+				status: 'connected',
+				connectionId: 'conn-2',
+				channelId: 3,
+			};
+		},
+		onEvent: (event) => {
+			events.push(event);
+		},
+	});
+
+	assert.equal(result.status, 'connected');
+	assert.deepEqual(
+		events.map((event) => (event as { kind: string }).kind),
+		[
+			'tailscale.ensure-ready.result',
+			'auto-connect.saved-entry.connect.started',
+			'auto-connect.saved-entry.connect.threw',
+			'tailscale.recovery.result',
+			'auto-connect.saved-entry.retry.started',
+			'auto-connect.saved-entry.connect.connected',
+		],
+	);
+	assert.deepEqual(events[3], {
+		kind: 'tailscale.recovery.result',
+		source: 'tailscale-recovery',
+		message: undefined,
+		recoveryResult: {
+			kind: 'recovered',
+			attempted: true,
+			networkLikeFailure: true,
+			available: true,
+		},
+	});
+});
+
+void test('trace payload mutation cannot bypass Tailscale readiness block', async () => {
+	let connectCalls = 0;
+	const result = await attemptSavedEntryWithTailscaleRecovery({
+		platformOS: 'android',
+		recovery: recoveryFixture({
+			ready: {
+				kind: 'unavailable',
+				attempted: false,
+				available: false,
+			},
+		}),
+		connectSavedEntry: async () => {
+			connectCalls += 1;
+			return connectedResult();
+		},
+		onEvent: (event) => {
+			if (event.kind !== 'tailscale.ensure-ready.result') return;
+			event.readiness.kind = 'ready';
+			event.readiness.available = true;
+		},
+	});
+
+	assert.equal(result.status, 'blocked');
+	assert.equal(connectCalls, 0);
+});
+
+void test('trace payload mutation cannot force Tailscale retry', async () => {
+	let connectCalls = 0;
+	const result = await attemptSavedEntryWithTailscaleRecovery({
+		platformOS: 'android',
+		recovery: recoveryFixture({
+			afterFailure: {
+				kind: 'failed',
+				attempted: true,
+				networkLikeFailure: true,
+				available: true,
+			},
+		}),
+		connectSavedEntry: async () => {
+			connectCalls += 1;
+			throw new Error('No route to host');
+		},
+		onEvent: (event) => {
+			if (event.kind !== 'tailscale.recovery.result') return;
+			event.recoveryResult.kind = 'recovered';
+			event.recoveryResult.networkLikeFailure = false;
+		},
+	});
+
+	assert.equal(result.status, 'recoveryNotAttempted');
+	assert.equal(connectCalls, 1);
+});
+
+void test('trace payload mutation cannot convert tmux attach failure to success', async () => {
+	const tmuxResult = tmuxAttachFailedResult();
+
+	const result = await attemptSavedEntryWithTailscaleRecovery({
+		platformOS: 'android',
+		recovery: recoveryFixture(),
+		connectSavedEntry: async () => tmuxResult,
+		onEvent: (event) => {
+			if (
+				event.kind !== 'auto-connect.saved-entry.connect.tmux-attach-failed'
+			) {
+				return;
+			}
+			event.connectionId = 'mutated';
+		},
+	});
+
+	assert.deepEqual(result, { status: 'tmuxAttachFailed', result: tmuxResult });
+});

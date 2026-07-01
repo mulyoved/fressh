@@ -10,10 +10,10 @@ const packageJson = require('../../package.json') as {
 	dependencies: { expo: string };
 };
 
-void test('runtimeVersion changes when native agent alert route ABI changes', () => {
+void test('runtimeVersion changes when native Tailscale recovery ABI changes', () => {
 	assert.equal(
 		config.runtimeVersion,
-		`${packageJson.version}-native-agent-alert-route-v1`,
+		`${packageJson.version}-native-tailscale-recovery-v1`,
 	);
 	assert.notEqual(config.runtimeVersion, packageJson.dependencies.expo);
 });
@@ -27,6 +27,17 @@ void test('checked-in Android resources package the configured runtimeVersion', 
 	assert.equal(
 		stringsXml.includes(
 			`<string name="expo_runtime_version">${config.runtimeVersion}</string>`,
+		),
+		true,
+	);
+});
+
+void test('app config installs the Tailscale native plugin', () => {
+	assert.equal(
+		config.plugins?.some((plugin) =>
+			Array.isArray(plugin)
+				? plugin[0] === './plugins/with-tailscale'
+				: plugin === './plugins/with-tailscale',
 		),
 		true,
 	);

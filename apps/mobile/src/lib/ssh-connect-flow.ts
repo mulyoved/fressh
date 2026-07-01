@@ -38,19 +38,12 @@ export async function connectAndRememberConnection<
 	sshConnection: TResult;
 	storedConnectionId: string;
 }> {
-	const sshConnection = await args.connect({
-		host: args.connectionDetails.host,
-		port: args.connectionDetails.port,
-		username: args.connectionDetails.username,
-		security: args.resolvedSecurity,
-		onConnectionProgress: (progressEvent) => {
-			args.onConnectionProgress?.(progressEvent);
-		},
-		// TODO: Implement proper host key verification (known_hosts).
-		// Currently accepts all server keys, which is vulnerable to MITM attacks.
-		// Future: store known host keys, verify against them, prompt user on mismatch.
-		onServerKey: async () => true,
-		abortSignal: AbortSignalTimeout(args.abortSignalTimeoutMs),
+	const sshConnection = await connectWithoutRemembering({
+		connectionDetails: args.connectionDetails,
+		connect: args.connect,
+		onConnectionProgress: args.onConnectionProgress,
+		abortSignalTimeoutMs: args.abortSignalTimeoutMs,
+		resolvedSecurity: args.resolvedSecurity,
 	});
 
 	const storedConnectionId = getStoredConnectionId(args.connectionDetails);
@@ -64,4 +57,34 @@ export async function connectAndRememberConnection<
 		sshConnection,
 		storedConnectionId,
 	};
+}
+
+export async function connectWithoutRemembering<
+	TSecurity,
+	TProgressEvent,
+	TServerKeyInfo,
+	TResult extends { connectionId: string },
+>(args: {
+	connectionDetails: InputConnectionDetails;
+	connect: (
+		params: ConnectParamsBase<TSecurity, TProgressEvent, TServerKeyInfo>,
+	) => Promise<TResult>;
+	onConnectionProgress?: (progressEvent: TProgressEvent) => void;
+	abortSignalTimeoutMs: number;
+	resolvedSecurity: TSecurity;
+}): Promise<TResult> {
+	return await args.connect({
+		host: args.connectionDetails.host,
+		port: args.connectionDetails.port,
+		username: args.connectionDetails.username,
+		security: args.resolvedSecurity,
+		onConnectionProgress: (progressEvent) => {
+			args.onConnectionProgress?.(progressEvent);
+		},
+		// TODO: Implement proper host key verification (known_hosts).
+		// Currently accepts all server keys, which is vulnerable to MITM attacks.
+		// Future: store known host keys, verify against them, prompt user on mismatch.
+		onServerKey: async () => true,
+		abortSignal: AbortSignalTimeout(args.abortSignalTimeoutMs),
+	});
 }

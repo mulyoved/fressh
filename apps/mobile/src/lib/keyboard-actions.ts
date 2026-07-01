@@ -75,6 +75,7 @@ export const KNOWN_ACTION_IDS = [
 	'WORKMUX_NAV_SCOPE_ALL',
 	'FIT_TERMINAL_TO_DEVICE',
 	'RESTART_CODEX',
+	'DEBUG_CONNECTION_IN_CODEX',
 	'REFLOW_TERMINAL',
 	'OPEN_COMMANDER',
 	'OPEN_SKILL_SELECTOR',
@@ -270,6 +271,7 @@ export type ActionContext = {
 	setNavScope?: (scope: WorkmuxNavScope) => void;
 	fitTerminalToDevice?: () => Promise<void> | void;
 	restartCodex?: () => Promise<void> | void;
+	debugConnectionInCodex?: () => Promise<void> | void;
 	openCommander?: () => void;
 	openSkillSelector?: () => void;
 	openBrowserActions?: () => void;
@@ -428,6 +430,10 @@ export async function runAction(
 		}
 		case 'RESTART_CODEX': {
 			await context.restartCodex?.();
+			return;
+		}
+		case 'DEBUG_CONNECTION_IN_CODEX': {
+			await context.debugConnectionInCodex?.();
 			return;
 		}
 		case 'OPEN_COMMANDER': {

@@ -136,6 +136,7 @@ import {
 	createTmuxScrollbackLocalExitRequest,
 	resetTmuxScrollbackLocalExitRequests,
 } from '@/lib/tmux-scrollback-local-exit';
+import { useConnectionDebugCommand } from '@/lib/use-connection-debug-command';
 import { queryClient } from '@/lib/utils';
 import {
 	canStartWisprTextEntryAutomation,
@@ -2475,6 +2476,13 @@ function ShellDetail() {
 		void manualTerminalFitRunner.run();
 	}, [commandMenuModal, manualTerminalFitRunner]);
 
+	const debugConnectionInCodex = useConnectionDebugCommand({
+		appActive: isAppActiveRef.current,
+		closeMenu: commandMenuModal.onClose,
+		allowTerminalPaste: false,
+		pasteIntoTerminal: sendTextRaw,
+	});
+
 	const handleRestartCodex = useCallback(
 		async (options?: { timeoutMs?: number }) => {
 			commandMenuModal.onClose();
@@ -2548,6 +2556,7 @@ function ShellDetail() {
 			copySelection: handleCopySelection,
 			fitTerminalToDevice: handleFitTerminalToDevice,
 			restartCodex: handleRestartCodex,
+			debugConnectionInCodex,
 			toggleCommandMenu: () => {
 				browserActions.invalidateHostUrlReads();
 				commanderModal.onClose();
@@ -2594,6 +2603,7 @@ function ShellDetail() {
 			handleCloseTextEntry,
 			handlePasteClipboard,
 			handleFitTerminalToDevice,
+			debugConnectionInCodex,
 			handleRestartCodex,
 			handleOpenWisprTextEditor,
 			openConfigDialog,
