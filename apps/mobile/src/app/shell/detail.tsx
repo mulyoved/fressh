@@ -1,4 +1,4 @@
-import { RnRussh, type ListenerEvent } from '@fressh/react-native-uniffi-russh';
+import { type ListenerEvent } from '@fressh/react-native-uniffi-russh';
 import {
 	XtermJsWebView,
 	type XtermWebViewHandle,
@@ -50,17 +50,11 @@ import {
 } from '@/lib/agent-notification-visibility';
 import { useAutoConnectStore } from '@/lib/auto-connect';
 import { restartCodexWithBridge } from '@/lib/codex-restart';
-import { runConnectionDebugCommand } from '@/lib/connection-debug-command';
-import { connectionDiagnosticRecorder } from '@/lib/connection-diagnostic-recorder';
-import {
-	getStoredConnectionId,
-	pickLatestConnection,
-} from '@/lib/connection-utils';
+import { getStoredConnectionId } from '@/lib/connection-utils';
 import {
 	planDetectedOpenShortcutPress,
 	runDetectedOpenCallback,
 } from '@/lib/detected-open-actions';
-import { runDiagnosticShellProbe } from '@/lib/diagnostic-shell-probe';
 import {
 	isFocusedActiveRequestCurrent,
 	shouldShowFocusedActiveFeedback,
@@ -113,7 +107,6 @@ import {
 } from '@/lib/shell-modals';
 import { executeSideChannelCommand } from '@/lib/ssh-side-channel';
 import { useSshStore } from '@/lib/ssh-store';
-import { tailscaleRecovery } from '@/lib/tailscale-recovery';
 import {
 	createManualTerminalFitRunner,
 	type TerminalFitSize,
@@ -143,6 +136,7 @@ import {
 	createTmuxScrollbackLocalExitRequest,
 	resetTmuxScrollbackLocalExitRequests,
 } from '@/lib/tmux-scrollback-local-exit';
+import { useConnectionDebugCommand } from '@/lib/use-connection-debug-command';
 import { queryClient } from '@/lib/utils';
 import {
 	canStartWisprTextEntryAutomation,
@@ -2482,52 +2476,12 @@ function ShellDetail() {
 		void manualTerminalFitRunner.run();
 	}, [commandMenuModal, manualTerminalFitRunner]);
 
-	const loadLatestSavedConnectionForDiagnostic = useCallback(async () => {
-		const entries = await queryClient.fetchQuery(
-			secretsManager.connections.query.list,
-		);
-		const eligible = entries?.filter((entry) => entry.value.autoConnect);
-		return pickLatestConnection(eligible);
-	}, []);
-
-	const handleDebugConnectionInCodex = useCallback(async () => {
-		const autoState = useAutoConnectStore.getState();
-		await runConnectionDebugCommand({
-			recorder: connectionDiagnosticRecorder,
-			appState: {
-				platformOS: Platform.OS,
-				isAutoConnecting: autoState.isAutoConnecting,
-				isReconnecting: autoState.isReconnecting,
-				pathname: '/shell/detail',
-				appActive: isAppActiveRef.current,
-			},
-			closeMenu: () => {
-				commandMenuModal.onClose();
-			},
-			loadLatestSavedConnection: loadLatestSavedConnectionForDiagnostic,
-			resolvePrivateKey: async (keyId) => {
-				const keyEntry = await secretsManager.keys.utils.getPrivateKey(keyId);
-				return keyEntry.value;
-			},
-			runDiagnosticShellProbe,
-			connect: RnRussh.connect,
-			recovery: tailscaleRecovery,
-			allowTerminalPaste: Boolean(shell),
-			pasteIntoTerminal: sendTextRaw,
-			copyToClipboard: async (value) => {
-				await Clipboard.setStringAsync(value);
-			},
-			showAlert: (title, message) => {
-				Alert.alert(title, message);
-			},
-			logger,
-		});
-	}, [
-		commandMenuModal,
-		loadLatestSavedConnectionForDiagnostic,
-		sendTextRaw,
-		shell,
-	]);
+	const debugConnectionInCodex = useConnectionDebugCommand({
+		appActive: isAppActiveRef.current,
+		closeMenu: commandMenuModal.onClose,
+		allowTerminalPaste: Boolean(shell),
+		pasteIntoTerminal: sendTextRaw,
+	});
 
 	const handleRestartCodex = useCallback(
 		async (options?: { timeoutMs?: number }) => {
@@ -2602,7 +2556,7 @@ function ShellDetail() {
 			copySelection: handleCopySelection,
 			fitTerminalToDevice: handleFitTerminalToDevice,
 			restartCodex: handleRestartCodex,
-			debugConnectionInCodex: handleDebugConnectionInCodex,
+			debugConnectionInCodex,
 			toggleCommandMenu: () => {
 				browserActions.invalidateHostUrlReads();
 				commanderModal.onClose();
@@ -2649,7 +2603,7 @@ function ShellDetail() {
 			handleCloseTextEntry,
 			handlePasteClipboard,
 			handleFitTerminalToDevice,
-			handleDebugConnectionInCodex,
+			debugConnectionInCodex,
 			handleRestartCodex,
 			handleOpenWisprTextEditor,
 			openConfigDialog,

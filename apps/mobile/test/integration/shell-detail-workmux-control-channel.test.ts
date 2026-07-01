@@ -67,19 +67,6 @@ function extractHandleRestartCodexBlock(source: string): string {
 	return source.slice(callbackStart, callbackEnd);
 }
 
-function extractHandleDebugConnectionInCodexBlock(source: string): string {
-	const callbackStart = source.indexOf(
-		'const handleDebugConnectionInCodex = useCallback',
-	);
-	assert.notEqual(callbackStart, -1);
-	const callbackEnd = source.indexOf(
-		'const handleRestartCodex = useCallback',
-		callbackStart,
-	);
-	assert.notEqual(callbackEnd, -1);
-	return source.slice(callbackStart, callbackEnd);
-}
-
 function extractActionContextBlock(source: string): string {
 	const contextStart = source.indexOf('const actionContext = useMemo');
 	assert.notEqual(contextStart, -1);
@@ -281,16 +268,20 @@ void describe('shell detail Workmux control channel wiring', () => {
 		);
 	});
 
-	void test('allows explicit connection debug command to paste into an active shell', () => {
+	void test('delegates connection debug command wiring to hook', () => {
 		const source = readFileSync(detailSourcePath, 'utf8');
-		const block = extractHandleDebugConnectionInCodexBlock(source);
 
-		assert.match(block, /runConnectionDebugCommand\(\{/);
-		assert.match(block, /allowTerminalPaste:\s*Boolean\(shell\)/);
 		assert.match(
-			block,
-			/\[\s*commandMenuModal,[\s\S]*loadLatestSavedConnectionForDiagnostic,[\s\S]*sendTextRaw,[\s\S]*shell,[\s\S]*\]/,
+			source,
+			/import \{ useConnectionDebugCommand \} from '@\/lib\/use-connection-debug-command'/,
 		);
+		assert.match(
+			source,
+			/const debugConnectionInCodex = useConnectionDebugCommand\(\{/,
+		);
+		assert.match(source, /debugConnectionInCodex,\s*$/m);
+		assert.doesNotMatch(source, /runConnectionDebugCommand\(\{/);
+		assert.doesNotMatch(source, /loadLatestSavedConnectionForDiagnostic/);
 	});
 
 	void test('passes bridge handler into CommandMenuModal', () => {
