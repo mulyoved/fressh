@@ -18,6 +18,10 @@ function flushPromises() {
 	});
 }
 
+function eventKinds(events: unknown[]) {
+	return events.map((event) => (event as { kind: string }).kind);
+}
+
 function harness(
 	opts: Partial<AutoConnectReconnectSnapshot> & {
 		delaysMs?: readonly number[];
@@ -32,6 +36,7 @@ function harness(
 	const timers: Timer[] = [];
 	const setReconnectingCalls: boolean[] = [];
 	const attempts: number[] = [];
+	const events: unknown[] = [];
 	const logs: { level: 'info' | 'warn'; message: string }[] = [];
 	const snapshot: AutoConnectReconnectSnapshot = {
 		isAutoConnecting: opts.isAutoConnecting ?? false,
@@ -84,12 +89,18 @@ function harness(
 				logs.push({ level: 'warn', message });
 			},
 		},
+		trace: {
+			event: (event) => {
+				events.push(event);
+			},
+		},
 	});
 
 	return {
 		controller,
 		timers,
 		attempts,
+		events,
 		logs,
 		setReconnectingCalls,
 		snapshot,
@@ -115,6 +126,32 @@ void test('starts once and schedules retry after failed attempt', async () => {
 	assert.equal(context.timers.length, 1);
 	assert.equal(context.timers[0]?.delayMs, 10);
 	assert.deepEqual(context.setReconnectingCalls, [true]);
+	assert.deepEqual(eventKinds(context.events), [
+		'reconnect.started',
+		'reconnect.attempt.started',
+		'reconnect.attempt.failed',
+		'reconnect.retry.scheduled',
+	]);
+	assert.deepEqual(context.events[0], {
+		kind: 'reconnect.started',
+		source: 'reconnect-controller',
+		message: 'shell-drop',
+		reason: 'shell-drop',
+		windowMs: 100,
+	});
+	assert.deepEqual(context.events[2], {
+		kind: 'reconnect.attempt.failed',
+		source: 'reconnect-controller',
+		message: undefined,
+		reconnectElapsedMs: 0,
+	});
+	assert.deepEqual(context.events[3], {
+		kind: 'reconnect.retry.scheduled',
+		source: 'reconnect-controller',
+		message: undefined,
+		attemptIndex: 0,
+		delayMs: 10,
+	});
 });
 
 void test('blocks duplicate starts', async () => {
@@ -127,6 +164,15 @@ void test('blocks duplicate starts', async () => {
 	assert.deepEqual(context.attempts, [0]);
 	assert.equal(context.timers.length, 1);
 	assert.deepEqual(context.setReconnectingCalls, [true]);
+	assert.deepEqual(context.events[2], {
+		kind: 'reconnect.start.blocked',
+		source: 'reconnect-controller',
+		message: 'app-resume-no-shell',
+		reason: 'app-resume-no-shell',
+		isAutoConnecting: false,
+		isReconnecting: true,
+		resetInFlight: false,
+	});
 });
 
 void test('blocks start while auto-connect is already in flight', () => {
@@ -138,6 +184,17 @@ void test('blocks start while auto-connect is already in flight', () => {
 	assert.deepEqual(context.attempts, []);
 	assert.equal(context.timers.length, 0);
 	assert.deepEqual(context.setReconnectingCalls, []);
+	assert.deepEqual(context.events, [
+		{
+			kind: 'reconnect.start.blocked',
+			source: 'reconnect-controller',
+			message: 'shell-drop',
+			reason: 'shell-drop',
+			isAutoConnecting: true,
+			isReconnecting: false,
+			resetInFlight: false,
+		},
+	]);
 });
 
 void test('blocks start while reconnect state already exists', () => {
@@ -149,6 +206,17 @@ void test('blocks start while reconnect state already exists', () => {
 	assert.deepEqual(context.attempts, []);
 	assert.equal(context.timers.length, 0);
 	assert.deepEqual(context.setReconnectingCalls, []);
+	assert.deepEqual(context.events, [
+		{
+			kind: 'reconnect.start.blocked',
+			source: 'reconnect-controller',
+			message: 'shell-drop',
+			reason: 'shell-drop',
+			isAutoConnecting: false,
+			isReconnecting: true,
+			resetInFlight: false,
+		},
+	]);
 });
 
 void test('replacement stops current loop and starts a new one', async () => {
@@ -168,6 +236,21 @@ void test('replacement stops current loop and starts a new one', async () => {
 	assert.deepEqual(context.setReconnectingCalls, [true, false, true]);
 	assert.equal(context.timers.length, 2);
 	assert.equal(context.timers[1]?.delayMs, 10);
+	assert.equal(
+		eventKinds(context.events).includes('reconnect.stopped'),
+		true,
+	);
+	assert.deepEqual(
+		context.events.find(
+			(event) => (event as { kind: string }).kind === 'reconnect.stopped',
+		),
+		{
+			kind: 'reconnect.stopped',
+			source: 'reconnect-controller',
+			message: 'tailscale-reset-action-restart',
+			reason: 'tailscale-reset-action-restart',
+		},
+	);
 });
 
 void test('in-flight attempt resolving after replacement cannot update the new loop', async () => {
@@ -213,6 +296,15 @@ void test('stopped loops cannot schedule another retry', async () => {
 	assert.equal(context.controller.isRunning(), false);
 	assert.equal(context.timers.length, 0);
 	assert.deepEqual(context.attempts, [0]);
+	assert.deepEqual(eventKinds(context.events).slice(-1), [
+		'reconnect.stopped',
+	]);
+	assert.deepEqual(context.events.at(-1), {
+		kind: 'reconnect.stopped',
+		source: 'reconnect-controller',
+		message: 'test-stop',
+		reason: 'test-stop',
+	});
 });
 
 void test('stale loops cannot schedule another retry', async () => {
@@ -244,6 +336,23 @@ void test('timeout stops the loop', async () => {
 	assert.equal(context.controller.isRunning(), false);
 	assert.deepEqual(context.attempts, [0]);
 	assert.deepEqual(context.setReconnectingCalls, [true, false]);
+	assert.deepEqual(eventKinds(context.events).slice(-2), [
+		'reconnect.timeout',
+		'reconnect.stopped',
+	]);
+	assert.deepEqual(context.events.at(-2), {
+		kind: 'reconnect.timeout',
+		source: 'reconnect-controller',
+		message: undefined,
+		reconnectElapsedMs: 20,
+		windowMs: 15,
+	});
+	assert.deepEqual(context.events.at(-1), {
+		kind: 'reconnect.stopped',
+		source: 'reconnect-controller',
+		message: 'retry-timeout',
+		reason: 'retry-timeout',
+	});
 	assert.equal(
 		context.logs.some((log) => log.message === 'Reconnect timeout reached'),
 		true,
@@ -260,6 +369,24 @@ void test('successful reconnect stops the loop', async () => {
 	assert.deepEqual(context.attempts, [0]);
 	assert.equal(context.timers.length, 0);
 	assert.deepEqual(context.setReconnectingCalls, [true, false]);
+	assert.deepEqual(eventKinds(context.events), [
+		'reconnect.started',
+		'reconnect.attempt.started',
+		'reconnect.attempt.connected',
+		'reconnect.stopped',
+	]);
+	assert.deepEqual(context.events[2], {
+		kind: 'reconnect.attempt.connected',
+		source: 'reconnect-controller',
+		message: undefined,
+		reconnectElapsedMs: 0,
+	});
+	assert.deepEqual(context.events[3], {
+		kind: 'reconnect.stopped',
+		source: 'reconnect-controller',
+		message: 'reconnected',
+		reason: 'reconnected',
+	});
 	assert.equal(
 		context.logs.some((log) => log.message === 'Reconnected successfully'),
 		true,
@@ -321,6 +448,10 @@ void test('background not allowed stops with app-not-active', async () => {
 	assert.equal(context.controller.isRunning(), false);
 	assert.deepEqual(context.attempts, []);
 	assert.deepEqual(context.setReconnectingCalls, [true, false]);
+	assert.deepEqual(eventKinds(context.events), [
+		'reconnect.started',
+		'reconnect.stopped',
+	]);
 	assert.equal(
 		context.logs.some((log) => log.message === 'Reconnect cycle stopped'),
 		true,
@@ -342,6 +473,17 @@ void test('foreground coverage wait schedules next attempt without calling attem
 	assert.deepEqual(context.attempts, []);
 	assert.equal(context.timers.length, 1);
 	assert.equal(context.timers[0]?.delayMs, 10);
+	assert.deepEqual(eventKinds(context.events), [
+		'reconnect.started',
+		'reconnect.retry.scheduled',
+	]);
+	assert.deepEqual(context.events[1], {
+		kind: 'reconnect.retry.scheduled',
+		source: 'reconnect-controller',
+		message: undefined,
+		attemptIndex: 0,
+		delayMs: 10,
+	});
 });
 
 void test('foreground coverage wait retries once background work becomes available', async () => {

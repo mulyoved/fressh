@@ -6,6 +6,7 @@ import {
 	type SavedEntryConnectResult,
 	type SavedEntryTailscaleRecovery,
 } from '../../src/lib/auto-connect-saved-entry';
+import { type ConnectionDiagnosticEvent } from '../../src/lib/connection-diagnostics/events';
 import { createSavedEntryTailscaleDiagnosticRecovery } from '../../src/lib/saved-entry-tailscale-diagnostic-recovery';
 import {
 	TAILSCALE_REACHABILITY_MESSAGE,
@@ -152,6 +153,33 @@ void test('Tailscale diagnostic recovery ignores ensure-ready emit failures', as
 	assert.equal(result.status, 'connected');
 	if (result.status !== 'connected') return;
 	assert.deepEqual(result.result, connectedResult());
+});
+
+void test('Tailscale diagnostic recovery emits ensure-ready payload', async () => {
+	const events: ConnectionDiagnosticEvent[] = [];
+	const readiness = {
+		kind: 'ready',
+		attempted: true,
+		available: true,
+	} satisfies TailscaleReadyResult;
+	const recovery = createSavedEntryTailscaleDiagnosticRecovery({
+		platformOS: 'android',
+		recovery: recoveryFixture({ ready: readiness }),
+		emit: (event) => {
+			events.push(event);
+		},
+	});
+
+	assert.deepEqual(await recovery.ensureReady(), readiness);
+	assert.deepEqual(events, [
+		{
+			kind: 'tailscale.ensure-ready.result',
+			source: 'tailscale-recovery',
+			message: undefined,
+			platformOS: 'android',
+			readiness,
+		},
+	]);
 });
 
 void test('saved-entry retry policy returns blocked without UI callbacks', async () => {
@@ -644,4 +672,34 @@ void test('Tailscale diagnostic recovery ignores recovery emit failures', async 
 	assert.equal(connectCalls, 2);
 	if (result.status !== 'connected') return;
 	assert.deepEqual(result.result, connectedResult('conn-2'));
+});
+
+void test('Tailscale diagnostic recovery emits recovery payload', async () => {
+	const events: ConnectionDiagnosticEvent[] = [];
+	const recoveryResult = {
+		kind: 'recovered',
+		attempted: true,
+		networkLikeFailure: true,
+		available: true,
+	} satisfies TailscaleRecoverAfterFailureResult;
+	const recovery = createSavedEntryTailscaleDiagnosticRecovery({
+		platformOS: 'android',
+		recovery: recoveryFixture({ afterFailure: recoveryResult }),
+		emit: (event) => {
+			events.push(event);
+		},
+	});
+
+	assert.deepEqual(
+		await recovery.recoverAfterFailure(new Error('network unreachable')),
+		recoveryResult,
+	);
+	assert.deepEqual(events, [
+		{
+			kind: 'tailscale.recovery.result',
+			source: 'tailscale-recovery',
+			message: undefined,
+			recoveryResult,
+		},
+	]);
 });
