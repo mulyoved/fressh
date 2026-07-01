@@ -115,7 +115,7 @@ export function normalizeLegacyTraceForPrompt(
 	}
 }
 
-export function normalizeTimedConnectionDiagnosticEvent(input: {
+function normalizeTimedConnectionDiagnosticEvent(input: {
 	event: unknown;
 	startedAtMs: number;
 	atMs?: number;

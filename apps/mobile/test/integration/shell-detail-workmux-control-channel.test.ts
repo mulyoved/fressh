@@ -279,6 +279,7 @@ void describe('shell detail Workmux control channel wiring', () => {
 			source,
 			/const debugConnectionInCodex = useConnectionDebugCommand\(\{/,
 		);
+		assert.match(source, /allowTerminalPaste: false,/);
 		assert.match(source, /debugConnectionInCodex,\s*$/m);
 		assert.doesNotMatch(source, /runConnectionDebugCommand\(\{/);
 		assert.doesNotMatch(source, /loadLatestSavedConnectionForDiagnostic/);

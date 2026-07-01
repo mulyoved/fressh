@@ -5,19 +5,6 @@ import {
 	diagnosticEvents,
 } from '../../src/lib/connection-diagnostics';
 
-type EventWithCompatibilityFields = {
-	connection?: {
-		host?: string;
-		username?: string;
-	};
-	details?: Record<string, unknown>;
-	error?: {
-		name?: string;
-		message?: string;
-		inner?: unknown;
-	};
-};
-
 void test('recorder timestamps typed events and keeps bounded history', () => {
 	let now = 100;
 	const recorder = createConnectionDiagnosticRecorder({
@@ -92,129 +79,6 @@ void test('recorder snapshots typed events without broad secret redaction', () =
 	assert.equal(
 		latestEvent.error.message,
 		'token=abc is preserved for personal diagnostics',
-	);
-});
-
-void test('recorder normalizes legacy events before snapshotting traces', () => {
-	let now = 1000;
-	const recorder = createConnectionDiagnosticRecorder({ now: () => now });
-	const trace = recorder.startTrace({
-		trigger: 'manual-diagnostic',
-		reason: 'legacy runtime caller',
-	});
-
-	now = 1030;
-	const returnedEvent = trace.event({
-		type: 'ssh.connect.failed',
-		source: 'active-connection',
-		message: 'Legacy SSH failed',
-		connection: { host: 'dev.tailnet.ts.net', username: 'muly' },
-		error: { name: 'TimeoutError', message: 'connect timed out' },
-	} as unknown as Parameters<typeof trace.event>[0]);
-	trace.finish('failed');
-
-	if (returnedEvent.kind !== 'ssh.connect.failed') {
-		throw new Error(`Unexpected returned event kind: ${returnedEvent.kind}`);
-	}
-	assert.equal('type' in returnedEvent, false);
-	assert.equal(returnedEvent.elapsedMs, 30);
-	assert.equal(returnedEvent.connection.host, 'dev.tailnet.ts.net');
-	assert.equal(returnedEvent.error.message, 'connect timed out');
-
-	const latestEvent = recorder.getLatestTrace()?.events[0];
-	if (latestEvent?.kind !== 'ssh.connect.failed') {
-		throw new Error(`Unexpected latest event kind: ${latestEvent?.kind}`);
-	}
-	assert.equal('type' in latestEvent, false);
-	assert.equal(latestEvent.connection.username, 'muly');
-
-	const historyEvent = recorder.getHistory()[0]?.events[0];
-	if (historyEvent?.kind !== 'ssh.connect.failed') {
-		throw new Error(`Unexpected history event kind: ${historyEvent?.kind}`);
-	}
-	assert.equal('type' in historyEvent, false);
-	assert.equal(historyEvent.error.name, 'TimeoutError');
-});
-
-void test('recorder preserves unmapped legacy event evidence in snapshots', () => {
-	let now = 2000;
-	const recorder = createConnectionDiagnosticRecorder({ now: () => now });
-	const trace = recorder.startTrace({
-		trigger: 'manual-diagnostic',
-		reason: 'generic legacy runtime caller',
-	});
-
-	now = 2040;
-	const returnedEvent = trace.event({
-		type: 'manual-diagnostic.probe-exited',
-		source: 'manual-diagnostic',
-		message: 'Probe exited before shell prompt',
-		connection: { host: 'dev.tailnet.ts.net', username: 'muly' },
-		details: { probeExitCode: 255 },
-		timeoutMs: 15000,
-	} as unknown as Parameters<typeof trace.event>[0]);
-	trace.finish('failed');
-
-	if (returnedEvent.kind !== 'manual-diagnostic.warning') {
-		throw new Error(`Unexpected returned event kind: ${returnedEvent.kind}`);
-	}
-	const returned = returnedEvent as EventWithCompatibilityFields;
-	assert.equal('type' in returnedEvent, false);
-	assert.equal(returned.connection?.host, 'dev.tailnet.ts.net');
-	assert.equal(
-		returned.error?.message,
-		'manual-diagnostic.probe-exited: Probe exited before shell prompt',
-	);
-	assert.equal(returned.details?.legacyType, 'manual-diagnostic.probe-exited');
-	assert.deepEqual(returned.details?.details, { probeExitCode: 255 });
-	assert.equal(returned.details?.timeoutMs, 15000);
-
-	const latest = recorder.getLatestTrace()?.events[0];
-	const history = recorder.getHistory()[0]?.events[0];
-	assert.deepEqual(latest, returnedEvent);
-	assert.deepEqual(history, returnedEvent);
-});
-
-void test('recorder preserves known legacy event kinds in snapshots', () => {
-	let now = 2500;
-	const recorder = createConnectionDiagnosticRecorder({ now: () => now });
-	const trace = recorder.startTrace({
-		trigger: 'reconnect',
-		reason: 'legacy reconnect caller',
-	});
-
-	now = 2510;
-	const shellFailed = trace.event({
-		type: 'ssh.shell.failed',
-		source: 'active-connection',
-		connection: { host: 'dev.tailnet.ts.net' },
-		error: { name: 'ShellError', message: 'shell failed' },
-		storedConnectionId: 'stored-1',
-	} as unknown as Parameters<typeof trace.event>[0]);
-	now = 2520;
-	const reconnectStarted = trace.event({
-		type: 'reconnect.attempt.started',
-		source: 'reconnect-controller',
-		message: 'Reconnect attempt started',
-		elapsedMs: 99,
-	} as unknown as Parameters<typeof trace.event>[0]);
-	trace.finish('failed');
-
-	assert.equal(shellFailed.kind, 'ssh.shell.failed');
-	assert.equal(shellFailed.error.message, 'shell failed');
-	assert.equal(
-		(shellFailed as { storedConnectionId?: string }).storedConnectionId,
-		'stored-1',
-	);
-	assert.equal(reconnectStarted.kind, 'reconnect.attempt.started');
-	assert.equal(
-		(reconnectStarted as { reconnectElapsedMs?: number; message?: string })
-			.message,
-		'Reconnect attempt started',
-	);
-	assert.deepEqual(
-		recorder.getHistory()[0]?.events.map((event) => event.kind),
-		['ssh.shell.failed', 'reconnect.attempt.started'],
 	);
 });
 
@@ -318,55 +182,6 @@ void test('recorder serialization does not invoke hostile coercion hooks', () =>
 	assert.equal(coercionCalls, 0);
 	assert.doesNotMatch(JSON.stringify(latestEvent), /hostile toString/);
 	assert.doesNotMatch(JSON.stringify(latestEvent), /HostileTag/);
-});
-
-void test('recorder safely normalizes hostile legacy events', () => {
-	let now = 4000;
-	const recorder = createConnectionDiagnosticRecorder({ now: () => now });
-	const trace = recorder.startTrace({
-		trigger: 'manual-diagnostic',
-		reason: 'hostile legacy event',
-	});
-	const hostileEvent = Object.defineProperties(
-		{},
-		{
-			type: {
-				enumerable: true,
-				get() {
-					throw new Error('type getter failed');
-				},
-			},
-			source: {
-				enumerable: true,
-				get() {
-					throw new Error('source getter failed');
-				},
-			},
-			details: {
-				enumerable: true,
-				get() {
-					throw new Error('details getter failed');
-				},
-			},
-		},
-	) as Parameters<typeof trace.event>[0];
-
-	now = 4020;
-	assert.doesNotThrow(() => trace.event(hostileEvent));
-	const latestBeforeFinish = recorder.getLatestTrace();
-	assert.ok(latestBeforeFinish);
-	assert.equal(latestBeforeFinish.events.length, 1);
-	const event = latestBeforeFinish.events[0];
-	if (event?.kind !== 'manual-diagnostic.warning') {
-		throw new Error(`Unexpected event kind: ${event?.kind}`);
-	}
-	assert.equal(event.source, 'manual-diagnostic');
-
-	trace.finish('failed');
-	now = 4040;
-	assert.doesNotThrow(() => trace.event(hostileEvent));
-	assert.equal(recorder.getLatestTrace()?.events.length, 1);
-	assert.equal(recorder.getHistory()[0]?.events.length, 1);
 });
 
 void test('recorder falls back when readable kind cannot be safely cloned', () => {

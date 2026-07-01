@@ -1,4 +1,4 @@
-import { normalizeTimedConnectionDiagnosticEvent } from './connection-diagnostic-normalization';
+import { diagnosticEvents } from './connection-diagnostic-events';
 import {
 	cloneDiagnosticValue,
 	safeDiagnosticString,
@@ -7,6 +7,7 @@ import {
 	type ConnectionDiagnosticEvent,
 	type ConnectionDiagnosticRecorder,
 	type ConnectionDiagnosticRecorderOptions,
+	type ConnectionDiagnosticSource,
 	type ConnectionDiagnosticTimedEvent,
 	type ConnectionDiagnosticTrace,
 } from './connection-diagnostic-types';
@@ -17,6 +18,16 @@ type HistoryEntry = {
 };
 
 const DEFAULT_MAX_HISTORY = 20;
+const connectionDiagnosticSources = new Set<ConnectionDiagnosticSource>([
+	'latest-shell',
+	'active-connection',
+	'saved-entry',
+	'tailscale-recovery',
+	'reconnect-controller',
+	'manual-diagnostic',
+	'foreground-service',
+	'command-menu',
+]);
 
 let traceSequence = 0;
 
@@ -41,12 +52,42 @@ function timestampEvent(input: {
 	startedAtMs: number;
 	atMs: number;
 }): ConnectionDiagnosticTimedEvent {
-	return normalizeTimedConnectionDiagnosticEvent({
-		event: input.event,
-		startedAtMs: input.startedAtMs,
-		atMs: input.atMs,
-		elapsedMs: input.atMs - input.startedAtMs,
-	});
+	try {
+		return cloneDiagnosticValue({
+			...input.event,
+			atMs: input.atMs,
+			elapsedMs: input.atMs - input.startedAtMs,
+		});
+	} catch {
+		const fallbackEvent = diagnosticEvents.manualDiagnosticWarning({
+			source: readEventSource(input.event),
+			message: 'Connection diagnostic event could not be recorded',
+			error: {
+				name: 'ConnectionDiagnosticRecorderError',
+				message: 'Unable to clone typed diagnostic event',
+			},
+		});
+		return cloneDiagnosticValue({
+			...fallbackEvent,
+			atMs: input.atMs,
+			elapsedMs: input.atMs - input.startedAtMs,
+		});
+	}
+}
+
+function readEventSource(input: unknown): ConnectionDiagnosticSource {
+	try {
+		const source = (input as { source?: unknown }).source;
+		if (
+			typeof source === 'string' &&
+			connectionDiagnosticSources.has(source as ConnectionDiagnosticSource)
+		) {
+			return source as ConnectionDiagnosticSource;
+		}
+	} catch {
+		// Keep the recorder best-effort even for unreadable typed event objects.
+	}
+	return 'manual-diagnostic';
 }
 
 export function createConnectionDiagnosticRecorder(

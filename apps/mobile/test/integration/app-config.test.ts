@@ -32,6 +32,17 @@ void test('checked-in Android resources package the configured runtimeVersion', 
 	);
 });
 
+void test('app config installs the Tailscale native plugin', () => {
+	assert.equal(
+		config.plugins?.some((plugin) =>
+			Array.isArray(plugin)
+				? plugin[0] === './plugins/with-tailscale'
+				: plugin === './plugins/with-tailscale',
+		),
+		true,
+	);
+});
+
 void test('app config exposes the scroll trace flag through Expo extra', () => {
 	const source = readFileSync(require.resolve('../../app.config.ts'), 'utf8');
 

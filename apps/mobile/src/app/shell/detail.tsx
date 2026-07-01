@@ -2479,7 +2479,7 @@ function ShellDetail() {
 	const debugConnectionInCodex = useConnectionDebugCommand({
 		appActive: isAppActiveRef.current,
 		closeMenu: commandMenuModal.onClose,
-		allowTerminalPaste: Boolean(shell),
+		allowTerminalPaste: false,
 		pasteIntoTerminal: sendTextRaw,
 	});
 
