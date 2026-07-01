@@ -1,4 +1,4 @@
-import { normalizeTraceForPrompt } from './connection-diagnostic-normalization';
+import { normalizeLegacyTraceForPrompt } from './connection-diagnostic-normalization';
 import {
 	cloneDiagnosticValue,
 	normalizeConnectionIdentity,
@@ -285,7 +285,7 @@ export function formatConnectionDiagnosticPrompt(
 	options: ConnectionDiagnosticPromptOptions = {},
 ): string {
 	try {
-		const safeTrace = normalizeTraceForPrompt(trace);
+		const safeTrace = normalizeLegacyTraceForPrompt(trace);
 		const appState = formatAppState(options);
 		const connection = findPrimaryConnectionIdentity(safeTrace);
 		const failure = [...safeTrace.events]

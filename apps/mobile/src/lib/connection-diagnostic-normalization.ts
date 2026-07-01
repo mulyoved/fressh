@@ -16,11 +16,6 @@ import {
 	type ConnectionDiagnosticTrigger,
 } from './connection-diagnostic-types';
 
-export type ConnectionDiagnosticPromptCompatibleTimedEvent =
-	ConnectionDiagnosticTimedEvent & {
-		type: string;
-	};
-
 const connectionDiagnosticEventKinds = new Set<string>([
 	'saved-entry.selected',
 	'saved-entry.missing',
@@ -86,7 +81,7 @@ const legacyTypeAliases = new Map<string, string>([
 	['auto-connect.saved-entry.missing', 'saved-entry.missing'],
 ]);
 
-export function normalizeTraceForPrompt(
+export function normalizeLegacyTraceForPrompt(
 	trace: ConnectionDiagnosticTrace,
 ): ConnectionDiagnosticTrace {
 	try {
@@ -125,13 +120,12 @@ export function normalizeTimedConnectionDiagnosticEvent(input: {
 	startedAtMs: number;
 	atMs?: number;
 	elapsedMs?: number;
-}): ConnectionDiagnosticPromptCompatibleTimedEvent {
+}): ConnectionDiagnosticTimedEvent {
 	const atMs =
 		input.atMs ?? readNumberField(input.event, 'atMs') ?? input.startedAtMs;
 	const normalizedEvent = normalizeLegacyEvent(input.event);
 	return cloneDiagnosticValue({
 		...normalizedEvent,
-		type: normalizedEvent.kind,
 		atMs,
 		elapsedMs:
 			input.elapsedMs ??

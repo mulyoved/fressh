@@ -6,7 +6,6 @@ import {
 } from '../../src/lib/connection-diagnostics';
 
 type EventWithCompatibilityFields = {
-	type?: string;
 	connection?: {
 		host?: string;
 		username?: string;
@@ -117,7 +116,7 @@ void test('recorder normalizes legacy events before snapshotting traces', () => 
 	if (returnedEvent.kind !== 'ssh.connect.failed') {
 		throw new Error(`Unexpected returned event kind: ${returnedEvent.kind}`);
 	}
-	assert.equal((returnedEvent as { type?: string }).type, 'ssh.connect.failed');
+	assert.equal('type' in returnedEvent, false);
 	assert.equal(returnedEvent.elapsedMs, 30);
 	assert.equal(returnedEvent.connection.host, 'dev.tailnet.ts.net');
 	assert.equal(returnedEvent.error.message, 'connect timed out');
@@ -126,14 +125,14 @@ void test('recorder normalizes legacy events before snapshotting traces', () => 
 	if (latestEvent?.kind !== 'ssh.connect.failed') {
 		throw new Error(`Unexpected latest event kind: ${latestEvent?.kind}`);
 	}
-	assert.equal((latestEvent as { type?: string }).type, 'ssh.connect.failed');
+	assert.equal('type' in latestEvent, false);
 	assert.equal(latestEvent.connection.username, 'muly');
 
 	const historyEvent = recorder.getHistory()[0]?.events[0];
 	if (historyEvent?.kind !== 'ssh.connect.failed') {
 		throw new Error(`Unexpected history event kind: ${historyEvent?.kind}`);
 	}
-	assert.equal((historyEvent as { type?: string }).type, 'ssh.connect.failed');
+	assert.equal('type' in historyEvent, false);
 	assert.equal(historyEvent.error.name, 'TimeoutError');
 });
 
@@ -160,7 +159,7 @@ void test('recorder preserves unmapped legacy event evidence in snapshots', () =
 		throw new Error(`Unexpected returned event kind: ${returnedEvent.kind}`);
 	}
 	const returned = returnedEvent as EventWithCompatibilityFields;
-	assert.equal(returned.type, 'manual-diagnostic.warning');
+	assert.equal('type' in returnedEvent, false);
 	assert.equal(returned.connection?.host, 'dev.tailnet.ts.net');
 	assert.equal(
 		returned.error?.message,

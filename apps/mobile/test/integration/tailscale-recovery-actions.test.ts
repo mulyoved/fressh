@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import {
 	attemptSavedEntryWithTailscaleRecovery,
 	type SavedEntryConnectResult,
+	type SavedEntryRecoveryOutcome,
 	type SavedEntryTailscaleRecovery,
 } from '../../src/lib/auto-connect-saved-entry';
 import { createTailscaleRecoveryController } from '../../src/lib/tailscale-recovery';
@@ -224,7 +225,7 @@ function connectedResult(): SavedEntryConnectResult {
 function createComposedCooldownHarness() {
 	const nativeCalls: string[] = [];
 	const connectSavedEntryCalls: string[] = [];
-	const reconnectPromises: Promise<{ connected: boolean }>[] = [];
+	const reconnectPromises: Promise<SavedEntryRecoveryOutcome>[] = [];
 	const recovery = createTailscaleRecoveryController({
 		getPlatformOS: () => 'android',
 		getNowMs: () => 1_000,
@@ -261,10 +262,6 @@ function createComposedCooldownHarness() {
 						connectSavedEntryCalls.push('connectSavedEntry');
 						return connectedResult();
 					},
-					markTailscaleAttention: () => {},
-					clearTailscaleAttention: () => {},
-					logTmuxAttachFailure: () => {},
-					logWarning: () => {},
 				});
 				reconnectPromises.push(reconnectPromise);
 				return true;
@@ -300,7 +297,7 @@ void test('manual retry reaches saved-entry connect even when recovery cooldown 
 
 	context.actions.retry();
 	assert.equal(context.reconnectPromises.length, 1);
-	assert.deepEqual(await context.reconnectPromises[0], { connected: true });
+	assert.equal((await context.reconnectPromises[0])?.status, 'connected');
 	assert.deepEqual(context.connectSavedEntryCalls, ['connectSavedEntry']);
 });
 
@@ -310,7 +307,7 @@ void test('manual reset reaches saved-entry connect after reset records cooldown
 	await context.actions.reset();
 
 	assert.equal(context.reconnectPromises.length, 1);
-	assert.deepEqual(await context.reconnectPromises[0], { connected: true });
+	assert.equal((await context.reconnectPromises[0])?.status, 'connected');
 	assert.deepEqual(context.connectSavedEntryCalls, ['connectSavedEntry']);
 	assert.deepEqual(context.nativeCalls, [
 		'disconnect',
