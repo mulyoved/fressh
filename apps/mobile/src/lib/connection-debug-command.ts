@@ -4,7 +4,8 @@ import {
 	type ConnectionDiagnosticDeliveryResult,
 } from './connection-diagnostic-delivery';
 import {
-	runManualConnectionDiagnostic,
+	manualConnectionDiagnosticRunner,
+	type ManualConnectionDiagnosticRunner,
 	type ManualConnectionDiagnosticResult,
 } from './connection-diagnostic-runner';
 import {
@@ -37,6 +38,7 @@ export type ConnectionDebugCommandArgs = {
 	copyToClipboard: (value: string) => Promise<void>;
 	showAlert: (title: string, message: string) => void;
 	logger: ConnectionDebugLogger;
+	manualDiagnosticRunner?: ManualConnectionDiagnosticRunner;
 };
 
 export async function runConnectionDebugCommand(
@@ -46,7 +48,9 @@ export async function runConnectionDebugCommand(
 	delivery: ConnectionDiagnosticDeliveryResult;
 }> {
 	args.closeMenu();
-	const diagnostic = await runManualConnectionDiagnostic({
+	const diagnostic = await (
+		args.manualDiagnosticRunner ?? manualConnectionDiagnosticRunner
+	).run({
 		recorder: args.recorder,
 		appState: args.appState,
 		loadLatestSavedConnection: args.loadLatestSavedConnection,

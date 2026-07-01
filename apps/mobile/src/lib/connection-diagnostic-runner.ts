@@ -2,6 +2,7 @@ import {
 	attemptSavedEntryWithTailscaleRecovery,
 	type SavedEntryTailscaleRecovery,
 } from './auto-connect-saved-entry';
+import { diagnosticEvents } from './connection-diagnostic-events';
 import { formatConnectionDiagnosticPrompt } from './connection-diagnostic-prompt';
 import { serializeConnectionDiagnosticError } from './connection-diagnostic-redaction';
 import {
@@ -49,10 +50,6 @@ export type ManualConnectionDiagnosticArgs = {
 
 const DEFAULT_MANUAL_DIAGNOSTIC_TIMEOUT_MS = 60_000;
 
-let running = false;
-let activeTraceHandle: ConnectionDiagnosticTraceHandle | null = null;
-let activeRunToken: symbol | null = null;
-
 class ManualDiagnosticTimeoutError extends Error {
 	constructor(readonly timeoutMs: number) {
 		super(`Connection diagnostic timed out after ${timeoutMs}ms`);
@@ -88,15 +85,18 @@ function getConnectionIdentity(
 	id: string,
 	details: InputConnectionDetails,
 ): ConnectionDiagnosticConnectionIdentity {
-	return {
+	const identity: ConnectionDiagnosticConnectionIdentity = {
 		savedConnectionId: id,
 		username: details.username,
 		host: details.host,
 		port: details.port,
 		keyId: details.security.keyId,
-		useTmux: details.useTmux,
-		tmuxSessionName: details.tmuxSessionName,
 	};
+	if (details.useTmux !== undefined) identity.useTmux = details.useTmux;
+	if (details.tmuxSessionName !== undefined) {
+		identity.tmuxSessionName = details.tmuxSessionName;
+	}
+	return identity;
 }
 
 function promptForTrace(
@@ -137,12 +137,115 @@ function safeTraceEvent(
 	}
 }
 
-export async function runManualConnectionDiagnostic(
+type ManualConnectionDiagnosticRunnerState = {
+	running: boolean;
+	activeTraceHandle: ConnectionDiagnosticTraceHandle | null;
+	activeRunToken: symbol | null;
+};
+
+type ManualConnectionDiagnosticAttemptContext = {
+	setHandle: (next: ConnectionDiagnosticTraceHandle) => void;
+	ensureCurrentRun: () => void;
+};
+
+async function runManualConnectionDiagnosticAttempt(
 	args: ManualConnectionDiagnosticArgs,
+	state: ManualConnectionDiagnosticRunnerState,
+	{ setHandle, ensureCurrentRun }: ManualConnectionDiagnosticAttemptContext,
 ): Promise<ManualConnectionDiagnosticResult> {
-	if (running) {
+	const traceHandle = args.recorder.startTrace({
+		trigger: 'manual-diagnostic',
+		reason: 'command-menu',
+	});
+	setHandle(traceHandle);
+	state.activeTraceHandle = traceHandle;
+	const latestEntry = await args.loadLatestSavedConnection();
+	ensureCurrentRun();
+	if (!latestEntry) {
+		safeTraceEvent(
+			traceHandle,
+			diagnosticEvents.savedEntryMissing({
+				source: 'manual-diagnostic',
+				message: 'No eligible saved auto-connect connection was found.',
+			}),
+		);
+		return finish(traceHandle, 'skipped', args);
+	}
+
+	const details = latestEntry.value;
+	const normalizedDetails: InputConnectionDetails = {
+		...details,
+		useTmux: details.useTmux ?? true,
+		tmuxSessionName: details.tmuxSessionName?.trim() || 'main',
+		autoConnect: details.autoConnect ?? false,
+	};
+	const connection = getConnectionIdentity(latestEntry.id, normalizedDetails);
+	safeTraceEvent(
+		traceHandle,
+		diagnosticEvents.savedEntrySelected({
+			source: 'manual-diagnostic',
+			connection,
+		}),
+	);
+
+	const resolvedSecurity = await args.resolveKeySecurity(details);
+	ensureCurrentRun();
+	if (!resolvedSecurity) {
+		safeTraceEvent(
+			traceHandle,
+			diagnosticEvents.keyMissing({
+				source: 'manual-diagnostic',
+				connection,
+			}),
+		);
+		return finish(traceHandle, 'failed', args);
+	}
+
+	safeTraceEvent(
+		traceHandle,
+		diagnosticEvents.keyResolved({
+			source: 'manual-diagnostic',
+			connection,
+		}),
+	);
+
+	const result = await attemptSavedEntryWithTailscaleRecovery({
+		platformOS: args.appState.platformOS,
+		recovery: args.recovery,
+		connectSavedEntry: () =>
+			Promise.resolve()
+				.then(ensureCurrentRun)
+				.then(() =>
+					args.connectSavedEntry({
+						connectionDetails: normalizedDetails,
+						resolvedSecurity,
+						trace: traceHandle,
+					}),
+				),
+		shouldRecoverAfterFailure: (error) => !isDiagnosticShellCleanupError(error),
+		onEvent: (event) => safeTraceEvent(traceHandle, event),
+	});
+
+	switch (result.status) {
+		case 'connected':
+			return finish(traceHandle, 'connected', args);
+		case 'tmuxAttachFailed':
+		case 'blocked':
+		case 'recoveryNotAttempted':
+		case 'retryFailed':
+			return finish(traceHandle, 'failed', args);
+		case 'threw':
+			throw result.error;
+	}
+}
+
+async function runManualConnectionDiagnosticWithState(
+	args: ManualConnectionDiagnosticArgs,
+	state: ManualConnectionDiagnosticRunnerState,
+): Promise<ManualConnectionDiagnosticResult> {
+	if (state.running) {
 		const latestTrace =
-			activeTraceHandle?.trace ?? args.recorder.getLatestTrace();
+			state.activeTraceHandle?.trace ?? args.recorder.getLatestTrace();
 		const prompt = [
 			'A Fressh connection diagnostic is already running. Try again after it finishes.',
 			latestTrace ? promptForTrace(latestTrace, args) : null,
@@ -152,128 +255,24 @@ export async function runManualConnectionDiagnostic(
 		return { status: 'busy', prompt, trace: latestTrace };
 	}
 
-	running = true;
+	state.running = true;
 	const runToken = Symbol('manual-connection-diagnostic');
-	activeRunToken = runToken;
+	state.activeRunToken = runToken;
 	let handle: ConnectionDiagnosticTraceHandle | null = null;
 	const ensureCurrentRun = () => {
-		if (activeRunToken !== runToken) {
+		if (state.activeRunToken !== runToken) {
 			throw new Error('Connection diagnostic run is no longer active');
 		}
 	};
 
 	try {
 		return await withManualDiagnosticTimeout(
-			(async () => {
-				handle = args.recorder.startTrace({
-					trigger: 'manual-diagnostic',
-					reason: 'command-menu',
-				});
-				activeTraceHandle = handle;
-				const traceHandle = handle;
-				const latestEntry = await args.loadLatestSavedConnection();
-				ensureCurrentRun();
-				if (!latestEntry) {
-					safeTraceEvent(traceHandle, {
-						type: 'manual-diagnostic.saved-entry.missing',
-						source: 'manual-diagnostic',
-						message: 'No eligible saved auto-connect connection was found.',
-					});
-					return finish(traceHandle, 'skipped', args);
-				}
-
-				const details = latestEntry.value;
-				const normalizedDetails: InputConnectionDetails = {
-					...details,
-					useTmux: details.useTmux ?? true,
-					tmuxSessionName: details.tmuxSessionName?.trim() || 'main',
-					autoConnect: details.autoConnect ?? false,
-				};
-				const connection = getConnectionIdentity(
-					latestEntry.id,
-					normalizedDetails,
-				);
-				safeTraceEvent(traceHandle, {
-					type: 'manual-diagnostic.saved-entry.selected',
-					source: 'manual-diagnostic',
-					connection,
-				});
-
-				const resolvedSecurity = await args.resolveKeySecurity(details);
-				ensureCurrentRun();
-				if (!resolvedSecurity) {
-					safeTraceEvent(traceHandle, {
-						type: 'manual-diagnostic.key-missing',
-						source: 'manual-diagnostic',
-						connection,
-					});
-					return finish(traceHandle, 'failed', args);
-				}
-
-				safeTraceEvent(traceHandle, {
-					type: 'manual-diagnostic.key-resolved',
-					source: 'manual-diagnostic',
-					connection,
-				});
-
-				const result = await attemptSavedEntryWithTailscaleRecovery({
-					platformOS: args.appState.platformOS,
-					recovery: args.recovery,
-					connectSavedEntry: () =>
-						Promise.resolve()
-							.then(ensureCurrentRun)
-							.then(() =>
-								args.connectSavedEntry({
-									connectionDetails: normalizedDetails,
-									resolvedSecurity,
-									trace: traceHandle,
-								}),
-							),
-					markTailscaleAttention: (message) => {
-						safeTraceEvent(traceHandle, {
-							type: 'manual-diagnostic.tailscale.attention',
-							source: 'tailscale-recovery',
-							message,
-						});
-					},
-					clearTailscaleAttention: () => {
-						safeTraceEvent(traceHandle, {
-							type: 'manual-diagnostic.tailscale.attention-cleared',
-							source: 'tailscale-recovery',
-						});
-					},
-					logTmuxAttachFailure: (tmuxResult) => {
-						safeTraceEvent(traceHandle, {
-							type: 'manual-diagnostic.tmux-attach-failed',
-							source: 'manual-diagnostic',
-							connection: {
-								connectionId: tmuxResult.connectionId,
-								tmuxSessionName: tmuxResult.tmuxSessionName,
-							},
-							details: {
-								tmuxAttachFailureReason: tmuxResult.tmuxAttachFailureReason,
-							},
-						});
-					},
-					logWarning: (message, error) => {
-						safeTraceEvent(traceHandle, {
-							type: 'manual-diagnostic.warning',
-							source: 'manual-diagnostic',
-							message,
-							error: serializeConnectionDiagnosticError(error),
-						});
-					},
-					shouldRecoverAfterFailure: (error) =>
-						!isDiagnosticShellCleanupError(error),
-					trace: traceHandle,
-				});
-
-				return finish(
-					traceHandle,
-					result.connected ? 'connected' : 'failed',
-					args,
-				);
-			})(),
+			runManualConnectionDiagnosticAttempt(args, state, {
+				setHandle: (next) => {
+					handle = next;
+				},
+				ensureCurrentRun,
+			}),
 			args.timeoutMs ?? DEFAULT_MANUAL_DIAGNOSTIC_TIMEOUT_MS,
 		);
 	} catch (error) {
@@ -282,25 +281,54 @@ export async function runManualConnectionDiagnostic(
 		}
 		const isTimeout = error instanceof ManualDiagnosticTimeoutError;
 		if (isTimeout) {
-			safeTraceEvent(handle, {
-				type: 'manual-diagnostic.timeout',
-				source: 'manual-diagnostic',
-				message: error.message,
-				details: { timeoutMs: error.timeoutMs },
-			});
+			safeTraceEvent(
+				handle,
+				diagnosticEvents.manualDiagnosticTimeout({
+					timeoutMs: error.timeoutMs,
+					message: error.message,
+				}),
+			);
 			return finish(handle, 'failed', args);
 		}
-		safeTraceEvent(handle, {
-			type: 'manual-diagnostic.failed',
-			source: 'manual-diagnostic',
-			error: serializeConnectionDiagnosticError(error),
-		});
+		safeTraceEvent(
+			handle,
+			diagnosticEvents.manualDiagnosticFailed({
+				source: 'manual-diagnostic',
+				error: serializeConnectionDiagnosticError(error),
+			}),
+		);
 		return finish(handle, 'failed', args);
 	} finally {
-		if (activeRunToken === runToken) {
-			activeTraceHandle = null;
-			activeRunToken = null;
-			running = false;
+		if (state.activeRunToken === runToken) {
+			state.activeTraceHandle = null;
+			state.activeRunToken = null;
+			state.running = false;
 		}
 	}
+}
+
+export type ManualConnectionDiagnosticRunner = {
+	run: (
+		args: ManualConnectionDiagnosticArgs,
+	) => Promise<ManualConnectionDiagnosticResult>;
+};
+
+export function createManualConnectionDiagnosticRunner(): ManualConnectionDiagnosticRunner {
+	const state: ManualConnectionDiagnosticRunnerState = {
+		running: false,
+		activeTraceHandle: null,
+		activeRunToken: null,
+	};
+	return {
+		run: (args) => runManualConnectionDiagnosticWithState(args, state),
+	};
+}
+
+export const manualConnectionDiagnosticRunner =
+	createManualConnectionDiagnosticRunner();
+
+export function runManualConnectionDiagnostic(
+	args: ManualConnectionDiagnosticArgs,
+): Promise<ManualConnectionDiagnosticResult> {
+	return manualConnectionDiagnosticRunner.run(args);
 }

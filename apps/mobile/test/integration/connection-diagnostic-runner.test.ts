@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { runManualConnectionDiagnostic } from '../../src/lib/connection-diagnostic-runner';
+import {
+	createManualConnectionDiagnosticRunner,
+	runManualConnectionDiagnostic,
+} from '../../src/lib/connection-diagnostic-runner';
 import {
 	createConnectionDiagnosticRecorder,
 	formatConnectionDiagnosticPrompt,
@@ -79,6 +82,50 @@ void test('manual diagnostic records no saved connection as skipped trace', asyn
 	assert.equal(recorder.getLatestTrace()?.status, 'skipped');
 });
 
+void test('manual diagnostic runner instances do not share single-flight state', async () => {
+	const firstRunner = createManualConnectionDiagnosticRunner();
+	const secondRunner = createManualConnectionDiagnosticRunner();
+	const firstRecorder = createConnectionDiagnosticRecorder({ now: () => 10 });
+	const secondRecorder = createConnectionDiagnosticRecorder({ now: () => 20 });
+	const blocked = new Promise<never>(() => undefined);
+
+	const first = firstRunner.run({
+		recorder: firstRecorder,
+		appState: {
+			platformOS: 'android',
+			isAutoConnecting: false,
+			isReconnecting: false,
+		},
+		loadLatestSavedConnection: async () => savedEntry,
+		resolveKeySecurity: async () => ({
+			type: 'key',
+			privateKey: 'private-key',
+		}),
+		connectSavedEntry: async () => blocked,
+		recovery: readyRecovery,
+		timeoutMs: 5,
+	});
+
+	const second = await secondRunner.run({
+		recorder: secondRecorder,
+		appState: {
+			platformOS: 'android',
+			isAutoConnecting: false,
+			isReconnecting: false,
+		},
+		loadLatestSavedConnection: async () => null,
+		resolveKeySecurity: async () => null,
+		connectSavedEntry: async () => {
+			throw new Error('connect should not run');
+		},
+		recovery: readyRecovery,
+		timeoutMs: 50,
+	});
+
+	assert.equal(second.status, 'skipped');
+	assert.equal((await first).status, 'failed');
+});
+
 void test('manual diagnostic is single-flight', async () => {
 	const recorder = createConnectionDiagnosticRecorder({ now: () => 10 });
 	const competingRecorder = createConnectionDiagnosticRecorder({
@@ -109,8 +156,10 @@ void test('manual diagnostic is single-flight', async () => {
 
 	await connectStarted;
 	recorder.getLatestTrace()?.events.push({
-		type: 'caller-mutation-ignored',
+		kind: 'manual-diagnostic.timeout',
 		source: 'manual-diagnostic',
+		message: 'caller-mutation-ignored',
+		timeoutMs: 1,
 		atMs: 10,
 		elapsedMs: 0,
 	});
@@ -275,7 +324,10 @@ void test('manual diagnostic records tmux attach failures in the prompt', async 
 	});
 
 	assert.equal(result.status, 'failed');
-	assert.match(result.prompt, /manual-diagnostic\.tmux-attach-failed/);
+	assert.match(
+		result.prompt,
+		/auto-connect\.saved-entry\.connect\.tmux-attach-failed/,
+	);
 	assert.match(result.prompt, /missing session/);
 	assert.match(result.prompt, /tmuxSessionName=main/);
 	assert.doesNotMatch(result.prompt, /secret/);
@@ -301,7 +353,7 @@ void test('manual diagnostic records missing saved key as failed trace', async (
 	});
 
 	assert.equal(result.status, 'failed');
-	assert.match(result.prompt, /manual-diagnostic\.key-missing/);
+	assert.match(result.prompt, /key\.missing/);
 	assert.equal(recorder.getLatestTrace()?.status, 'failed');
 });
 

@@ -670,10 +670,12 @@ export const diagnosticEvents = {
 		source: ConnectionDiagnosticSource;
 		connection: ConnectionDiagnosticConnectionIdentity;
 		phase?: string;
+		message?: string;
 	}): SshConnectProgressEvent =>
 		withSource({
 			kind: 'ssh.connect.progress',
 			source: input.source,
+			message: input.message,
 			connection: copyConnectionIdentity(input.connection),
 			phase: input.phase,
 		}),
