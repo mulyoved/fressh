@@ -400,6 +400,7 @@ void test('records saved-entry selection through trace sink', async () => {
 
 void test('active shell failure falls through to saved-entry connection', async () => {
 	const navigations: [string, number][] = [];
+	const events: unknown[] = [];
 	const { calls, logger } = createLogger();
 
 	const connected = await attemptAutoConnectSource({
@@ -440,10 +441,39 @@ void test('active shell failure falls through to saved-entry connection', async 
 		markTailscaleAttention: () => {},
 		clearTailscaleAttention: () => {},
 		logger,
+		trace: {
+			event: (event) => {
+				events.push(event);
+			},
+		},
 	});
 
 	assert.equal(connected, true);
 	assert.deepEqual(navigations, [['saved-2', 9]]);
+	assert.deepEqual(eventKinds(events), [
+		'auto-connect.latest-shell.missing',
+		'auto-connect.active-connection.selected',
+		'auto-connect.active-connection.shell-started',
+		'auto-connect.active-connection.shell-failed',
+		'saved-entry.selected',
+		'key.resolved',
+		'tailscale.ensure-ready.result',
+		'auto-connect.saved-entry.connect.started',
+		'auto-connect.saved-entry.connect.connected',
+	]);
+	const failureEvent = events[3] as {
+		connection: unknown;
+		error: { message: string };
+		tmuxSessionName: string;
+	};
+	assert.deepEqual(failureEvent.connection, {
+		connectionId: 'active-1',
+		username: 'muly',
+		host: 'host.example',
+		port: 22,
+	});
+	assert.equal(failureEvent.error.message, 'active shell unavailable');
+	assert.equal(failureEvent.tmuxSessionName, 'main');
 	assert.equal(
 		calls.some(
 			(call) =>
@@ -453,6 +483,75 @@ void test('active shell failure falls through to saved-entry connection', async 
 		),
 		true,
 	);
+});
+
+void test('active shell tmux attach failure records active-connection tmux trace', async () => {
+	const events: unknown[] = [];
+	const { logger } = createLogger();
+
+	const connected = await attemptAutoConnectSource({
+		platformOS: 'android',
+		pathname: '/(tabs)',
+		latestShell: null,
+		connections: {
+			active: {
+				connectionId: 'active-1',
+				connectedAtMs: 20,
+				connectionDetails: baseDetails,
+				startShell: async () => {
+					throw {
+						tag: 'TmuxAttachFailed',
+						inner: ['missing session'],
+					};
+				},
+			},
+		},
+		openSavedEntryShell: async () => ({
+			status: 'connected',
+			connectionId: 'saved-2',
+			channelId: 9,
+		}),
+		loadTmuxSettings: async () => ({
+			useTmux: true,
+			tmuxSessionName: 'ops',
+		}),
+		loadLatestSavedConnection: async () => createSavedEntry(),
+		resolveKeySecurity: async () => ({
+			type: 'key',
+			privateKey: 'private-key',
+		}),
+		navigateToShell: () => {},
+		recovery: readyRecovery,
+		markTailscaleAttention: () => {},
+		clearTailscaleAttention: () => {},
+		logger,
+		trace: {
+			event: (event) => {
+				events.push(event);
+			},
+		},
+	});
+
+	assert.equal(connected, true);
+	assert.deepEqual(eventKinds(events).slice(0, 4), [
+		'auto-connect.latest-shell.missing',
+		'auto-connect.active-connection.selected',
+		'auto-connect.active-connection.shell-started',
+		'auto-connect.active-connection.tmux-attach-failed',
+	]);
+	const tmuxEvent = events[3] as {
+		connection: unknown;
+		tmuxAttachFailureReason: string;
+		tmuxSessionName: string;
+	};
+	assert.deepEqual(tmuxEvent.connection, {
+		connectionId: 'active-1',
+		username: 'muly',
+		host: 'host.example',
+		port: 22,
+	});
+	assert.equal(tmuxEvent.tmuxAttachFailureReason, 'missing session');
+	assert.equal(tmuxEvent.tmuxSessionName, 'ops');
 });
 
 void test('saved-entry path returns false when no saved entry exists', async () => {

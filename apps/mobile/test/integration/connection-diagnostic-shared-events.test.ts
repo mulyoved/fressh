@@ -9,8 +9,14 @@ import {
 	omitPrivateKeyMaterial,
 	serializeConnectionDiagnosticError,
 	snapshotDiagnosticValue,
+	type autoConnectEvents,
 	type connectionDiagnosticEventKinds,
 	type ConnectionDiagnosticEvent,
+	type manualDiagnosticEvents,
+	type reconnectEvents,
+	type savedEntryEvents,
+	type sshEvents,
+	type tailscaleDiagnosticEvents,
 } from '../../src/lib/connection-diagnostics/events';
 
 void test('identity helpers copy only diagnostic-safe connection fields', () => {
@@ -194,3 +200,29 @@ type ConnectionDiagnosticEventKindsExactlyCoverUnion = [
 
 const assertConnectionDiagnosticEventKindsExactlyCoverUnion: ConnectionDiagnosticEventKindsExactlyCoverUnion = true;
 void assertConnectionDiagnosticEventKindsExactlyCoverUnion;
+
+type DiagnosticEventBuilder =
+	| (typeof savedEntryEvents)[keyof typeof savedEntryEvents]
+	| (typeof sshEvents)[keyof typeof sshEvents]
+	| (typeof autoConnectEvents)[keyof typeof autoConnectEvents]
+	| (typeof manualDiagnosticEvents)[keyof typeof manualDiagnosticEvents]
+	| (typeof tailscaleDiagnosticEvents)[keyof typeof tailscaleDiagnosticEvents]
+	| (typeof reconnectEvents)[keyof typeof reconnectEvents];
+type DiagnosticEventBuilderKind = ReturnType<DiagnosticEventBuilder>['kind'];
+type MissingDiagnosticEventBuilderKind = Exclude<
+	ConnectionDiagnosticEvent['kind'],
+	DiagnosticEventBuilderKind
+>;
+type ExtraDiagnosticEventBuilderKind = Exclude<
+	DiagnosticEventBuilderKind,
+	ConnectionDiagnosticEvent['kind']
+>;
+type DiagnosticEventBuildersExactlyCoverUnion = [
+	MissingDiagnosticEventBuilderKind,
+	ExtraDiagnosticEventBuilderKind,
+] extends [never, never]
+	? true
+	: never;
+
+const assertDiagnosticEventBuildersExactlyCoverUnion: DiagnosticEventBuildersExactlyCoverUnion = true;
+void assertDiagnosticEventBuildersExactlyCoverUnion;
