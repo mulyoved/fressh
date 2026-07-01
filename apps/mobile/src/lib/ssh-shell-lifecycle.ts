@@ -5,11 +5,11 @@ import type {
 	SshShell,
 } from '@fressh/react-native-uniffi-russh';
 import { diagnosticEvents } from './connection-diagnostic-events';
-import { serializeConnectionDiagnosticError } from './connection-diagnostic-redaction';
 import {
 	type ConnectionDiagnosticConnectionIdentity,
 	type ConnectionDiagnosticEvent,
 } from './connection-diagnostic-types';
+import { serializeConnectionDiagnosticError } from './connection-diagnostics/events';
 import { type InputConnectionDetails } from './connection-storage';
 import { extractTmuxAttachFailureReason } from './ssh-error-details';
 import { type RegisteredStartShellOptions } from './ssh-registry-store';

@@ -1,8 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-	diagnosticEvents,
+	autoConnectEvents,
 	formatConnectionDiagnosticPrompt,
+	manualDiagnosticEvents,
+	reconnectEvents,
+	savedEntryEvents,
+	sshEvents,
+	tailscaleDiagnosticEvents,
 	type ConnectionDiagnosticTrace,
 } from '../../src/lib/connection-diagnostics';
 
@@ -16,7 +21,7 @@ void test('prompt renders typed event timeline and app state', () => {
 		finishedAtMs: 150,
 		events: [
 			{
-				...diagnosticEvents.savedEntrySelected({
+				...savedEntryEvents.selected({
 					source: 'manual-diagnostic',
 					connection: {
 						savedConnectionId: 'saved-1',
@@ -31,7 +36,7 @@ void test('prompt renders typed event timeline and app state', () => {
 				elapsedMs: 10,
 			},
 			{
-				...diagnosticEvents.sshConnectFailed({
+				...sshEvents.connectFailed({
 					source: 'saved-entry',
 					connection: { host: 'dev.tailnet.ts.net' },
 					error: { name: 'Error', message: 'connection refused' },
@@ -80,7 +85,7 @@ void test('prompt preserves personal diagnostic tokens but omits private key blo
 		startedAtMs: 100,
 		events: [
 			{
-				...diagnosticEvents.manualDiagnosticFailed({
+				...manualDiagnosticEvents.failed({
 					source: 'manual-diagnostic',
 					error: {
 						name: 'Error',
@@ -116,7 +121,7 @@ void test('prompt selects the richest later connection identity', () => {
 		finishedAtMs: 180,
 		events: [
 			{
-				...diagnosticEvents.savedEntrySelected({
+				...savedEntryEvents.selected({
 					source: 'saved-entry',
 					connection: {
 						savedConnectionId: 'saved-22',
@@ -129,7 +134,7 @@ void test('prompt selects the richest later connection identity', () => {
 				elapsedMs: 0,
 			},
 			{
-				...diagnosticEvents.savedEntrySelected({
+				...savedEntryEvents.selected({
 					source: 'active-connection',
 					connection: {
 						savedConnectionId: 'saved-22',
@@ -173,7 +178,7 @@ void test('prompt renders event-specific typed diagnostic fields', () => {
 		startedAtMs: 1000,
 		events: [
 			{
-				...diagnosticEvents.manualDiagnosticTimeout({
+				...manualDiagnosticEvents.timeout({
 					message: 'Diagnostic timed out',
 					timeoutMs: 15000,
 				}),
@@ -181,7 +186,7 @@ void test('prompt renders event-specific typed diagnostic fields', () => {
 				elapsedMs: 10,
 			},
 			{
-				...diagnosticEvents.sshShellConnected({
+				...sshEvents.shellConnected({
 					source: 'saved-entry',
 					connection: baseConnection,
 					channelId: 7,
@@ -191,7 +196,7 @@ void test('prompt renders event-specific typed diagnostic fields', () => {
 				elapsedMs: 20,
 			},
 			{
-				...diagnosticEvents.sshShellTmuxAttachFailed({
+				...sshEvents.shellTmuxAttachFailed({
 					source: 'saved-entry',
 					connection: baseConnection,
 					error: { name: 'TmuxError', message: 'attach failed' },
@@ -202,7 +207,7 @@ void test('prompt renders event-specific typed diagnostic fields', () => {
 				elapsedMs: 30,
 			},
 			{
-				...diagnosticEvents.tailscaleEnsureReadyResult({
+				...tailscaleDiagnosticEvents.ensureReadyResult({
 					source: 'manual-diagnostic',
 					platformOS: 'android',
 					readiness: {
@@ -215,7 +220,7 @@ void test('prompt renders event-specific typed diagnostic fields', () => {
 				elapsedMs: 40,
 			},
 			{
-				...diagnosticEvents.tailscaleRecoveryResult({
+				...tailscaleDiagnosticEvents.recoveryResult({
 					source: 'tailscale-recovery',
 					recoveryResult: {
 						kind: 'recovered',
@@ -228,7 +233,7 @@ void test('prompt renders event-specific typed diagnostic fields', () => {
 				elapsedMs: 50,
 			},
 			{
-				...diagnosticEvents.autoConnectSavedEntryConnectConnected({
+				...autoConnectEvents.savedEntryConnectConnected({
 					source: 'saved-entry',
 					connection: baseConnection,
 					connectionId: 'saved-entry-1',
@@ -239,7 +244,7 @@ void test('prompt renders event-specific typed diagnostic fields', () => {
 				elapsedMs: 60,
 			},
 			{
-				...diagnosticEvents.autoConnectActiveConnectionTmuxAttachFailed({
+				...autoConnectEvents.activeConnectionTmuxAttachFailed({
 					source: 'active-connection',
 					connection: baseConnection,
 					error: { name: 'TmuxError', message: 'active attach failed' },
@@ -276,4 +281,174 @@ void test('prompt renders event-specific typed diagnostic fields', () => {
 		);
 	}
 	assert.doesNotMatch(prompt, /undefined/);
+});
+
+void test('prompt renders fields through domain formatters', () => {
+	const trace: ConnectionDiagnosticTrace = {
+		id: 'trace-domain-formatters',
+		trigger: 'manual-diagnostic',
+		reason: 'domain formatter fields',
+		status: 'connected',
+		startedAtMs: 100,
+		events: [
+			{
+				...autoConnectEvents.savedEntryConnectConnected({
+					source: 'saved-entry',
+					connection: { savedConnectionId: 'saved-1' },
+					connectionId: 'connection-1',
+					channelId: 9,
+					storedConnectionId: 'stored-1',
+				}),
+				atMs: 110,
+				elapsedMs: 10,
+			},
+			{
+				...tailscaleDiagnosticEvents.recoveryResult({
+					source: 'tailscale-recovery',
+					recoveryResult: {
+						kind: 'recovered',
+						attempted: true,
+						networkLikeFailure: true,
+						available: true,
+					},
+				}),
+				atMs: 120,
+				elapsedMs: 20,
+			},
+		],
+	};
+
+	const prompt = formatConnectionDiagnosticPrompt(trace);
+
+	assert.match(prompt, /auto-connect.saved-entry.connect.connected/);
+	assert.match(prompt, /connectionId=connection-1/);
+	assert.match(prompt, /channelId=9/);
+	assert.match(prompt, /storedConnectionId=stored-1/);
+	assert.match(prompt, /tailscale.recovery.result/);
+	assert.match(prompt, /recoveryResult=/);
+});
+
+void test('prompt renders saved-entry and reconnect domain fields', () => {
+	const trace: ConnectionDiagnosticTrace = {
+		id: 'trace-saved-entry-reconnect-formatters',
+		trigger: 'reconnect',
+		reason: 'formatter coverage',
+		status: 'failed',
+		startedAtMs: 2000,
+		events: [
+			{
+				...savedEntryEvents.invalidTmuxSettings({
+					source: 'saved-entry',
+					connection: { savedConnectionId: 'saved-1' },
+					useTmuxType: 'string',
+					tmuxSessionNameType: 'number',
+				}),
+				atMs: 2010,
+				elapsedMs: 10,
+			},
+			{
+				...reconnectEvents.started({
+					source: 'reconnect-controller',
+					reason: 'network down',
+					windowMs: 30000,
+				}),
+				atMs: 2020,
+				elapsedMs: 20,
+			},
+			{
+				...reconnectEvents.startBlocked({
+					source: 'reconnect-controller',
+					reason: 'already running',
+					isAutoConnecting: true,
+					isReconnecting: false,
+					resetInFlight: true,
+				}),
+				atMs: 2030,
+				elapsedMs: 30,
+			},
+			{
+				...reconnectEvents.stopped({
+					source: 'reconnect-controller',
+					reason: 'manual stop',
+				}),
+				atMs: 2035,
+				elapsedMs: 35,
+			},
+			{
+				...reconnectEvents.retryScheduled({
+					source: 'reconnect-controller',
+					attemptIndex: 2,
+					delayMs: 1500,
+				}),
+				atMs: 2040,
+				elapsedMs: 40,
+			},
+			{
+				...reconnectEvents.attemptFailed({
+					source: 'reconnect-controller',
+					reconnectElapsedMs: 4200,
+				}),
+				atMs: 2050,
+				elapsedMs: 50,
+			},
+			{
+				...reconnectEvents.timeout({
+					source: 'reconnect-controller',
+					reconnectElapsedMs: 30000,
+					windowMs: 30000,
+				}),
+				atMs: 2060,
+				elapsedMs: 60,
+			},
+		],
+	};
+
+	const prompt = formatConnectionDiagnosticPrompt(trace);
+
+	for (const expected of [
+		'useTmuxType=string',
+		'tmuxSessionNameType=number',
+		'reason=network down',
+		'windowMs=30000',
+		'reason=already running',
+		'isAutoConnecting=true',
+		'isReconnecting=false',
+		'resetInFlight=true',
+		'reason=manual stop',
+		'attemptIndex=2',
+		'delayMs=1500',
+		'reconnectElapsedMs=4200',
+		'reconnectElapsedMs=30000',
+	]) {
+		assert.match(
+			prompt,
+			new RegExp(expected.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
+		);
+	}
+});
+
+void test('prompt does not render generic details fields', () => {
+	const trace: ConnectionDiagnosticTrace = {
+		id: 'trace-no-generic-details',
+		trigger: 'manual-diagnostic',
+		reason: 'typed fields only',
+		status: 'skipped',
+		startedAtMs: 100,
+		events: [
+			{
+				...savedEntryEvents.missing({
+					source: 'manual-diagnostic',
+					message: 'No saved entry',
+				}),
+				details: { legacyType: 'saved-entry.missing' },
+				atMs: 100,
+				elapsedMs: 0,
+			} as ConnectionDiagnosticTrace['events'][number],
+		],
+	};
+
+	const prompt = formatConnectionDiagnosticPrompt(trace);
+
+	assert.doesNotMatch(prompt, /details=/);
+	assert.doesNotMatch(prompt, /legacyType/);
 });

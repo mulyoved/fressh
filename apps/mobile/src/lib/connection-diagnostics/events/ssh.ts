@@ -1,5 +1,8 @@
 import { copyConnectionIdentity } from './identity';
-import { serializeConnectionDiagnosticError } from './snapshot';
+import {
+	safeDiagnosticString,
+	serializeConnectionDiagnosticError,
+} from './snapshot';
 import {
 	type ConnectionDiagnosticConnectionIdentity,
 	type ConnectionDiagnosticError,
@@ -93,14 +96,12 @@ export const sshDiagnosticEventKinds = [
 	'ssh.diagnostic.disconnect-failed',
 ] as const satisfies readonly SshDiagnosticEvent['kind'][];
 
-const withSource = <T extends SshDiagnosticEvent>(event: T): T => event;
-
 export const sshEvents = {
 	connectStarted: (input: {
 		source: ConnectionDiagnosticSource;
 		connection: ConnectionDiagnosticConnectionIdentity;
 	}): SshConnectStartedEvent =>
-		withSource({
+		({
 			kind: 'ssh.connect.started',
 			source: input.source,
 			connection: copyConnectionIdentity(input.connection),
@@ -111,7 +112,7 @@ export const sshEvents = {
 		phase?: string;
 		message?: string;
 	}): SshConnectProgressEvent =>
-		withSource({
+		({
 			kind: 'ssh.connect.progress',
 			source: input.source,
 			...(input.message === undefined ? {} : { message: input.message }),
@@ -123,7 +124,7 @@ export const sshEvents = {
 		connection: ConnectionDiagnosticConnectionIdentity;
 		storedConnectionId: string;
 	}): SshConnectConnectedEvent =>
-		withSource({
+		({
 			kind: 'ssh.connect.connected',
 			source: input.source,
 			connection: copyConnectionIdentity(input.connection),
@@ -134,7 +135,7 @@ export const sshEvents = {
 		connection: ConnectionDiagnosticConnectionIdentity;
 		error: unknown;
 	}): SshConnectFailedEvent =>
-		withSource({
+		({
 			kind: 'ssh.connect.failed',
 			source: input.source,
 			connection: copyConnectionIdentity(input.connection),
@@ -144,7 +145,7 @@ export const sshEvents = {
 		source: ConnectionDiagnosticSource;
 		connection: ConnectionDiagnosticConnectionIdentity;
 	}): SshShellStartedEvent =>
-		withSource({
+		({
 			kind: 'ssh.shell.started',
 			source: input.source,
 			connection: copyConnectionIdentity(input.connection),
@@ -155,7 +156,7 @@ export const sshEvents = {
 		channelId: number;
 		storedConnectionId: string;
 	}): SshShellConnectedEvent =>
-		withSource({
+		({
 			kind: 'ssh.shell.connected',
 			source: input.source,
 			connection: copyConnectionIdentity(input.connection),
@@ -168,7 +169,7 @@ export const sshEvents = {
 		error: unknown;
 		storedConnectionId: string;
 	}): SshShellFailedEvent =>
-		withSource({
+		({
 			kind: 'ssh.shell.failed',
 			source: input.source,
 			connection: copyConnectionIdentity(input.connection),
@@ -182,7 +183,7 @@ export const sshEvents = {
 		tmuxAttachFailureReason: string | null;
 		storedConnectionId: string;
 	}): SshShellTmuxAttachFailedEvent =>
-		withSource({
+		({
 			kind: 'ssh.shell.tmux-attach-failed',
 			source: input.source,
 			connection: copyConnectionIdentity(input.connection),
@@ -195,7 +196,7 @@ export const sshEvents = {
 		connection: ConnectionDiagnosticConnectionIdentity;
 		message?: string;
 	}): DiagnosticDisconnectedEvent =>
-		withSource({
+		({
 			kind: 'ssh.diagnostic.disconnected',
 			source: input.source,
 			message: input.message,
@@ -207,7 +208,7 @@ export const sshEvents = {
 		error: unknown;
 		message?: string;
 	}): DiagnosticDisconnectFailedEvent =>
-		withSource({
+		({
 			kind: 'ssh.diagnostic.disconnect-failed',
 			source: input.source,
 			message: input.message,
@@ -215,3 +216,40 @@ export const sshEvents = {
 			error: serializeConnectionDiagnosticError(input.error),
 		}),
 } as const;
+
+export function formatSshEventFields(event: SshDiagnosticEvent): string[] {
+	switch (event.kind) {
+		case 'ssh.connect.progress':
+			return event.phase ? [`phase=${safeDiagnosticString(event.phase)}`] : [];
+		case 'ssh.connect.connected':
+			return [
+				`storedConnectionId=${safeDiagnosticString(event.storedConnectionId)}`,
+			];
+		case 'ssh.shell.connected':
+			return [
+				`channelId=${event.channelId}`,
+				`storedConnectionId=${safeDiagnosticString(event.storedConnectionId)}`,
+			];
+		case 'ssh.shell.failed':
+			return [
+				`storedConnectionId=${safeDiagnosticString(event.storedConnectionId)}`,
+			];
+		case 'ssh.shell.tmux-attach-failed':
+			return [
+				`tmuxAttachFailureReason=${
+					event.tmuxAttachFailureReason === null
+						? 'unknown'
+						: safeDiagnosticString(event.tmuxAttachFailureReason)
+				}`,
+				`storedConnectionId=${safeDiagnosticString(event.storedConnectionId)}`,
+			];
+		case 'ssh.connect.started':
+		case 'ssh.connect.failed':
+		case 'ssh.shell.started':
+		case 'ssh.diagnostic.disconnected':
+		case 'ssh.diagnostic.disconnect-failed':
+			return [];
+	}
+	const unreachable: never = event;
+	return unreachable;
+}

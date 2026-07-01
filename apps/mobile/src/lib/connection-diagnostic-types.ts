@@ -1,85 +1,22 @@
-import { type ConnectionDiagnosticEvent as TypedConnectionDiagnosticEvent } from './connection-diagnostic-events';
+import {
+	type ConnectionDiagnosticEvent,
+	type ConnectionDiagnosticStatus,
+	type ConnectionDiagnosticTrace,
+	type ConnectionDiagnosticTraceHandleOf,
+} from './connection-diagnostics/events';
 
-export type ConnectionDiagnosticTrigger =
-	| 'initial-auto-connect'
-	| 'reconnect'
-	| 'manual-diagnostic'
-	| 'command-menu';
+export type * from './connection-diagnostics/events';
+export type {
+	ActiveConnectionEvent,
+	SavedEntryConnectEvent,
+} from './connection-diagnostic-events';
 
-export type ConnectionDiagnosticStatus =
-	| 'running'
-	| 'failed'
-	| 'connected'
-	| 'skipped';
-
-export type ConnectionDiagnosticSource =
-	| 'latest-shell'
-	| 'active-connection'
-	| 'saved-entry'
-	| 'tailscale-recovery'
-	| 'reconnect-controller'
-	| 'manual-diagnostic'
-	| 'foreground-service'
-	| 'command-menu';
-
-export type ConnectionDiagnosticConnectionIdentity = {
-	savedConnectionId?: string;
-	connectionId?: string;
-	username?: string;
-	host?: string;
-	port?: number;
-	keyId?: string;
-	useTmux?: boolean;
-	tmuxSessionName?: string;
-};
-
-export type ConnectionDiagnosticError = {
-	name: string;
-	message: string;
-	stack?: string;
-	tag?: string;
-	inner?: unknown;
-};
-
-export type ConnectionDiagnosticTimedEvent = TypedConnectionDiagnosticEvent & {
-	atMs: number;
-	elapsedMs: number;
-};
-
-export type ConnectionDiagnosticTrace = {
-	id: string;
-	trigger: ConnectionDiagnosticTrigger;
-	reason: string;
-	status: ConnectionDiagnosticStatus;
-	startedAtMs: number;
-	finishedAtMs?: number;
-	events: ConnectionDiagnosticTimedEvent[];
-};
-
-export type ConnectionDiagnosticTraceHandle = {
-	readonly trace: ConnectionDiagnosticTrace;
-	event: (
-		input: TypedConnectionDiagnosticEvent,
-	) => ConnectionDiagnosticTimedEvent;
-	finish: (status: Exclude<ConnectionDiagnosticStatus, 'running'>) => void;
-};
-
-export type ConnectionDiagnosticEvent = TypedConnectionDiagnosticEvent;
-
-export type ConnectionDiagnosticAppState = {
-	platformOS: string;
-	pathname?: string;
-	isAutoConnecting: boolean;
-	isReconnecting: boolean;
-	foregroundServiceStarted?: boolean;
-	backgroundWorkAllowed?: boolean;
-	foregroundServiceRequired?: boolean;
-	appActive?: boolean;
-};
+export type ConnectionDiagnosticTraceHandle =
+	ConnectionDiagnosticTraceHandleOf<ConnectionDiagnosticEvent>;
 
 export type ConnectionDiagnosticRecorder = {
 	startTrace: (input: {
-		trigger: ConnectionDiagnosticTrigger;
+		trigger: ConnectionDiagnosticTrace['trigger'];
 		reason: string;
 	}) => ConnectionDiagnosticTraceHandle;
 	getLatestTrace: () => ConnectionDiagnosticTrace | null;
@@ -87,11 +24,7 @@ export type ConnectionDiagnosticRecorder = {
 	clear: () => void;
 };
 
-export type ConnectionDiagnosticRecorderOptions = {
-	now?: () => number;
-	maxHistory?: number;
-};
-
-export type ConnectionDiagnosticPromptOptions = {
-	appState?: ConnectionDiagnosticAppState;
-};
+export type ConnectionDiagnosticFinishedStatus = Exclude<
+	ConnectionDiagnosticStatus,
+	'running'
+>;

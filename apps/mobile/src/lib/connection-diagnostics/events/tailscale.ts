@@ -2,6 +2,8 @@ import {
 	type TailscaleReadyResult,
 	type TailscaleRecoverAfterFailureResult,
 } from '../../tailscale-recovery-core';
+import { formatDiagnosticJsonInline } from './prompt-format';
+import { safeDiagnosticString } from './snapshot';
 import {
 	type ConnectionDiagnosticEventBase,
 	type ConnectionDiagnosticSource,
@@ -26,8 +28,6 @@ export const tailscaleDiagnosticEventKinds = [
 	'tailscale.ensure-ready.result',
 	'tailscale.recovery.result',
 ] as const satisfies readonly TailscaleDiagnosticEvent['kind'][];
-
-const withSource = <T extends TailscaleDiagnosticEvent>(event: T): T => event;
 
 function copyTailscaleReadyResult(
 	readiness: TailscaleReadyResult,
@@ -146,7 +146,7 @@ export const tailscaleDiagnosticEvents = {
 		readiness: TailscaleReadyResult;
 		message?: string;
 	}): TailscaleEnsureReadyEvent =>
-		withSource({
+		({
 			kind: 'tailscale.ensure-ready.result',
 			source: input.source,
 			message: input.message,
@@ -158,7 +158,7 @@ export const tailscaleDiagnosticEvents = {
 		recoveryResult: TailscaleRecoverAfterFailureResult;
 		message?: string;
 	}): TailscaleRecoveryResultEvent =>
-		withSource({
+		({
 			kind: 'tailscale.recovery.result',
 			source: input.source,
 			message: input.message,
@@ -167,3 +167,21 @@ export const tailscaleDiagnosticEvents = {
 			),
 		}),
 } as const;
+
+export function formatTailscaleDiagnosticEventFields(
+	event: TailscaleDiagnosticEvent,
+): string[] {
+	switch (event.kind) {
+		case 'tailscale.ensure-ready.result':
+			return [
+				`platformOS=${safeDiagnosticString(event.platformOS)}`,
+				`readiness=${formatDiagnosticJsonInline(event.readiness)}`,
+			];
+		case 'tailscale.recovery.result':
+			return [
+				`recoveryResult=${formatDiagnosticJsonInline(event.recoveryResult)}`,
+			];
+	}
+	const unreachable: never = event;
+	return unreachable;
+}

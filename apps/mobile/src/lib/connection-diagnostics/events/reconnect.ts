@@ -1,3 +1,4 @@
+import { safeDiagnosticString } from './snapshot';
 import {
 	type ConnectionDiagnosticEventBase,
 	type ConnectionDiagnosticSource,
@@ -70,8 +71,6 @@ export const reconnectEventKinds = [
 	'reconnect.timeout',
 ] as const satisfies readonly ReconnectEvent['kind'][];
 
-const withSource = <T extends ReconnectEvent>(event: T): T => event;
-
 export const reconnectEvents = {
 	started: (input: {
 		source: ConnectionDiagnosticSource;
@@ -79,7 +78,7 @@ export const reconnectEvents = {
 		windowMs: number;
 		message?: string;
 	}): ReconnectStartedEvent =>
-		withSource({
+		({
 			kind: 'reconnect.started',
 			source: input.source,
 			message: input.message,
@@ -91,7 +90,7 @@ export const reconnectEvents = {
 		reason: string;
 		message?: string;
 	}): ReconnectStoppedEvent =>
-		withSource({
+		({
 			kind: 'reconnect.stopped',
 			source: input.source,
 			message: input.message,
@@ -105,7 +104,7 @@ export const reconnectEvents = {
 		resetInFlight?: boolean;
 		message?: string;
 	}): ReconnectStartBlockedEvent =>
-		withSource({
+		({
 			kind: 'reconnect.start.blocked',
 			source: input.source,
 			message: input.message,
@@ -120,7 +119,7 @@ export const reconnectEvents = {
 		delayMs: number;
 		message?: string;
 	}): ReconnectRetryScheduledEvent =>
-		withSource({
+		({
 			kind: 'reconnect.retry.scheduled',
 			source: input.source,
 			message: input.message,
@@ -132,7 +131,7 @@ export const reconnectEvents = {
 		reconnectElapsedMs: number;
 		message?: string;
 	}): ReconnectAttemptStartedEvent =>
-		withSource({
+		({
 			kind: 'reconnect.attempt.started',
 			source: input.source,
 			message: input.message,
@@ -143,7 +142,7 @@ export const reconnectEvents = {
 		reconnectElapsedMs: number;
 		message?: string;
 	}): ReconnectAttemptConnectedEvent =>
-		withSource({
+		({
 			kind: 'reconnect.attempt.connected',
 			source: input.source,
 			message: input.message,
@@ -154,7 +153,7 @@ export const reconnectEvents = {
 		reconnectElapsedMs: number;
 		message?: string;
 	}): ReconnectAttemptFailedEvent =>
-		withSource({
+		({
 			kind: 'reconnect.attempt.failed',
 			source: input.source,
 			message: input.message,
@@ -166,7 +165,7 @@ export const reconnectEvents = {
 		windowMs: number;
 		message?: string;
 	}): ReconnectTimeoutEvent =>
-		withSource({
+		({
 			kind: 'reconnect.timeout',
 			source: input.source,
 			message: input.message,
@@ -174,3 +173,41 @@ export const reconnectEvents = {
 			windowMs: input.windowMs,
 		}),
 } as const;
+
+export function formatReconnectEventFields(event: ReconnectEvent): string[] {
+	switch (event.kind) {
+		case 'reconnect.started':
+			return [
+				`reason=${safeDiagnosticString(event.reason)}`,
+				`windowMs=${event.windowMs}`,
+			];
+		case 'reconnect.stopped':
+			return [`reason=${safeDiagnosticString(event.reason)}`];
+		case 'reconnect.start.blocked':
+			return [
+				`reason=${safeDiagnosticString(event.reason)}`,
+				...(typeof event.isAutoConnecting === 'boolean'
+					? [`isAutoConnecting=${String(event.isAutoConnecting)}`]
+					: []),
+				...(typeof event.isReconnecting === 'boolean'
+					? [`isReconnecting=${String(event.isReconnecting)}`]
+					: []),
+				...(typeof event.resetInFlight === 'boolean'
+					? [`resetInFlight=${String(event.resetInFlight)}`]
+					: []),
+			];
+		case 'reconnect.retry.scheduled':
+			return [`attemptIndex=${event.attemptIndex}`, `delayMs=${event.delayMs}`];
+		case 'reconnect.attempt.started':
+		case 'reconnect.attempt.connected':
+		case 'reconnect.attempt.failed':
+			return [`reconnectElapsedMs=${event.reconnectElapsedMs}`];
+		case 'reconnect.timeout':
+			return [
+				`reconnectElapsedMs=${event.reconnectElapsedMs}`,
+				`windowMs=${event.windowMs}`,
+			];
+	}
+	const unreachable: never = event;
+	return unreachable;
+}

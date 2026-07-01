@@ -1,57 +1,15 @@
-import { normalizeLegacyTraceForPrompt } from './connection-diagnostic-normalization';
 import {
-	cloneDiagnosticValue,
+	formatConnectionDiagnosticEventFields,
+	formatConnectionIdentity,
+	formatDiagnosticJsonInline,
 	normalizeConnectionIdentity,
 	omitPrivateKeyMaterial,
 	safeDiagnosticString,
-} from './connection-diagnostic-redaction';
-import {
 	type ConnectionDiagnosticConnectionIdentity,
 	type ConnectionDiagnosticPromptOptions,
 	type ConnectionDiagnosticTimedEvent,
 	type ConnectionDiagnosticTrace,
-} from './connection-diagnostic-types';
-
-function formatConnectionIdentity(
-	connection: ConnectionDiagnosticConnectionIdentity | undefined,
-): string {
-	const normalizedConnection = normalizeConnectionIdentity(connection);
-	if (!normalizedConnection) return 'unknown connection';
-
-	const username = normalizedConnection.username?.trim();
-	const host = normalizedConnection.host?.trim();
-	const port = normalizedConnection.port;
-	const address =
-		username && host && typeof port === 'number'
-			? `${username}@${host}:${port}`
-			: host;
-	const parts = [
-		address ? safeDiagnosticString(address) : null,
-		normalizedConnection.savedConnectionId
-			? `savedConnectionId=${safeDiagnosticString(
-					normalizedConnection.savedConnectionId.trim(),
-				)}`
-			: null,
-		normalizedConnection.connectionId
-			? `connectionId=${safeDiagnosticString(
-					normalizedConnection.connectionId.trim(),
-				)}`
-			: null,
-		typeof normalizedConnection.useTmux === 'boolean'
-			? `useTmux=${String(normalizedConnection.useTmux)}`
-			: null,
-		normalizedConnection.tmuxSessionName
-			? `tmuxSessionName=${safeDiagnosticString(
-					normalizedConnection.tmuxSessionName.trim(),
-				)}`
-			: null,
-		normalizedConnection.keyId
-			? `keyId=${safeDiagnosticString(normalizedConnection.keyId.trim())}`
-			: null,
-	];
-
-	return parts.filter(Boolean).join(' | ') || 'unknown connection';
-}
+} from './connection-diagnostics/events';
 
 function readConnection(
 	event: ConnectionDiagnosticTimedEvent,
@@ -71,17 +29,6 @@ function readError(event: ConnectionDiagnosticTimedEvent):
 	  }
 	| undefined {
 	return 'error' in event ? event.error : undefined;
-}
-
-function readDetails(event: ConnectionDiagnosticTimedEvent): unknown {
-	return 'details' in event ? event.details : undefined;
-}
-
-function formatJsonInline(value: unknown): string {
-	return JSON.stringify(cloneDiagnosticValue(value), null, 2).replace(
-		/\n/g,
-		' ',
-	);
 }
 
 function findPrimaryConnectionIdentity(
@@ -129,7 +76,7 @@ function formatError(event: ConnectionDiagnosticTimedEvent): string | null {
 			? `errorStack=${safeDiagnosticString(error.stack).replace(/\n/g, ' ')}`
 			: null,
 		error.inner !== undefined
-			? `errorInner=${formatJsonInline(error.inner)}`
+			? `errorInner=${formatDiagnosticJsonInline(error.inner)}`
 			: null,
 	];
 
@@ -137,97 +84,11 @@ function formatError(event: ConnectionDiagnosticTimedEvent): string | null {
 }
 
 function formatEventSpecifics(event: ConnectionDiagnosticTimedEvent): string[] {
-	switch (event.kind) {
-		case 'manual-diagnostic.timeout':
-			return [`timeoutMs=${event.timeoutMs}`];
-		case 'ssh.shell.connected':
-			return [
-				`channelId=${event.channelId}`,
-				`storedConnectionId=${event.storedConnectionId}`,
-			];
-		case 'ssh.connect.connected':
-			return [`storedConnectionId=${event.storedConnectionId}`];
-		case 'ssh.shell.tmux-attach-failed':
-			return [
-				`tmuxAttachFailureReason=${event.tmuxAttachFailureReason ?? 'unknown'}`,
-				`storedConnectionId=${event.storedConnectionId}`,
-			];
-		case 'ssh.shell.failed':
-			return [`storedConnectionId=${event.storedConnectionId}`];
-		case 'tailscale.ensure-ready.result':
-			return [
-				`platformOS=${event.platformOS}`,
-				`readiness=${formatJsonInline(event.readiness)}`,
-			];
-		case 'tailscale.recovery.result':
-			return [`recoveryResult=${formatJsonInline(event.recoveryResult)}`];
-		case 'auto-connect.latest-shell.selected':
-			return [
-				...(typeof event.channelId === 'number'
-					? [`channelId=${event.channelId}`]
-					: []),
-				...(event.pathname
-					? [`pathname=${safeDiagnosticString(event.pathname)}`]
-					: []),
-			];
-		case 'auto-connect.latest-shell.missing':
-			return [`pathname=${safeDiagnosticString(event.pathname)}`];
-		case 'auto-connect.active-connection.shell-connected':
-			return [
-				`channelId=${event.channelId}`,
-				...(event.pathname
-					? [`pathname=${safeDiagnosticString(event.pathname)}`]
-					: []),
-			];
-		case 'auto-connect.active-connection.shell-failed':
-			return event.tmuxSessionName
-				? [`tmuxSessionName=${safeDiagnosticString(event.tmuxSessionName)}`]
-				: [];
-		case 'auto-connect.active-connection.tmux-attach-failed':
-			return [
-				`tmuxAttachFailureReason=${event.tmuxAttachFailureReason ?? 'unknown'}`,
-				`tmuxSessionName=${safeDiagnosticString(event.tmuxSessionName)}`,
-			];
-		case 'auto-connect.saved-entry.connect.connected':
-			return [
-				`connectionId=${safeDiagnosticString(event.connectionId)}`,
-				`channelId=${event.channelId}`,
-				...(event.storedConnectionId
-					? [
-							`storedConnectionId=${safeDiagnosticString(
-								event.storedConnectionId,
-							)}`,
-						]
-					: []),
-			];
-		case 'auto-connect.saved-entry.connect.failed':
-			return [
-				...(event.connectionId
-					? [`connectionId=${safeDiagnosticString(event.connectionId)}`]
-					: []),
-				...(event.storedConnectionId
-					? [
-							`storedConnectionId=${safeDiagnosticString(
-								event.storedConnectionId,
-							)}`,
-						]
-					: []),
-			];
-		case 'auto-connect.saved-entry.connect.tmux-attach-failed':
-			return [
-				`connectionId=${safeDiagnosticString(event.connectionId)}`,
-				`tmuxAttachFailureReason=${event.tmuxAttachFailureReason ?? 'unknown'}`,
-				`tmuxSessionName=${safeDiagnosticString(event.tmuxSessionName)}`,
-				`storedConnectionId=${safeDiagnosticString(event.storedConnectionId)}`,
-			];
-		default:
-			return [];
-	}
+	return formatConnectionDiagnosticEventFields(event);
 }
 
 function formatEvent(event: ConnectionDiagnosticTimedEvent): string {
 	const error = formatError(event);
-	const details = readDetails(event);
 	const connection = readConnection(event);
 	const parts = [
 		`- +${event.elapsedMs}ms ${event.kind}`,
@@ -238,7 +99,6 @@ function formatEvent(event: ConnectionDiagnosticTimedEvent): string {
 		connection ? `connection=${formatConnectionIdentity(connection)}` : null,
 		error,
 		...formatEventSpecifics(event),
-		details !== undefined ? `details=${formatJsonInline(details)}` : null,
 	];
 
 	return omitPrivateKeyMaterial(parts.filter(Boolean).join(' | '));
@@ -285,22 +145,21 @@ export function formatConnectionDiagnosticPrompt(
 	options: ConnectionDiagnosticPromptOptions = {},
 ): string {
 	try {
-		const safeTrace = normalizeLegacyTraceForPrompt(trace);
 		const appState = formatAppState(options);
-		const connection = findPrimaryConnectionIdentity(safeTrace);
-		const failure = [...safeTrace.events]
+		const connection = findPrimaryConnectionIdentity(trace);
+		const failure = [...trace.events]
 			.reverse()
 			.find((event) => readError(event) || event.kind.includes('failed'));
 		const lines = [
 			'Debug this Fressh mobile SSH connection failure.',
 			'',
 			'Trace:',
-			`- traceId: ${safeDiagnosticString(safeTrace.id)}`,
-			`- trigger: ${safeTrace.trigger}`,
-			`- reason: ${safeDiagnosticString(safeTrace.reason)}`,
-			`- status: ${safeTrace.status}`,
-			`- startedAtMs: ${safeTrace.startedAtMs}`,
-			`- finishedAtMs: ${safeTrace.finishedAtMs ?? 'not-finished'}`,
+			`- traceId: ${safeDiagnosticString(trace.id)}`,
+			`- trigger: ${trace.trigger}`,
+			`- reason: ${safeDiagnosticString(trace.reason)}`,
+			`- status: ${trace.status}`,
+			`- startedAtMs: ${trace.startedAtMs}`,
+			`- finishedAtMs: ${trace.finishedAtMs ?? 'not-finished'}`,
 			'',
 			`Selected connection: ${formatConnectionIdentity(connection)}`,
 			'',
@@ -310,7 +169,7 @@ export function formatConnectionDiagnosticPrompt(
 			failure ? formatEvent(failure) : '- no failure event recorded',
 			'',
 			'Timeline:',
-			...safeTrace.events.map((event) => formatEvent(event)),
+			...trace.events.map((event) => formatEvent(event)),
 			'',
 			'Private key material has been omitted from this diagnostic trace.',
 			'Please explain the most likely failure point, the evidence from the trace, and the next debugging steps.',

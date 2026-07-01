@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
 	createConnectionDiagnosticRecorder,
-	diagnosticEvents,
+	manualDiagnosticEvents,
+	savedEntryEvents,
+	sshEvents,
 } from '../../src/lib/connection-diagnostics';
 
 void test('recorder timestamps typed events and keeps bounded history', () => {
@@ -18,7 +20,7 @@ void test('recorder timestamps typed events and keeps bounded history', () => {
 	});
 	now = 125;
 	first.event(
-		diagnosticEvents.savedEntryMissing({
+		savedEntryEvents.missing({
 			source: 'manual-diagnostic',
 			message: 'No saved entry',
 		}),
@@ -32,7 +34,7 @@ void test('recorder timestamps typed events and keeps bounded history', () => {
 	});
 	now = 175;
 	second.event(
-		diagnosticEvents.savedEntrySelected({
+		savedEntryEvents.selected({
 			source: 'manual-diagnostic',
 			connection: { savedConnectionId: 'saved-2' },
 		}),
@@ -54,7 +56,7 @@ void test('recorder snapshots typed events without broad secret redaction', () =
 	});
 
 	const event = trace.event(
-		diagnosticEvents.sshConnectFailed({
+		sshEvents.connectFailed({
 			source: 'saved-entry',
 			connection: { host: 'dev.tailnet.ts.net' },
 			error: {
@@ -90,7 +92,7 @@ void test('recorder omits nested private key blocks in stored snapshots', () => 
 	});
 
 	trace.event(
-		diagnosticEvents.sshConnectFailed({
+		sshEvents.connectFailed({
 			source: 'saved-entry',
 			connection: { host: 'dev.tailnet.ts.net' },
 			error: {
@@ -157,7 +159,7 @@ void test('recorder serialization does not invoke hostile coercion hooks', () =>
 		reason: 'hostile coercion hooks',
 	});
 	trace.event(
-		diagnosticEvents.manualDiagnosticWarning({
+		manualDiagnosticEvents.warning({
 			source: 'manual-diagnostic',
 			message: 'hostile details',
 			error: {
@@ -182,6 +184,30 @@ void test('recorder serialization does not invoke hostile coercion hooks', () =>
 	assert.equal(coercionCalls, 0);
 	assert.doesNotMatch(JSON.stringify(latestEvent), /hostile toString/);
 	assert.doesNotMatch(JSON.stringify(latestEvent), /HostileTag/);
+});
+
+void test('recorder stores typed events without legacy normalization', () => {
+	let now = 1000;
+	const recorder = createConnectionDiagnosticRecorder({ now: () => now });
+	const trace = recorder.startTrace({
+		trigger: 'manual-diagnostic',
+		reason: 'typed events only',
+	});
+
+	now = 1030;
+	const event = trace.event(
+		savedEntryEvents.missing({
+			source: 'manual-diagnostic',
+			message: 'No saved entry',
+		}),
+	);
+	trace.finish('skipped');
+
+	assert.equal(event.kind, 'saved-entry.missing');
+	assert.equal(event.elapsedMs, 30);
+	assert.equal('type' in event, false);
+	assert.equal('details' in event, false);
+	assert.deepEqual(recorder.getHistory()[0]?.events, [event]);
 });
 
 void test('recorder falls back when readable kind cannot be safely cloned', () => {

@@ -2,7 +2,10 @@ import {
 	copyConnectionIdentity,
 	copyOptionalConnectionIdentity,
 } from './identity';
-import { serializeConnectionDiagnosticError } from './snapshot';
+import {
+	safeDiagnosticString,
+	serializeConnectionDiagnosticError,
+} from './snapshot';
 import {
 	type ConnectionDiagnosticConnectionIdentity,
 	type ConnectionDiagnosticError,
@@ -154,8 +157,6 @@ export const autoConnectEventKinds = [
 	'auto-connect.saved-entry.retry.threw',
 ] as const satisfies readonly AutoConnectEvent['kind'][];
 
-const withSource = <T extends AutoConnectEvent>(event: T): T => event;
-
 export const autoConnectEvents = {
 	latestShellSelected: (input: {
 		source: ConnectionDiagnosticSource;
@@ -164,7 +165,7 @@ export const autoConnectEvents = {
 		pathname: string;
 		message?: string;
 	}): AutoConnectLatestShellSelectedEvent =>
-		withSource({
+		({
 			kind: 'auto-connect.latest-shell.selected',
 			source: input.source,
 			message: input.message,
@@ -177,7 +178,7 @@ export const autoConnectEvents = {
 		pathname: string;
 		message?: string;
 	}): AutoConnectLatestShellMissingEvent =>
-		withSource({
+		({
 			kind: 'auto-connect.latest-shell.missing',
 			source: input.source,
 			message: input.message,
@@ -188,7 +189,7 @@ export const autoConnectEvents = {
 		connection: ConnectionDiagnosticConnectionIdentity;
 		message?: string;
 	}): AutoConnectActiveConnectionSelectedEvent =>
-		withSource({
+		({
 			kind: 'auto-connect.active-connection.selected',
 			source: input.source,
 			message: input.message,
@@ -198,7 +199,7 @@ export const autoConnectEvents = {
 		source: ConnectionDiagnosticSource;
 		message?: string;
 	}): AutoConnectActiveConnectionMissingEvent =>
-		withSource({
+		({
 			kind: 'auto-connect.active-connection.missing',
 			source: input.source,
 			message: input.message,
@@ -208,7 +209,7 @@ export const autoConnectEvents = {
 		connection: ConnectionDiagnosticConnectionIdentity;
 		message?: string;
 	}): AutoConnectActiveConnectionShellStartedEvent =>
-		withSource({
+		({
 			kind: 'auto-connect.active-connection.shell-started',
 			source: input.source,
 			message: input.message,
@@ -221,7 +222,7 @@ export const autoConnectEvents = {
 		pathname?: string;
 		message?: string;
 	}): AutoConnectActiveConnectionShellConnectedEvent =>
-		withSource({
+		({
 			kind: 'auto-connect.active-connection.shell-connected',
 			source: input.source,
 			message: input.message,
@@ -236,7 +237,7 @@ export const autoConnectEvents = {
 		tmuxSessionName?: string;
 		message?: string;
 	}): AutoConnectActiveConnectionShellFailedEvent =>
-		withSource({
+		({
 			kind: 'auto-connect.active-connection.shell-failed',
 			source: input.source,
 			message: input.message,
@@ -252,7 +253,7 @@ export const autoConnectEvents = {
 		tmuxSessionName: string;
 		message?: string;
 	}): AutoConnectActiveConnectionTmuxAttachFailedEvent =>
-		withSource({
+		({
 			kind: 'auto-connect.active-connection.tmux-attach-failed',
 			source: input.source,
 			message: input.message,
@@ -266,7 +267,7 @@ export const autoConnectEvents = {
 		connection?: ConnectionDiagnosticConnectionIdentity;
 		message?: string;
 	}): AutoConnectSavedEntryConnectStartedEvent =>
-		withSource({
+		({
 			kind: 'auto-connect.saved-entry.connect.started',
 			source: input.source,
 			message: input.message,
@@ -280,7 +281,7 @@ export const autoConnectEvents = {
 		storedConnectionId?: string;
 		message?: string;
 	}): AutoConnectSavedEntryConnectConnectedEvent =>
-		withSource({
+		({
 			kind: 'auto-connect.saved-entry.connect.connected',
 			source: input.source,
 			message: input.message,
@@ -296,7 +297,7 @@ export const autoConnectEvents = {
 		storedConnectionId?: string;
 		message?: string;
 	}): AutoConnectSavedEntryConnectFailedEvent =>
-		withSource({
+		({
 			kind: 'auto-connect.saved-entry.connect.failed',
 			source: input.source,
 			message: input.message,
@@ -310,7 +311,7 @@ export const autoConnectEvents = {
 		error: unknown;
 		message?: string;
 	}): AutoConnectSavedEntryConnectThrewEvent =>
-		withSource({
+		({
 			kind: 'auto-connect.saved-entry.connect.threw',
 			source: input.source,
 			message: input.message,
@@ -326,7 +327,7 @@ export const autoConnectEvents = {
 		storedConnectionId: string;
 		message?: string;
 	}): AutoConnectSavedEntryConnectTmuxAttachFailedEvent =>
-		withSource({
+		({
 			kind: 'auto-connect.saved-entry.connect.tmux-attach-failed',
 			source: input.source,
 			message: input.message,
@@ -341,7 +342,7 @@ export const autoConnectEvents = {
 		connection?: ConnectionDiagnosticConnectionIdentity;
 		message?: string;
 	}): AutoConnectSavedEntryRetryStartedEvent =>
-		withSource({
+		({
 			kind: 'auto-connect.saved-entry.retry.started',
 			source: input.source,
 			message: input.message,
@@ -353,7 +354,7 @@ export const autoConnectEvents = {
 		error: unknown;
 		message?: string;
 	}): AutoConnectSavedEntryRetryThrewEvent =>
-		withSource({
+		({
 			kind: 'auto-connect.saved-entry.retry.threw',
 			source: input.source,
 			message: input.message,
@@ -361,3 +362,83 @@ export const autoConnectEvents = {
 			error: serializeConnectionDiagnosticError(input.error),
 		}),
 } as const;
+
+export function formatAutoConnectEventFields(
+	event: AutoConnectEvent,
+): string[] {
+	switch (event.kind) {
+		case 'auto-connect.latest-shell.selected':
+			return [
+				`channelId=${event.channelId}`,
+				`pathname=${safeDiagnosticString(event.pathname)}`,
+			];
+		case 'auto-connect.latest-shell.missing':
+			return [`pathname=${safeDiagnosticString(event.pathname)}`];
+		case 'auto-connect.active-connection.shell-connected':
+			return [
+				`channelId=${event.channelId}`,
+				...(event.pathname
+					? [`pathname=${safeDiagnosticString(event.pathname)}`]
+					: []),
+			];
+		case 'auto-connect.active-connection.shell-failed':
+			return event.tmuxSessionName
+				? [`tmuxSessionName=${safeDiagnosticString(event.tmuxSessionName)}`]
+				: [];
+		case 'auto-connect.active-connection.tmux-attach-failed':
+			return [
+				`tmuxAttachFailureReason=${
+					event.tmuxAttachFailureReason === null
+						? 'unknown'
+						: safeDiagnosticString(event.tmuxAttachFailureReason)
+				}`,
+				`tmuxSessionName=${safeDiagnosticString(event.tmuxSessionName)}`,
+			];
+		case 'auto-connect.saved-entry.connect.connected':
+			return [
+				`connectionId=${safeDiagnosticString(event.connectionId)}`,
+				`channelId=${event.channelId}`,
+				...(event.storedConnectionId
+					? [
+							`storedConnectionId=${safeDiagnosticString(
+								event.storedConnectionId,
+							)}`,
+						]
+					: []),
+			];
+		case 'auto-connect.saved-entry.connect.failed':
+			return [
+				...(event.connectionId
+					? [`connectionId=${safeDiagnosticString(event.connectionId)}`]
+					: []),
+				...(event.storedConnectionId
+					? [
+							`storedConnectionId=${safeDiagnosticString(
+								event.storedConnectionId,
+							)}`,
+						]
+					: []),
+			];
+		case 'auto-connect.saved-entry.connect.tmux-attach-failed':
+			return [
+				`connectionId=${safeDiagnosticString(event.connectionId)}`,
+				`tmuxAttachFailureReason=${
+					event.tmuxAttachFailureReason === null
+						? 'unknown'
+						: safeDiagnosticString(event.tmuxAttachFailureReason)
+				}`,
+				`tmuxSessionName=${safeDiagnosticString(event.tmuxSessionName)}`,
+				`storedConnectionId=${safeDiagnosticString(event.storedConnectionId)}`,
+			];
+		case 'auto-connect.active-connection.selected':
+		case 'auto-connect.active-connection.missing':
+		case 'auto-connect.active-connection.shell-started':
+		case 'auto-connect.saved-entry.connect.started':
+		case 'auto-connect.saved-entry.connect.threw':
+		case 'auto-connect.saved-entry.retry.started':
+		case 'auto-connect.saved-entry.retry.threw':
+			return [];
+	}
+	const unreachable: never = event;
+	return unreachable;
+}

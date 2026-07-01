@@ -1,8 +1,3 @@
-import { diagnosticEvents } from './connection-diagnostic-events';
-import {
-	cloneDiagnosticValue,
-	safeDiagnosticString,
-} from './connection-diagnostic-redaction';
 import {
 	type ConnectionDiagnosticEvent,
 	type ConnectionDiagnosticRecorder,
@@ -11,6 +6,11 @@ import {
 	type ConnectionDiagnosticTimedEvent,
 	type ConnectionDiagnosticTrace,
 } from './connection-diagnostic-types';
+import {
+	manualDiagnosticEvents,
+	safeDiagnosticString,
+	snapshotDiagnosticValue,
+} from './connection-diagnostics/events';
 
 type HistoryEntry = {
 	order: number;
@@ -43,7 +43,7 @@ function cloneTrace(
 		...trace,
 		id: safeDiagnosticString(trace.id),
 		reason: safeDiagnosticString(trace.reason),
-		events: trace.events.map((event) => cloneDiagnosticValue(event)),
+		events: trace.events.map((event) => snapshotDiagnosticValue(event)),
 	};
 }
 
@@ -53,13 +53,13 @@ function timestampEvent(input: {
 	atMs: number;
 }): ConnectionDiagnosticTimedEvent {
 	try {
-		return cloneDiagnosticValue({
+		return snapshotDiagnosticValue({
 			...input.event,
 			atMs: input.atMs,
 			elapsedMs: input.atMs - input.startedAtMs,
 		});
 	} catch {
-		const fallbackEvent = diagnosticEvents.manualDiagnosticWarning({
+		const fallbackEvent = manualDiagnosticEvents.warning({
 			source: readEventSource(input.event),
 			message: 'Connection diagnostic event could not be recorded',
 			error: {
@@ -67,7 +67,7 @@ function timestampEvent(input: {
 				message: 'Unable to clone typed diagnostic event',
 			},
 		});
-		return cloneDiagnosticValue({
+		return snapshotDiagnosticValue({
 			...fallbackEvent,
 			atMs: input.atMs,
 			elapsedMs: input.atMs - input.startedAtMs,
@@ -130,7 +130,7 @@ export function createConnectionDiagnosticRecorder(
 					if (!finished) {
 						trace.events.push(event);
 					}
-					return cloneDiagnosticValue(event);
+					return snapshotDiagnosticValue(event);
 				},
 				finish: (status) => {
 					if (finished) {

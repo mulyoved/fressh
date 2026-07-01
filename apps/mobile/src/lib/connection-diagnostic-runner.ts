@@ -4,7 +4,6 @@ import {
 } from './auto-connect-saved-entry';
 import { diagnosticEvents } from './connection-diagnostic-events';
 import { formatConnectionDiagnosticPrompt } from './connection-diagnostic-prompt';
-import { serializeConnectionDiagnosticError } from './connection-diagnostic-redaction';
 import {
 	type ConnectionDiagnosticAppState,
 	type ConnectionDiagnosticConnectionIdentity,
@@ -12,6 +11,7 @@ import {
 	type ConnectionDiagnosticTrace,
 	type ConnectionDiagnosticTraceHandle,
 } from './connection-diagnostic-types';
+import { serializeConnectionDiagnosticError } from './connection-diagnostics/events';
 import { type SavedConnectionEntry } from './connection-utils';
 import {
 	isDiagnosticShellCleanupError,

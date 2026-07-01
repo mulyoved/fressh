@@ -1,4 +1,5 @@
 import { copyConnectionIdentity } from './identity';
+import { safeDiagnosticString } from './snapshot';
 import {
 	type ConnectionDiagnosticConnectionIdentity,
 	type ConnectionDiagnosticEventBase,
@@ -47,14 +48,12 @@ export const savedEntryEventKinds = [
 	'key.missing',
 ] as const satisfies readonly SavedEntryEvent['kind'][];
 
-const withSource = <T extends SavedEntryEvent>(event: T): T => event;
-
 export const savedEntryEvents = {
 	selected: (input: {
 		source: ConnectionDiagnosticSource;
 		connection: ConnectionDiagnosticConnectionIdentity;
 	}): SavedEntrySelectedEvent =>
-		withSource({
+		({
 			kind: 'saved-entry.selected',
 			source: input.source,
 			connection: copyConnectionIdentity(input.connection),
@@ -63,7 +62,7 @@ export const savedEntryEvents = {
 		source: ConnectionDiagnosticSource;
 		message?: string;
 	}): SavedEntryMissingEvent =>
-		withSource({
+		({
 			kind: 'saved-entry.missing',
 			source: input.source,
 			message: input.message,
@@ -74,7 +73,7 @@ export const savedEntryEvents = {
 		useTmuxType: string;
 		tmuxSessionNameType: string;
 	}): SavedEntryInvalidTmuxSettingsEvent =>
-		withSource({
+		({
 			kind: 'saved-entry.invalid-tmux-settings',
 			source: input.source,
 			connection: copyConnectionIdentity(input.connection),
@@ -85,7 +84,7 @@ export const savedEntryEvents = {
 		source: ConnectionDiagnosticSource;
 		connection: ConnectionDiagnosticConnectionIdentity;
 	}): KeyResolvedEvent =>
-		withSource({
+		({
 			kind: 'key.resolved',
 			source: input.source,
 			connection: copyConnectionIdentity(input.connection),
@@ -94,9 +93,28 @@ export const savedEntryEvents = {
 		source: ConnectionDiagnosticSource;
 		connection: ConnectionDiagnosticConnectionIdentity;
 	}): KeyMissingEvent =>
-		withSource({
+		({
 			kind: 'key.missing',
 			source: input.source,
 			connection: copyConnectionIdentity(input.connection),
 		}),
 } as const;
+
+export function formatSavedEntryEventFields(event: SavedEntryEvent): string[] {
+	switch (event.kind) {
+		case 'saved-entry.invalid-tmux-settings':
+			return [
+				`useTmuxType=${safeDiagnosticString(event.useTmuxType)}`,
+				`tmuxSessionNameType=${safeDiagnosticString(
+					event.tmuxSessionNameType,
+				)}`,
+			];
+		case 'saved-entry.selected':
+		case 'saved-entry.missing':
+		case 'key.resolved':
+		case 'key.missing':
+			return [];
+	}
+	const unreachable: never = event;
+	return unreachable;
+}

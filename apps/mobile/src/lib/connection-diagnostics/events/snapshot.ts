@@ -35,7 +35,7 @@ export function safeDiagnosticString(
 
 function snapshotDiagnosticValueInternal(
 	value: unknown,
-	seen: WeakMap<object, unknown>,
+	path: WeakSet<object>,
 ): unknown {
 	try {
 		if (value === null) return null;
@@ -56,13 +56,17 @@ function snapshotDiagnosticValueInternal(
 		}
 		if (typeof value !== 'object') return safeDiagnosticString(value);
 
-		if (seen.has(value)) return CIRCULAR_PLACEHOLDER;
+		if (path.has(value)) return CIRCULAR_PLACEHOLDER;
 
 		if (Array.isArray(value)) {
 			const copy: unknown[] = [];
-			seen.set(value, copy);
-			for (const item of value) {
-				copy.push(snapshotDiagnosticValueInternal(item, seen));
+			path.add(value);
+			try {
+				for (const item of value) {
+					copy.push(snapshotDiagnosticValueInternal(item, path));
+				}
+			} finally {
+				path.delete(value);
 			}
 			return copy;
 		}
@@ -73,16 +77,20 @@ function snapshotDiagnosticValueInternal(
 		}
 
 		const copy: Record<string, unknown> = {};
-		seen.set(value, copy);
-		for (const key of Object.keys(value)) {
-			try {
-				copy[safeDiagnosticString(key, key)] = snapshotDiagnosticValueInternal(
-					(value as Record<string, unknown>)[key],
-					seen,
-				);
-			} catch {
-				copy[safeDiagnosticString(key, key)] = UNREADABLE_VALUE_MESSAGE;
+		path.add(value);
+		try {
+			for (const key of Object.keys(value)) {
+				try {
+					copy[safeDiagnosticString(key, key)] = snapshotDiagnosticValueInternal(
+						(value as Record<string, unknown>)[key],
+						path,
+					);
+				} catch {
+					copy[safeDiagnosticString(key, key)] = UNREADABLE_VALUE_MESSAGE;
+				}
 			}
+		} finally {
+			path.delete(value);
 		}
 		return copy;
 	} catch {
@@ -91,10 +99,8 @@ function snapshotDiagnosticValueInternal(
 }
 
 export function snapshotDiagnosticValue<T>(value: T): T {
-	return snapshotDiagnosticValueInternal(value, new WeakMap()) as T;
+	return snapshotDiagnosticValueInternal(value, new WeakSet()) as T;
 }
-
-export const cloneDiagnosticValue = snapshotDiagnosticValue;
 
 export function serializeConnectionDiagnosticError(
 	error: unknown,

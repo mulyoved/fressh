@@ -7,8 +7,8 @@ import type {
 } from '@fressh/react-native-uniffi-russh';
 import { type SavedEntryConnectResult } from './auto-connect-saved-entry';
 import { diagnosticEvents } from './connection-diagnostic-events';
-import { serializeConnectionDiagnosticError } from './connection-diagnostic-redaction';
 import { type ConnectionDiagnosticEvent } from './connection-diagnostic-types';
+import { serializeConnectionDiagnosticError } from './connection-diagnostics/events';
 import { type InputConnectionDetails } from './connection-storage';
 import { getStoredConnectionId } from './connection-utils';
 import { rootLogger } from './logger';

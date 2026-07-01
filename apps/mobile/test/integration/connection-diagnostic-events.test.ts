@@ -5,10 +5,6 @@ import {
 	type ConnectionDiagnosticEvent,
 	type ManualDiagnosticTimeoutEvent,
 } from '../../src/lib/connection-diagnostic-events';
-import {
-	diagnosticEvents as barrelDiagnosticEvents,
-	type ConnectionDiagnosticEvent as BarrelConnectionDiagnosticEvent,
-} from '../../src/lib/connection-diagnostics';
 
 type DiagnosticEventConstructorKind = ReturnType<
 	(typeof diagnosticEvents)[keyof typeof diagnosticEvents]
@@ -475,14 +471,6 @@ void test('optional saved-entry constructors preserve omitted connections', () =
 	for (const event of events) {
 		assert.equal(event.connection, undefined);
 	}
-});
-
-void test('connection diagnostics barrel exports diagnostic event helpers', () => {
-	const event: BarrelConnectionDiagnosticEvent =
-		barrelDiagnosticEvents.savedEntryMissing({ source: 'saved-entry' });
-
-	assert.equal(event.kind, 'saved-entry.missing');
-	assertNoLegacyFields(event);
 });
 
 void test('diagnostic event constructors cover every public event kind', () => {

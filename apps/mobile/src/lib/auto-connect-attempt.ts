@@ -4,11 +4,11 @@ import {
 	type SavedEntryTailscaleRecovery,
 } from './auto-connect-saved-entry';
 import { diagnosticEvents } from './connection-diagnostic-events';
-import { serializeConnectionDiagnosticError } from './connection-diagnostic-redaction';
 import {
 	type ConnectionDiagnosticConnectionIdentity,
 	type ConnectionDiagnosticEvent,
 } from './connection-diagnostic-types';
+import { serializeConnectionDiagnosticError } from './connection-diagnostics/events';
 import {
 	getStoredConnectionId,
 	type SavedConnectionEntry,

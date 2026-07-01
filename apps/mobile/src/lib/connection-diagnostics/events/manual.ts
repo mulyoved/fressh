@@ -1,5 +1,8 @@
 import { copyConnectionIdentity } from './identity';
-import { serializeConnectionDiagnosticError } from './snapshot';
+import {
+	safeDiagnosticString,
+	serializeConnectionDiagnosticError,
+} from './snapshot';
 import {
 	type ConnectionDiagnosticConnectionIdentity,
 	type ConnectionDiagnosticError,
@@ -66,14 +69,12 @@ export const manualDiagnosticEventKinds = [
 	'manual-diagnostic.failed',
 ] as const satisfies readonly ManualDiagnosticEvent['kind'][];
 
-const withSource = <T extends ManualDiagnosticEvent>(event: T): T => event;
-
 export const manualDiagnosticEvents = {
 	savedEntryMissing: (input: {
 		source: ConnectionDiagnosticSource;
 		message?: string;
 	}): ManualDiagnosticSavedEntryMissingEvent =>
-		withSource({
+		({
 			kind: 'manual-diagnostic.saved-entry.missing',
 			source: input.source,
 			message: input.message,
@@ -82,7 +83,7 @@ export const manualDiagnosticEvents = {
 		source: ConnectionDiagnosticSource;
 		message: string;
 	}): ManualDiagnosticTailscaleAttentionEvent =>
-		withSource({
+		({
 			kind: 'manual-diagnostic.tailscale.attention',
 			source: input.source,
 			message: input.message,
@@ -91,7 +92,7 @@ export const manualDiagnosticEvents = {
 		source: ConnectionDiagnosticSource;
 		message?: string;
 	}): ManualDiagnosticTailscaleAttentionClearedEvent =>
-		withSource({
+		({
 			kind: 'manual-diagnostic.tailscale.attention-cleared',
 			source: input.source,
 			message: input.message,
@@ -102,7 +103,7 @@ export const manualDiagnosticEvents = {
 		tmuxAttachFailureReason: string | null;
 		message?: string;
 	}): ManualDiagnosticTmuxAttachFailedEvent =>
-		withSource({
+		({
 			kind: 'manual-diagnostic.tmux-attach-failed',
 			source: input.source,
 			message: input.message,
@@ -114,7 +115,7 @@ export const manualDiagnosticEvents = {
 		message: string;
 		error: unknown;
 	}): ManualDiagnosticWarningEvent =>
-		withSource({
+		({
 			kind: 'manual-diagnostic.warning',
 			source: input.source,
 			message: input.message,
@@ -124,7 +125,7 @@ export const manualDiagnosticEvents = {
 		timeoutMs: number;
 		message: string;
 	}): ManualDiagnosticTimeoutEvent =>
-		withSource({
+		({
 			kind: 'manual-diagnostic.timeout',
 			source: 'manual-diagnostic',
 			timeoutMs: input.timeoutMs,
@@ -135,10 +136,35 @@ export const manualDiagnosticEvents = {
 		error: unknown;
 		message?: string;
 	}): ManualDiagnosticFailedEvent =>
-		withSource({
+		({
 			kind: 'manual-diagnostic.failed',
 			source: input.source,
 			message: input.message,
 			error: serializeConnectionDiagnosticError(input.error),
 		}),
 } as const;
+
+export function formatManualDiagnosticEventFields(
+	event: ManualDiagnosticEvent,
+): string[] {
+	switch (event.kind) {
+		case 'manual-diagnostic.tmux-attach-failed':
+			return [
+				`tmuxAttachFailureReason=${
+					event.tmuxAttachFailureReason === null
+						? 'unknown'
+						: safeDiagnosticString(event.tmuxAttachFailureReason)
+				}`,
+			];
+		case 'manual-diagnostic.timeout':
+			return [`timeoutMs=${event.timeoutMs}`];
+		case 'manual-diagnostic.saved-entry.missing':
+		case 'manual-diagnostic.tailscale.attention':
+		case 'manual-diagnostic.tailscale.attention-cleared':
+		case 'manual-diagnostic.warning':
+		case 'manual-diagnostic.failed':
+			return [];
+	}
+	const unreachable: never = event;
+	return unreachable;
+}

@@ -1,14 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-	cloneDiagnosticValue as legacyCloneDiagnosticValue,
-	normalizeConnectionIdentity as legacyNormalizeConnectionIdentity,
-	omitPrivateKeyMaterial as legacyOmitPrivateKeyMaterial,
-	safeDiagnosticString as legacySafeDiagnosticString,
-	serializeConnectionDiagnosticError as legacySerializeConnectionDiagnosticError,
-	UNREADABLE_ERROR_MESSAGE as LEGACY_UNREADABLE_ERROR_MESSAGE,
-} from '../../src/lib/connection-diagnostic-redaction';
-import {
 	buildActiveConnectionIdentity,
 	buildSavedEntryIdentity,
 	copyConnectionIdentity,
@@ -119,46 +111,6 @@ void test('private key omission helper redacts PEM blocks only', () => {
 
 void test('inline diagnostic JSON formatter handles undefined snapshots', () => {
 	assert.equal(formatDiagnosticJsonInline(undefined), 'undefined');
-});
-
-void test('legacy redaction path exports compatibility helpers', () => {
-	assert.equal(LEGACY_UNREADABLE_ERROR_MESSAGE, '[Unserializable error]');
-	assert.equal(legacySafeDiagnosticString('token=abc'), 'token=abc');
-	assert.equal(
-		legacyOmitPrivateKeyMaterial(
-			['-----BEGIN PRIVATE KEY-----', 'abc', '-----END PRIVATE KEY-----'].join(
-				'\n',
-			),
-		),
-		'[Private key material omitted]',
-	);
-	assert.deepEqual(legacyCloneDiagnosticValue({ nested: { ok: true } }), {
-		nested: { ok: true },
-	});
-	assert.deepEqual(
-		legacySerializeConnectionDiagnosticError({
-			name: 'LegacyError',
-			message: 'failed',
-			inner: { code: 'ECONNRESET' },
-		}),
-		{
-			name: 'LegacyError',
-			message: 'failed',
-			inner: { code: 'ECONNRESET' },
-		},
-	);
-	assert.deepEqual(
-		legacyNormalizeConnectionIdentity({
-			connectionId: 'active-1',
-			host: 'dev.tailnet.ts.net',
-			privateKey: 'must-not-copy',
-			password: 'must-not-copy',
-		}),
-		{
-			connectionId: 'active-1',
-			host: 'dev.tailnet.ts.net',
-		},
-	);
 });
 
 void test('connection identity formatter covers unknown and rich identities', () => {
