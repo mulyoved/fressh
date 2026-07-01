@@ -9,13 +9,14 @@ import {
 	type ConnectionDiagnosticEvent,
 } from './connection-diagnostic-types';
 import {
+	buildConnectionDetailsIdentity,
 	serializeConnectionDiagnosticError,
 	sshEvents,
 } from './connection-diagnostics/events';
 import { type InputConnectionDetails } from './connection-storage';
 import { extractTmuxAttachFailureReason } from './ssh-error-details';
 import { type RegisteredStartShellOptions } from './ssh-registry-store';
-import { AbortSignalTimeout } from './utils';
+import { AbortSignalAny, AbortSignalTimeout } from './utils';
 
 export type SshShellLifecycleResult =
 	| {
@@ -61,14 +62,7 @@ function readSshConnectionProgressPhase(
 export function getSshShellLifecycleConnectionIdentity(
 	connectionDetails: InputConnectionDetails,
 ): ConnectionDiagnosticConnectionIdentity {
-	return {
-		username: connectionDetails.username,
-		host: connectionDetails.host,
-		port: connectionDetails.port,
-		keyId: connectionDetails.security.keyId,
-		useTmux: connectionDetails.useTmux,
-		tmuxSessionName: connectionDetails.tmuxSessionName,
-	};
+	return buildConnectionDetailsIdentity(connectionDetails);
 }
 
 export async function runSshShellLifecycle(args: {
@@ -78,6 +72,7 @@ export async function runSshShellLifecycle(args: {
 	}) => Promise<ConnectedSshConnection>;
 	onConnectionProgress?: (progressEvent: SshConnectionProgress) => void;
 	abortSignalTimeoutMs: number;
+	abortSignal?: AbortSignal;
 	registerInStore?: boolean;
 	traceEvent: (event: ConnectionDiagnosticEvent) => void;
 	afterShellFailure?: (context: ShellLifecycleFailureContext) => Promise<void>;
@@ -87,6 +82,7 @@ export async function runSshShellLifecycle(args: {
 		connectConnection,
 		onConnectionProgress,
 		abortSignalTimeoutMs,
+		abortSignal,
 		registerInStore,
 		traceEvent,
 		afterShellFailure,
@@ -151,7 +147,10 @@ export async function runSshShellLifecycle(args: {
 			term: 'Xterm',
 			useTmux: connectionDetails.useTmux,
 			tmuxSessionName: connectionDetails.tmuxSessionName,
-			abortSignal: AbortSignalTimeout(abortSignalTimeoutMs),
+			abortSignal: AbortSignalAny([
+				AbortSignalTimeout(abortSignalTimeoutMs),
+				abortSignal,
+			]),
 		};
 		if (registerInStore !== undefined) {
 			startShellOptions.registerInStore = registerInStore;

@@ -1,4 +1,5 @@
-import { type TouchScrollConfig } from '@fressh/react-native-xtermjs-webview';
+// eslint-disable-next-line import/consistent-type-specifier-style -- Pure type import keeps Node integration tests from loading the React Native WebView runtime.
+import type { TouchScrollConfig } from '@fressh/react-native-xtermjs-webview';
 
 export type ShellTouchScrollPolicy = {
 	ownsViewport: boolean;

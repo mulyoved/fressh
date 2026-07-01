@@ -6,12 +6,12 @@ import {
 import { formatConnectionDiagnosticPrompt } from './connection-diagnostic-prompt';
 import {
 	type ConnectionDiagnosticAppState,
-	type ConnectionDiagnosticConnectionIdentity,
 	type ConnectionDiagnosticRecorder,
 	type ConnectionDiagnosticTrace,
 	type ConnectionDiagnosticTraceHandle,
 } from './connection-diagnostic-types';
 import {
+	buildSavedEntryIdentity,
 	manualDiagnosticEvents,
 	savedEntryEvents,
 } from './connection-diagnostics/events';
@@ -83,24 +83,6 @@ async function withManualDiagnosticTimeout<T>(
 	} finally {
 		if (timeoutId !== null) clearTimeout(timeoutId);
 	}
-}
-
-function getConnectionIdentity(
-	id: string,
-	details: InputConnectionDetails,
-): ConnectionDiagnosticConnectionIdentity {
-	const identity: ConnectionDiagnosticConnectionIdentity = {
-		savedConnectionId: id,
-		username: details.username,
-		host: details.host,
-		port: details.port,
-		keyId: details.security.keyId,
-	};
-	if (details.useTmux !== undefined) identity.useTmux = details.useTmux;
-	if (details.tmuxSessionName !== undefined) {
-		identity.tmuxSessionName = details.tmuxSessionName;
-	}
-	return identity;
 }
 
 function promptForTrace(
@@ -183,7 +165,7 @@ async function runManualConnectionDiagnosticAttempt(
 		tmuxSessionName: details.tmuxSessionName?.trim() || 'main',
 		autoConnect: details.autoConnect ?? false,
 	};
-	const connection = getConnectionIdentity(latestEntry.id, normalizedDetails);
+	const connection = buildSavedEntryIdentity(latestEntry.id, normalizedDetails);
 	safeTraceEvent(
 		traceHandle,
 		savedEntryEvents.selected({

@@ -137,15 +137,16 @@ export function AutoConnectManager() {
 	);
 
 	const inFlightRef = React.useRef(false);
+	const inFlightSettledRef = React.useRef<Promise<void> | null>(null);
 	const foregroundStartRetryTimerRef = React.useRef<ReturnType<
 		typeof setTimeout
 	> | null>(null);
 	const foregroundStartFailureCountRef = React.useRef(0);
 	const [foregroundStartRetryNonce, setForegroundStartRetryNonce] =
 		React.useState(0);
-	const attemptAutoConnectRef = React.useRef<(() => Promise<boolean>) | null>(
-		null,
-	);
+	const attemptAutoConnectRef = React.useRef<
+		((signal?: AbortSignal) => Promise<boolean>) | null
+	>(null);
 	const reconnectControllerRef =
 		React.useRef<AutoConnectReconnectController | null>(null);
 	const activeDiagnosticTraceRef =
@@ -316,10 +317,20 @@ export function AutoConnectManager() {
 	}, []);
 
 	// Single attempt: use an active shell if present; otherwise connect silently.
-	const attemptAutoConnect = React.useCallback(async () => {
+	const attemptAutoConnect = React.useCallback(async (signal?: AbortSignal) => {
 		if (launchUrlSuppressAutoConnectRef.current) return false;
-		if (inFlightRef.current) return false;
+		if (inFlightRef.current) {
+			if (!signal) return false;
+			await inFlightSettledRef.current;
+			if (signal.aborted || inFlightRef.current) return false;
+		}
+		if (signal?.aborted) return false;
 		inFlightRef.current = true;
+		let settleInFlight!: () => void;
+		const inFlightSettled = new Promise<void>((resolve) => {
+			settleInFlight = resolve;
+		});
+		inFlightSettledRef.current = inFlightSettled;
 		setAutoConnecting(true);
 		const existingTrace = activeDiagnosticTraceRef.current;
 		const ownsTrace = existingTrace === null;
@@ -341,6 +352,7 @@ export function AutoConnectManager() {
 					connectionDetails,
 					resolvedSecurity,
 					navigate,
+					abortSignal,
 				}) =>
 					connectAndOpenShell({
 						connectionDetails,
@@ -348,6 +360,7 @@ export function AutoConnectManager() {
 						connect,
 						navigate,
 						trace,
+						abortSignal,
 					}),
 				loadLatestSavedConnection,
 				resolveKeySecurity,
@@ -357,6 +370,7 @@ export function AutoConnectManager() {
 				clearTailscaleAttention,
 				logger,
 				trace,
+				abortSignal: signal,
 			});
 			if (ownsTrace) {
 				finishTrace(trace, connected ? 'connected' : 'failed');
@@ -371,6 +385,10 @@ export function AutoConnectManager() {
 		} finally {
 			setAutoConnecting(false);
 			inFlightRef.current = false;
+			settleInFlight();
+			if (inFlightSettledRef.current === inFlightSettled) {
+				inFlightSettledRef.current = null;
+			}
 			if (ownsTrace && activeDiagnosticTraceRef.current === trace) {
 				activeDiagnosticTraceRef.current = null;
 			}
@@ -418,8 +436,8 @@ export function AutoConnectManager() {
 				};
 			},
 			setReconnecting,
-			attemptAutoConnect: async () =>
-				(await attemptAutoConnectRef.current?.()) ?? false,
+			attemptAutoConnect: async (signal) =>
+				(await attemptAutoConnectRef.current?.(signal)) ?? false,
 			logger,
 			trace: {
 				event: (event) => {

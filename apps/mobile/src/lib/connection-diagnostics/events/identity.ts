@@ -81,7 +81,7 @@ export function normalizeConnectionIdentity(
 	return Object.keys(identity).length ? identity : undefined;
 }
 
-function buildConnectionDetailsIdentity(
+export function buildConnectionDetailsIdentity(
 	connectionDetails: unknown,
 ): ConnectionDiagnosticConnectionIdentity {
 	const identity: ConnectionDiagnosticConnectionIdentity = {};

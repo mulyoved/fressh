@@ -24,6 +24,13 @@ type AutoConnectReconnectTrace = {
 	event: (event: ConnectionDiagnosticEvent) => void;
 };
 
+class ReconnectAttemptTimeoutError extends Error {
+	constructor(readonly timeoutMs: number) {
+		super(`Reconnect attempt timed out after ${timeoutMs}ms`);
+		this.name = 'ReconnectAttemptTimeoutError';
+	}
+}
+
 export type AutoConnectReconnectControllerOptions = {
 	delaysMs: readonly number[];
 	windowMs: number;
@@ -32,7 +39,7 @@ export type AutoConnectReconnectControllerOptions = {
 	clearTimeout: (timer: unknown) => void;
 	getSnapshot: () => AutoConnectReconnectSnapshot;
 	setReconnecting: (next: boolean) => void;
-	attemptAutoConnect: () => Promise<boolean>;
+	attemptAutoConnect: (signal: AbortSignal) => Promise<boolean>;
 	logger: AutoConnectReconnectLogger;
 	trace?: AutoConnectReconnectTrace;
 };
@@ -61,6 +68,8 @@ export function createAutoConnectReconnectController({
 	let attemptIndex = 0;
 	let running = false;
 	let generation = 0;
+	let attemptAbortController: AbortController | null = null;
+	let attemptDeadlineTimer: unknown = null;
 
 	const clearTimer = () => {
 		if (timer === null) return;
@@ -125,7 +134,43 @@ export function createAutoConnectReconnectController({
 					}),
 		);
 
+	const runAttemptWithDeadline = async (timeoutMs: number) => {
+		const abortController = new AbortController();
+		let deadlineTimer: unknown = null;
+		attemptAbortController = abortController;
+		try {
+			return await Promise.race([
+				attemptAutoConnect(abortController.signal),
+				new Promise<never>((_, reject) => {
+					deadlineTimer = setTimeout(() => {
+						attemptDeadlineTimer = null;
+						abortController.abort();
+						reject(new ReconnectAttemptTimeoutError(timeoutMs));
+					}, timeoutMs);
+					attemptDeadlineTimer = deadlineTimer;
+				}),
+			]);
+		} finally {
+			if (
+				deadlineTimer !== null &&
+				attemptDeadlineTimer === deadlineTimer
+			) {
+				clearTimeout(deadlineTimer);
+				attemptDeadlineTimer = null;
+			}
+			if (attemptAbortController === abortController) {
+				attemptAbortController = null;
+			}
+		}
+	};
+
 	const stop = (reason: string) => {
+		attemptAbortController?.abort();
+		attemptAbortController = null;
+		if (attemptDeadlineTimer !== null) {
+			clearTimeout(attemptDeadlineTimer);
+			attemptDeadlineTimer = null;
+		}
 		traceStop(reason);
 		clearTimer();
 		generation += 1;
@@ -151,13 +196,16 @@ export function createAutoConnectReconnectController({
 		}, delayMs);
 	};
 
-	const start = (reason: string) => {
+	const startWithOptions = (
+		reason: string,
+		options?: { allowAutoConnectInFlight: boolean },
+	) => {
 		const snapshot = getSnapshot();
 		if (
 			running ||
 			snapshot.resetInFlight ||
 			snapshot.isReconnecting ||
-			snapshot.isAutoConnecting
+			(snapshot.isAutoConnecting && !options?.allowAutoConnectInFlight)
 		) {
 			traceBlockedStart(reason, snapshot);
 			return false;
@@ -230,7 +278,35 @@ export function createAutoConnectReconnectController({
 					reconnectElapsedMs: elapsedMs,
 				}),
 			);
-			const success = await attemptAutoConnect();
+			let success = false;
+			try {
+				success = await runAttemptWithDeadline(windowMs - elapsedMs);
+			} catch (error) {
+				if (!isCurrentLoop(loopGeneration)) return;
+				if (error instanceof ReconnectAttemptTimeoutError) {
+					logger.warn('Reconnect attempt timed out', {
+						timeoutMs: error.timeoutMs,
+					});
+					traceEvent(
+						reconnectEvents.timeout({
+							source: 'reconnect-controller',
+							reconnectElapsedMs: windowMs,
+							windowMs,
+						}),
+					);
+					stop('retry-timeout');
+					return;
+				}
+				logger.warn('Reconnect attempt threw', error);
+				traceAttemptResult(false, elapsedMs);
+				if (getSnapshot().resetInFlight) {
+					stop('tailscale-reset-in-progress');
+					return;
+				}
+				if (!isCurrentLoop(loopGeneration)) return;
+				scheduleNextAttempt(loopGeneration, attemptWithBackoff);
+				return;
+			}
 			if (!isCurrentLoop(loopGeneration)) return;
 			traceAttemptResult(success, elapsedMs);
 			if (success) {
@@ -250,11 +326,16 @@ export function createAutoConnectReconnectController({
 		return true;
 	};
 
+	const start = (reason: string) => startWithOptions(reason);
+
 	const replace = (reason: string) => {
+		const wasRunning = running;
 		if (running) {
 			stop(`${reason}-restart`);
 		}
-		return start(reason);
+		return startWithOptions(reason, {
+			allowAutoConnectInFlight: wasRunning,
+		});
 	};
 
 	return {

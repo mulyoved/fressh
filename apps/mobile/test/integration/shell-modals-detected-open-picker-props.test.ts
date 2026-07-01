@@ -2,6 +2,10 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
+import {
+	buildKeyedDetectedOpenCandidates,
+	type DetectedOpenCandidate,
+} from '../../src/lib/detected-open-actions';
 
 const shellModalsSourcePath = join(process.cwd(), 'src/lib/shell-modals.tsx');
 const shellDetailSourcePath = join(process.cwd(), 'src/app/shell/detail.tsx');
@@ -104,4 +108,38 @@ void test('shell detail renders detected open picker modal with browser action p
 	assert.match(source, /import \{ DetectedOpenPickerModal \}/);
 	assert.match(source, /<DetectedOpenPickerModal/);
 	assert.match(source, /\{\.\.\.browserActions\.detectedOpenPickerProps\}/);
+});
+
+void test('detected open picker keys stay unique for duplicate candidates', () => {
+	const duplicate = {
+		kind: 'remote-url',
+		raw: 'remote-url:https://example.test:1',
+		normalized: 'https://example.test',
+		display: 'Example',
+		path: null,
+		line: null,
+		url: 'https://example.test',
+	} satisfies DetectedOpenCandidate;
+	const candidates = [
+		duplicate,
+		duplicate,
+		{
+			kind: 'remote-url',
+			raw: 'https://example.test',
+			normalized: 'https://example.test',
+			display: 'Example collision candidate',
+			path: null,
+			line: null,
+			url: 'https://example.test',
+		},
+	] satisfies readonly DetectedOpenCandidate[];
+
+	const keyedCandidates = buildKeyedDetectedOpenCandidates(candidates);
+	const keys = keyedCandidates.map((candidate) => candidate.key);
+
+	assert.equal(new Set(keys).size, candidates.length);
+	assert.deepEqual(
+		keyedCandidates.map((candidate) => candidate.candidate),
+		candidates,
+	);
 });

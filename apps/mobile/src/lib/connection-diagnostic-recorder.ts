@@ -7,6 +7,7 @@ import {
 	type ConnectionDiagnosticTrace,
 } from './connection-diagnostic-types';
 import {
+	connectionDiagnosticSources,
 	manualDiagnosticEvents,
 	safeDiagnosticString,
 	snapshotDiagnosticValue,
@@ -18,16 +19,9 @@ type HistoryEntry = {
 };
 
 const DEFAULT_MAX_HISTORY = 20;
-const connectionDiagnosticSources = new Set<ConnectionDiagnosticSource>([
-	'latest-shell',
-	'active-connection',
-	'saved-entry',
-	'tailscale-recovery',
-	'reconnect-controller',
-	'manual-diagnostic',
-	'foreground-service',
-	'command-menu',
-]);
+const connectionDiagnosticSourceSet = new Set<ConnectionDiagnosticSource>(
+	connectionDiagnosticSources,
+);
 
 let traceSequence = 0;
 
@@ -80,7 +74,7 @@ function readEventSource(input: unknown): ConnectionDiagnosticSource {
 		const source = (input as { source?: unknown }).source;
 		if (
 			typeof source === 'string' &&
-			connectionDiagnosticSources.has(source as ConnectionDiagnosticSource)
+			connectionDiagnosticSourceSet.has(source as ConnectionDiagnosticSource)
 		) {
 			return source as ConnectionDiagnosticSource;
 		}

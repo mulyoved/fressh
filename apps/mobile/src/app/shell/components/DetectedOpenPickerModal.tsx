@@ -1,6 +1,9 @@
-import React, { useCallback } from 'react';
+import React, { useCallback, useMemo } from 'react';
 import { Modal, Pressable, ScrollView, Text, View } from 'react-native';
-import { type DetectedOpenCandidate } from '@/lib/detected-open-actions';
+import {
+	buildKeyedDetectedOpenCandidates,
+	type DetectedOpenCandidate,
+} from '@/lib/detected-open-actions';
 import { useTheme } from '@/lib/theme';
 
 export function DetectedOpenPickerModal({
@@ -17,6 +20,10 @@ export function DetectedOpenPickerModal({
 	onSelect: (candidate: DetectedOpenCandidate) => void;
 }) {
 	const theme = useTheme();
+	const keyedCandidates = useMemo(
+		() => buildKeyedDetectedOpenCandidates(candidates),
+		[candidates],
+	);
 	const close = useCallback(() => {
 		onClose();
 	}, [onClose]);
@@ -93,9 +100,9 @@ export function DetectedOpenPickerModal({
 					</View>
 
 					<ScrollView>
-						{candidates.map((candidate) => (
+						{keyedCandidates.map(({ candidate, key }) => (
 							<Pressable
-								key={`${candidate.kind}:${candidate.raw}`}
+								key={key}
 								accessibilityRole="button"
 								onPress={() => select(candidate)}
 								style={{

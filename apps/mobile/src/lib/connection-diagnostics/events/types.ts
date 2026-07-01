@@ -1,3 +1,14 @@
+export const connectionDiagnosticSources = [
+	'latest-shell',
+	'active-connection',
+	'saved-entry',
+	'tailscale-recovery',
+	'reconnect-controller',
+	'manual-diagnostic',
+	'foreground-service',
+	'command-menu',
+] as const;
+
 export type ConnectionDiagnosticTrigger =
 	| 'initial-auto-connect'
 	| 'reconnect'
@@ -11,14 +22,7 @@ export type ConnectionDiagnosticStatus =
 	| 'skipped';
 
 export type ConnectionDiagnosticSource =
-	| 'latest-shell'
-	| 'active-connection'
-	| 'saved-entry'
-	| 'tailscale-recovery'
-	| 'reconnect-controller'
-	| 'manual-diagnostic'
-	| 'foreground-service'
-	| 'command-menu';
+	(typeof connectionDiagnosticSources)[number];
 
 export type ConnectionDiagnosticConnectionIdentity = {
 	savedConnectionId?: string;

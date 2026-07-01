@@ -182,6 +182,38 @@ void test('Tailscale diagnostic recovery emits ensure-ready payload', async () =
 	]);
 });
 
+void test('trace payload mutation cannot bypass Tailscale readiness block', async () => {
+	let connectCount = 0;
+	const result = await attemptSavedEntryWithTailscaleRecovery({
+		platformOS: 'android',
+		recovery: createSavedEntryTailscaleDiagnosticRecovery({
+			platformOS: 'android',
+			recovery: recoveryFixture({
+				ready: {
+					kind: 'unavailable',
+					attempted: false,
+					available: false,
+				},
+			}),
+			emit: (event) => {
+				if (event.kind !== 'tailscale.ensure-ready.result') return;
+				Object.assign(event.readiness, {
+					kind: 'ready',
+					attempted: true,
+					available: true,
+				} satisfies TailscaleReadyResult);
+			},
+		}),
+		connectSavedEntry: async () => {
+			connectCount += 1;
+			return connectedResult();
+		},
+	});
+
+	assert.equal(result.status, 'blocked');
+	assert.equal(connectCount, 0);
+});
+
 void test('saved-entry retry policy returns blocked without UI callbacks', async () => {
 	const result = await attemptSavedEntryWithTailscaleRecovery({
 		platformOS: 'android',
@@ -702,4 +734,38 @@ void test('Tailscale diagnostic recovery emits recovery payload', async () => {
 			recoveryResult,
 		},
 	]);
+});
+
+void test('trace payload mutation cannot force Tailscale retry', async () => {
+	let connectCount = 0;
+	const result = await attemptSavedEntryWithTailscaleRecovery({
+		platformOS: 'android',
+		recovery: createSavedEntryTailscaleDiagnosticRecovery({
+			platformOS: 'android',
+			recovery: recoveryFixture({
+				afterFailure: {
+					kind: 'nonNetworkFailure',
+					attempted: false,
+					networkLikeFailure: false,
+					available: true,
+				},
+			}),
+			emit: (event) => {
+				if (event.kind !== 'tailscale.recovery.result') return;
+				Object.assign(event.recoveryResult, {
+					kind: 'recovered',
+					attempted: true,
+					networkLikeFailure: true,
+					available: true,
+				} satisfies TailscaleRecoverAfterFailureResult);
+			},
+		}),
+		connectSavedEntry: async () => {
+			connectCount += 1;
+			throw new Error('permission denied');
+		},
+	});
+
+	assert.equal(result.status, 'recoveryNotAttempted');
+	assert.equal(connectCount, 1);
 });
