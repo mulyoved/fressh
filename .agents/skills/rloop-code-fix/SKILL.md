@@ -1,8 +1,6 @@
 ---
 name: rloop-code-fix
-description:
-  Use when uncommitted code changes need automated review before commit, but the
-  main agent should stay responsible for triage, fixes, and verification.
+description: Use when uncommitted code changes need automated review before commit, but the main agent should stay responsible for triage, fixes, and verification.
 ---
 
 # Review-First Code Fix Loop

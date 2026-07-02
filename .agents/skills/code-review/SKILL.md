@@ -1,9 +1,6 @@
 ---
 name: code-review
-description:
-  Use when reviewing local code changes, branch diffs, pull requests, or
-  explicit files for correctness, security, performance, maintainability, test
-  coverage, AI slop, or release readiness.
+description: Use when reviewing local code changes, branch diffs, pull requests, or explicit files for correctness, security, performance, maintainability, test coverage, AI slop, or release readiness.
 ---
 
 # Code Review
@@ -16,19 +13,25 @@ update PRs/issues.
 
 ## Quick Reference
 
-| Situation                                                                                                            | Do                                                                                                                                           |
-| -------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| Target or base unclear                                                                                               | Stop and ask                                                                                                                                 |
-| Sensitive files in scope                                                                                             | Report paths only; do not read contents                                                                                                      |
-| User explicitly asks review-only, findings-only, no edits, or audit-only                                             | Review and report findings; do not edit                                                                                                      |
-| bundled code-review helpers exist                                                                                    | Use External Codex adapter                                                                                                                   |
-| Starting a routine closeout review after preflight confirms the dirty worktree/current branch is the intended target | Use `run-closeout-review.mjs` with no flags, optionally `--check "<command>"`                                                                |
-| External Codex finds issues                                                                                          | Validate, auto-fix accepted in-scope items, verify, inner review, rerun Codex                                                                |
-| First External Codex round is clean                                                                                  | Run one deep review before clean closeout                                                                                                    |
-| Accepted fix is safe and in scope                                                                                    | Fix without asking                                                                                                                           |
-| Finding is uncertain, UX/product-changing, false-positive, broad, or repeated                                        | Ask or stop with `needs_user_decision`                                                                                                       |
-| Convergence/churn trigger                                                                                            | Read `../shared/convergence.md`, then choose targeted verification, final integrated review, another bounded batch, or `needs_user_decision` |
-| Verification unavailable                                                                                             | Return `blocked` with command and reason                                                                                                     |
+- Target or base unclear -> stop and ask.
+- Sensitive files in scope -> report paths only; do not read contents.
+- User explicitly asks review-only, findings-only, no edits, or audit-only ->
+  review and report findings; do not edit.
+- Bundled code-review helpers exist -> use External Codex adapter.
+- Starting a routine closeout review after preflight confirms the dirty
+  worktree/current branch is the intended target -> use
+  `run-closeout-review.mjs` with no flags, optionally `--check "<command>"`.
+- External Codex finds issues -> validate, auto-fix accepted in-scope items,
+  verify, inner review, rerun Codex.
+- First External Codex round is clean -> run one deep review before clean
+  closeout.
+- Accepted fix is safe and in scope -> fix without asking.
+- Finding is uncertain, UX/product-changing, false-positive, broad, or repeated
+  -> ask or stop with `needs_user_decision`.
+- Convergence/churn trigger -> read `../shared/convergence.md`, then choose
+  targeted verification, final integrated review, another bounded batch, or
+  `needs_user_decision`.
+- Verification unavailable -> return `blocked` with command and reason.
 
 ## Workflow
 
