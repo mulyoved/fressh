@@ -1,6 +1,7 @@
 # Stop Conditions
 
-Stop, pause, or ask the user when continuing would make the review unreliable or unsafe.
+Stop, pause, or ask the user when continuing would make the review unreliable or
+unsafe.
 
 ## Contents
 
@@ -35,7 +36,8 @@ Stop before reading, quoting, uploading, or sending review content from:
 - local database dumps or customer data extracts
 - generated files that embed secrets
 
-If such files appear in the diff, report their paths only and recommend removing them from the review target.
+If such files appear in the diff, report their paths only and recommend removing
+them from the review target.
 
 ## Async External Review
 
@@ -64,7 +66,8 @@ node .agents/skills/code-review/scripts/run-boundary-step.mjs \
   --repo-root "$(pwd)"
 ```
 
-If `run-boundary-step --action wait` exits without a terminal state, times out, or returns no usable terminal result, closeout remains blocked.
+If `run-boundary-step --action wait` exits without a terminal state, times out,
+or returns no usable terminal result, closeout remains blocked.
 
 Before ending a review-backed run, run:
 
@@ -79,24 +82,37 @@ Terminal outcome mapping:
 
 - `clean` maps to a clean final verdict.
 - `issues_found` maps to queue items.
-- `failed`, `stalled`, or `blocked` map to final verdict `blocked` unless the user chooses otherwise.
+- `failed`, `stalled`, or `blocked` map to final verdict `blocked` unless the
+  user chooses otherwise.
 
-Do not close out when the boundary helper requires `inner_receive_review`, `inner_request_review`, `deep_review`, or `wait_external_review`.
+Do not close out when the boundary helper requires `inner_receive_review`,
+`inner_request_review`, `deep_review`, or `wait_external_review`.
 
 ## Verification Blockers
 
 Stop or mark `blocked` when:
 
 - Required dependencies are unavailable and no meaningful fallback exists.
-- Tests require credentials, services, data, or network access not available in the environment.
+- Tests require credentials, services, data, or network access not available in
+  the environment.
 - A command fails because of environment setup unrelated to the change.
 - The repo has no discoverable verification path and risk is non-trivial.
 
 Report the attempted command, failure summary, and what is needed.
 
-If a command fails because a flag, path, review target, or input is unsupported, do not rerun the same command with the same stderr. Inspect the script or docs, switch to a documented fallback, or stop with `needs_user_decision`.
+If a command fails because a flag, path, review target, or input is unsupported,
+do not rerun the same command with the same stderr. Inspect the script or docs,
+switch to a documented fallback, or stop with `needs_user_decision`.
+
+When a required gate is proven environment or configuration broken, follow
+`../../shared/convergence.md`: record the command, failure reason, and fallback
+once; use the fallback until the environment changes; and include the downgraded
+gate in the final verification notes.
 
 ## Repeated Findings
+
+Run the convergence checkpoint in `../../shared/convergence.md` before deciding
+whether repeated-finding rules require `needs_user_decision`.
 
 Stop with `needs_user_decision` when:
 
@@ -105,26 +121,41 @@ Stop with `needs_user_decision` when:
 - Fixing an item would change product behavior beyond the review scope.
 - Findings conflict and cannot be resolved from code/docs.
 
+Before launching another full review after repeated findings, de-duplicate
+findings and state the current task contract. Choose another bounded batch only
+when the checkpoint shows genuinely new evidence, a resolved root cause that
+needs bounded confirmation, or that the finding is not actually unchanged. For
+unchanged repeated findings, stop with `needs_user_decision`.
+
 ## User Decisions
 
 Ask only when one of these applies:
 
 - Expanding review scope beyond the requested target.
 - Applying broad refactors or cleanup.
-- Escalating a fix into `writing-plans` / `executing-plans` because it is broad, architectural, or too complex for a direct fix.
-- Changing important UX, product behavior, permissions, data semantics, or public API behavior.
-- Rejecting, deferring, or marking a finding as false-positive when the answer is not mechanically provable from code/docs.
+- Escalating a fix into `writing-plans` / `executing-plans` because it is broad,
+  architectural, or too complex for a direct fix.
+- Changing important UX, product behavior, permissions, data semantics, or
+  public API behavior.
+- Rejecting, deferring, or marking a finding as false-positive when the answer
+  is not mechanically provable from code/docs.
 - Deleting code where usage is unclear.
 - Deferring a critical or security finding.
 - `receiving-code-review` is uncertain or asks for clarification.
-- All reviews and verification are clean but a real unresolved closeout decision remains.
+- All reviews and verification are clean but a real unresolved closeout decision
+  remains.
 
-Do not ask before accepted direct fixes that are in scope, low risk, and locally verifiable.
-Respect explicit review-only, findings-only, no-edit, audit-only, or comments-only instructions without asking; report findings only unless the user later authorizes edits.
+Do not ask before accepted direct fixes that are in scope, low risk, and locally
+verifiable. Respect explicit review-only, findings-only, no-edit, audit-only, or
+comments-only instructions without asking; report findings only unless the user
+later authorizes edits.
 
 ## Automatic Fix Boundaries
 
-Continue without user intervention when the next fix is accepted, in scope, low risk, and locally verifiable. Stop with `needs_user_decision` when the next step would require product judgment, broad redesign, scope expansion, rejecting reviewer evidence, or repeating the same finding without meaningful progress.
+Continue without user intervention when the next fix is accepted, in scope, low
+risk, and locally verifiable. Stop with `needs_user_decision` when the next step
+would require product judgment, broad redesign, scope expansion, rejecting
+reviewer evidence, or repeating the same finding without meaningful progress.
 
 ## Hard No
 
@@ -135,4 +166,7 @@ Do not continue silently when:
 - Review mode changed accidentally.
 - Verification is failing but the report would otherwise say clean.
 - The fix loop is churning without reducing risk.
-- Accepted automatic fixes remain but the run is about to close with `issues_found`.
+- A convergence trigger fired but the run is launching more reviewers without a
+  checkpoint or recorded reason.
+- Accepted automatic fixes remain but the run is about to close with
+  `issues_found`.

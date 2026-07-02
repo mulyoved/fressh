@@ -5,18 +5,25 @@ description: Use when completing tasks, implementing major features, or before m
 
 # Requesting Code Review
 
-Dispatch a code reviewer subagent to catch issues before they cascade. The reviewer gets precisely crafted context for evaluation — never your session's history. This keeps the reviewer focused on the work product, not your thought process, and preserves your own context for continued work.
+Dispatch a code reviewer subagent to catch issues before they cascade. The
+reviewer gets precisely crafted context for evaluation — never your session's
+history. This keeps the reviewer focused on the work product, not your thought
+process, and preserves your own context for continued work.
 
-**Core principle:** Review early, review often.
+**Core principle:** Review early at meaningful boundaries, but keep review loops
+bounded. If repeated review/fix cycles stop reducing risk, read
+`../shared/convergence.md` before requesting another full review.
 
 ## When to Request Review
 
 **Mandatory:**
+
 - After each task in subagent-driven development
 - After completing major feature
 - Before merge to main
 
 **Optional but valuable:**
+
 - When stuck (fresh perspective)
 - Before refactoring (baseline check)
 - After fixing complex bug
@@ -24,6 +31,7 @@ Dispatch a code reviewer subagent to catch issues before they cascade. The revie
 ## How to Request
 
 **1. Get git SHAs:**
+
 ```bash
 BASE_SHA=$(git rev-parse HEAD~1)  # or origin/main
 HEAD_SHA=$(git rev-parse HEAD)
@@ -34,12 +42,14 @@ HEAD_SHA=$(git rev-parse HEAD)
 Use Task tool with `general-purpose` type, fill template at `code-reviewer.md`
 
 **Placeholders:**
+
 - `{DESCRIPTION}` - Brief summary of what you built
 - `{PLAN_OR_REQUIREMENTS}` - What it should do
 - `{BASE_SHA}` - Starting commit
 - `{HEAD_SHA}` - Ending commit
 
 **3. Act on feedback:**
+
 - Fix Critical issues immediately
 - Fix Important issues before proceeding
 - Note Minor issues for later
@@ -75,27 +85,44 @@ You: [Fix progress indicators]
 ## Integration with Workflows
 
 **Subagent-Driven Development:**
+
 - Review after EACH task
 - Catch issues before they compound
 - Fix before moving to next task
 
 **Executing Plans:**
+
 - Review after each task or at natural checkpoints
 - Get feedback, apply, continue
 
 **Ad-Hoc Development:**
+
 - Review before merge
 - Review when stuck
+
+## Convergence Boundary
+
+Use `../shared/convergence.md` before requesting another reviewer when:
+
+- two review/fix loops have already run for the same task;
+- the next review would repeat the same scope after a narrow patch;
+- reviewer feedback is clustering around one root cause or task-contract change;
+- a verification gate is known broken and needs a recorded fallback.
+
+After the checkpoint, prefer a targeted review or final integrated review over
+restarting the full review pattern by habit.
 
 ## Red Flags
 
 **Never:**
+
 - Skip review because "it's simple"
 - Ignore Critical issues
 - Proceed with unfixed Important issues
 - Argue with valid technical feedback
 
 **If reviewer wrong:**
+
 - Push back with technical reasoning
 - Show code/tests that prove it works
 - Request clarification
