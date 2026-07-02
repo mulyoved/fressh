@@ -7,7 +7,9 @@ description: Use when completing tasks, implementing major features, or before m
 
 Dispatch a code reviewer subagent to catch issues before they cascade. The reviewer gets precisely crafted context for evaluation — never your session's history. This keeps the reviewer focused on the work product, not your thought process, and preserves your own context for continued work.
 
-**Core principle:** Review early, review often.
+**Core principle:** Review early at meaningful boundaries, but keep review loops
+bounded. If repeated review/fix cycles stop reducing risk, read
+`../shared/convergence.md` before requesting another full review.
 
 ## When to Request Review
 
@@ -86,6 +88,18 @@ You: [Fix progress indicators]
 **Ad-Hoc Development:**
 - Review before merge
 - Review when stuck
+
+## Convergence Boundary
+
+Use `../shared/convergence.md` before requesting another reviewer when:
+
+- two review/fix loops have already run for the same task;
+- the next review would repeat the same scope after a narrow patch;
+- reviewer feedback is clustering around one root cause or task-contract change;
+- a verification gate is known broken and needs a recorded fallback.
+
+After the checkpoint, prefer a targeted review or final integrated review over
+restarting the full review pattern by habit.
 
 ## Red Flags
 

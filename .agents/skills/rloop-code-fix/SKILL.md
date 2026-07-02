@@ -23,6 +23,11 @@ This skill is durable by default. Every run must leave a clear record under:
 - Do not use `codex exec` or `codex exec resume` for fixes in the normal path.
 - A passing local verify is not enough to close the run. The loop must get a later `codex review --uncommitted` result of `clean` before it can move to deep review or final closeout.
 - Run external review in batches of 5 rounds: `1-5`, then `6-10`, then `11-15`, and so on. If the latest external review is still not clean at the end of a batch, stop and ask the user whether to continue with another 5-round batch or exit as-is.
+- Before a third review/fix loop on the same root cause, or earlier if findings
+  cluster around one design smell, read `../shared/convergence.md` and record
+  the checkpoint in the durable run or repo-tracked process report before
+  launching more review. If continuing without consolidating first is cheaper or
+  safer, record that rationale in the checkpoint.
 - Do not silently ignore `P3`. Every finding must be classified and explained.
 - If a finding is real but outside the current PR scope, record it as a separate-issue suggestion instead of expanding scope silently.
 - Rejected findings must be recorded in both the durable run and the repo-tracked process report so later `codex review --uncommitted` rounds can see the prior rationale.
@@ -43,6 +48,8 @@ This skill is durable by default. Every run must leave a clear record under:
 - `references/artifacts.md` - event log schema, generated reports, and saved artifact paths
 - `references/final-summary.md` - what the tracked process report must show
 - `../shared/long-running-subprocess.md` - standard wait/resume behavior for healthy long-running subprocesses
+- `../shared/convergence.md` - checkpoint for repeated review/fix loops,
+  known-broken gates, reviewer capacity, and root-cause consolidation
 
 ## External Review Wait Policy
 
@@ -297,6 +304,11 @@ If verification fails:
 - verify again before another external review
 - repeated same-round `main-agent-fix` and `main-agent-verify` artifacts auto-version as `*-attempt-<n>.md`
 
+If the same verification gate is proven environment or configuration broken,
+record the command, failure reason, and fallback according to
+`../shared/convergence.md`. Use the fallback for the rest of the run unless the
+environment changes.
+
 If verification passes:
 - if the current round does not end the current 5-round batch window, go back to Step 2 and rerun `codex review --uncommitted`
 - if the current round does end the current 5-round batch window and the latest external review was still not clean, go to Step 7 and ask the user whether to continue with another 5-round batch
@@ -376,6 +388,11 @@ If the loop keeps surfacing adjacent issues that point to one root cause, pause 
 - “we keep finding related workflow issues”
 - “this looks like a design or test smell”
 - “we should improve X before continuing on this task”
+
+Then run the convergence checkpoint from `../shared/convergence.md` before
+starting another review batch. Record the current contract, superseded
+assumptions, duplicate versus new findings, trusted versus downgraded gates, and
+why another batch is or is not worth the cost.
 
 ### Step 8: Final Closeout
 
