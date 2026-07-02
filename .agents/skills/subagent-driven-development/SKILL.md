@@ -13,6 +13,13 @@ Execute plan by dispatching fresh subagent per task, with two-stage review after
 
 **Continuous execution:** Do not pause to check in with your human partner between tasks. Execute all tasks from the plan without stopping. The only reasons to stop are: BLOCKED status you cannot resolve, ambiguity that genuinely prevents progress, or all tasks complete. "Should I continue?" prompts and progress summaries waste their time — they asked you to execute the plan, so execute it.
 
+**Convergence checkpoint:** Continuous execution is still bounded. Before a
+third review/fix loop on the same task, before retrying after reviewer/subagent
+slot saturation, or when multiple findings point to one root cause, read
+`../shared/convergence.md` and record the checkpoint in the workflow's durable
+report, user-visible session summary, or active plan state before launching more
+subagents.
+
 ## When to Use
 
 ```dot
@@ -118,6 +125,12 @@ Implementer subagents report one of four statuses. Handle each appropriately:
 4. If the plan itself is wrong, escalate to the human
 
 **Never** ignore an escalation or force the same model to retry without changes. If the implementer said it's stuck, something needs to change.
+
+If a task needs repeated spec-review or code-quality-review fixes, use
+`../shared/convergence.md` to summarize the root cause, update the active task
+contract, de-duplicate findings, and decide whether the next step is targeted
+verification, one final integrated review, another bounded reviewer batch, or a
+human decision.
 
 ## Prompt Templates
 

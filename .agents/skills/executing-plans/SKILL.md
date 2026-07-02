@@ -46,6 +46,12 @@ After all tasks complete and verified:
 
 **Ask for clarification rather than guessing.**
 
+When verification fails repeatedly, a plan step changes the contract for later
+steps, or the same blocker returns after a fix attempt, read
+`../shared/convergence.md` before asking for help. Record the current task
+contract, superseded assumptions, trusted or downgraded verification gates, and
+the next bounded action to propose.
+
 ## When to Revisit Earlier Steps
 
 **Return to Review (Step 1) when:**
