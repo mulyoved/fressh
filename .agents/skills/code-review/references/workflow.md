@@ -51,7 +51,11 @@ After triage, do not ask before routine fixes. Automatically fix findings that a
 
 After accepted fixes, run local verification, run inner review, then rerun External Codex with the same persisted mode. Keep looping until the latest External Codex round is terminal `clean`, the run is `blocked`, or a stop condition requires `needs_user_decision`.
 
+Before a third review/fix loop on the same task, or earlier when related findings point to one root cause, run the convergence checkpoint in `../../shared/convergence.md`. Record the current contract, superseded assumptions, duplicate versus new findings, trusted versus downgraded verification gates, and why the next step should be targeted verification, one final integrated review, another bounded review batch, or `needs_user_decision`.
+
 When the first External Codex round is clean, run one deep review pass. Deep-review findings reopen the same queue and require the same autonomous triage/fix/verify/inner-review/rerun loop.
+
+After small patches, do not restart optional or broad adapter matrices by habit. This does not relax the accepted-fix loop: accepted fixes still require local verification, inner review, and any required External Codex rerun before clean closeout. Prefer targeted verification and queue updates for optional/broad follow-up unless the task contract changed, broad files changed, or final closeout needs integrated confidence.
 
 For AI-slop cleanup, run a bounded loop: review, fix safe simplifications, verify, reviewer-only rerun. Stop after 3 iterations, clean reviewer pass, blocker, or repeated issue.
 

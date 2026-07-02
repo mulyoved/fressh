@@ -96,7 +96,11 @@ Report the attempted command, failure summary, and what is needed.
 
 If a command fails because a flag, path, review target, or input is unsupported, do not rerun the same command with the same stderr. Inspect the script or docs, switch to a documented fallback, or stop with `needs_user_decision`.
 
+When a required gate is proven environment or configuration broken, follow `../../shared/convergence.md`: record the command, failure reason, and fallback once; use the fallback until the environment changes; and include the downgraded gate in the final verification notes.
+
 ## Repeated Findings
+
+Run the convergence checkpoint in `../../shared/convergence.md` before deciding whether repeated-finding rules require `needs_user_decision`.
 
 Stop with `needs_user_decision` when:
 
@@ -104,6 +108,8 @@ Stop with `needs_user_decision` when:
 - A reviewer repeats a suggestion already rejected with technical evidence.
 - Fixing an item would change product behavior beyond the review scope.
 - Findings conflict and cannot be resolved from code/docs.
+
+Before launching another full review after repeated findings, de-duplicate findings and state the current task contract. Choose another bounded batch only when the checkpoint shows genuinely new evidence, a resolved root cause that needs bounded confirmation, or that the finding is not actually unchanged. For unchanged repeated findings, stop with `needs_user_decision`.
 
 ## User Decisions
 
@@ -135,4 +141,5 @@ Do not continue silently when:
 - Review mode changed accidentally.
 - Verification is failing but the report would otherwise say clean.
 - The fix loop is churning without reducing risk.
+- A convergence trigger fired but the run is launching more reviewers without a checkpoint or recorded reason.
 - Accepted automatic fixes remain but the run is about to close with `issues_found`.

@@ -20,6 +20,7 @@ Produce one prioritized queue of actionable findings for the requested code targ
 | First External Codex round is clean | Run one deep review before clean closeout |
 | Accepted fix is safe and in scope | Fix without asking |
 | Finding is uncertain, UX/product-changing, false-positive, broad, or repeated | Ask or stop with `needs_user_decision` |
+| Convergence/churn trigger | Read `../shared/convergence.md`, then choose targeted verification, final integrated review, another bounded batch, or `needs_user_decision` |
 | Verification unavailable | Return `blocked` with command and reason |
 
 ## Workflow
@@ -29,6 +30,10 @@ Produce one prioritized queue of actionable findings for the requested code targ
 3. Read `references/adapters.md` before non-manual review sources. If a relevant adapter exists, run it or report why skipped.
 4. Use `references/review-queue-format.md` for the consolidated queue.
 5. Use `references/stop-conditions.md` whenever scope, safety, async review, verification, or repeated findings get uncertain.
+6. Use `../shared/convergence.md` when repeated review/fix loops, repeated
+   findings, known-broken gates, or reviewer-capacity issues show the run is
+   churning. Record the checkpoint, then choose targeted verification, final
+   integrated review, another bounded batch, or `needs_user_decision`.
 
 ## Hard Rules
 
@@ -61,3 +66,5 @@ Produce one prioritized queue of actionable findings for the requested code targ
 - `references/artifacts.md` - durable review artifact contract.
 - `references/record-templates.md` - exact event recording commands.
 - `references/final-summary.md` - generated report and closeout semantics.
+- `../shared/convergence.md` - long-session convergence checkpoint for repeated
+  review/fix loops and process churn.
