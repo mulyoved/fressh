@@ -1,22 +1,26 @@
 import {
 	attemptSavedEntryWithTailscaleRecovery,
+	type SavedEntryConnectAttemptPhase,
 	type SavedEntryTailscaleRecovery,
 } from './auto-connect-saved-entry';
-import { diagnosticEvents } from './connection-diagnostic-events';
 import { formatConnectionDiagnosticPrompt } from './connection-diagnostic-prompt';
-import { serializeConnectionDiagnosticError } from './connection-diagnostic-redaction';
 import {
 	type ConnectionDiagnosticAppState,
-	type ConnectionDiagnosticConnectionIdentity,
 	type ConnectionDiagnosticRecorder,
 	type ConnectionDiagnosticTrace,
 	type ConnectionDiagnosticTraceHandle,
 } from './connection-diagnostic-types';
+import {
+	buildSavedEntryIdentity,
+	manualDiagnosticEvents,
+	savedEntryEvents,
+} from './connection-diagnostics/events';
 import { type SavedConnectionEntry } from './connection-utils';
 import {
 	isDiagnosticShellCleanupError,
 	type DiagnosticShellProbeResult,
 } from './diagnostic-shell-probe';
+import { createSavedEntryTailscaleDiagnosticRecovery } from './saved-entry-tailscale-diagnostic-recovery';
 // eslint-disable-next-line import/consistent-type-specifier-style -- keep secrets-manager type-only so Node integration tests do not load React Native at runtime
 import type { InputConnectionDetails } from './secrets-manager';
 
@@ -79,24 +83,6 @@ async function withManualDiagnosticTimeout<T>(
 	} finally {
 		if (timeoutId !== null) clearTimeout(timeoutId);
 	}
-}
-
-function getConnectionIdentity(
-	id: string,
-	details: InputConnectionDetails,
-): ConnectionDiagnosticConnectionIdentity {
-	const identity: ConnectionDiagnosticConnectionIdentity = {
-		savedConnectionId: id,
-		username: details.username,
-		host: details.host,
-		port: details.port,
-		keyId: details.security.keyId,
-	};
-	if (details.useTmux !== undefined) identity.useTmux = details.useTmux;
-	if (details.tmuxSessionName !== undefined) {
-		identity.tmuxSessionName = details.tmuxSessionName;
-	}
-	return identity;
 }
 
 function promptForTrace(
@@ -164,7 +150,7 @@ async function runManualConnectionDiagnosticAttempt(
 	if (!latestEntry) {
 		safeTraceEvent(
 			traceHandle,
-			diagnosticEvents.savedEntryMissing({
+			manualDiagnosticEvents.savedEntryMissing({
 				source: 'manual-diagnostic',
 				message: 'No eligible saved auto-connect connection was found.',
 			}),
@@ -179,10 +165,10 @@ async function runManualConnectionDiagnosticAttempt(
 		tmuxSessionName: details.tmuxSessionName?.trim() || 'main',
 		autoConnect: details.autoConnect ?? false,
 	};
-	const connection = getConnectionIdentity(latestEntry.id, normalizedDetails);
+	const connection = buildSavedEntryIdentity(latestEntry.id, normalizedDetails);
 	safeTraceEvent(
 		traceHandle,
-		diagnosticEvents.savedEntrySelected({
+		savedEntryEvents.selected({
 			source: 'manual-diagnostic',
 			connection,
 		}),
@@ -193,7 +179,7 @@ async function runManualConnectionDiagnosticAttempt(
 	if (!resolvedSecurity) {
 		safeTraceEvent(
 			traceHandle,
-			diagnosticEvents.keyMissing({
+			savedEntryEvents.keyMissing({
 				source: 'manual-diagnostic',
 				connection,
 			}),
@@ -203,17 +189,22 @@ async function runManualConnectionDiagnosticAttempt(
 
 	safeTraceEvent(
 		traceHandle,
-		diagnosticEvents.keyResolved({
+		savedEntryEvents.keyResolved({
 			source: 'manual-diagnostic',
 			connection,
 		}),
 	);
 
-	const result = await attemptSavedEntryWithTailscaleRecovery({
+	const tracedRecovery = createSavedEntryTailscaleDiagnosticRecovery({
 		platformOS: args.appState.platformOS,
 		recovery: args.recovery,
-		connectSavedEntry: () =>
-			Promise.resolve()
+		emit: (event) => safeTraceEvent(traceHandle, event),
+	});
+	const tracedConnectSavedEntry = async (
+		phase: SavedEntryConnectAttemptPhase,
+	) => {
+		try {
+			return await Promise.resolve()
 				.then(ensureCurrentRun)
 				.then(() =>
 					args.connectSavedEntry({
@@ -221,18 +212,55 @@ async function runManualConnectionDiagnosticAttempt(
 						resolvedSecurity,
 						trace: traceHandle,
 					}),
-				),
+				);
+		} catch (error) {
+			safeTraceEvent(
+				traceHandle,
+				manualDiagnosticEvents.warning({
+					source: 'manual-diagnostic',
+					message:
+						phase === 'retry'
+							? 'Saved-entry retry threw.'
+							: 'Saved-entry connection threw.',
+					error,
+				}),
+			);
+			throw error;
+		}
+	};
+
+	const result = await attemptSavedEntryWithTailscaleRecovery({
+		platformOS: args.appState.platformOS,
+		recovery: tracedRecovery,
+		connectSavedEntry: tracedConnectSavedEntry,
 		shouldRecoverAfterFailure: (error) => !isDiagnosticShellCleanupError(error),
-		onEvent: (event) => safeTraceEvent(traceHandle, event),
 	});
 
 	switch (result.status) {
 		case 'connected':
 			return finish(traceHandle, 'connected', args);
 		case 'tmuxAttachFailed':
+			safeTraceEvent(
+				traceHandle,
+				manualDiagnosticEvents.tmuxAttachFailed({
+					source: 'manual-diagnostic',
+					connection,
+					tmuxAttachFailureReason: result.result.tmuxAttachFailureReason,
+				}),
+			);
+			return finish(traceHandle, 'failed', args);
 		case 'blocked':
 		case 'recoveryNotAttempted':
 		case 'retryFailed':
+			if (result.attentionMessage !== null) {
+				safeTraceEvent(
+					traceHandle,
+					manualDiagnosticEvents.tailscaleAttention({
+						source: 'tailscale-recovery',
+						message: result.attentionMessage,
+					}),
+				);
+			}
 			return finish(traceHandle, 'failed', args);
 		case 'threw':
 			throw result.error;
@@ -283,7 +311,7 @@ async function runManualConnectionDiagnosticWithState(
 		if (isTimeout) {
 			safeTraceEvent(
 				handle,
-				diagnosticEvents.manualDiagnosticTimeout({
+				manualDiagnosticEvents.timeout({
 					timeoutMs: error.timeoutMs,
 					message: error.message,
 				}),
@@ -292,9 +320,9 @@ async function runManualConnectionDiagnosticWithState(
 		}
 		safeTraceEvent(
 			handle,
-			diagnosticEvents.manualDiagnosticFailed({
+			manualDiagnosticEvents.failed({
 				source: 'manual-diagnostic',
-				error: serializeConnectionDiagnosticError(error),
+				error,
 			}),
 		);
 		return finish(handle, 'failed', args);

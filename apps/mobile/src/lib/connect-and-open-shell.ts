@@ -12,6 +12,7 @@ import {
 	runSshShellLifecycle,
 	type SshShellLifecycleResult,
 } from './ssh-shell-lifecycle';
+import { AbortSignalTimeout } from './utils';
 
 const logger = rootLogger.extend('ConnectAndOpenShell');
 const DEFAULT_CONNECT_TIMEOUT_MS = 5_000;
@@ -49,6 +50,43 @@ const defaultSaveConnection: SaveConnection = async (params) => {
 	return await secretsManager.connections.utils.upsertConnection(params);
 };
 
+async function cleanupAbortedConnection(
+	result: ConnectedSshShellLifecycleResult,
+	timeoutMs: number,
+) {
+	try {
+		await result.shellHandle.close?.({
+			signal: AbortSignalTimeout(timeoutMs),
+		});
+	} catch (error) {
+		logger.warn('Failed to close aborted auto-connect shell', error);
+	}
+	try {
+		await result.sshConnection.disconnect?.({
+			signal: AbortSignalTimeout(timeoutMs),
+		});
+	} catch (error) {
+		logger.warn('Failed to disconnect aborted auto-connect SSH connection', error);
+	}
+}
+
+async function disconnectAbortedConnection(
+	result: Parameters<
+		NonNullable<
+			Parameters<typeof runSshShellLifecycle>[0]['afterShellFailure']
+		>
+	>[0],
+	timeoutMs: number,
+) {
+	try {
+		await result.sshConnection.disconnect?.({
+			signal: AbortSignalTimeout(timeoutMs),
+		});
+	} catch (error) {
+		logger.warn('Failed to disconnect aborted auto-connect SSH connection', error);
+	}
+}
+
 // Shared resolver for turning stored details into a connect-ready security object.
 async function resolveSecurityFromDetails(
 	connectionDetails: InputConnectionDetails,
@@ -76,6 +114,7 @@ export async function connectAndOpenShell(args: {
 	}) => void;
 	onConnectionProgress?: (progressEvent: SshConnectionProgress) => void;
 	abortSignalTimeoutMs?: number;
+	abortSignal?: AbortSignal;
 	resolvedSecurity?: ConnectionDetails['security'];
 	saveConnection?: SaveConnection;
 	trace?: ConnectTrace;
@@ -86,6 +125,7 @@ export async function connectAndOpenShell(args: {
 		navigate,
 		onConnectionProgress,
 		abortSignalTimeoutMs = DEFAULT_CONNECT_TIMEOUT_MS,
+		abortSignal,
 		resolvedSecurity,
 		saveConnection = defaultSaveConnection,
 	} = args;
@@ -113,11 +153,18 @@ export async function connectAndOpenShell(args: {
 				connect,
 				onConnectionProgress,
 				abortSignalTimeoutMs,
+				abortSignal,
 				resolvedSecurity: security,
 				saveConnection,
 			}),
+		abortSignal,
+		afterShellFailure: async (context) => {
+			if (!abortSignal?.aborted) return;
+			await disconnectAbortedConnection(context, abortSignalTimeoutMs);
+		},
 	});
 	if (result.status === 'tmux_attach_failed') {
+		if (abortSignal?.aborted) return result;
 		args.navigateWithError?.({
 			connectionId: result.connectionId,
 			tmuxAttachFailureReason: result.tmuxAttachFailureReason,
@@ -132,6 +179,10 @@ export async function connectAndOpenShell(args: {
 		result.sshConnection.connectionId,
 		result.shellHandle.channelId,
 	);
+	if (abortSignal?.aborted) {
+		await cleanupAbortedConnection(result, abortSignalTimeoutMs);
+		return result;
+	}
 	navigate({
 		connectionId: result.sshConnection.connectionId,
 		channelId: result.shellHandle.channelId,

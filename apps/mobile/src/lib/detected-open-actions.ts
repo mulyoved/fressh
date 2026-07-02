@@ -11,6 +11,23 @@ import {
 
 export type { DetectedOpenCandidate };
 
+export function buildKeyedDetectedOpenCandidates(
+	candidates: readonly DetectedOpenCandidate[],
+): { candidate: DetectedOpenCandidate; key: string }[] {
+	const seen = new Map<string, number>();
+
+	return candidates.map((candidate) => {
+		const identity = `${candidate.kind}:${candidate.raw}`;
+		const occurrence = seen.get(identity) ?? 0;
+		seen.set(identity, occurrence + 1);
+
+		return {
+			candidate,
+			key: JSON.stringify([candidate.kind, candidate.raw, occurrence]),
+		};
+	});
+}
+
 export type RunDetectedOpenHostCommandDeps = {
 	mode: HostBrowserOpenMode;
 	resolvePaneContext: () => Promise<TmuxPaneContext>;

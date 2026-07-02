@@ -172,7 +172,7 @@ function extractSkillDiscoveryJsonPayload(output: string): string | null {
 }
 
 function stripAnsi(value: string): string {
-	return value.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '');
+	return value.replace(new RegExp(String.raw`\u001B\[[0-?]*[ -/]*[@-~]`, 'g'), '');
 }
 
 function isSkillDiscoveryRecord(value: unknown): value is SkillDiscoveryRecord {

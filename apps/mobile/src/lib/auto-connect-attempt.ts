@@ -1,25 +1,29 @@
 import {
 	attemptSavedEntryWithTailscaleRecovery,
+	type SavedEntryConnectAttemptPhase,
 	type SavedEntryConnectResult,
 	type SavedEntryTailscaleRecovery,
 } from './auto-connect-saved-entry';
-import { diagnosticEvents } from './connection-diagnostic-events';
-import { serializeConnectionDiagnosticError } from './connection-diagnostic-redaction';
+import { type ConnectionDiagnosticEvent } from './connection-diagnostic-types';
 import {
-	type ConnectionDiagnosticConnectionIdentity,
-	type ConnectionDiagnosticEvent,
-} from './connection-diagnostic-types';
+	autoConnectEvents,
+	buildActiveConnectionIdentity,
+	buildSavedEntryIdentity,
+	savedEntryEvents,
+	serializeConnectionDiagnosticError,
+} from './connection-diagnostics/events';
 import {
 	getStoredConnectionId,
 	type SavedConnectionEntry,
 } from './connection-utils';
+import { createSavedEntryTailscaleDiagnosticRecovery } from './saved-entry-tailscale-diagnostic-recovery';
 // eslint-disable-next-line import/consistent-type-specifier-style -- keep secrets-manager fully type-only so Node integration tests do not load React Native at runtime
 import type {
 	InputConnectionDetails,
 	StoredConnectionDetails,
 } from './secrets-manager';
 import { extractTmuxAttachFailureReason } from './ssh-error-details';
-import { AbortSignalTimeout, queryClient } from './utils';
+import { AbortSignalAny, AbortSignalTimeout, queryClient } from './utils';
 
 type LatestShellSnapshot = {
 	connectionId: string;
@@ -40,7 +44,10 @@ type ActiveConnectionSnapshot = {
 		useTmux: boolean;
 		tmuxSessionName: string;
 		abortSignal: AbortSignal;
-	}) => Promise<{ channelId: number }>;
+	}) => Promise<{
+		channelId: number;
+		close?: (opts?: { signal?: AbortSignal }) => Promise<void>;
+	}>;
 };
 
 type ResolvedKeySecurity = {
@@ -52,6 +59,7 @@ type OpenSavedEntryShell = (args: {
 	connectionDetails: InputConnectionDetails;
 	resolvedSecurity: ResolvedKeySecurity;
 	navigate: (params: { connectionId: string; channelId: number }) => void;
+	abortSignal?: AbortSignal;
 }) => Promise<SavedEntryConnectResult>;
 
 type Logger = {
@@ -87,6 +95,7 @@ export type AutoConnectAttemptSourceArgs = {
 		storedConnectionId: string,
 	) => Promise<TmuxSettings | null>;
 	trace?: AutoConnectTrace;
+	abortSignal?: AbortSignal;
 };
 
 const loadStoredTmuxSettings = async (
@@ -113,24 +122,6 @@ const pickLatestActiveConnection = (
 	);
 };
 
-const getSavedEntryConnectionIdentity = (
-	id: string,
-	details: StoredConnectionDetails,
-): ConnectionDiagnosticConnectionIdentity => {
-	const identity: ConnectionDiagnosticConnectionIdentity = {
-		savedConnectionId: id,
-		username: details.username,
-		host: details.host,
-		port: details.port,
-		keyId: details.security.keyId,
-	};
-	if (details.useTmux !== undefined) identity.useTmux = details.useTmux;
-	if (details.tmuxSessionName !== undefined) {
-		identity.tmuxSessionName = details.tmuxSessionName;
-	}
-	return identity;
-};
-
 function emitTrace(
 	trace: AutoConnectTrace | undefined,
 	logger: Logger,
@@ -152,7 +143,7 @@ function traceLatestShell(
 	emitTrace(
 		trace,
 		logger,
-		diagnosticEvents.autoConnectLatestShellSelected({
+		autoConnectEvents.latestShellSelected({
 			source: 'latest-shell',
 			connection: { connectionId: latestShell.connectionId },
 			channelId: latestShell.channelId,
@@ -176,36 +167,44 @@ export async function attemptAutoConnectSource({
 	logger,
 	loadTmuxSettings = loadStoredTmuxSettings,
 	trace,
+	abortSignal,
 }: AutoConnectAttemptSourceArgs): Promise<boolean> {
+	const isAborted = () => abortSignal?.aborted === true;
 	const traceEvent = (event: ConnectionDiagnosticEvent) => {
 		emitTrace(trace, logger, event);
 	};
 
+	if (isAborted()) return false;
+
 	if (latestShell) {
 		traceLatestShell(trace, logger, latestShell, pathname);
+		if (isAborted()) return false;
 		if (pathname !== '/shell/detail') {
 			navigateToShell(latestShell.connectionId, latestShell.channelId);
 		}
+		if (isAborted()) return false;
 		clearTailscaleAttention();
 		return true;
 	}
 
 	traceEvent(
-		diagnosticEvents.autoConnectLatestShellMissing({
+		autoConnectEvents.latestShellMissing({
 			source: 'latest-shell',
 			pathname,
 		}),
 	);
 	const activeConnection = pickLatestActiveConnection(connections);
 	if (activeConnection) {
-		const activeConnectionIdentity = {
+		const activeConnectionIdentity = buildActiveConnectionIdentity({
 			connectionId: activeConnection.connectionId,
-			username: activeConnection.connectionDetails.username,
-			host: activeConnection.connectionDetails.host,
-			port: activeConnection.connectionDetails.port,
-		};
+			connectionDetails: {
+				username: activeConnection.connectionDetails.username,
+				host: activeConnection.connectionDetails.host,
+				port: activeConnection.connectionDetails.port,
+			},
+		});
 		traceEvent(
-			diagnosticEvents.autoConnectActiveConnectionSelected({
+			autoConnectEvents.activeConnectionSelected({
 				source: 'active-connection',
 				connection: activeConnectionIdentity,
 			}),
@@ -227,7 +226,7 @@ export async function attemptAutoConnectSource({
 
 		try {
 			traceEvent(
-				diagnosticEvents.autoConnectActiveConnectionShellStarted({
+				autoConnectEvents.activeConnectionShellStarted({
 					source: 'active-connection',
 					connection: {
 						...activeConnectionIdentity,
@@ -240,14 +239,27 @@ export async function attemptAutoConnectSource({
 				term: 'Xterm',
 				useTmux,
 				tmuxSessionName,
-				abortSignal: AbortSignalTimeout(5_000),
+				abortSignal: AbortSignalAny([
+					AbortSignalTimeout(5_000),
+					abortSignal,
+				]),
 			});
+			if (isAborted()) {
+				try {
+					await shellHandle.close?.({
+						signal: AbortSignalTimeout(5_000),
+					});
+				} catch (error) {
+					logger.warn('Failed to close aborted active shell', error);
+				}
+				return false;
+			}
 			logger.info('Reconnected by reopening shell on active connection', {
 				connectionId: activeConnection.connectionId,
 				channelId: shellHandle.channelId,
 			});
 			traceEvent(
-				diagnosticEvents.autoConnectActiveConnectionShellConnected({
+				autoConnectEvents.activeConnectionShellConnected({
 					source: 'active-connection',
 					connection: activeConnectionIdentity,
 					channelId: shellHandle.channelId,
@@ -255,20 +267,21 @@ export async function attemptAutoConnectSource({
 				}),
 			);
 			navigateToShell(activeConnection.connectionId, shellHandle.channelId);
+			if (isAborted()) return false;
 			clearTailscaleAttention();
 			return true;
 		} catch (error) {
 			const tmuxAttachFailureReason = extractTmuxAttachFailureReason(error);
 			traceEvent(
 				tmuxAttachFailureReason !== null
-					? diagnosticEvents.autoConnectActiveConnectionTmuxAttachFailed({
+					? autoConnectEvents.activeConnectionTmuxAttachFailed({
 							source: 'active-connection',
 							connection: activeConnectionIdentity,
 							error: serializeConnectionDiagnosticError(error),
 							tmuxAttachFailureReason,
 							tmuxSessionName,
 						})
-					: diagnosticEvents.autoConnectActiveConnectionShellFailed({
+					: autoConnectEvents.activeConnectionShellFailed({
 							source: 'active-connection',
 							connection: activeConnectionIdentity,
 							error: serializeConnectionDiagnosticError(error),
@@ -287,19 +300,21 @@ export async function attemptAutoConnectSource({
 			} else {
 				logger.warn('Failed to reopen shell on active connection', error);
 			}
+			if (isAborted()) return false;
 		}
 	} else {
 		traceEvent(
-			diagnosticEvents.autoConnectActiveConnectionMissing({
+			autoConnectEvents.activeConnectionMissing({
 				source: 'active-connection',
 			}),
 		);
 	}
 
 	const latestEntry = await loadLatestSavedConnection();
+	if (isAborted()) return false;
 	if (!latestEntry) {
 		traceEvent(
-			diagnosticEvents.savedEntryMissing({
+			savedEntryEvents.missing({
 				source: 'saved-entry',
 			}),
 		);
@@ -307,12 +322,12 @@ export async function attemptAutoConnectSource({
 	}
 
 	const details = latestEntry.value;
-	const latestEntryConnection = getSavedEntryConnectionIdentity(
+	const latestEntryConnection = buildSavedEntryIdentity(
 		latestEntry.id,
 		latestEntry.value,
 	);
 	traceEvent(
-		diagnosticEvents.savedEntrySelected({
+		savedEntryEvents.selected({
 			source: 'saved-entry',
 			connection: latestEntryConnection,
 		}),
@@ -322,7 +337,7 @@ export async function attemptAutoConnectSource({
 		typeof details.tmuxSessionName !== 'string'
 	) {
 		traceEvent(
-			diagnosticEvents.savedEntryInvalidTmuxSettings({
+			savedEntryEvents.invalidTmuxSettings({
 				source: 'saved-entry',
 				connection: latestEntryConnection,
 				useTmuxType: typeof details.useTmux,
@@ -339,9 +354,10 @@ export async function attemptAutoConnectSource({
 		autoConnect: details.autoConnect ?? false,
 	};
 	const resolvedSecurity = await resolveKeySecurity(details);
+	if (isAborted()) return false;
 	if (!resolvedSecurity) {
 		traceEvent(
-			diagnosticEvents.keyMissing({
+			savedEntryEvents.keyMissing({
 				source: 'saved-entry',
 				connection: latestEntryConnection,
 			}),
@@ -349,7 +365,7 @@ export async function attemptAutoConnectSource({
 		return false;
 	}
 	traceEvent(
-		diagnosticEvents.keyResolved({
+		savedEntryEvents.keyResolved({
 			source: 'saved-entry',
 			connection: latestEntryConnection,
 		}),
@@ -360,9 +376,46 @@ export async function attemptAutoConnectSource({
 			connectionDetails: normalizedDetails,
 			resolvedSecurity,
 			navigate: ({ connectionId, channelId }) => {
+				if (isAborted()) return;
 				navigateToShell(connectionId, channelId);
 			},
+			abortSignal,
 		});
+	const tracedConnectSavedEntry = async (
+		phase: SavedEntryConnectAttemptPhase,
+	) => {
+		const isRetry = phase === 'retry';
+		traceEvent(
+			isRetry
+				? autoConnectEvents.savedEntryRetryStarted({
+						source: 'saved-entry',
+					})
+				: autoConnectEvents.savedEntryConnectStarted({
+						source: 'saved-entry',
+					}),
+		);
+		try {
+			return await connectSavedEntry();
+		} catch (error) {
+			traceEvent(
+				isRetry
+					? autoConnectEvents.savedEntryRetryThrew({
+							source: 'saved-entry',
+							error,
+						})
+					: autoConnectEvents.savedEntryConnectThrew({
+							source: 'saved-entry',
+							error,
+						}),
+			);
+			throw error;
+		}
+	};
+	const tracedRecovery = createSavedEntryTailscaleDiagnosticRecovery({
+		platformOS,
+		recovery,
+		emit: traceEvent,
+	});
 	const logTmuxAttachFailure = (
 		result: Extract<
 			Awaited<ReturnType<typeof connectSavedEntry>>,
@@ -378,20 +431,41 @@ export async function attemptAutoConnectSource({
 
 	const result = await attemptSavedEntryWithTailscaleRecovery({
 		platformOS,
-		recovery,
-		connectSavedEntry,
+		recovery: tracedRecovery,
+		connectSavedEntry: tracedConnectSavedEntry,
 		shouldRecoverAfterFailure: () => true,
-		onEvent: traceEvent,
 	});
+	if (isAborted()) return false;
 
 	switch (result.status) {
 		case 'connected':
+			traceEvent(
+				autoConnectEvents.savedEntryConnectConnected({
+					source: 'saved-entry',
+					connection: { connectionId: result.result.connectionId },
+					connectionId: result.result.connectionId,
+					channelId: result.result.channelId,
+				}),
+			);
 			clearTailscaleAttention();
 			return true;
 		case 'tmuxAttachFailed':
+			traceEvent(
+				autoConnectEvents.savedEntryConnectTmuxAttachFailed({
+					source: 'saved-entry',
+					connection: {
+						connectionId: result.result.connectionId,
+						tmuxSessionName: result.result.tmuxSessionName,
+					},
+					connectionId: result.result.connectionId,
+					tmuxAttachFailureReason: result.result.tmuxAttachFailureReason,
+					tmuxSessionName: result.result.tmuxSessionName,
+					storedConnectionId: result.result.storedConnectionId,
+				}),
+			);
 			logTmuxAttachFailure(result.result);
 			traceEvent(
-				diagnosticEvents.autoConnectSavedEntryConnectFailed({
+				autoConnectEvents.savedEntryConnectFailed({
 					source: 'saved-entry',
 					connection: latestEntryConnection,
 					connectionId: result.result.connectionId,
@@ -412,7 +486,7 @@ export async function attemptAutoConnectSource({
 				);
 			}
 			traceEvent(
-				diagnosticEvents.autoConnectSavedEntryConnectFailed({
+				autoConnectEvents.savedEntryConnectFailed({
 					source: 'saved-entry',
 					connection: latestEntryConnection,
 				}),

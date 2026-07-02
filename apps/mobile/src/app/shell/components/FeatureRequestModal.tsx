@@ -1,3 +1,4 @@
+import { Picker } from '@react-native-picker/picker';
 import React, { useCallback, useEffect, useState } from 'react';
 import {
 	ActivityIndicator,
@@ -10,7 +11,6 @@ import {
 	TextInput,
 	View,
 } from 'react-native';
-import { Picker } from '@react-native-picker/picker';
 import {
 	canSubmitFeatureRequest,
 	PINNED_FEATURE_REQUEST_REPOS,
@@ -48,6 +48,7 @@ export function FeatureRequestModal({
 		if (!open) {
 			// eslint-disable-next-line @eslint-react/hooks-extra/no-direct-set-state-in-use-effect -- Reset draft text and selection when parent closes the modal.
 			setDescription('');
+			// eslint-disable-next-line @eslint-react/hooks-extra/no-direct-set-state-in-use-effect -- Reset draft text and selection when parent closes the modal.
 			setSelection({ kind: 'current' });
 		}
 	}, [open]);

@@ -53,6 +53,10 @@ function createSavedEntry(
 	};
 }
 
+function eventKinds(events: unknown[]) {
+	return events.map((event) => (event as { kind: string }).kind);
+}
+
 const unsupportedRecovery = {
 	ensureReady: async () => ({
 		kind: 'unsupported' as const,
@@ -156,6 +160,7 @@ void test('active shell does not navigate when already on shell detail', async (
 void test('latest active connection loads tmux settings, starts shell, and navigates', async () => {
 	const navigations: [string, number][] = [];
 	const shellStarts: unknown[] = [];
+	const events: unknown[] = [];
 	let clearAttentionCount = 0;
 	const { logger } = createLogger();
 
@@ -200,11 +205,60 @@ void test('latest active connection loads tmux settings, starts shell, and navig
 			clearAttentionCount += 1;
 		},
 		logger,
+		trace: {
+			event: (event) => {
+				events.push(event);
+			},
+		},
 	});
 
 	assert.equal(connected, true);
 	assert.deepEqual(navigations, [['newer', 44]]);
 	assert.equal(clearAttentionCount, 1);
+	assert.deepEqual(eventKinds(events), [
+		'auto-connect.latest-shell.missing',
+		'auto-connect.active-connection.selected',
+		'auto-connect.active-connection.shell-started',
+		'auto-connect.active-connection.shell-connected',
+	]);
+	assert.deepEqual(
+		(events[1] as { source: string; connection: unknown }).connection,
+		{
+			connectionId: 'newer',
+			username: 'muly',
+			host: 'host.example',
+			port: 22,
+		},
+	);
+	assert.equal(
+		(events[1] as { source: string; connection: unknown }).source,
+		'active-connection',
+	);
+	assert.deepEqual((events[2] as { connection: unknown }).connection, {
+		connectionId: 'newer',
+		username: 'muly',
+		host: 'host.example',
+		port: 22,
+		useTmux: false,
+		tmuxSessionName: 'ops',
+	});
+	assert.deepEqual(
+		{
+			channelId: (events[3] as { channelId: number }).channelId,
+			pathname: (events[3] as { pathname: string }).pathname,
+			connection: (events[3] as { connection: unknown }).connection,
+		},
+		{
+			channelId: 44,
+			pathname: '/(tabs)',
+			connection: {
+				connectionId: 'newer',
+				username: 'muly',
+				host: 'host.example',
+				port: 22,
+			},
+		},
+	);
 	assert.equal(shellStarts.length, 1);
 	assert.deepEqual(
 		{
@@ -215,6 +269,115 @@ void test('latest active connection loads tmux settings, starts shell, and navig
 		},
 		{ term: 'Xterm', useTmux: false, tmuxSessionName: 'ops' },
 	);
+});
+
+void test('aborted active connection auto-connect suppresses late navigation', async () => {
+	const abortController = new AbortController();
+	const navigations: [string, number][] = [];
+	let receivedSignal: AbortSignal | undefined;
+	let clearAttentionCount = 0;
+	let closeCalls = 0;
+	const { logger } = createLogger();
+
+	const connected = await attemptAutoConnectSource({
+		platformOS: 'android',
+		pathname: '/(tabs)',
+		latestShell: null,
+		connections: {
+			active: {
+				connectionId: 'active-1',
+				connectedAtMs: 20,
+				connectionDetails: baseDetails,
+				startShell: async ({ abortSignal }) => {
+					receivedSignal = abortSignal;
+					abortController.abort();
+					return {
+						channelId: 7,
+						close: async () => {
+							closeCalls += 1;
+						},
+					};
+				},
+			},
+		},
+		openSavedEntryShell: async () => {
+			throw new Error('saved-entry fallback should not run');
+		},
+		loadTmuxSettings: async () => ({
+			useTmux: true,
+			tmuxSessionName: 'main',
+		}),
+		loadLatestSavedConnection: async () => createSavedEntry(),
+		resolveKeySecurity: async () => ({
+			type: 'key',
+			privateKey: 'private-key',
+		}),
+		navigateToShell: (connectionId, channelId) => {
+			navigations.push([connectionId, channelId]);
+		},
+		recovery: readyRecovery,
+		markTailscaleAttention: () => {},
+		clearTailscaleAttention: () => {
+			clearAttentionCount += 1;
+		},
+		logger,
+		abortSignal: abortController.signal,
+	});
+
+	assert.equal(connected, false);
+	assert.equal(receivedSignal?.aborted, true);
+	assert.deepEqual(navigations, []);
+	assert.equal(clearAttentionCount, 0);
+	assert.equal(closeCalls, 1);
+});
+
+void test('aborted active shell failure skips saved-entry fallback', async () => {
+	const abortController = new AbortController();
+	let loadLatestSavedConnectionCalls = 0;
+	const { logger } = createLogger();
+
+	const connected = await attemptAutoConnectSource({
+		platformOS: 'android',
+		pathname: '/(tabs)',
+		latestShell: null,
+		connections: {
+			active: {
+				connectionId: 'active-1',
+				connectedAtMs: 20,
+				connectionDetails: baseDetails,
+				startShell: async () => {
+					abortController.abort();
+					throw new Error('operation aborted');
+				},
+			},
+		},
+		openSavedEntryShell: async () => {
+			throw new Error('saved-entry fallback should not run');
+		},
+		loadTmuxSettings: async () => ({
+			useTmux: true,
+			tmuxSessionName: 'main',
+		}),
+		loadLatestSavedConnection: async () => {
+			loadLatestSavedConnectionCalls += 1;
+			return createSavedEntry();
+		},
+		resolveKeySecurity: async () => ({
+			type: 'key',
+			privateKey: 'private-key',
+		}),
+		navigateToShell: () => {
+			throw new Error('aborted active shell should not navigate');
+		},
+		recovery: readyRecovery,
+		markTailscaleAttention: () => {},
+		clearTailscaleAttention: () => {},
+		logger,
+		abortSignal: abortController.signal,
+	});
+
+	assert.equal(connected, false);
+	assert.equal(loadLatestSavedConnectionCalls, 0);
 });
 
 void test('saved-entry path delegates through Tailscale recovery and injected opener', async () => {
@@ -346,6 +509,7 @@ void test('records saved-entry selection through trace sink', async () => {
 
 void test('active shell failure falls through to saved-entry connection', async () => {
 	const navigations: [string, number][] = [];
+	const events: unknown[] = [];
 	const { calls, logger } = createLogger();
 
 	const connected = await attemptAutoConnectSource({
@@ -386,10 +550,39 @@ void test('active shell failure falls through to saved-entry connection', async 
 		markTailscaleAttention: () => {},
 		clearTailscaleAttention: () => {},
 		logger,
+		trace: {
+			event: (event) => {
+				events.push(event);
+			},
+		},
 	});
 
 	assert.equal(connected, true);
 	assert.deepEqual(navigations, [['saved-2', 9]]);
+	assert.deepEqual(eventKinds(events), [
+		'auto-connect.latest-shell.missing',
+		'auto-connect.active-connection.selected',
+		'auto-connect.active-connection.shell-started',
+		'auto-connect.active-connection.shell-failed',
+		'saved-entry.selected',
+		'key.resolved',
+		'tailscale.ensure-ready.result',
+		'auto-connect.saved-entry.connect.started',
+		'auto-connect.saved-entry.connect.connected',
+	]);
+	const failureEvent = events[3] as {
+		connection: unknown;
+		error: { message: string };
+		tmuxSessionName: string;
+	};
+	assert.deepEqual(failureEvent.connection, {
+		connectionId: 'active-1',
+		username: 'muly',
+		host: 'host.example',
+		port: 22,
+	});
+	assert.equal(failureEvent.error.message, 'active shell unavailable');
+	assert.equal(failureEvent.tmuxSessionName, 'main');
 	assert.equal(
 		calls.some(
 			(call) =>
@@ -399,6 +592,116 @@ void test('active shell failure falls through to saved-entry connection', async 
 		),
 		true,
 	);
+});
+
+void test('aborted saved-entry auto-connect suppresses late navigation', async () => {
+	const abortController = new AbortController();
+	const navigations: [string, number][] = [];
+	let receivedSignal: AbortSignal | undefined;
+	const { logger } = createLogger();
+
+	const connected = await attemptAutoConnectSource({
+		platformOS: 'android',
+		pathname: '/(tabs)',
+		latestShell: null,
+		connections: {},
+		openSavedEntryShell: async ({ navigate, abortSignal }) => {
+			receivedSignal = abortSignal;
+			abortController.abort();
+			navigate({ connectionId: 'saved-late', channelId: 44 });
+			return {
+				status: 'connected',
+				connectionId: 'saved-late',
+				channelId: 44,
+			};
+		},
+		loadLatestSavedConnection: async () => createSavedEntry(),
+		resolveKeySecurity: async () => ({
+			type: 'key',
+			privateKey: 'private-key',
+		}),
+		navigateToShell: (connectionId, channelId) => {
+			navigations.push([connectionId, channelId]);
+		},
+		recovery: readyRecovery,
+		markTailscaleAttention: () => {},
+		clearTailscaleAttention: () => {},
+		logger,
+		abortSignal: abortController.signal,
+	});
+
+	assert.equal(connected, false);
+	assert.equal(receivedSignal, abortController.signal);
+	assert.deepEqual(navigations, []);
+});
+
+void test('active shell tmux attach failure records active-connection tmux trace', async () => {
+	const events: unknown[] = [];
+	const { logger } = createLogger();
+
+	const connected = await attemptAutoConnectSource({
+		platformOS: 'android',
+		pathname: '/(tabs)',
+		latestShell: null,
+		connections: {
+			active: {
+				connectionId: 'active-1',
+				connectedAtMs: 20,
+				connectionDetails: baseDetails,
+				startShell: async () => {
+					throw {
+						tag: 'TmuxAttachFailed',
+						inner: ['missing session'],
+					};
+				},
+			},
+		},
+		openSavedEntryShell: async () => ({
+			status: 'connected',
+			connectionId: 'saved-2',
+			channelId: 9,
+		}),
+		loadTmuxSettings: async () => ({
+			useTmux: true,
+			tmuxSessionName: 'ops',
+		}),
+		loadLatestSavedConnection: async () => createSavedEntry(),
+		resolveKeySecurity: async () => ({
+			type: 'key',
+			privateKey: 'private-key',
+		}),
+		navigateToShell: () => {},
+		recovery: readyRecovery,
+		markTailscaleAttention: () => {},
+		clearTailscaleAttention: () => {},
+		logger,
+		trace: {
+			event: (event) => {
+				events.push(event);
+			},
+		},
+	});
+
+	assert.equal(connected, true);
+	assert.deepEqual(eventKinds(events).slice(0, 4), [
+		'auto-connect.latest-shell.missing',
+		'auto-connect.active-connection.selected',
+		'auto-connect.active-connection.shell-started',
+		'auto-connect.active-connection.tmux-attach-failed',
+	]);
+	const tmuxEvent = events[3] as {
+		connection: unknown;
+		tmuxAttachFailureReason: string;
+		tmuxSessionName: string;
+	};
+	assert.deepEqual(tmuxEvent.connection, {
+		connectionId: 'active-1',
+		username: 'muly',
+		host: 'host.example',
+		port: 22,
+	});
+	assert.equal(tmuxEvent.tmuxAttachFailureReason, 'missing session');
+	assert.equal(tmuxEvent.tmuxSessionName, 'ops');
 });
 
 void test('saved-entry path returns false when no saved entry exists', async () => {
@@ -581,4 +884,205 @@ void test('records saved-entry failure trace events', async () => {
 		],
 	);
 	assert.doesNotMatch(JSON.stringify(events), /SECRET_PRIVATE_KEY/);
+});
+
+void test('records saved-entry recovery retry success trace events from caller', async () => {
+	const events: unknown[] = [];
+	const { logger } = createLogger();
+	let connectCalls = 0;
+
+	const connected = await attemptAutoConnectSource({
+		platformOS: 'android',
+		pathname: '/(tabs)',
+		latestShell: null,
+		connections: {},
+		openSavedEntryShell: async () => {
+			connectCalls += 1;
+			if (connectCalls === 1) {
+				throw new Error('network unreachable');
+			}
+			return {
+				status: 'connected',
+				connectionId: 'conn-retry',
+				channelId: 7,
+			};
+		},
+		loadLatestSavedConnection: async () => createSavedEntry(),
+		resolveKeySecurity: async () => ({
+			type: 'key',
+			privateKey: 'private-key',
+		}),
+		navigateToShell: () => {},
+		recovery: {
+			ensureReady: readyRecovery.ensureReady,
+			recoverAfterFailure: async () => ({
+				kind: 'recovered' as const,
+				attempted: true as const,
+				networkLikeFailure: true as const,
+				available: true as const,
+			}),
+		},
+		markTailscaleAttention: () => {},
+		clearTailscaleAttention: () => {},
+		logger,
+		trace: {
+			event: (event) => {
+				events.push(event);
+			},
+		},
+	});
+
+	assert.equal(connected, true);
+	assert.equal(connectCalls, 2);
+	assert.deepEqual(eventKinds(events), [
+		'auto-connect.latest-shell.missing',
+		'auto-connect.active-connection.missing',
+		'saved-entry.selected',
+		'key.resolved',
+		'tailscale.ensure-ready.result',
+		'auto-connect.saved-entry.connect.started',
+		'auto-connect.saved-entry.connect.threw',
+		'tailscale.recovery.result',
+		'auto-connect.saved-entry.retry.started',
+		'auto-connect.saved-entry.connect.connected',
+	]);
+});
+
+void test('records saved-entry recovery retry failure before connect failure', async () => {
+	const events: unknown[] = [];
+	const { logger } = createLogger();
+
+	const connected = await attemptAutoConnectSource({
+		platformOS: 'android',
+		pathname: '/(tabs)',
+		latestShell: null,
+		connections: {},
+		openSavedEntryShell: async () => {
+			throw new Error('No route to host');
+		},
+		loadLatestSavedConnection: async () => createSavedEntry(),
+		resolveKeySecurity: async () => ({
+			type: 'key',
+			privateKey: 'private-key',
+		}),
+		navigateToShell: () => {},
+		recovery: {
+			ensureReady: readyRecovery.ensureReady,
+			recoverAfterFailure: async () => ({
+				kind: 'recovered' as const,
+				attempted: true as const,
+				networkLikeFailure: true as const,
+				available: true as const,
+			}),
+		},
+		markTailscaleAttention: () => {},
+		clearTailscaleAttention: () => {},
+		logger,
+		trace: {
+			event: (event) => {
+				events.push(event);
+			},
+		},
+	});
+
+	assert.equal(connected, false);
+	assert.deepEqual(eventKinds(events), [
+		'auto-connect.latest-shell.missing',
+		'auto-connect.active-connection.missing',
+		'saved-entry.selected',
+		'key.resolved',
+		'tailscale.ensure-ready.result',
+		'auto-connect.saved-entry.connect.started',
+		'auto-connect.saved-entry.connect.threw',
+		'tailscale.recovery.result',
+		'auto-connect.saved-entry.retry.started',
+		'auto-connect.saved-entry.retry.threw',
+		'auto-connect.saved-entry.connect.failed',
+	]);
+});
+
+void test('records saved-entry tmux attach failure and connect failure payloads', async () => {
+	const events: unknown[] = [];
+	const { logger } = createLogger();
+
+	const connected = await attemptAutoConnectSource({
+		platformOS: 'android',
+		pathname: '/(tabs)',
+		latestShell: null,
+		connections: {},
+		openSavedEntryShell: async () => ({
+			status: 'tmux_attach_failed',
+			connectionId: 'conn-tmux',
+			tmuxAttachFailureReason: 'missing session',
+			tmuxSessionName: 'ops',
+			storedConnectionId: 'stored-tmux',
+		}),
+		loadLatestSavedConnection: async () => createSavedEntry(),
+		resolveKeySecurity: async () => ({
+			type: 'key',
+			privateKey: 'private-key',
+		}),
+		navigateToShell: () => {},
+		recovery: readyRecovery,
+		markTailscaleAttention: () => {},
+		clearTailscaleAttention: () => {},
+		logger,
+		trace: {
+			event: (event) => {
+				events.push(event);
+			},
+		},
+	});
+
+	assert.equal(connected, false);
+	assert.deepEqual(eventKinds(events), [
+		'auto-connect.latest-shell.missing',
+		'auto-connect.active-connection.missing',
+		'saved-entry.selected',
+		'key.resolved',
+		'tailscale.ensure-ready.result',
+		'auto-connect.saved-entry.connect.started',
+		'auto-connect.saved-entry.connect.tmux-attach-failed',
+		'auto-connect.saved-entry.connect.failed',
+	]);
+	const tmuxEvent = events.find(
+		(event) =>
+			(event as { kind: string }).kind ===
+			'auto-connect.saved-entry.connect.tmux-attach-failed',
+	) as {
+		connection: unknown;
+		connectionId: string;
+		tmuxAttachFailureReason: string | null;
+		tmuxSessionName: string;
+		storedConnectionId: string;
+	};
+	assert.deepEqual(tmuxEvent.connection, {
+		connectionId: 'conn-tmux',
+		tmuxSessionName: 'ops',
+	});
+	assert.equal(tmuxEvent.connectionId, 'conn-tmux');
+	assert.equal(tmuxEvent.tmuxAttachFailureReason, 'missing session');
+	assert.equal(tmuxEvent.tmuxSessionName, 'ops');
+	assert.equal(tmuxEvent.storedConnectionId, 'stored-tmux');
+
+	const failureEvent = events.find(
+		(event) =>
+			(event as { kind: string }).kind ===
+			'auto-connect.saved-entry.connect.failed',
+	) as {
+		connection: unknown;
+		connectionId: string;
+		storedConnectionId: string;
+	};
+	assert.deepEqual(failureEvent.connection, {
+		savedConnectionId: 'saved-1',
+		username: 'muly',
+		host: 'host.example',
+		port: 22,
+		keyId: 'key-1',
+		useTmux: true,
+		tmuxSessionName: 'main',
+	});
+	assert.equal(failureEvent.connectionId, 'conn-tmux');
+	assert.equal(failureEvent.storedConnectionId, 'stored-tmux');
 });

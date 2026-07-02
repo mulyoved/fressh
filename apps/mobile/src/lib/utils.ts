@@ -13,3 +13,27 @@ export const AbortSignalTimeout = (timeout: number) => {
 	}, timeout);
 	return controller.signal;
 };
+
+export const AbortSignalAny = (
+	signals: readonly (AbortSignal | undefined)[],
+) => {
+	const activeSignals = signals.filter((signal) => signal !== undefined);
+	const controller = new AbortController();
+	const abort = () => {
+		controller.abort();
+		for (const signal of activeSignals) {
+			signal.removeEventListener('abort', abort);
+		}
+	};
+
+	if (activeSignals.some((signal) => signal.aborted)) {
+		abort();
+		return controller.signal;
+	}
+
+	for (const signal of activeSignals) {
+		signal.addEventListener('abort', abort, { once: true });
+	}
+
+	return controller.signal;
+};

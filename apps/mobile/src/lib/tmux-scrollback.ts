@@ -1,3 +1,4 @@
+import { type ScrollTraceSink } from './scroll-trace';
 import { type WorkmuxScrollDirection } from './workmux-app-commands';
 import {
 	accumulateWorkmuxScrollbackBatchCommands,
@@ -10,7 +11,6 @@ import {
 	type WorkmuxScrollbackCommandExecutor,
 	type WorkmuxScrollbackFailurePolicy,
 } from './workmux-scrollback-executor';
-import { type ScrollTraceSink } from './scroll-trace';
 import {
 	registerWorkmuxScrollbackLiveInputCleanup,
 	type WorkmuxScrollbackLiveInputCleanupBarrier,

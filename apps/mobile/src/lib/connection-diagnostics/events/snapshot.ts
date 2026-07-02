@@ -1,7 +1,4 @@
-import {
-	type ConnectionDiagnosticConnectionIdentity,
-	type ConnectionDiagnosticError,
-} from './connection-diagnostic-types';
+import { type ConnectionDiagnosticError } from './types';
 
 const CIRCULAR_PLACEHOLDER = '[Circular]';
 const UNREADABLE_VALUE_MESSAGE = '[Unreadable]';
@@ -36,9 +33,9 @@ export function safeDiagnosticString(
 	}
 }
 
-function cloneDiagnosticValueInternal(
+function snapshotDiagnosticValueInternal(
 	value: unknown,
-	seen: WeakMap<object, unknown>,
+	path: WeakSet<object>,
 ): unknown {
 	try {
 		if (value === null) return null;
@@ -59,13 +56,17 @@ function cloneDiagnosticValueInternal(
 		}
 		if (typeof value !== 'object') return safeDiagnosticString(value);
 
-		if (seen.has(value)) return CIRCULAR_PLACEHOLDER;
+		if (path.has(value)) return CIRCULAR_PLACEHOLDER;
 
 		if (Array.isArray(value)) {
 			const copy: unknown[] = [];
-			seen.set(value, copy);
-			for (const item of value) {
-				copy.push(cloneDiagnosticValueInternal(item, seen));
+			path.add(value);
+			try {
+				for (const item of value) {
+					copy.push(snapshotDiagnosticValueInternal(item, path));
+				}
+			} finally {
+				path.delete(value);
 			}
 			return copy;
 		}
@@ -76,16 +77,20 @@ function cloneDiagnosticValueInternal(
 		}
 
 		const copy: Record<string, unknown> = {};
-		seen.set(value, copy);
-		for (const key of Object.keys(value)) {
-			try {
-				copy[safeDiagnosticString(key, key)] = cloneDiagnosticValueInternal(
-					(value as Record<string, unknown>)[key],
-					seen,
-				);
-			} catch {
-				copy[safeDiagnosticString(key, key)] = UNREADABLE_VALUE_MESSAGE;
+		path.add(value);
+		try {
+			for (const key of Object.keys(value)) {
+				try {
+					copy[safeDiagnosticString(key, key)] = snapshotDiagnosticValueInternal(
+						(value as Record<string, unknown>)[key],
+						path,
+					);
+				} catch {
+					copy[safeDiagnosticString(key, key)] = UNREADABLE_VALUE_MESSAGE;
+				}
 			}
+		} finally {
+			path.delete(value);
 		}
 		return copy;
 	} catch {
@@ -93,8 +98,8 @@ function cloneDiagnosticValueInternal(
 	}
 }
 
-export function cloneDiagnosticValue<T>(value: T): T {
-	return cloneDiagnosticValueInternal(value, new WeakMap()) as T;
+export function snapshotDiagnosticValue<T>(value: T): T {
+	return snapshotDiagnosticValueInternal(value, new WeakSet()) as T;
 }
 
 export function serializeConnectionDiagnosticError(
@@ -122,8 +127,9 @@ export function serializeConnectionDiagnosticError(
 
 		if (stack !== undefined) serializedError.stack = stack;
 		if (tag !== undefined) serializedError.tag = tag;
-		if (inner !== undefined)
-			serializedError.inner = cloneDiagnosticValue(inner);
+		if (inner !== undefined) {
+			serializedError.inner = snapshotDiagnosticValue(inner);
+		}
 
 		return serializedError;
 	}
@@ -142,7 +148,10 @@ function isErrorLike(error: unknown): error is Error {
 	}
 }
 
-function readStringField(value: unknown, field: string): string | undefined {
+export function readStringField(
+	value: unknown,
+	field: string,
+): string | undefined {
 	try {
 		const fieldValue = readObjectField(value, field);
 		return typeof fieldValue === 'string'
@@ -153,7 +162,10 @@ function readStringField(value: unknown, field: string): string | undefined {
 	}
 }
 
-function readNumberField(value: unknown, field: string): number | undefined {
+export function readNumberField(
+	value: unknown,
+	field: string,
+): number | undefined {
 	try {
 		const fieldValue = readObjectField(value, field);
 		return typeof fieldValue === 'number' && Number.isFinite(fieldValue)
@@ -164,7 +176,10 @@ function readNumberField(value: unknown, field: string): number | undefined {
 	}
 }
 
-function readBooleanField(value: unknown, field: string): boolean | undefined {
+export function readBooleanField(
+	value: unknown,
+	field: string,
+): boolean | undefined {
 	try {
 		const fieldValue = readObjectField(value, field);
 		return typeof fieldValue === 'boolean' ? fieldValue : undefined;
@@ -173,35 +188,7 @@ function readBooleanField(value: unknown, field: string): boolean | undefined {
 	}
 }
 
-export function normalizeConnectionIdentity(
-	value: unknown,
-): ConnectionDiagnosticConnectionIdentity | undefined {
-	const identity: ConnectionDiagnosticConnectionIdentity = {};
-	const savedConnectionId = readStringField(value, 'savedConnectionId');
-	const connectionId = readStringField(value, 'connectionId');
-	const username = readStringField(value, 'username');
-	const host = readStringField(value, 'host');
-	const port = readNumberField(value, 'port');
-	const keyId = readStringField(value, 'keyId');
-	const useTmux = readBooleanField(value, 'useTmux');
-	const tmuxSessionName = readStringField(value, 'tmuxSessionName');
-
-	if (savedConnectionId !== undefined)
-		identity.savedConnectionId = savedConnectionId;
-	if (connectionId !== undefined) identity.connectionId = connectionId;
-	if (username !== undefined) identity.username = username;
-	if (host !== undefined) identity.host = host;
-	if (port !== undefined) identity.port = port;
-	if (keyId !== undefined) identity.keyId = keyId;
-	if (useTmux !== undefined) identity.useTmux = useTmux;
-	if (tmuxSessionName !== undefined) {
-		identity.tmuxSessionName = tmuxSessionName;
-	}
-
-	return Object.keys(identity).length ? identity : undefined;
-}
-
-function readObjectField(value: unknown, field: string): unknown {
+export function readObjectField(value: unknown, field: string): unknown {
 	try {
 		if (
 			value === null ||

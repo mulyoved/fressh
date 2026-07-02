@@ -6,9 +6,11 @@ import type {
 	SshConnectionProgress,
 } from '@fressh/react-native-uniffi-russh';
 import { type SavedEntryConnectResult } from './auto-connect-saved-entry';
-import { diagnosticEvents } from './connection-diagnostic-events';
-import { serializeConnectionDiagnosticError } from './connection-diagnostic-redaction';
 import { type ConnectionDiagnosticEvent } from './connection-diagnostic-types';
+import {
+	serializeConnectionDiagnosticError,
+	sshEvents,
+} from './connection-diagnostics/events';
 import { type InputConnectionDetails } from './connection-storage';
 import { getStoredConnectionId } from './connection-utils';
 import { rootLogger } from './logger';
@@ -112,7 +114,7 @@ export async function runDiagnosticShellProbe(args: {
 				abortSignalTimeoutMs,
 			);
 			traceEvent(
-				diagnosticEvents.diagnosticDisconnected({
+				sshEvents.diagnosticDisconnected({
 					source: 'saved-entry',
 					connection: connectedIdentity,
 				}),
@@ -120,7 +122,7 @@ export async function runDiagnosticShellProbe(args: {
 			return null;
 		} catch (error) {
 			traceEvent(
-				diagnosticEvents.diagnosticDisconnectFailed({
+				sshEvents.diagnosticDisconnectFailed({
 					source: 'saved-entry',
 					connection: connectedIdentity,
 					error: serializeConnectionDiagnosticError(error),

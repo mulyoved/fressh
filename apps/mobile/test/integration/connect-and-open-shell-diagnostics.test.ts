@@ -85,6 +85,75 @@ void test('connectAndOpenShell records connect and shell success events', async 
 	assert.doesNotMatch(JSON.stringify(events), /secret/);
 });
 
+void test('connectAndOpenShell propagates caller abort to connect and shell start', async () => {
+	const abortController = new AbortController();
+	let connectSignal: AbortSignal | undefined;
+	let shellSignal: AbortSignal | undefined;
+
+	await connectAndOpenShell({
+		connectionDetails,
+		resolvedSecurity: { type: 'key', privateKey: 'secret' },
+		abortSignal: abortController.signal,
+		connect: async (params) => {
+			assert.ok(params.abortSignal);
+			connectSignal = params.abortSignal;
+			assert.equal(params.abortSignal.aborted, false);
+			return {
+				connectionId: 'conn-1',
+				startShell: async (options: { abortSignal: AbortSignal }) => {
+					shellSignal = options.abortSignal;
+					assert.equal(options.abortSignal.aborted, false);
+					abortController.abort();
+					return { channelId: 7 };
+				},
+			} as never;
+		},
+		saveConnection: async () => {},
+		navigate: () => {
+			throw new Error('aborted connect should not navigate');
+		},
+	});
+
+	assert.equal(connectSignal?.aborted, true);
+	assert.equal(shellSignal?.aborted, true);
+});
+
+void test('connectAndOpenShell cleans up an aborted late success', async () => {
+	const abortController = new AbortController();
+	let closeCalls = 0;
+	let disconnectCalls = 0;
+
+	const result = await connectAndOpenShell({
+		connectionDetails,
+		resolvedSecurity: { type: 'key', privateKey: 'secret' },
+		abortSignal: abortController.signal,
+		connect: async () =>
+			({
+				connectionId: 'conn-1',
+				disconnect: async () => {
+					disconnectCalls += 1;
+				},
+				startShell: async () => {
+					abortController.abort();
+					return {
+						channelId: 7,
+						close: async () => {
+							closeCalls += 1;
+						},
+					};
+				},
+			}) as never,
+		saveConnection: async () => {},
+		navigate: () => {
+			throw new Error('aborted connect should not navigate');
+		},
+	});
+
+	assert.equal(result.status, 'connected');
+	assert.equal(closeCalls, 1);
+	assert.equal(disconnectCalls, 1);
+});
+
 void test('connectAndOpenShell navigates with tmux attach failure metadata', async () => {
 	const navigatedWithError: unknown[] = [];
 	const saveCalls: unknown[] = [];
@@ -129,6 +198,43 @@ void test('connectAndOpenShell navigates with tmux attach failure metadata', asy
 			storedConnectionId: 'muly-dev_tailnet_ts_net-22',
 		},
 	]);
+});
+
+void test('connectAndOpenShell suppresses aborted tmux error navigation and disconnects', async () => {
+	const abortController = new AbortController();
+	let disconnectCalls = 0;
+	let navigatedWithError = false;
+
+	const result = await connectAndOpenShell({
+		connectionDetails,
+		resolvedSecurity: { type: 'key', privateKey: 'secret' },
+		abortSignal: abortController.signal,
+		connect: async () =>
+			({
+				connectionId: 'conn-1',
+				disconnect: async () => {
+					disconnectCalls += 1;
+				},
+				startShell: async () => {
+					abortController.abort();
+					throw {
+						tag: 'TmuxAttachFailed',
+						inner: ['missing session'],
+					};
+				},
+			}) as never,
+		saveConnection: async () => {},
+		navigate: () => {
+			throw new Error('success navigation should not run');
+		},
+		navigateWithError: () => {
+			navigatedWithError = true;
+		},
+	});
+
+	assert.equal(result.status, 'tmux_attach_failed');
+	assert.equal(disconnectCalls, 1);
+	assert.equal(navigatedWithError, false);
 });
 
 void test('connectAndOpenShell records connect failure', async () => {
