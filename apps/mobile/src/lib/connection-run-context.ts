@@ -11,6 +11,7 @@ export type ConnectionRunTimeoutKind = 'operation' | 'recovery' | 'cleanup';
 export type ConnectionRunOperationKind = 'operation' | 'recovery' | 'cleanup';
 
 type NonTimeoutAbortReason = Exclude<ConnectionRunAbortReason, 'timeout'>;
+type ManualAbortReason = 'stopped' | 'replaced' | 'unmounted';
 
 export type ConnectionRunOperationResult<T> =
 	| { status: 'ok'; value: T }
@@ -70,9 +71,7 @@ export type ConnectionRunContext = {
 	readonly signal: AbortSignal;
 	readonly abortReason: ConnectionRunAbortReason | null;
 	readonly timeoutKind: ConnectionRunTimeoutKind | null;
-	abort: (
-		reason: Exclude<ConnectionRunAbortReason, 'timeout' | 'stale-run'>,
-	) => void;
+	abort: (reason: ManualAbortReason) => void;
 	runOperation: <T>(
 		kind: ConnectionRunOperationKind,
 		operation: (signal: AbortSignal) => Promise<T>,

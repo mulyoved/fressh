@@ -488,12 +488,7 @@ void test('cleanup operation remains bounded after operation timeout', async () 
 });
 
 void test('cleanup operation can run after prior non-timeout aborts', async () => {
-	const abortReasons = [
-		'caller-aborted',
-		'replaced',
-		'stopped',
-		'unmounted',
-	] as const;
+	const abortReasons = ['replaced', 'stopped', 'unmounted'] as const;
 
 	for (const abortReason of abortReasons) {
 		const fixture = harness();
@@ -524,6 +519,36 @@ void test('cleanup operation can run after prior non-timeout aborts', async () =
 			value: `cleaned-${abortReason}`,
 		});
 	}
+
+	const caller = new AbortController();
+	const fixture = harness();
+	const run = fixture.createRun({
+		callerSignal: caller.signal,
+		timeouts: {
+			operationTimeoutMs: 50,
+			recoveryTimeoutMs: 80,
+			cleanupTimeoutMs: 25,
+		},
+	});
+	let cleanupSignal: AbortSignal | null = null;
+	let called = false;
+
+	caller.abort();
+
+	const result = await run.runOperation('cleanup', async (signal) => {
+		called = true;
+		cleanupSignal = signal;
+		assert.equal(signal.aborted, false);
+		return 'cleaned-caller-aborted';
+	});
+
+	assert.equal(called, true);
+	assert.equal(requireSignal(cleanupSignal).aborted, false);
+	assert.equal(fixture.timers[0]?.delayMs, 25);
+	assert.deepEqual(result, {
+		status: 'ok',
+		value: 'cleaned-caller-aborted',
+	});
 });
 
 void test('cleanup started after prior stop is interrupted by later stop', async () => {
