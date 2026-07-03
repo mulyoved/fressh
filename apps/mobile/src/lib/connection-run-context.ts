@@ -55,7 +55,6 @@ export type ConnectionRunContext = {
 	createOperationScope: (
 		kind: ConnectionRunOperationKind,
 	) => ConnectionRunOperationScope;
-	createOperationSignal: (kind: ConnectionRunOperationKind) => AbortSignal;
 	runOperation: <T>(
 		kind: ConnectionRunOperationKind,
 		operation: (signal: AbortSignal) => Promise<T>,
@@ -216,10 +215,6 @@ export function createConnectionRunContext(
 		};
 	}
 
-	function createOperationSignal(kind: ConnectionRunOperationKind) {
-		return createOperationScope(kind).signal;
-	}
-
 	function throwIfAborted() {
 		if (!isCurrent()) {
 			throw new ConnectionRunAbortedError('stale-run', null);
@@ -356,7 +351,6 @@ export function createConnectionRunContext(
 			abortRun(reason, nextTimeoutKind);
 		},
 		createOperationScope,
-		createOperationSignal,
 		runOperation,
 		throwIfAborted,
 		finish,

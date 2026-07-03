@@ -64,7 +64,8 @@ void test('operation timeout aborts run and operation signal', async () => {
 			cleanupTimeoutMs: 25,
 		},
 	});
-	const signal = run.createOperationSignal('operation');
+	const scope = run.createOperationScope('operation');
+	const signal = scope.signal;
 
 	assert.equal(signal.aborted, false);
 	assert.equal(fixture.timers[0]?.delayMs, 50);
@@ -92,7 +93,8 @@ void test('recovery timeout is separate from operation timeout', async () => {
 			cleanupTimeoutMs: 25,
 		},
 	});
-	const signal = run.createOperationSignal('recovery');
+	const scope = run.createOperationScope('recovery');
+	const signal = scope.signal;
 
 	assert.equal(fixture.timers[0]?.delayMs, 80);
 	fixture.timers[0]?.callback();
@@ -113,7 +115,8 @@ void test('caller abort propagates to child operation signal', () => {
 			cleanupTimeoutMs: 25,
 		},
 	});
-	const shellSignal = run.createOperationSignal('operation');
+	const shellScope = run.createOperationScope('operation');
+	const shellSignal = shellScope.signal;
 
 	caller.abort();
 
@@ -161,7 +164,7 @@ void test('cleanup operation remains bounded after operation timeout', async () 
 		},
 	});
 
-	run.createOperationSignal('operation');
+	run.createOperationScope('operation');
 	fixture.timers[0]?.callback();
 
 	let cleanupSignal: AbortSignal | null = null;
@@ -213,7 +216,7 @@ void test('finish clears timers and prevents late timeout abort', () => {
 		},
 	});
 
-	run.createOperationSignal('operation');
+	run.createOperationScope('operation');
 	run.finish();
 	fixture.timers[0]?.callback();
 
@@ -249,7 +252,8 @@ void test('manual abort accepts lifecycle reasons', () => {
 			cleanupTimeoutMs: 25,
 		},
 	});
-	const signal = run.createOperationSignal('operation');
+	const scope = run.createOperationScope('operation');
+	const signal = scope.signal;
 
 	run.abort('replaced');
 
