@@ -167,6 +167,37 @@ void test('saved-entry lifecycle maps Tailscale readiness block and does not con
 	assert.match(outcome.attentionMessage ?? '', /Tailscale/i);
 });
 
+void test('saved-entry lifecycle treats readiness abort errors as failures when run is active', async () => {
+	const { runContext } = runHarness();
+	const abortError = Object.assign(new Error('The operation was aborted.'), {
+		name: 'AbortError',
+	});
+
+	const outcome = await runSavedEntryConnectionAttempt({
+		platformOS: 'android',
+		mode: 'auto-connect',
+		runContext,
+		recovery: {
+			ensureReady: async () => {
+				throw abortError;
+			},
+			recoverAfterFailure: async () => {
+				throw new Error('recovery should not run');
+			},
+		},
+		connectSavedEntry: async () => {
+			throw new Error('connect should not run');
+		},
+		cleanupConnected: async () => {},
+	});
+
+	assert.deepEqual(outcome, {
+		status: 'failed',
+		error: abortError,
+		recoverable: false,
+	});
+});
+
 void test('saved-entry lifecycle retries after Tailscale recovery', async () => {
 	const { runContext } = runHarness();
 	const phases: SavedEntryConnectAttemptPhase[] = [];

@@ -263,35 +263,37 @@ export async function runSavedEntryConnectionAttempt(
 			},
 		});
 	};
-	const readinessResult = await args.runContext.runOperation(
-		'recovery',
-		async () => await args.recovery.ensureReady(),
-	);
-	if (readinessResult.status === 'aborted') return mapAborted(readinessResult);
-
-	const recovery: SavedEntryTailscaleRecovery = {
-		...args.recovery,
-		ensureReady: async () => readinessResult.value,
-		recoverAfterFailure: async (error) => {
-			const recoveryResult = await args.runContext.runOperation(
-				'recovery',
-				async () => await args.recovery.recoverAfterFailure(error),
-			);
-			if (recoveryResult.status === 'aborted') {
-				throw new ConnectionAttemptOutcomeError(mapAborted(recoveryResult));
-			}
-			return recoveryResult.value;
-		},
-	};
-
-	const shouldRecoverAfterFailure = (error: unknown) => {
-		if (error instanceof ConnectionAttemptOutcomeError) {
-			return false;
-		}
-		return args.shouldRecoverAfterFailure?.(error) ?? true;
-	};
 
 	try {
+		const readinessResult = await args.runContext.runOperation(
+			'recovery',
+			async () => await args.recovery.ensureReady(),
+		);
+		if (readinessResult.status === 'aborted')
+			return mapAborted(readinessResult);
+
+		const recovery: SavedEntryTailscaleRecovery = {
+			...args.recovery,
+			ensureReady: async () => readinessResult.value,
+			recoverAfterFailure: async (error) => {
+				const recoveryResult = await args.runContext.runOperation(
+					'recovery',
+					async () => await args.recovery.recoverAfterFailure(error),
+				);
+				if (recoveryResult.status === 'aborted') {
+					throw new ConnectionAttemptOutcomeError(mapAborted(recoveryResult));
+				}
+				return recoveryResult.value;
+			},
+		};
+
+		const shouldRecoverAfterFailure = (error: unknown) => {
+			if (error instanceof ConnectionAttemptOutcomeError) {
+				return false;
+			}
+			return args.shouldRecoverAfterFailure?.(error) ?? true;
+		};
+
 		const savedEntryOutcome = await attemptSavedEntryWithTailscaleRecovery({
 			platformOS: args.platformOS,
 			recovery,
