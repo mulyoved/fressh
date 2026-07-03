@@ -468,6 +468,43 @@ void test('cleanup operation remains bounded after operation timeout', async () 
 	assert.deepEqual(await cleanup, { status: 'ok', value: 'cleaned' });
 });
 
+void test('cleanup abort-like failure after operation timeout is thrown while cleanup is live', async () => {
+	const abortLikeErrors = [
+		Object.assign(new Error('The operation was aborted.'), {
+			name: 'AbortError',
+		}),
+		new Error('operation aborted by signal'),
+	];
+
+	for (const cleanupError of abortLikeErrors) {
+		const fixture = harness();
+		const run = fixture.createRun({
+			timeouts: {
+				operationTimeoutMs: 50,
+				recoveryTimeoutMs: 80,
+				cleanupTimeoutMs: 25,
+			},
+		});
+		let cleanupSignal: AbortSignal | null = null;
+
+		run.createOperationScope('operation');
+		fixture.timers[0]?.callback();
+
+		await assert.rejects(
+			run.runOperation('cleanup', async (signal) => {
+				cleanupSignal = signal;
+				assert.equal(signal.aborted, false);
+				throw cleanupError;
+			}),
+			(error) => {
+				assert.equal(error, cleanupError);
+				return true;
+			},
+		);
+		assert.equal(requireSignal(cleanupSignal).aborted, false);
+	}
+});
+
 void test('caller abort stops cleanup started after operation timeout', () => {
 	const caller = new AbortController();
 	const fixture = harness();
@@ -782,6 +819,35 @@ void test('finish removes active scope run abort listeners', () => {
 	run.finish();
 
 	assert.equal(runController.abortListeners.size, 0);
+});
+
+void test('runOperation removes scope abort listener after successful operation', async () => {
+	const controllers: TrackedAbortController[] = [];
+	const fixture = harness();
+	const run = fixture.createRun({
+		createAbortController: () => createTrackedAbortController(controllers),
+		timeouts: {
+			operationTimeoutMs: 50,
+			recoveryTimeoutMs: 80,
+			cleanupTimeoutMs: 25,
+		},
+	});
+
+	assert.deepEqual(
+		await run.runOperation('operation', async () => 'connected'),
+		{
+			status: 'ok',
+			value: 'connected',
+		},
+	);
+
+	const operationController = controllers[1];
+	if (!operationController) {
+		throw new assert.AssertionError({
+			message: 'Expected operation AbortController to be created',
+		});
+	}
+	assert.equal(operationController.abortListeners.size, 0);
 });
 
 void test('finish removes caller abort listener', () => {

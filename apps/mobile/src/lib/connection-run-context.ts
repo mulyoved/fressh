@@ -377,15 +377,15 @@ export function createConnectionRunContext(
 			return getScopeAbortResult(scope);
 		}
 
+		let abortResultListener: (() => void) | null = null;
 		const abortResult = new Promise<ConnectionRunOperationResult<never>>(
 			(resolve) => {
-				signal.addEventListener(
-					'abort',
-					() => {
-						resolve(getScopeAbortResult(scope));
-					},
-					{ once: true },
-				);
+				abortResultListener = () => {
+					resolve(getScopeAbortResult(scope));
+				};
+				signal.addEventListener('abort', abortResultListener, {
+					once: true,
+				});
 			},
 		);
 
@@ -429,7 +429,10 @@ export function createConnectionRunContext(
 				if (signal.aborted) {
 					return getScopeAbortResult(scope);
 				}
-				if (runController.signal.aborted) {
+				if (
+					runController.signal.aborted &&
+					!(kind === 'cleanup' && abortReason === 'timeout')
+				) {
 					return {
 						status: 'aborted',
 						reason: abortReason ?? 'stopped',
@@ -446,6 +449,9 @@ export function createConnectionRunContext(
 			}
 			throw error;
 		} finally {
+			if (abortResultListener !== null) {
+				signal.removeEventListener('abort', abortResultListener);
+			}
 			scope.finish();
 		}
 	}
