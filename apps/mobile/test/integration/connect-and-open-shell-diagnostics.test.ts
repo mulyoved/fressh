@@ -192,6 +192,7 @@ void test('connectAndOpenShell disconnects after shell operation abort failure',
 
 void test('connectAndOpenShell cleans up shell operation abort after late shell success', async () => {
 	const shellAbortController = new AbortController();
+	const abortReason = new Error('shell operation aborted after start');
 	let closeCalls = 0;
 	let disconnectCalls = 0;
 	let navigated = false;
@@ -209,7 +210,7 @@ void test('connectAndOpenShell cleans up shell operation abort after late shell 
 					disconnectCalls += 1;
 				},
 				startShell: async () => {
-					shellAbortController.abort();
+					shellAbortController.abort(abortReason);
 					return {
 						channelId: 7,
 						close: async () => {
@@ -224,7 +225,8 @@ void test('connectAndOpenShell cleans up shell operation abort after late shell 
 		},
 	});
 
-	assert.equal(result.status, 'connected');
+	assert.equal(result.status, 'aborted');
+	assert.equal(result.reason, abortReason);
 	assert.equal(navigated, false);
 	assert.equal(closeCalls, 1);
 	assert.equal(disconnectCalls, 1);
@@ -274,8 +276,10 @@ void test('connectAndOpenShell follows explicit shell signal when parent aborts 
 
 void test('connectAndOpenShell cleans up an aborted late success', async () => {
 	const abortController = new AbortController();
+	const abortReason = new Error('parent connection attempt aborted');
 	let closeCalls = 0;
 	let disconnectCalls = 0;
+	let navigated = false;
 
 	const result = await connectAndOpenShell({
 		connectionDetails,
@@ -288,7 +292,7 @@ void test('connectAndOpenShell cleans up an aborted late success', async () => {
 					disconnectCalls += 1;
 				},
 				startShell: async () => {
-					abortController.abort();
+					abortController.abort(abortReason);
 					return {
 						channelId: 7,
 						close: async () => {
@@ -299,11 +303,63 @@ void test('connectAndOpenShell cleans up an aborted late success', async () => {
 			}) as never,
 		saveConnection: async () => {},
 		navigate: () => {
-			throw new Error('aborted connect should not navigate');
+			navigated = true;
 		},
 	});
 
-	assert.equal(result.status, 'connected');
+	assert.equal(result.status, 'aborted');
+	assert.equal(result.reason, abortReason);
+	assert.equal(navigated, false);
+	assert.equal(closeCalls, 1);
+	assert.equal(disconnectCalls, 1);
+});
+
+void test('connectAndOpenShell returns generic abort reason when signal has no reason', async () => {
+	const abortSignal = {
+		aborted: false,
+		addEventListener: () => {},
+		removeEventListener: () => {},
+		dispatchEvent: () => true,
+		onabort: null,
+		reason: undefined,
+		throwIfAborted: () => {},
+	} as AbortSignal;
+	let closeCalls = 0;
+	let disconnectCalls = 0;
+	let navigated = false;
+
+	const result = await connectAndOpenShell({
+		connectionDetails,
+		resolvedSecurity: { type: 'key', privateKey: 'secret' },
+		operationSignals: {
+			shell: abortSignal,
+		},
+		connect: async () =>
+			({
+				connectionId: 'conn-1',
+				disconnect: async () => {
+					disconnectCalls += 1;
+				},
+				startShell: async () => {
+					Object.assign(abortSignal, { aborted: true });
+					return {
+						channelId: 7,
+						close: async () => {
+							closeCalls += 1;
+						},
+					};
+				},
+			}) as never,
+		saveConnection: async () => {},
+		navigate: () => {
+			navigated = true;
+		},
+	});
+
+	assert.equal(result.status, 'aborted');
+	assert.ok(result.reason instanceof Error);
+	assert.equal(result.reason.message, 'Connection attempt aborted');
+	assert.equal(navigated, false);
 	assert.equal(closeCalls, 1);
 	assert.equal(disconnectCalls, 1);
 });
@@ -443,6 +499,15 @@ void test('auto-connect saved-entry result exposes cleanup for connected results
 	});
 	assert.equal(tmuxFailed.status, 'tmux_attach_failed');
 	assert.equal('cleanup' in tmuxFailed, false);
+
+	const abortReason = new Error('auto-connect aborted');
+	const aborted = toAutoConnectSavedEntryResult({
+		status: 'aborted',
+		reason: abortReason,
+	});
+	assert.equal(aborted.status, 'aborted');
+	assert.equal(aborted.reason, abortReason);
+	assert.equal('cleanup' in aborted, false);
 });
 
 void test('connectAndOpenShell navigates with tmux attach failure metadata', async () => {
