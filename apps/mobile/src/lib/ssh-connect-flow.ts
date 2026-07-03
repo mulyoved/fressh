@@ -2,11 +2,7 @@ import { type InputConnectionDetails } from './connection-storage';
 import { getStoredConnectionId } from './connection-utils';
 import { AbortSignalAny, AbortSignalTimeout } from './utils';
 
-type ConnectParamsBase<
-	TSecurity,
-	TProgressEvent,
-	TServerKeyInfo,
-> = {
+type ConnectParamsBase<TSecurity, TProgressEvent, TServerKeyInfo> = {
 	host: string;
 	port: number;
 	username: string;
@@ -34,6 +30,7 @@ export async function connectAndRememberConnection<
 	onConnectionProgress?: (progressEvent: TProgressEvent) => void;
 	abortSignalTimeoutMs: number;
 	abortSignal?: AbortSignal;
+	connectSignal?: AbortSignal;
 	resolvedSecurity: TSecurity;
 }): Promise<{
 	sshConnection: TResult;
@@ -45,6 +42,7 @@ export async function connectAndRememberConnection<
 		onConnectionProgress: args.onConnectionProgress,
 		abortSignalTimeoutMs: args.abortSignalTimeoutMs,
 		abortSignal: args.abortSignal,
+		connectSignal: args.connectSignal,
 		resolvedSecurity: args.resolvedSecurity,
 	});
 
@@ -74,6 +72,7 @@ export async function connectWithoutRemembering<
 	onConnectionProgress?: (progressEvent: TProgressEvent) => void;
 	abortSignalTimeoutMs: number;
 	abortSignal?: AbortSignal;
+	connectSignal?: AbortSignal;
 	resolvedSecurity: TSecurity;
 }): Promise<TResult> {
 	return await args.connect({
@@ -88,9 +87,11 @@ export async function connectWithoutRemembering<
 		// Currently accepts all server keys, which is vulnerable to MITM attacks.
 		// Future: store known host keys, verify against them, prompt user on mismatch.
 		onServerKey: async () => true,
-		abortSignal: AbortSignalAny([
-			AbortSignalTimeout(args.abortSignalTimeoutMs),
-			args.abortSignal,
-		]),
+		abortSignal:
+			args.connectSignal ??
+			AbortSignalAny([
+				AbortSignalTimeout(args.abortSignalTimeoutMs),
+				args.abortSignal,
+			]),
 	});
 }

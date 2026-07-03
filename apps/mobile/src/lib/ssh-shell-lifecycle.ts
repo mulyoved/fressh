@@ -35,6 +35,11 @@ export type SshShellLifecycleResult =
 			storedConnectionId: string;
 	  };
 
+export type SshShellLifecycleOperationSignals = {
+	connect?: AbortSignal;
+	shell?: AbortSignal;
+};
+
 type ConnectedSshConnection = {
 	sshConnection: SshConnection;
 	storedConnectionId: string;
@@ -68,11 +73,13 @@ export function getSshShellLifecycleConnectionIdentity(
 export async function runSshShellLifecycle(args: {
 	connectionDetails: InputConnectionDetails;
 	connectConnection: (params: {
+		connectSignal?: AbortSignal;
 		onConnectionProgress?: (progressEvent: SshConnectionProgress) => void;
 	}) => Promise<ConnectedSshConnection>;
 	onConnectionProgress?: (progressEvent: SshConnectionProgress) => void;
 	abortSignalTimeoutMs: number;
 	abortSignal?: AbortSignal;
+	operationSignals?: SshShellLifecycleOperationSignals;
 	registerInStore?: boolean;
 	traceEvent: (event: ConnectionDiagnosticEvent) => void;
 	afterShellFailure?: (context: ShellLifecycleFailureContext) => Promise<void>;
@@ -83,6 +90,7 @@ export async function runSshShellLifecycle(args: {
 		onConnectionProgress,
 		abortSignalTimeoutMs,
 		abortSignal,
+		operationSignals,
 		registerInStore,
 		traceEvent,
 		afterShellFailure,
@@ -100,6 +108,7 @@ export async function runSshShellLifecycle(args: {
 	let connected: ConnectedSshConnection;
 	try {
 		connected = await connectConnection({
+			connectSignal: operationSignals?.connect,
 			onConnectionProgress: (progressEvent) => {
 				traceEvent(
 					sshEvents.connectProgress({
@@ -147,10 +156,9 @@ export async function runSshShellLifecycle(args: {
 			term: 'Xterm',
 			useTmux: connectionDetails.useTmux,
 			tmuxSessionName: connectionDetails.tmuxSessionName,
-			abortSignal: AbortSignalAny([
-				AbortSignalTimeout(abortSignalTimeoutMs),
-				abortSignal,
-			]),
+			abortSignal:
+				operationSignals?.shell ??
+				AbortSignalAny([AbortSignalTimeout(abortSignalTimeoutMs), abortSignal]),
 		};
 		if (registerInStore !== undefined) {
 			startShellOptions.registerInStore = registerInStore;

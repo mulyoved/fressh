@@ -44,6 +44,21 @@ void test('connectWithoutRemembering forwards SSH connect parameters', async () 
 	assert.deepEqual(progressEvents, [{ phase: 'auth' }]);
 });
 
+void test('connectWithoutRemembering uses explicit connect signal when provided', async () => {
+	const connectAbortController = new AbortController();
+
+	await connectWithoutRemembering({
+		connectionDetails,
+		resolvedSecurity: { type: 'key', privateKey: 'secret' },
+		abortSignalTimeoutMs: 5_000,
+		connectSignal: connectAbortController.signal,
+		connect: async (params) => {
+			assert.equal(params.abortSignal, connectAbortController.signal);
+			return { connectionId: 'conn-1' };
+		},
+	});
+});
+
 void test('connectAndRememberConnection saves after connecting', async () => {
 	const calls: string[] = [];
 	const saveCalls: unknown[] = [];
@@ -74,6 +89,22 @@ void test('connectAndRememberConnection saves after connecting', async () => {
 			priority: 0,
 		},
 	]);
+});
+
+void test('connectAndRememberConnection forwards explicit connect signal', async () => {
+	const connectAbortController = new AbortController();
+
+	await connectAndRememberConnection({
+		connectionDetails,
+		resolvedSecurity: { type: 'key', privateKey: 'secret' },
+		abortSignalTimeoutMs: 5_000,
+		connectSignal: connectAbortController.signal,
+		connect: async (params) => {
+			assert.equal(params.abortSignal, connectAbortController.signal);
+			return { connectionId: 'conn-1' };
+		},
+		saveConnection: async () => {},
+	});
 });
 
 void test('connectAndRememberConnection does not save after connect failure', async () => {

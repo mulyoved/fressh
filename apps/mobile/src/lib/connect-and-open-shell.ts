@@ -10,6 +10,7 @@ import { rootLogger } from './logger';
 import { connectAndRememberConnection } from './ssh-connect-flow';
 import {
 	runSshShellLifecycle,
+	type SshShellLifecycleOperationSignals,
 	type SshShellLifecycleResult,
 } from './ssh-shell-lifecycle';
 import { AbortSignalTimeout } from './utils';
@@ -66,15 +67,16 @@ async function cleanupAbortedConnection(
 			signal: AbortSignalTimeout(timeoutMs),
 		});
 	} catch (error) {
-		logger.warn('Failed to disconnect aborted auto-connect SSH connection', error);
+		logger.warn(
+			'Failed to disconnect aborted auto-connect SSH connection',
+			error,
+		);
 	}
 }
 
 async function disconnectAbortedConnection(
 	result: Parameters<
-		NonNullable<
-			Parameters<typeof runSshShellLifecycle>[0]['afterShellFailure']
-		>
+		NonNullable<Parameters<typeof runSshShellLifecycle>[0]['afterShellFailure']>
 	>[0],
 	timeoutMs: number,
 ) {
@@ -83,7 +85,10 @@ async function disconnectAbortedConnection(
 			signal: AbortSignalTimeout(timeoutMs),
 		});
 	} catch (error) {
-		logger.warn('Failed to disconnect aborted auto-connect SSH connection', error);
+		logger.warn(
+			'Failed to disconnect aborted auto-connect SSH connection',
+			error,
+		);
 	}
 }
 
@@ -115,6 +120,7 @@ export async function connectAndOpenShell(args: {
 	onConnectionProgress?: (progressEvent: SshConnectionProgress) => void;
 	abortSignalTimeoutMs?: number;
 	abortSignal?: AbortSignal;
+	operationSignals?: SshShellLifecycleOperationSignals;
 	resolvedSecurity?: ConnectionDetails['security'];
 	saveConnection?: SaveConnection;
 	trace?: ConnectTrace;
@@ -126,6 +132,7 @@ export async function connectAndOpenShell(args: {
 		onConnectionProgress,
 		abortSignalTimeoutMs = DEFAULT_CONNECT_TIMEOUT_MS,
 		abortSignal,
+		operationSignals,
 		resolvedSecurity,
 		saveConnection = defaultSaveConnection,
 	} = args;
@@ -142,18 +149,20 @@ export async function connectAndOpenShell(args: {
 	const result = await runSshShellLifecycle({
 		connectionDetails,
 		abortSignalTimeoutMs,
+		operationSignals,
 		traceEvent,
 		onConnectionProgress: (progressEvent) => {
 			logger.info('SSH connect progress event', progressEvent);
 			onConnectionProgress?.(progressEvent);
 		},
-		connectConnection: async ({ onConnectionProgress }) =>
+		connectConnection: async ({ connectSignal, onConnectionProgress }) =>
 			await connectAndRememberConnection({
 				connectionDetails,
 				connect,
 				onConnectionProgress,
 				abortSignalTimeoutMs,
 				abortSignal,
+				connectSignal,
 				resolvedSecurity: security,
 				saveConnection,
 			}),
