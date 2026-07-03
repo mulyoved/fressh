@@ -565,6 +565,35 @@ void test('saved-entry lifecycle preserves stale outcome when stale cleanup fail
 	);
 });
 
+void test('saved-entry lifecycle ignores late cleanup failure reporter errors', async () => {
+	let current = true;
+	const { runContext } = runHarness({ isCurrent: () => current });
+	const connect = deferred<SavedEntryConnectResult>();
+
+	const outcomePromise = runSavedEntryConnectionAttempt({
+		platformOS: 'android',
+		mode: 'auto-connect',
+		runContext,
+		recovery: readyRecovery(),
+		connectSavedEntry: async () => connect.promise,
+		cleanupConnected: async () => {
+			throw new Error('disconnect failed');
+		},
+		onLateCleanupFailure: () => {
+			throw new Error('report failed');
+		},
+	});
+	await flushPromises();
+
+	current = false;
+	connect.resolve(connectedResult());
+
+	assert.deepEqual(await outcomePromise, {
+		status: 'aborted',
+		reason: 'stale-run',
+	});
+});
+
 void test('manual diagnostic mode returns cleanup failure with prior outcome', async () => {
 	const { runContext } = runHarness();
 	const cleanupError = new Error('disconnect failed');
@@ -825,4 +854,38 @@ void test('active shell reopen preserves stale outcome when stale cleanup fails'
 		(reportedCleanupFailure as { status?: unknown } | null)?.status,
 		'cleanupFailed',
 	);
+});
+
+void test('active shell reopen ignores late cleanup failure reporter errors', async () => {
+	let current = true;
+	const { runContext } = runHarness({ isCurrent: () => current });
+	const shell = deferred<{
+		connectionId: string;
+		channelId: number;
+		close: () => Promise<void>;
+	}>();
+
+	const outcomePromise = runActiveShellReopenAttempt({
+		runContext,
+		startShell: async () => shell.promise,
+		cleanupConnected: async () => {
+			throw new Error('close failed');
+		},
+		onLateCleanupFailure: () => {
+			throw new Error('report failed');
+		},
+	});
+	await flushPromises();
+
+	current = false;
+	shell.resolve({
+		connectionId: 'active-1',
+		channelId: 9,
+		close: async () => {},
+	});
+
+	assert.deepEqual(await outcomePromise, {
+		status: 'aborted',
+		reason: 'stale-run',
+	});
 });

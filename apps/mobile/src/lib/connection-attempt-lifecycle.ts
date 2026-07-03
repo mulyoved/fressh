@@ -176,6 +176,17 @@ function mapSavedEntryResult(
 	};
 }
 
+function reportLateCleanupFailure(
+	reporter: ((outcome: ConnectionAttemptOutcome) => void) | undefined,
+	outcome: ConnectionAttemptOutcome,
+) {
+	try {
+		reporter?.(outcome);
+	} catch {
+		// Cleanup reporting must never alter the lifecycle outcome.
+	}
+}
+
 async function cleanupConnectedOutcome({
 	runContext,
 	outcome,
@@ -265,7 +276,7 @@ async function cleanupLateSavedEntryConnected({
 		cleanupConnected,
 	});
 	if (cleanupOutcome !== null) {
-		onLateCleanupFailure?.(cleanupOutcome);
+		reportLateCleanupFailure(onLateCleanupFailure, cleanupOutcome);
 	}
 }
 
@@ -447,7 +458,7 @@ export async function runActiveShellReopenAttempt({
 			cleanupConnected,
 		});
 		if (cleanupOutcome !== null) {
-			onLateCleanupFailure?.(cleanupOutcome);
+			reportLateCleanupFailure(onLateCleanupFailure, cleanupOutcome);
 		}
 	};
 	try {
