@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { attemptAutoConnectSource } from '../../src/lib/auto-connect-attempt';
+import {
+	attemptAutoConnectSource as attemptAutoConnectSourceBase,
+	type AutoConnectAttemptSourceArgs,
+} from '../../src/lib/auto-connect-attempt';
+import { createConnectionRunContext } from '../../src/lib/connection-run-context';
 import { type SavedConnectionEntry } from '../../src/lib/connection-utils';
 // eslint-disable-next-line import/consistent-type-specifier-style -- keep secrets-manager fully type-only so Node integration tests do not load React Native at runtime
 import type { InputConnectionDetails } from '../../src/lib/secrets-manager';
@@ -51,6 +55,35 @@ function createSavedEntry(
 		},
 		value,
 	};
+}
+
+function createAutoConnectRunContext(callerSignal?: AbortSignal) {
+	return createConnectionRunContext({
+		callerSignal,
+		timeouts: {
+			operationTimeoutMs: 60_000,
+			recoveryTimeoutMs: 60_000,
+			cleanupTimeoutMs: 5_000,
+		},
+	});
+}
+
+async function attemptAutoConnectSource(
+	args: Omit<AutoConnectAttemptSourceArgs, 'runContext'> & {
+		runContext?: AutoConnectAttemptSourceArgs['runContext'];
+		abortSignal?: AbortSignal;
+	},
+) {
+	const runContext =
+		args.runContext ?? createAutoConnectRunContext(args.abortSignal);
+	try {
+		const { abortSignal: _abortSignal, ...sourceArgs } = args;
+		return await attemptAutoConnectSourceBase({ ...sourceArgs, runContext });
+	} finally {
+		if (!args.runContext) {
+			runContext.finish();
+		}
+	}
 }
 
 function eventKinds(events: unknown[]) {
@@ -163,6 +196,7 @@ void test('latest active connection loads tmux settings, starts shell, and navig
 	const events: unknown[] = [];
 	let clearAttentionCount = 0;
 	const { logger } = createLogger();
+	const runContext = createAutoConnectRunContext();
 
 	const connected = await attemptAutoConnectSource({
 		platformOS: 'android',
@@ -210,7 +244,9 @@ void test('latest active connection loads tmux settings, starts shell, and navig
 				events.push(event);
 			},
 		},
+		runContext,
 	});
+	runContext.finish();
 
 	assert.equal(connected, true);
 	assert.deepEqual(navigations, [['newer', 44]]);
@@ -278,57 +314,70 @@ void test('aborted active connection auto-connect suppresses late navigation', a
 	let clearAttentionCount = 0;
 	let closeCalls = 0;
 	const { logger } = createLogger();
-
-	const connected = await attemptAutoConnectSource({
-		platformOS: 'android',
-		pathname: '/(tabs)',
-		latestShell: null,
-		connections: {
-			active: {
-				connectionId: 'active-1',
-				connectedAtMs: 20,
-				connectionDetails: baseDetails,
-				startShell: async ({ abortSignal }) => {
-					receivedSignal = abortSignal;
-					abortController.abort();
-					return {
-						channelId: 7,
-						close: async () => {
-							closeCalls += 1;
-						},
-					};
-				},
-			},
+	const runContext = createConnectionRunContext({
+		callerSignal: abortController.signal,
+		timeouts: {
+			operationTimeoutMs: 5_000,
+			recoveryTimeoutMs: 60_000,
+			cleanupTimeoutMs: 5_000,
 		},
-		openSavedEntryShell: async () => {
-			throw new Error('saved-entry fallback should not run');
-		},
-		loadTmuxSettings: async () => ({
-			useTmux: true,
-			tmuxSessionName: 'main',
-		}),
-		loadLatestSavedConnection: async () => createSavedEntry(),
-		resolveKeySecurity: async () => ({
-			type: 'key',
-			privateKey: 'private-key',
-		}),
-		navigateToShell: (connectionId, channelId) => {
-			navigations.push([connectionId, channelId]);
-		},
-		recovery: readyRecovery,
-		markTailscaleAttention: () => {},
-		clearTailscaleAttention: () => {
-			clearAttentionCount += 1;
-		},
-		logger,
-		abortSignal: abortController.signal,
 	});
 
-	assert.equal(connected, false);
-	assert.equal(receivedSignal?.aborted, true);
-	assert.deepEqual(navigations, []);
-	assert.equal(clearAttentionCount, 0);
-	assert.equal(closeCalls, 1);
+	try {
+		const connected = await attemptAutoConnectSource({
+			platformOS: 'android',
+			pathname: '/(tabs)',
+			latestShell: null,
+			connections: {
+				active: {
+					connectionId: 'active-1',
+					connectedAtMs: 20,
+					connectionDetails: baseDetails,
+					startShell: async ({ abortSignal }) => {
+						receivedSignal = abortSignal;
+						abortController.abort();
+						return {
+							channelId: 7,
+							close: async () => {
+								closeCalls += 1;
+							},
+						};
+					},
+				},
+			},
+			openSavedEntryShell: async () => {
+				throw new Error('saved-entry fallback should not run');
+			},
+			loadTmuxSettings: async () => ({
+				useTmux: true,
+				tmuxSessionName: 'main',
+			}),
+			loadLatestSavedConnection: async () => createSavedEntry(),
+			resolveKeySecurity: async () => ({
+				type: 'key',
+				privateKey: 'private-key',
+			}),
+			navigateToShell: (connectionId, channelId) => {
+				navigations.push([connectionId, channelId]);
+			},
+			recovery: readyRecovery,
+			markTailscaleAttention: () => {},
+			clearTailscaleAttention: () => {
+				clearAttentionCount += 1;
+			},
+			logger,
+			abortSignal: abortController.signal,
+			runContext,
+		});
+
+		assert.equal(connected, false);
+		assert.equal(receivedSignal?.aborted, true);
+		assert.deepEqual(navigations, []);
+		assert.equal(clearAttentionCount, 0);
+		assert.equal(closeCalls, 1);
+	} finally {
+		runContext.finish();
+	}
 });
 
 void test('aborted active shell failure skips saved-entry fallback', async () => {
@@ -392,6 +441,7 @@ void test('saved-entry path delegates through Tailscale recovery and injected op
 		security: baseDetails.security,
 	};
 	const { logger } = createLogger();
+	const runContext = createAutoConnectRunContext();
 
 	const connected = await attemptAutoConnectSource({
 		platformOS: 'android',
@@ -420,7 +470,9 @@ void test('saved-entry path delegates through Tailscale recovery and injected op
 		markTailscaleAttention: () => {},
 		clearTailscaleAttention: () => {},
 		logger,
+		runContext,
 	});
+	runContext.finish();
 
 	assert.equal(connected, true);
 	assert.deepEqual(navigations, [['conn-2', 3]]);
@@ -594,6 +646,95 @@ void test('active shell failure falls through to saved-entry connection', async 
 	);
 });
 
+void test('auto-connect run context active shell timeout falls through to saved-entry connection', async () => {
+	const navigations: [string, number][] = [];
+	const events: unknown[] = [];
+	const runContext = createConnectionRunContext({
+		timeouts: {
+			operationTimeoutMs: 1_000,
+			recoveryTimeoutMs: 60_000,
+			cleanupTimeoutMs: 5_000,
+		},
+	});
+	const { logger } = createLogger();
+
+	try {
+		const connected = await attemptAutoConnectSource({
+			platformOS: 'android',
+			pathname: '/(tabs)',
+			latestShell: null,
+			connections: {
+				active: {
+					connectionId: 'active-1',
+					connectedAtMs: 20,
+					connectionDetails: baseDetails,
+					startShell: async ({ abortSignal }) =>
+						await new Promise((_resolve, reject) => {
+							abortSignal.addEventListener(
+								'abort',
+								() => {
+									reject(new Error('active shell timed out'));
+								},
+								{ once: true },
+							);
+						}),
+				},
+			},
+			openSavedEntryShell: async ({ navigate }) => {
+				navigate({ connectionId: 'saved-2', channelId: 9 });
+				return {
+					status: 'connected',
+					connectionId: 'saved-2',
+					channelId: 9,
+				};
+			},
+			loadTmuxSettings: async () => ({
+				useTmux: true,
+				tmuxSessionName: 'main',
+			}),
+			loadLatestSavedConnection: async () => createSavedEntry(),
+			resolveKeySecurity: async () => ({
+				type: 'key',
+				privateKey: 'private-key',
+			}),
+			navigateToShell: (connectionId, channelId) => {
+				navigations.push([connectionId, channelId]);
+			},
+			recovery: readyRecovery,
+			markTailscaleAttention: () => {},
+			clearTailscaleAttention: () => {},
+			logger,
+			trace: {
+				event: (event) => {
+					events.push(event);
+				},
+			},
+			runContext,
+			timeouts: {
+				operationTimeoutMs: 5,
+				recoveryTimeoutMs: 60_000,
+				cleanupTimeoutMs: 5_000,
+			},
+		});
+
+		assert.equal(connected, true);
+		assert.deepEqual(navigations, [['saved-2', 9]]);
+		assert.deepEqual(eventKinds(events), [
+			'auto-connect.latest-shell.missing',
+			'auto-connect.active-connection.selected',
+			'auto-connect.active-connection.shell-started',
+			'auto-connect.active-connection.shell-failed',
+			'saved-entry.selected',
+			'key.resolved',
+			'tailscale.ensure-ready.result',
+			'auto-connect.saved-entry.connect.started',
+			'auto-connect.saved-entry.connect.connected',
+		]);
+	} finally {
+		runContext.finish();
+	}
+});
+
 void test('aborted saved-entry auto-connect suppresses late navigation', async () => {
 	const abortController = new AbortController();
 	const navigations: [string, number][] = [];
@@ -631,58 +772,126 @@ void test('aborted saved-entry auto-connect suppresses late navigation', async (
 	});
 
 	assert.equal(connected, false);
-	assert.equal(receivedSignal, abortController.signal);
+	assert.equal(receivedSignal?.aborted, true);
 	assert.deepEqual(navigations, []);
+});
+
+void test('auto-connect run context suppresses stale saved-entry late success navigation', async () => {
+	const abortController = new AbortController();
+	const runContext = createConnectionRunContext({
+		callerSignal: abortController.signal,
+		timeouts: {
+			operationTimeoutMs: 5_000,
+			recoveryTimeoutMs: 60_000,
+			cleanupTimeoutMs: 5_000,
+		},
+	});
+	const navigations: unknown[] = [];
+	let openerCalls = 0;
+	let cleanupCalls = 0;
+	let cleanupSignal: AbortSignal | undefined;
+	const { logger } = createLogger();
+
+	try {
+		const connected = await attemptAutoConnectSource({
+			platformOS: 'android',
+			pathname: '/shell',
+			latestShell: null,
+			connections: {},
+			openSavedEntryShell: async ({ abortSignal, navigate }) => {
+				abortController.abort();
+				assert.equal(abortSignal?.aborted, true);
+				openerCalls += 1;
+				navigate({ connectionId: 'conn-1', channelId: 7 });
+				return {
+					status: 'connected',
+					connectionId: 'conn-1',
+					channelId: 7,
+					cleanup: async (opts) => {
+						cleanupCalls += 1;
+						cleanupSignal = opts?.signal;
+					},
+				};
+			},
+			loadLatestSavedConnection: async () => createSavedEntry(),
+			resolveKeySecurity: async () => ({
+				type: 'key',
+				privateKey: 'secret',
+			}),
+			navigateToShell: (connectionId, channelId) => {
+				navigations.push({ connectionId, channelId });
+			},
+			recovery: readyRecovery,
+			markTailscaleAttention: () => {},
+			clearTailscaleAttention: () => {},
+			logger,
+			runContext,
+		});
+
+		assert.equal(connected, false);
+		assert.deepEqual(navigations, []);
+		assert.equal(openerCalls, 1);
+		assert.equal(cleanupCalls, 1);
+		assert.equal(cleanupSignal instanceof AbortSignal, true);
+	} finally {
+		runContext.finish();
+	}
 });
 
 void test('active shell tmux attach failure records active-connection tmux trace', async () => {
 	const events: unknown[] = [];
 	const { logger } = createLogger();
+	const runContext = createAutoConnectRunContext();
 
-	const connected = await attemptAutoConnectSource({
-		platformOS: 'android',
-		pathname: '/(tabs)',
-		latestShell: null,
-		connections: {
-			active: {
-				connectionId: 'active-1',
-				connectedAtMs: 20,
-				connectionDetails: baseDetails,
-				startShell: async () => {
-					throw {
-						tag: 'TmuxAttachFailed',
-						inner: ['missing session'],
-					};
+	try {
+		const connected = await attemptAutoConnectSource({
+			platformOS: 'android',
+			pathname: '/(tabs)',
+			latestShell: null,
+			connections: {
+				active: {
+					connectionId: 'active-1',
+					connectedAtMs: 20,
+					connectionDetails: baseDetails,
+					startShell: async () => {
+						throw {
+							tag: 'TmuxAttachFailed',
+							inner: ['missing session'],
+						};
+					},
 				},
 			},
-		},
-		openSavedEntryShell: async () => ({
-			status: 'connected',
-			connectionId: 'saved-2',
-			channelId: 9,
-		}),
-		loadTmuxSettings: async () => ({
-			useTmux: true,
-			tmuxSessionName: 'ops',
-		}),
-		loadLatestSavedConnection: async () => createSavedEntry(),
-		resolveKeySecurity: async () => ({
-			type: 'key',
-			privateKey: 'private-key',
-		}),
-		navigateToShell: () => {},
-		recovery: readyRecovery,
-		markTailscaleAttention: () => {},
-		clearTailscaleAttention: () => {},
-		logger,
-		trace: {
-			event: (event) => {
-				events.push(event);
+			openSavedEntryShell: async () => ({
+				status: 'connected',
+				connectionId: 'saved-2',
+				channelId: 9,
+			}),
+			loadTmuxSettings: async () => ({
+				useTmux: true,
+				tmuxSessionName: 'ops',
+			}),
+			loadLatestSavedConnection: async () => createSavedEntry(),
+			resolveKeySecurity: async () => ({
+				type: 'key',
+				privateKey: 'private-key',
+			}),
+			navigateToShell: () => {},
+			recovery: readyRecovery,
+			markTailscaleAttention: () => {},
+			clearTailscaleAttention: () => {},
+			logger,
+			trace: {
+				event: (event) => {
+					events.push(event);
+				},
 			},
-		},
-	});
+			runContext,
+		});
 
-	assert.equal(connected, true);
+		assert.equal(connected, true);
+	} finally {
+		runContext.finish();
+	}
 	assert.deepEqual(eventKinds(events).slice(0, 4), [
 		'auto-connect.latest-shell.missing',
 		'auto-connect.active-connection.selected',
@@ -743,6 +952,48 @@ void test('saved-entry path returns false when no saved entry exists', async () 
 	assert.equal(connected, false);
 	assert.equal(recoveryCalls, 0);
 	assert.equal(openerCalls, 0);
+});
+
+void test('saved-entry lookup timeout returns false without opening shell', async () => {
+	const runContext = createConnectionRunContext({
+		timeouts: {
+			operationTimeoutMs: 5,
+			recoveryTimeoutMs: 60_000,
+			cleanupTimeoutMs: 5_000,
+		},
+	});
+	let openerCalls = 0;
+	const { logger } = createLogger();
+
+	try {
+		const connected = await attemptAutoConnectSource({
+			platformOS: 'android',
+			pathname: '/(tabs)',
+			latestShell: null,
+			connections: {},
+			openSavedEntryShell: async () => {
+				openerCalls += 1;
+				throw new Error('connect should not run');
+			},
+			loadLatestSavedConnection: async () => new Promise(() => {}),
+			resolveKeySecurity: async () => {
+				throw new Error('security should not resolve');
+			},
+			navigateToShell: () => {
+				throw new Error('navigation should not run');
+			},
+			recovery: readyRecovery,
+			markTailscaleAttention: () => {},
+			clearTailscaleAttention: () => {},
+			logger,
+			runContext,
+		});
+
+		assert.equal(connected, false);
+		assert.equal(openerCalls, 0);
+	} finally {
+		runContext.finish();
+	}
 });
 
 void test('saved-entry path returns false for invalid legacy tmux fields', async () => {
@@ -827,8 +1078,101 @@ void test('saved-entry path skips when key security cannot resolve', async () =>
 	assert.equal(connected, false);
 });
 
+void test('saved-entry key resolution timeout returns false without opening shell', async () => {
+	const runContext = createConnectionRunContext({
+		timeouts: {
+			operationTimeoutMs: 5,
+			recoveryTimeoutMs: 60_000,
+			cleanupTimeoutMs: 5_000,
+		},
+	});
+	let openerCalls = 0;
+	const { logger } = createLogger();
+
+	try {
+		const connected = await attemptAutoConnectSource({
+			platformOS: 'android',
+			pathname: '/(tabs)',
+			latestShell: null,
+			connections: {},
+			openSavedEntryShell: async () => {
+				openerCalls += 1;
+				throw new Error('connect should not run');
+			},
+			loadLatestSavedConnection: async () => createSavedEntry(),
+			resolveKeySecurity: async () => new Promise(() => {}),
+			navigateToShell: () => {
+				throw new Error('navigation should not run');
+			},
+			recovery: readyRecovery,
+			markTailscaleAttention: () => {},
+			clearTailscaleAttention: () => {},
+			logger,
+			runContext,
+		});
+
+		assert.equal(connected, false);
+		assert.equal(openerCalls, 0);
+	} finally {
+		runContext.finish();
+	}
+});
+
+void test('saved-entry Tailscale readiness block marks attention and fails trace', async () => {
+	const events: unknown[] = [];
+	const attentionMessages: string[] = [];
+	const { logger } = createLogger();
+
+	const connected = await attemptAutoConnectSource({
+		platformOS: 'android',
+		pathname: '/(tabs)',
+		latestShell: null,
+		connections: {},
+		openSavedEntryShell: async () => {
+			throw new Error('connect should not run');
+		},
+		loadLatestSavedConnection: async () => createSavedEntry(),
+		resolveKeySecurity: async () => ({
+			type: 'key',
+			privateKey: 'private-key',
+		}),
+		navigateToShell: () => {},
+		recovery: {
+			ensureReady: async () => ({
+				kind: 'unavailable' as const,
+				attempted: false as const,
+				available: false as const,
+			}),
+			recoverAfterFailure: readyRecovery.recoverAfterFailure,
+		},
+		markTailscaleAttention: (message) => {
+			attentionMessages.push(message);
+		},
+		clearTailscaleAttention: () => {},
+		logger,
+		trace: {
+			event: (event) => {
+				events.push(event);
+			},
+		},
+	});
+
+	assert.equal(connected, false);
+	assert.equal(attentionMessages.length, 1);
+	assert.match(attentionMessages[0] ?? '', /Tailscale is required/);
+	assert.deepEqual(eventKinds(events), [
+		'auto-connect.latest-shell.missing',
+		'auto-connect.active-connection.missing',
+		'saved-entry.selected',
+		'key.resolved',
+		'tailscale.ensure-ready.result',
+		'auto-connect.saved-entry.connect.failed',
+	]);
+});
+
 void test('records saved-entry failure trace events', async () => {
 	const events: unknown[] = [];
+	const attentionMessages: string[] = [];
 	const { logger } = createLogger();
 
 	const connected = await attemptAutoConnectSource({
@@ -858,7 +1202,9 @@ void test('records saved-entry failure trace events', async () => {
 				available: true,
 			}),
 		},
-		markTailscaleAttention: () => {},
+		markTailscaleAttention: (message) => {
+			attentionMessages.push(message);
+		},
 		clearTailscaleAttention: () => {},
 		logger,
 		trace: {
@@ -869,6 +1215,8 @@ void test('records saved-entry failure trace events', async () => {
 	});
 
 	assert.equal(connected, false);
+	assert.equal(attentionMessages.length, 1);
+	assert.match(attentionMessages[0] ?? '', /restarting Tailscale/);
 	assert.deepEqual(
 		events.map((event) => (event as { kind: string }).kind),
 		[
@@ -889,6 +1237,7 @@ void test('records saved-entry failure trace events', async () => {
 void test('records saved-entry recovery retry success trace events from caller', async () => {
 	const events: unknown[] = [];
 	const { logger } = createLogger();
+	const runContext = createAutoConnectRunContext();
 	let connectCalls = 0;
 
 	const connected = await attemptAutoConnectSource({
@@ -930,7 +1279,9 @@ void test('records saved-entry recovery retry success trace events from caller',
 				events.push(event);
 			},
 		},
+		runContext,
 	});
+	runContext.finish();
 
 	assert.equal(connected, true);
 	assert.equal(connectCalls, 2);
@@ -951,6 +1302,7 @@ void test('records saved-entry recovery retry success trace events from caller',
 void test('records saved-entry recovery retry failure before connect failure', async () => {
 	const events: unknown[] = [];
 	const { logger } = createLogger();
+	const runContext = createAutoConnectRunContext();
 
 	const connected = await attemptAutoConnectSource({
 		platformOS: 'android',
@@ -983,7 +1335,9 @@ void test('records saved-entry recovery retry failure before connect failure', a
 				events.push(event);
 			},
 		},
+		runContext,
 	});
+	runContext.finish();
 
 	assert.equal(connected, false);
 	assert.deepEqual(eventKinds(events), [
@@ -1004,37 +1358,43 @@ void test('records saved-entry recovery retry failure before connect failure', a
 void test('records saved-entry tmux attach failure and connect failure payloads', async () => {
 	const events: unknown[] = [];
 	const { logger } = createLogger();
+	const runContext = createAutoConnectRunContext();
 
-	const connected = await attemptAutoConnectSource({
-		platformOS: 'android',
-		pathname: '/(tabs)',
-		latestShell: null,
-		connections: {},
-		openSavedEntryShell: async () => ({
-			status: 'tmux_attach_failed',
-			connectionId: 'conn-tmux',
-			tmuxAttachFailureReason: 'missing session',
-			tmuxSessionName: 'ops',
-			storedConnectionId: 'stored-tmux',
-		}),
-		loadLatestSavedConnection: async () => createSavedEntry(),
-		resolveKeySecurity: async () => ({
-			type: 'key',
-			privateKey: 'private-key',
-		}),
-		navigateToShell: () => {},
-		recovery: readyRecovery,
-		markTailscaleAttention: () => {},
-		clearTailscaleAttention: () => {},
-		logger,
-		trace: {
-			event: (event) => {
-				events.push(event);
+	try {
+		const connected = await attemptAutoConnectSource({
+			platformOS: 'android',
+			pathname: '/(tabs)',
+			latestShell: null,
+			connections: {},
+			openSavedEntryShell: async () => ({
+				status: 'tmux_attach_failed',
+				connectionId: 'conn-tmux',
+				tmuxAttachFailureReason: 'missing session',
+				tmuxSessionName: 'ops',
+				storedConnectionId: 'stored-tmux',
+			}),
+			loadLatestSavedConnection: async () => createSavedEntry(),
+			resolveKeySecurity: async () => ({
+				type: 'key',
+				privateKey: 'private-key',
+			}),
+			navigateToShell: () => {},
+			recovery: readyRecovery,
+			markTailscaleAttention: () => {},
+			clearTailscaleAttention: () => {},
+			logger,
+			trace: {
+				event: (event) => {
+					events.push(event);
+				},
 			},
-		},
-	});
+			runContext,
+		});
 
-	assert.equal(connected, false);
+		assert.equal(connected, false);
+	} finally {
+		runContext.finish();
+	}
 	assert.deepEqual(eventKinds(events), [
 		'auto-connect.latest-shell.missing',
 		'auto-connect.active-connection.missing',

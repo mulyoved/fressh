@@ -11,9 +11,11 @@ import {
 	createAutoConnectReconnectController,
 	type AutoConnectReconnectController,
 } from './auto-connect-reconnect-controller';
+import { toAutoConnectSavedEntryResult } from './auto-connect-saved-entry-cleanup';
 import { connectAndOpenShell } from './connect-and-open-shell';
 import { connectionDiagnosticRecorder } from './connection-diagnostic-recorder';
 import { type ConnectionDiagnosticTraceHandle } from './connection-diagnostic-types';
+import { createConnectionRunContext } from './connection-run-context';
 import { pickLatestConnection } from './connection-utils';
 import {
 	startForegroundService,
@@ -55,6 +57,9 @@ const RECONNECT_WINDOW_MS = 2 * 60 * 1_000;
 const FOREGROUND_SERVICE_START_RETRY_MS = 5_000;
 const FOREGROUND_SERVICE_START_MAX_RETRIES = 5;
 const TAILSCALE_RESET_WAIT_FOR_IDLE_MS = 5_000;
+const AUTO_CONNECT_OPERATION_TIMEOUT_MS = 60_000;
+const AUTO_CONNECT_RECOVERY_TIMEOUT_MS = 60_000;
+const AUTO_CONNECT_CLEANUP_TIMEOUT_MS = 5_000;
 
 type TailscaleRecoveryUiState = TailscaleRecoveryBannerState;
 
@@ -317,93 +322,109 @@ export function AutoConnectManager() {
 	}, []);
 
 	// Single attempt: use an active shell if present; otherwise connect silently.
-	const attemptAutoConnect = React.useCallback(async (signal?: AbortSignal) => {
-		if (launchUrlSuppressAutoConnectRef.current) return false;
-		if (inFlightRef.current) {
-			if (!signal) return false;
-			await inFlightSettledRef.current;
-			if (signal.aborted || inFlightRef.current) return false;
-		}
-		if (signal?.aborted) return false;
-		inFlightRef.current = true;
-		let settleInFlight!: () => void;
-		const inFlightSettled = new Promise<void>((resolve) => {
-			settleInFlight = resolve;
-		});
-		inFlightSettledRef.current = inFlightSettled;
-		setAutoConnecting(true);
-		const existingTrace = activeDiagnosticTraceRef.current;
-		const ownsTrace = existingTrace === null;
-		const trace =
-			existingTrace ??
-			connectionDiagnosticRecorder.startTrace({
-				trigger: 'initial-auto-connect',
-				reason: 'auto-connect-attempt',
+	const attemptAutoConnect = React.useCallback(
+		async (signal?: AbortSignal) => {
+			if (launchUrlSuppressAutoConnectRef.current) return false;
+			if (inFlightRef.current) {
+				if (!signal) return false;
+				await inFlightSettledRef.current;
+				if (signal.aborted || inFlightRef.current) return false;
+			}
+			if (signal?.aborted) return false;
+			inFlightRef.current = true;
+			const runContext = createConnectionRunContext({
+				callerSignal: signal,
+				isCurrent: () => inFlightRef.current,
+				timeouts: {
+					operationTimeoutMs: AUTO_CONNECT_OPERATION_TIMEOUT_MS,
+					recoveryTimeoutMs: AUTO_CONNECT_RECOVERY_TIMEOUT_MS,
+					cleanupTimeoutMs: AUTO_CONNECT_CLEANUP_TIMEOUT_MS,
+				},
 			});
-		activeDiagnosticTraceRef.current = trace;
+			let settleInFlight!: () => void;
+			const inFlightSettled = new Promise<void>((resolve) => {
+				settleInFlight = resolve;
+			});
+			inFlightSettledRef.current = inFlightSettled;
+			setAutoConnecting(true);
+			const existingTrace = activeDiagnosticTraceRef.current;
+			const ownsTrace = existingTrace === null;
+			const trace =
+				existingTrace ??
+				connectionDiagnosticRecorder.startTrace({
+					trigger: 'initial-auto-connect',
+					reason: 'auto-connect-attempt',
+				});
+			activeDiagnosticTraceRef.current = trace;
 
-		try {
-			const connected = await attemptAutoConnectSource({
-				platformOS: Platform.OS,
-				pathname,
-				latestShell,
-				connections,
-				openSavedEntryShell: ({
-					connectionDetails,
-					resolvedSecurity,
-					navigate,
-					abortSignal,
-				}) =>
-					connectAndOpenShell({
+			try {
+				const connected = await attemptAutoConnectSource({
+					platformOS: Platform.OS,
+					pathname,
+					latestShell,
+					connections,
+					openSavedEntryShell: async ({
 						connectionDetails,
 						resolvedSecurity,
-						connect,
 						navigate,
-						trace,
 						abortSignal,
-					}),
-				loadLatestSavedConnection,
-				resolveKeySecurity,
-				navigateToShell,
-				recovery: tailscaleRecovery,
-				markTailscaleAttention,
-				clearTailscaleAttention,
-				logger,
-				trace,
-				abortSignal: signal,
-			});
-			if (ownsTrace) {
-				finishTrace(trace, connected ? 'connected' : 'failed');
+					}) => {
+						const result = await connectAndOpenShell({
+							connectionDetails,
+							resolvedSecurity,
+							connect,
+							navigate,
+							trace,
+							abortSignal,
+							cleanupOnAbort: false,
+						});
+						return toAutoConnectSavedEntryResult(result);
+					},
+					loadLatestSavedConnection,
+					resolveKeySecurity,
+					navigateToShell,
+					recovery: tailscaleRecovery,
+					markTailscaleAttention,
+					clearTailscaleAttention,
+					logger,
+					trace,
+					runContext,
+				});
+				if (ownsTrace) {
+					finishTrace(trace, connected ? 'connected' : 'failed');
+				}
+				return connected;
+			} catch (error) {
+				logger.warn('Auto-connect attempt failed', error);
+				if (ownsTrace) {
+					finishTrace(trace, 'failed');
+				}
+				return false;
+			} finally {
+				runContext.finish();
+				setAutoConnecting(false);
+				inFlightRef.current = false;
+				settleInFlight();
+				if (inFlightSettledRef.current === inFlightSettled) {
+					inFlightSettledRef.current = null;
+				}
+				if (ownsTrace && activeDiagnosticTraceRef.current === trace) {
+					activeDiagnosticTraceRef.current = null;
+				}
 			}
-			return connected;
-		} catch (error) {
-			logger.warn('Auto-connect attempt failed', error);
-			if (ownsTrace) {
-				finishTrace(trace, 'failed');
-			}
-			return false;
-		} finally {
-			setAutoConnecting(false);
-			inFlightRef.current = false;
-			settleInFlight();
-			if (inFlightSettledRef.current === inFlightSettled) {
-				inFlightSettledRef.current = null;
-			}
-			if (ownsTrace && activeDiagnosticTraceRef.current === trace) {
-				activeDiagnosticTraceRef.current = null;
-			}
-		}
-	}, [
-		connect,
-		connections,
-		clearTailscaleAttention,
-		latestShell,
-		loadLatestSavedConnection,
-		markTailscaleAttention,
-		navigateToShell,
-		pathname,
-		setAutoConnecting,
-	]);
+		},
+		[
+			connect,
+			connections,
+			clearTailscaleAttention,
+			latestShell,
+			loadLatestSavedConnection,
+			markTailscaleAttention,
+			navigateToShell,
+			pathname,
+			setAutoConnecting,
+		],
+	);
 	attemptAutoConnectRef.current = attemptAutoConnect;
 
 	if (reconnectControllerRef.current === null) {

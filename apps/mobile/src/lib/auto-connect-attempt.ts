@@ -1,9 +1,13 @@
 import {
-	attemptSavedEntryWithTailscaleRecovery,
 	type SavedEntryConnectAttemptPhase,
 	type SavedEntryConnectResult,
 	type SavedEntryTailscaleRecovery,
 } from './auto-connect-saved-entry';
+import {
+	runActiveShellReopenAttempt,
+	runSavedEntryConnectionAttempt,
+	type ConnectionAttemptTimeouts,
+} from './connection-attempt-lifecycle';
 import { type ConnectionDiagnosticEvent } from './connection-diagnostic-types';
 import {
 	autoConnectEvents,
@@ -12,6 +16,10 @@ import {
 	savedEntryEvents,
 	serializeConnectionDiagnosticError,
 } from './connection-diagnostics/events';
+import {
+	createConnectionRunContext,
+	type ConnectionRunContext,
+} from './connection-run-context';
 import {
 	getStoredConnectionId,
 	type SavedConnectionEntry,
@@ -23,7 +31,7 @@ import type {
 	StoredConnectionDetails,
 } from './secrets-manager';
 import { extractTmuxAttachFailureReason } from './ssh-error-details';
-import { AbortSignalAny, AbortSignalTimeout, queryClient } from './utils';
+import { AbortSignalTimeout, queryClient } from './utils';
 
 type LatestShellSnapshot = {
 	connectionId: string;
@@ -76,6 +84,12 @@ type AutoConnectTrace = {
 	event: (event: ConnectionDiagnosticEvent) => void;
 };
 
+const DEFAULT_AUTO_CONNECT_TIMEOUTS: ConnectionAttemptTimeouts = {
+	operationTimeoutMs: 5_000,
+	recoveryTimeoutMs: 60_000,
+	cleanupTimeoutMs: 5_000,
+};
+
 export type AutoConnectAttemptSourceArgs = {
 	platformOS: string;
 	pathname: string;
@@ -95,7 +109,8 @@ export type AutoConnectAttemptSourceArgs = {
 		storedConnectionId: string,
 	) => Promise<TmuxSettings | null>;
 	trace?: AutoConnectTrace;
-	abortSignal?: AbortSignal;
+	runContext: ConnectionRunContext;
+	timeouts?: ConnectionAttemptTimeouts;
 };
 
 const loadStoredTmuxSettings = async (
@@ -167,9 +182,10 @@ export async function attemptAutoConnectSource({
 	logger,
 	loadTmuxSettings = loadStoredTmuxSettings,
 	trace,
-	abortSignal,
+	runContext,
+	timeouts = DEFAULT_AUTO_CONNECT_TIMEOUTS,
 }: AutoConnectAttemptSourceArgs): Promise<boolean> {
-	const isAborted = () => abortSignal?.aborted === true;
+	const isAborted = () => runContext.signal.aborted === true;
 	const traceEvent = (event: ConnectionDiagnosticEvent) => {
 		emitTrace(trace, logger, event);
 	};
@@ -215,7 +231,12 @@ export async function attemptAutoConnectSource({
 		let useTmux = true;
 		let tmuxSessionName = 'main';
 		try {
-			const tmuxSettings = await loadTmuxSettings(storedConnectionId);
+			const tmuxSettingsResult = await runContext.runOperation(
+				'operation',
+				async () => await loadTmuxSettings(storedConnectionId),
+			);
+			if (tmuxSettingsResult.status === 'aborted') return false;
+			const tmuxSettings = tmuxSettingsResult.value;
 			if (tmuxSettings) {
 				useTmux = tmuxSettings.useTmux;
 				tmuxSessionName = tmuxSettings.tmuxSessionName;
@@ -224,30 +245,58 @@ export async function attemptAutoConnectSource({
 			logger.warn('Failed to load tmux settings for active connection', error);
 		}
 
-		try {
-			traceEvent(
-				autoConnectEvents.activeConnectionShellStarted({
-					source: 'active-connection',
-					connection: {
-						...activeConnectionIdentity,
-						useTmux,
-						tmuxSessionName,
+		traceEvent(
+			autoConnectEvents.activeConnectionShellStarted({
+				source: 'active-connection',
+				connection: {
+					...activeConnectionIdentity,
+					useTmux,
+					tmuxSessionName,
+				},
+			}),
+		);
+		let closeReopenedShell:
+			| ((opts?: { signal?: AbortSignal }) => Promise<void>)
+			| undefined;
+		const activeRunContext = createConnectionRunContext({
+			callerSignal: runContext.signal,
+			isCurrent: () => !runContext.signal.aborted,
+			timeouts,
+		});
+		const result = await (async () => {
+			try {
+				return await runActiveShellReopenAttempt({
+					runContext: activeRunContext,
+					startShell: async ({ signal }) => {
+						const shellHandle = await activeConnection.startShell({
+							term: 'Xterm',
+							useTmux,
+							tmuxSessionName,
+							abortSignal: signal,
+						});
+						closeReopenedShell = shellHandle.close;
+						return {
+							connectionId: activeConnection.connectionId,
+							channelId: shellHandle.channelId,
+							close: shellHandle.close,
+						};
 					},
-				}),
-			);
-			const shellHandle = await activeConnection.startShell({
-				term: 'Xterm',
-				useTmux,
-				tmuxSessionName,
-				abortSignal: AbortSignalAny([
-					AbortSignalTimeout(5_000),
-					abortSignal,
-				]),
-			});
+					cleanupConnected: async ({ close }, signal) => {
+						await close?.({ signal });
+					},
+					onLateCleanupFailure: (error) => {
+						logger.warn('Failed to close late active shell', error);
+					},
+				});
+			} finally {
+				activeRunContext.finish();
+			}
+		})();
+		if (result.status === 'connected') {
 			if (isAborted()) {
 				try {
-					await shellHandle.close?.({
-						signal: AbortSignalTimeout(5_000),
+					await closeReopenedShell?.({
+						signal: AbortSignalTimeout(timeouts.cleanupTimeoutMs),
 					});
 				} catch (error) {
 					logger.warn('Failed to close aborted active shell', error);
@@ -256,21 +305,38 @@ export async function attemptAutoConnectSource({
 			}
 			logger.info('Reconnected by reopening shell on active connection', {
 				connectionId: activeConnection.connectionId,
-				channelId: shellHandle.channelId,
+				channelId: result.channelId,
 			});
 			traceEvent(
 				autoConnectEvents.activeConnectionShellConnected({
 					source: 'active-connection',
 					connection: activeConnectionIdentity,
-					channelId: shellHandle.channelId,
+					channelId: result.channelId,
 					pathname,
 				}),
 			);
-			navigateToShell(activeConnection.connectionId, shellHandle.channelId);
+			navigateToShell(activeConnection.connectionId, result.channelId);
 			if (isAborted()) return false;
 			clearTailscaleAttention();
 			return true;
-		} catch (error) {
+		}
+		if (result.status === 'aborted') {
+			return false;
+		}
+		if (result.status === 'timedOut') {
+			const error = new Error('Active shell reopen timed out');
+			traceEvent(
+				autoConnectEvents.activeConnectionShellFailed({
+					source: 'active-connection',
+					connection: activeConnectionIdentity,
+					error: serializeConnectionDiagnosticError(error),
+					tmuxSessionName,
+				}),
+			);
+			logger.warn('Failed to reopen shell on active connection', error);
+			if (isAborted()) return false;
+		} else {
+			const error = result.error;
 			const tmuxAttachFailureReason = extractTmuxAttachFailureReason(error);
 			traceEvent(
 				tmuxAttachFailureReason !== null
@@ -310,7 +376,12 @@ export async function attemptAutoConnectSource({
 		);
 	}
 
-	const latestEntry = await loadLatestSavedConnection();
+	const latestEntryResult = await runContext.runOperation(
+		'operation',
+		async () => await loadLatestSavedConnection(),
+	);
+	if (latestEntryResult.status === 'aborted') return false;
+	const latestEntry = latestEntryResult.value;
 	if (isAborted()) return false;
 	if (!latestEntry) {
 		traceEvent(
@@ -353,7 +424,12 @@ export async function attemptAutoConnectSource({
 		tmuxSessionName: details.tmuxSessionName,
 		autoConnect: details.autoConnect ?? false,
 	};
-	const resolvedSecurity = await resolveKeySecurity(details);
+	const resolvedSecurityResult = await runContext.runOperation(
+		'operation',
+		async () => await resolveKeySecurity(details),
+	);
+	if (resolvedSecurityResult.status === 'aborted') return false;
+	const resolvedSecurity = resolvedSecurityResult.value;
 	if (isAborted()) return false;
 	if (!resolvedSecurity) {
 		traceEvent(
@@ -371,7 +447,7 @@ export async function attemptAutoConnectSource({
 		}),
 	);
 
-	const connectSavedEntry = () =>
+	const connectSavedEntry = (signal?: AbortSignal) =>
 		openSavedEntryShell({
 			connectionDetails: normalizedDetails,
 			resolvedSecurity,
@@ -379,10 +455,11 @@ export async function attemptAutoConnectSource({
 				if (isAborted()) return;
 				navigateToShell(connectionId, channelId);
 			},
-			abortSignal,
+			abortSignal: signal,
 		});
 	const tracedConnectSavedEntry = async (
 		phase: SavedEntryConnectAttemptPhase,
+		signal?: AbortSignal,
 	) => {
 		const isRetry = phase === 'retry';
 		traceEvent(
@@ -395,7 +472,7 @@ export async function attemptAutoConnectSource({
 					}),
 		);
 		try {
-			return await connectSavedEntry();
+			return await connectSavedEntry(signal);
 		} catch (error) {
 			traceEvent(
 				isRetry
@@ -429,11 +506,19 @@ export async function attemptAutoConnectSource({
 		});
 	};
 
-	const result = await attemptSavedEntryWithTailscaleRecovery({
+	const result = await runSavedEntryConnectionAttempt({
 		platformOS,
+		mode: 'auto-connect',
+		runContext,
 		recovery: tracedRecovery,
-		connectSavedEntry: tracedConnectSavedEntry,
-		shouldRecoverAfterFailure: () => true,
+		connectSavedEntry: async ({ phase, signal }) =>
+			await tracedConnectSavedEntry(phase, signal),
+		cleanupConnected: async (connected, signal) => {
+			await connected.cleanup?.({ signal });
+		},
+		onLateCleanupFailure: (error) => {
+			logger.warn('Auto-connect cleanup failed', error);
+		},
 	});
 	if (isAborted()) return false;
 
@@ -442,9 +527,9 @@ export async function attemptAutoConnectSource({
 			traceEvent(
 				autoConnectEvents.savedEntryConnectConnected({
 					source: 'saved-entry',
-					connection: { connectionId: result.result.connectionId },
-					connectionId: result.result.connectionId,
-					channelId: result.result.channelId,
+					connection: { connectionId: result.connectionId },
+					connectionId: result.connectionId,
+					channelId: result.channelId,
 				}),
 			);
 			clearTailscaleAttention();
@@ -454,32 +539,47 @@ export async function attemptAutoConnectSource({
 				autoConnectEvents.savedEntryConnectTmuxAttachFailed({
 					source: 'saved-entry',
 					connection: {
-						connectionId: result.result.connectionId,
-						tmuxSessionName: result.result.tmuxSessionName,
+						connectionId: result.connectionId,
+						tmuxSessionName: result.tmuxSessionName,
 					},
-					connectionId: result.result.connectionId,
-					tmuxAttachFailureReason: result.result.tmuxAttachFailureReason,
-					tmuxSessionName: result.result.tmuxSessionName,
-					storedConnectionId: result.result.storedConnectionId,
+					connectionId: result.connectionId,
+					tmuxAttachFailureReason: result.tmuxAttachFailureReason,
+					tmuxSessionName: result.tmuxSessionName,
+					storedConnectionId: result.storedConnectionId,
 				}),
 			);
-			logTmuxAttachFailure(result.result);
+			logTmuxAttachFailure({
+				status: 'tmux_attach_failed',
+				connectionId: result.connectionId,
+				tmuxAttachFailureReason: result.tmuxAttachFailureReason,
+				tmuxSessionName: result.tmuxSessionName,
+				storedConnectionId: result.storedConnectionId,
+			});
 			traceEvent(
 				autoConnectEvents.savedEntryConnectFailed({
 					source: 'saved-entry',
 					connection: latestEntryConnection,
-					connectionId: result.result.connectionId,
-					storedConnectionId: result.result.storedConnectionId,
+					connectionId: result.connectionId,
+					storedConnectionId: result.storedConnectionId,
 				}),
 			);
 			return false;
 		case 'blocked':
-		case 'recoveryNotAttempted':
-		case 'retryFailed':
 			if (result.attentionMessage !== null) {
 				markTailscaleAttention(result.attentionMessage);
 			}
-			if (result.status === 'retryFailed') {
+			traceEvent(
+				autoConnectEvents.savedEntryConnectFailed({
+					source: 'saved-entry',
+					connection: latestEntryConnection,
+				}),
+			);
+			return false;
+		case 'failed':
+			if (result.attentionMessage !== null) {
+				markTailscaleAttention(result.attentionMessage);
+			}
+			if (result.recoverable) {
 				logger.warn(
 					'Auto-connect failed after Tailscale recovery retry',
 					result.error,
@@ -492,7 +592,11 @@ export async function attemptAutoConnectSource({
 				}),
 			);
 			return false;
-		case 'threw':
-			throw result.error;
+		case 'aborted':
+		case 'timedOut':
+			return false;
+		case 'cleanupFailed':
+			logger.warn('Auto-connect cleanup failed', result.error);
+			return false;
 	}
 }

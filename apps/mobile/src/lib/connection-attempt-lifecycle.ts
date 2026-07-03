@@ -21,6 +21,7 @@ type ConnectedConnectionAttemptOutcome = {
 	connectionId: string;
 	channelId: number;
 	storedConnectionId?: string;
+	cleanup?: (opts?: { signal?: AbortSignal }) => Promise<void>;
 };
 
 type FailedConnectionAttemptOutcome = {
@@ -173,11 +174,15 @@ function mapSavedEntryResult(
 			storedConnectionId: result.storedConnectionId,
 		};
 	}
-	return {
+	const outcome: ConnectedConnectionAttemptOutcome = {
 		status: 'connected',
 		connectionId: result.connectionId,
 		channelId: result.channelId,
 	};
+	if (typeof result.cleanup === 'function') {
+		outcome.cleanup = result.cleanup;
+	}
+	return outcome;
 }
 
 function reportLateCleanupFailure(

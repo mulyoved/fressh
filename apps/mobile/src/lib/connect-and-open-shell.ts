@@ -122,6 +122,7 @@ export async function connectAndOpenShell(args: {
 	resolvedSecurity?: ConnectionDetails['security'];
 	saveConnection?: SaveConnection;
 	trace?: ConnectTrace;
+	cleanupOnAbort?: boolean;
 }): Promise<ConnectAndOpenShellResult> {
 	const {
 		connectionDetails,
@@ -133,6 +134,7 @@ export async function connectAndOpenShell(args: {
 		operationSignals,
 		resolvedSecurity,
 		saveConnection = defaultSaveConnection,
+		cleanupOnAbort = true,
 	} = args;
 	const traceEvent = (event: ConnectionDiagnosticEvent) => {
 		try {
@@ -192,7 +194,7 @@ export async function connectAndOpenShell(args: {
 		result.sshConnection.connectionId,
 		result.shellHandle.channelId,
 	);
-	if (isShellLifecycleAborted()) {
+	if (cleanupOnAbort && isShellLifecycleAborted()) {
 		await cleanupAbortedConnection(result, abortSignalTimeoutMs);
 		return result;
 	}

@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import {
+	cleanupAutoConnectSavedEntryResult,
+	toAutoConnectSavedEntryResult,
+} from '../../src/lib/auto-connect-saved-entry-cleanup';
 import { connectAndOpenShell } from '../../src/lib/connect-and-open-shell';
 
 const connectionDetails = {
@@ -302,6 +306,143 @@ void test('connectAndOpenShell cleans up an aborted late success', async () => {
 	assert.equal(result.status, 'connected');
 	assert.equal(closeCalls, 1);
 	assert.equal(disconnectCalls, 1);
+});
+
+void test('connectAndOpenShell lets caller own aborted success cleanup', async () => {
+	const abortController = new AbortController();
+	let closeCalls = 0;
+	let disconnectCalls = 0;
+	const navigations: unknown[] = [];
+
+	const result = await connectAndOpenShell({
+		connectionDetails,
+		resolvedSecurity: { type: 'key', privateKey: 'secret' },
+		abortSignal: abortController.signal,
+		cleanupOnAbort: false,
+		connect: async () =>
+			({
+				connectionId: 'conn-1',
+				disconnect: async () => {
+					disconnectCalls += 1;
+				},
+				startShell: async () => {
+					abortController.abort();
+					return {
+						channelId: 7,
+						close: async () => {
+							closeCalls += 1;
+						},
+					};
+				},
+			}) as never,
+		saveConnection: async () => {},
+		navigate: (params) => {
+			navigations.push(params);
+		},
+	});
+
+	assert.equal(result.status, 'connected');
+	assert.deepEqual(navigations, [{ connectionId: 'conn-1', channelId: 7 }]);
+	assert.equal(closeCalls, 0);
+	assert.equal(disconnectCalls, 0);
+});
+
+void test('auto-connect saved-entry cleanup disconnects after close failure', async () => {
+	const cleanupSignal = new AbortController().signal;
+	const closeError = new Error('close failed');
+	let closeSignal: AbortSignal | undefined;
+	let disconnectSignal: AbortSignal | undefined;
+
+	await assert.rejects(
+		cleanupAutoConnectSavedEntryResult(
+			{
+				status: 'connected',
+				connectionId: 'conn-1',
+				channelId: 7,
+				storedConnectionId: 'stored-1',
+				shellHandle: {
+					channelId: 7,
+					close: async (opts?: { signal?: AbortSignal }) => {
+						closeSignal = opts?.signal;
+						throw closeError;
+					},
+				},
+				sshConnection: {
+					connectionId: 'conn-1',
+					disconnect: async (opts?: { signal?: AbortSignal }) => {
+						disconnectSignal = opts?.signal;
+					},
+				},
+			} as never,
+			{ signal: cleanupSignal },
+		),
+		(error) => error === closeError,
+	);
+
+	assert.equal(closeSignal, cleanupSignal);
+	assert.equal(disconnectSignal, cleanupSignal);
+});
+
+void test('auto-connect saved-entry cleanup starts disconnect when close hangs', async () => {
+	let disconnectCalls = 0;
+
+	void cleanupAutoConnectSavedEntryResult({
+		status: 'connected',
+		connectionId: 'conn-1',
+		channelId: 7,
+		storedConnectionId: 'stored-1',
+		shellHandle: {
+			channelId: 7,
+			close: async () => new Promise(() => {}),
+		},
+		sshConnection: {
+			connectionId: 'conn-1',
+			disconnect: async () => {
+				disconnectCalls += 1;
+			},
+		},
+	} as never);
+	await Promise.resolve();
+
+	assert.equal(disconnectCalls, 1);
+});
+
+void test('auto-connect saved-entry result exposes cleanup for connected results only', async () => {
+	let closeCalls = 0;
+	let disconnectCalls = 0;
+	const connected = toAutoConnectSavedEntryResult({
+		status: 'connected',
+		connectionId: 'conn-1',
+		channelId: 7,
+		storedConnectionId: 'stored-1',
+		shellHandle: {
+			channelId: 7,
+			close: async () => {
+				closeCalls += 1;
+			},
+		},
+		sshConnection: {
+			connectionId: 'conn-1',
+			disconnect: async () => {
+				disconnectCalls += 1;
+			},
+		},
+	} as never);
+
+	assert.equal(connected.status, 'connected');
+	await connected.cleanup?.();
+	assert.equal(closeCalls, 1);
+	assert.equal(disconnectCalls, 1);
+
+	const tmuxFailed = toAutoConnectSavedEntryResult({
+		status: 'tmux_attach_failed',
+		connectionId: 'conn-1',
+		tmuxAttachFailureReason: 'missing session',
+		tmuxSessionName: 'main',
+		storedConnectionId: 'stored-1',
+	});
+	assert.equal(tmuxFailed.status, 'tmux_attach_failed');
+	assert.equal('cleanup' in tmuxFailed, false);
 });
 
 void test('connectAndOpenShell navigates with tmux attach failure metadata', async () => {

@@ -12,6 +12,7 @@ export type SavedEntryConnectResult =
 			status: 'connected';
 			connectionId: string;
 			channelId: number;
+			cleanup?: (opts?: { signal?: AbortSignal }) => Promise<void>;
 	  }
 	| {
 			status: 'tmux_attach_failed';
