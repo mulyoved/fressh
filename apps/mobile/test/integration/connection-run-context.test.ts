@@ -66,6 +66,59 @@ function createNoReasonAbortController(): AbortController {
 	} as AbortController;
 }
 
+type TrackedAbortController = AbortController & {
+	abortListeners: Set<EventListenerOrEventListenerObject>;
+};
+
+function createTrackedAbortController(
+	controllers: TrackedAbortController[],
+): AbortController {
+	const controller = new AbortController();
+	const abortListeners = new Set<EventListenerOrEventListenerObject>();
+	const originalAddEventListener = controller.signal.addEventListener.bind(
+		controller.signal,
+	) as (
+		type: string,
+		listener: EventListenerOrEventListenerObject,
+		options?: boolean | AddEventListenerOptions,
+	) => void;
+	const originalRemoveEventListener =
+		controller.signal.removeEventListener.bind(controller.signal) as (
+			type: string,
+			listener: EventListenerOrEventListenerObject,
+			options?: boolean | EventListenerOptions,
+		) => void;
+
+	controller.signal.addEventListener = ((
+		type: string,
+		listener: EventListenerOrEventListenerObject | null,
+		options?: boolean | AddEventListenerOptions,
+	) => {
+		if (type === 'abort' && listener !== null) {
+			abortListeners.add(listener);
+		}
+		if (listener !== null) {
+			originalAddEventListener(type, listener, options);
+		}
+	}) as AbortSignal['addEventListener'];
+	controller.signal.removeEventListener = ((
+		type: string,
+		listener: EventListenerOrEventListenerObject | null,
+		options?: boolean | EventListenerOptions,
+	) => {
+		if (type === 'abort' && listener !== null) {
+			abortListeners.delete(listener);
+		}
+		if (listener !== null) {
+			originalRemoveEventListener(type, listener, options);
+		}
+	}) as AbortSignal['removeEventListener'];
+
+	const trackedController = Object.assign(controller, { abortListeners });
+	controllers.push(trackedController);
+	return trackedController;
+}
+
 function harness() {
 	let nextId = 1;
 	const timers: Timer[] = [];
@@ -700,6 +753,35 @@ void test('finish prevents later abort from stopping active cleanup scope', () =
 	run.abort('stopped');
 
 	assert.equal(cleanupScope.signal.aborted, false);
+});
+
+void test('finish removes active scope run abort listeners', () => {
+	const controllers: TrackedAbortController[] = [];
+	const fixture = harness();
+	const run = fixture.createRun({
+		createAbortController: () => createTrackedAbortController(controllers),
+		timeouts: {
+			operationTimeoutMs: 50,
+			recoveryTimeoutMs: 80,
+			cleanupTimeoutMs: 25,
+		},
+	});
+	const runController = controllers[0];
+	if (!runController) {
+		throw new assert.AssertionError({
+			message: 'Expected run AbortController to be created',
+		});
+	}
+
+	run.createOperationScope('operation');
+	run.createOperationScope('recovery');
+	run.createOperationScope('cleanup');
+
+	assert.equal(runController.abortListeners.size, 3);
+
+	run.finish();
+
+	assert.equal(runController.abortListeners.size, 0);
 });
 
 void test('finish removes caller abort listener', () => {
