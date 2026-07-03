@@ -199,6 +199,31 @@ void test('saved-entry lifecycle retries after Tailscale recovery', async () => 
 	assert.deepEqual(phases, ['initial', 'retry']);
 });
 
+void test('saved-entry lifecycle treats dependency abort errors as failures when run is active', async () => {
+	const { runContext } = runHarness();
+	const abortError = Object.assign(new Error('The operation was aborted.'), {
+		name: 'AbortError',
+	});
+
+	const outcome = await runSavedEntryConnectionAttempt({
+		platformOS: 'android',
+		mode: 'auto-connect',
+		runContext,
+		recovery: readyRecovery(),
+		shouldRecoverAfterFailure: () => false,
+		connectSavedEntry: async () => {
+			throw abortError;
+		},
+		cleanupConnected: async () => {},
+	});
+
+	assert.deepEqual(outcome, {
+		status: 'failed',
+		error: abortError,
+		recoverable: false,
+	});
+});
+
 void test('saved-entry lifecycle maps operation timeout', async () => {
 	const { runContext, timers } = runHarness();
 
@@ -390,6 +415,27 @@ void test('active shell reopen returns connected outcome', async () => {
 		status: 'connected',
 		connectionId: 'active-1',
 		channelId: 9,
+	});
+});
+
+void test('active shell reopen treats dependency abort errors as failures when run is active', async () => {
+	const { runContext } = runHarness();
+	const abortError = Object.assign(new Error('The operation was aborted.'), {
+		name: 'AbortError',
+	});
+
+	const outcome = await runActiveShellReopenAttempt({
+		runContext,
+		startShell: async () => {
+			throw abortError;
+		},
+		cleanupConnected: async () => {},
+	});
+
+	assert.deepEqual(outcome, {
+		status: 'failed',
+		error: abortError,
+		recoverable: false,
 	});
 });
 

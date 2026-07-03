@@ -130,6 +130,10 @@ function mapCurrentAbort(runContext: ConnectionRunContext) {
 	};
 }
 
+function hasRunAbort(runContext: ConnectionRunContext) {
+	return runContext.abortReason !== null || runContext.signal.aborted;
+}
+
 function mapSavedEntryResult(
 	result: SavedEntryConnectResult,
 ): Extract<
@@ -361,7 +365,9 @@ export async function runSavedEntryConnectionAttempt(
 					return savedEntryOutcome.error.outcome;
 				}
 				if (
-					args.runContext.classifyError(savedEntryOutcome.error) === 'aborted'
+					args.runContext.classifyError(savedEntryOutcome.error) ===
+						'aborted' &&
+					hasRunAbort(args.runContext)
 				) {
 					return mapCurrentAbort(args.runContext);
 				}
@@ -376,7 +382,10 @@ export async function runSavedEntryConnectionAttempt(
 			await cleanupLateConnected();
 			return error.outcome;
 		}
-		if (args.runContext.classifyError(error) === 'aborted') {
+		if (
+			args.runContext.classifyError(error) === 'aborted' &&
+			hasRunAbort(args.runContext)
+		) {
 			return mapCurrentAbort(args.runContext);
 		}
 		return { status: 'failed', error, recoverable: false };
@@ -432,7 +441,10 @@ export async function runActiveShellReopenAttempt({
 			channelId: operation.value.channelId,
 		};
 	} catch (error) {
-		if (runContext.classifyError(error) === 'aborted') {
+		if (
+			runContext.classifyError(error) === 'aborted' &&
+			hasRunAbort(runContext)
+		) {
 			return mapCurrentAbort(runContext);
 		}
 		return { status: 'failed', error, recoverable: false };
