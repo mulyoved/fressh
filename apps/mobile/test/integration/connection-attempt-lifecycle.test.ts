@@ -214,6 +214,38 @@ void test('saved-entry lifecycle maps operation timeout', async () => {
 	});
 });
 
+void test('saved-entry lifecycle cleans up success that arrives after operation timeout', async () => {
+	const { runContext, timers } = runHarness();
+	const connect = deferred<SavedEntryConnectResult>();
+	let cleanupCount = 0;
+
+	const outcomePromise = runSavedEntryConnectionAttempt({
+		platformOS: 'android',
+		mode: 'auto-connect',
+		runContext,
+		recovery: readyRecovery(),
+		connectSavedEntry: async () => connect.promise,
+		cleanupConnected: async () => {
+			cleanupCount += 1;
+		},
+	});
+	await flushPromises();
+
+	timers[1]?.callback();
+
+	assert.deepEqual(await outcomePromise, {
+		status: 'timedOut',
+		timeoutKind: 'operation',
+	});
+	assert.equal(cleanupCount, 0);
+
+	connect.resolve(connectedResult());
+	await flushPromises();
+	await flushPromises();
+
+	assert.equal(cleanupCount, 1);
+});
+
 void test('saved-entry lifecycle cleans up stale late success', async () => {
 	let current = true;
 	const { runContext } = runHarness({ isCurrent: () => current });
@@ -314,6 +346,43 @@ void test('active shell reopen returns connected outcome', async () => {
 		connectionId: 'active-1',
 		channelId: 9,
 	});
+});
+
+void test('active shell reopen cleans up success that arrives after operation timeout', async () => {
+	const { runContext, timers } = runHarness();
+	const shell = deferred<{
+		connectionId: string;
+		channelId: number;
+		close: () => Promise<void>;
+	}>();
+	let cleanupCount = 0;
+
+	const outcomePromise = runActiveShellReopenAttempt({
+		runContext,
+		startShell: async () => shell.promise,
+		cleanupConnected: async () => {
+			cleanupCount += 1;
+		},
+	});
+	await flushPromises();
+
+	timers[0]?.callback();
+
+	assert.deepEqual(await outcomePromise, {
+		status: 'timedOut',
+		timeoutKind: 'operation',
+	});
+	assert.equal(cleanupCount, 0);
+
+	shell.resolve({
+		connectionId: 'active-1',
+		channelId: 9,
+		close: async () => {},
+	});
+	await flushPromises();
+	await flushPromises();
+
+	assert.equal(cleanupCount, 1);
 });
 
 void test('active shell reopen cleans up stale late success', async () => {

@@ -216,26 +216,49 @@ async function cleanupActiveShellResult({
 	}
 }
 
-async function cleanupLateSavedEntryConnected(
-	args: RunSavedEntryConnectionAttemptArgs,
-	lateConnected: ConnectedConnectionAttemptOutcome | null,
-	outcome: ConnectionAttemptOutcome,
-) {
-	if (lateConnected === null) {
-		return outcome;
+async function cleanupLateSavedEntryConnected({
+	runContext,
+	lateConnected,
+	cleanupConnected,
+	cleanupStarted,
+}: {
+	runContext: ConnectionRunContext;
+	lateConnected: ConnectedConnectionAttemptOutcome | null;
+	cleanupConnected: (
+		outcome: ConnectedConnectionAttemptOutcome,
+		signal: AbortSignal,
+	) => Promise<void>;
+	cleanupStarted: () => boolean;
+}) {
+	if (lateConnected === null || cleanupStarted()) {
+		return;
 	}
 	await cleanupConnectedOutcome({
-		runContext: args.runContext,
+		runContext,
 		outcome: lateConnected,
-		cleanupConnected: args.cleanupConnected,
+		cleanupConnected,
 	});
-	return outcome;
 }
 
 export async function runSavedEntryConnectionAttempt(
 	args: RunSavedEntryConnectionAttemptArgs,
 ): Promise<ConnectionAttemptOutcome> {
 	let lateConnected: ConnectedConnectionAttemptOutcome | null = null;
+	let lateCleanupStarted = false;
+	const cleanupLateConnected = async () => {
+		await cleanupLateSavedEntryConnected({
+			runContext: args.runContext,
+			lateConnected,
+			cleanupConnected: args.cleanupConnected,
+			cleanupStarted: () => {
+				if (lateCleanupStarted) {
+					return true;
+				}
+				lateCleanupStarted = true;
+				return false;
+			},
+		});
+	};
 	const readinessResult = await args.runContext.runOperation(
 		'recovery',
 		async () => await args.recovery.ensureReady(),
@@ -273,7 +296,20 @@ export async function runSavedEntryConnectionAttempt(
 				const operation = await args.runContext.runOperation(
 					'operation',
 					async (signal) => {
-						const result = await args.connectSavedEntry({ phase, signal });
+						const connectPromise = args.connectSavedEntry({ phase, signal });
+						void connectPromise.then(
+							(result) => {
+								const outcome = mapSavedEntryResult(result);
+								if (outcome.status === 'connected') {
+									lateConnected = outcome;
+									if (signal.aborted) {
+										void cleanupLateConnected();
+									}
+								}
+							},
+							() => {},
+						);
+						const result = await connectPromise;
 						const outcome = mapSavedEntryResult(result);
 						if (outcome.status === 'connected') {
 							lateConnected = outcome;
@@ -321,11 +357,8 @@ export async function runSavedEntryConnectionAttempt(
 				};
 			case 'threw':
 				if (savedEntryOutcome.error instanceof ConnectionAttemptOutcomeError) {
-					return await cleanupLateSavedEntryConnected(
-						args,
-						lateConnected,
-						savedEntryOutcome.error.outcome,
-					);
+					await cleanupLateConnected();
+					return savedEntryOutcome.error.outcome;
 				}
 				if (
 					args.runContext.classifyError(savedEntryOutcome.error) === 'aborted'
@@ -340,11 +373,8 @@ export async function runSavedEntryConnectionAttempt(
 		}
 	} catch (error) {
 		if (error instanceof ConnectionAttemptOutcomeError) {
-			return await cleanupLateSavedEntryConnected(
-				args,
-				lateConnected,
-				error.outcome,
-			);
+			await cleanupLateConnected();
+			return error.outcome;
 		}
 		if (args.runContext.classifyError(error) === 'aborted') {
 			return mapCurrentAbort(args.runContext);
@@ -359,11 +389,33 @@ export async function runActiveShellReopenAttempt({
 	cleanupConnected,
 }: RunActiveShellReopenAttemptArgs): Promise<ConnectionAttemptOutcome> {
 	let lateConnected: ActiveShellReopenResult | null = null;
+	let lateCleanupStarted = false;
+	const cleanupLateConnected = async () => {
+		if (lateConnected === null || lateCleanupStarted) {
+			return;
+		}
+		lateCleanupStarted = true;
+		await cleanupActiveShellResult({
+			runContext,
+			result: lateConnected,
+			cleanupConnected,
+		});
+	};
 	try {
 		const operation = await runContext.runOperation(
 			'operation',
 			async (signal) => {
-				const result = await startShell({ signal });
+				const shellPromise = startShell({ signal });
+				void shellPromise.then(
+					(result) => {
+						lateConnected = result;
+						if (signal.aborted) {
+							void cleanupLateConnected();
+						}
+					},
+					() => {},
+				);
+				const result = await shellPromise;
 				lateConnected = result;
 				return result;
 			},
@@ -371,11 +423,7 @@ export async function runActiveShellReopenAttempt({
 		if (operation.status === 'aborted') {
 			const outcome = mapAborted(operation);
 			if (lateConnected === null) return outcome;
-			await cleanupActiveShellResult({
-				runContext,
-				result: lateConnected,
-				cleanupConnected,
-			});
+			await cleanupLateConnected();
 			return outcome;
 		}
 		return {
