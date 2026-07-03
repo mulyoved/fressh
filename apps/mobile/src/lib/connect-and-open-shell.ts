@@ -75,9 +75,7 @@ async function cleanupAbortedConnection(
 }
 
 async function disconnectAbortedConnection(
-	result: Parameters<
-		NonNullable<Parameters<typeof runSshShellLifecycle>[0]['afterShellFailure']>
-	>[0],
+	result: { sshConnection: ConnectedSshShellLifecycleResult['sshConnection'] },
 	timeoutMs: number,
 ) {
 	try {
@@ -145,6 +143,8 @@ export async function connectAndOpenShell(args: {
 	};
 	const security =
 		resolvedSecurity ?? (await resolveSecurityFromDetails(connectionDetails));
+	const isShellLifecycleAborted = () =>
+		abortSignal?.aborted === true || operationSignals?.shell?.aborted === true;
 
 	const result = await runSshShellLifecycle({
 		connectionDetails,
@@ -167,13 +167,16 @@ export async function connectAndOpenShell(args: {
 				saveConnection,
 			}),
 		abortSignal,
+		afterConnectAbort: async (context) => {
+			await disconnectAbortedConnection(context, abortSignalTimeoutMs);
+		},
 		afterShellFailure: async (context) => {
-			if (!abortSignal?.aborted && !operationSignals?.shell?.aborted) return;
+			if (!isShellLifecycleAborted()) return;
 			await disconnectAbortedConnection(context, abortSignalTimeoutMs);
 		},
 	});
 	if (result.status === 'tmux_attach_failed') {
-		if (abortSignal?.aborted) return result;
+		if (isShellLifecycleAborted()) return result;
 		args.navigateWithError?.({
 			connectionId: result.connectionId,
 			tmuxAttachFailureReason: result.tmuxAttachFailureReason,
@@ -188,7 +191,7 @@ export async function connectAndOpenShell(args: {
 		result.sshConnection.connectionId,
 		result.shellHandle.channelId,
 	);
-	if (abortSignal?.aborted) {
+	if (isShellLifecycleAborted()) {
 		await cleanupAbortedConnection(result, abortSignalTimeoutMs);
 		return result;
 	}

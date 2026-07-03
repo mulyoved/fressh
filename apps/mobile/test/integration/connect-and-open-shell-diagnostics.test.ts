@@ -186,6 +186,46 @@ void test('connectAndOpenShell disconnects after shell operation abort failure',
 	assert.equal(disconnectCalls, 1);
 });
 
+void test('connectAndOpenShell cleans up shell operation abort after late shell success', async () => {
+	const shellAbortController = new AbortController();
+	let closeCalls = 0;
+	let disconnectCalls = 0;
+	let navigated = false;
+
+	const result = await connectAndOpenShell({
+		connectionDetails,
+		resolvedSecurity: { type: 'key', privateKey: 'secret' },
+		operationSignals: {
+			shell: shellAbortController.signal,
+		},
+		connect: async () =>
+			({
+				connectionId: 'conn-1',
+				disconnect: async () => {
+					disconnectCalls += 1;
+				},
+				startShell: async () => {
+					shellAbortController.abort();
+					return {
+						channelId: 7,
+						close: async () => {
+							closeCalls += 1;
+						},
+					};
+				},
+			}) as never,
+		saveConnection: async () => {},
+		navigate: () => {
+			navigated = true;
+		},
+	});
+
+	assert.equal(result.status, 'connected');
+	assert.equal(navigated, false);
+	assert.equal(closeCalls, 1);
+	assert.equal(disconnectCalls, 1);
+});
+
 void test('connectAndOpenShell cleans up an aborted late success', async () => {
 	const abortController = new AbortController();
 	let closeCalls = 0;
@@ -303,6 +343,85 @@ void test('connectAndOpenShell suppresses aborted tmux error navigation and disc
 	assert.equal(result.status, 'tmux_attach_failed');
 	assert.equal(disconnectCalls, 1);
 	assert.equal(navigatedWithError, false);
+});
+
+void test('connectAndOpenShell suppresses shell operation aborted tmux error navigation and disconnects', async () => {
+	const shellAbortController = new AbortController();
+	let disconnectCalls = 0;
+	let navigatedWithError = false;
+
+	const result = await connectAndOpenShell({
+		connectionDetails,
+		resolvedSecurity: { type: 'key', privateKey: 'secret' },
+		operationSignals: {
+			shell: shellAbortController.signal,
+		},
+		connect: async () =>
+			({
+				connectionId: 'conn-1',
+				disconnect: async () => {
+					disconnectCalls += 1;
+				},
+				startShell: async () => {
+					shellAbortController.abort();
+					throw {
+						tag: 'TmuxAttachFailed',
+						inner: ['missing session'],
+					};
+				},
+			}) as never,
+		saveConnection: async () => {},
+		navigate: () => {
+			throw new Error('success navigation should not run');
+		},
+		navigateWithError: () => {
+			navigatedWithError = true;
+		},
+	});
+
+	assert.equal(result.status, 'tmux_attach_failed');
+	assert.equal(disconnectCalls, 1);
+	assert.equal(navigatedWithError, false);
+});
+
+void test('connectAndOpenShell disconnects after connect operation abort before shell startup', async () => {
+	const connectAbortController = new AbortController();
+	const abortError = new Error('connect operation aborted');
+	let disconnectCalls = 0;
+	let startShellCalls = 0;
+	let navigated = false;
+
+	await assert.rejects(
+		connectAndOpenShell({
+			connectionDetails,
+			resolvedSecurity: { type: 'key', privateKey: 'secret' },
+			operationSignals: {
+				connect: connectAbortController.signal,
+			},
+			connect: async () => {
+				connectAbortController.abort(abortError);
+				return {
+					connectionId: 'conn-1',
+					disconnect: async () => {
+						disconnectCalls += 1;
+					},
+					startShell: async () => {
+						startShellCalls += 1;
+						return { channelId: 7 };
+					},
+				} as never;
+			},
+			saveConnection: async () => {},
+			navigate: () => {
+				navigated = true;
+			},
+		}),
+		(error) => error === abortError,
+	);
+
+	assert.equal(startShellCalls, 0);
+	assert.equal(disconnectCalls, 1);
+	assert.equal(navigated, false);
 });
 
 void test('connectAndOpenShell records connect failure', async () => {

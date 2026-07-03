@@ -82,6 +82,7 @@ export async function runSshShellLifecycle(args: {
 	operationSignals?: SshShellLifecycleOperationSignals;
 	registerInStore?: boolean;
 	traceEvent: (event: ConnectionDiagnosticEvent) => void;
+	afterConnectAbort?: (context: ConnectedSshConnection) => Promise<void>;
 	afterShellFailure?: (context: ShellLifecycleFailureContext) => Promise<void>;
 }): Promise<SshShellLifecycleResult> {
 	const {
@@ -93,6 +94,7 @@ export async function runSshShellLifecycle(args: {
 		operationSignals,
 		registerInStore,
 		traceEvent,
+		afterConnectAbort,
 		afterShellFailure,
 	} = args;
 	const connectionIdentity =
@@ -129,6 +131,11 @@ export async function runSshShellLifecycle(args: {
 			}),
 		);
 		throw error;
+	}
+
+	if (operationSignals?.connect?.aborted) {
+		await afterConnectAbort?.(connected);
+		throw operationSignals.connect.reason;
 	}
 
 	const { sshConnection, storedConnectionId } = connected;
