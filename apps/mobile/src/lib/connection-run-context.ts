@@ -225,14 +225,14 @@ export function createConnectionRunContext(
 	}
 
 	function throwIfAborted() {
-		if (!isCurrent()) {
-			throw new ConnectionRunAbortedError('stale-run', null);
-		}
 		if (runController.signal.aborted) {
 			throw new ConnectionRunAbortedError(
 				abortReason ?? 'stopped',
 				timeoutKind,
 			);
+		}
+		if (!isCurrent()) {
+			throw new ConnectionRunAbortedError('stale-run', null);
 		}
 	}
 

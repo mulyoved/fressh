@@ -84,6 +84,42 @@ void test('operation timeout aborts run and operation signal', async () => {
 	);
 });
 
+void test('throwIfAborted preserves existing abort before stale-run', () => {
+	const fixture = harness();
+	let current = true;
+	const run = fixture.createRun({
+		isCurrent: () => current,
+		timeouts: {
+			operationTimeoutMs: 50,
+			recoveryTimeoutMs: 80,
+			cleanupTimeoutMs: 25,
+		},
+	});
+	const scope = run.createOperationScope('operation');
+
+	fixture.timers[0]?.callback();
+	current = false;
+
+	assert.throws(
+		() => {
+			run.throwIfAborted();
+		},
+		(error) => {
+			assert.equal(error instanceof ConnectionRunAbortedError, true);
+			assert.equal(
+				(error as ConnectionRunAbortedError).reason,
+				'timeout',
+			);
+			assert.equal(
+				(error as ConnectionRunAbortedError).timeoutKind,
+				'operation',
+			);
+			return true;
+		},
+	);
+	assert.equal(scope.signal.aborted, true);
+});
+
 void test('recovery timeout is separate from operation timeout', async () => {
 	const fixture = harness();
 	const run = fixture.createRun({
