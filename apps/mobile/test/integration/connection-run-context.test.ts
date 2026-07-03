@@ -18,12 +18,21 @@ function flushPromises() {
 	});
 }
 
+function requireSignal(signal: AbortSignal | null): AbortSignal {
+	if (signal === null) {
+		throw new assert.AssertionError({
+			message: 'Expected operation to capture an AbortSignal',
+		});
+	}
+	return signal;
+}
+
 function harness() {
 	let nextId = 1;
 	const timers: Timer[] = [];
 	return {
 		timers,
-		createContext: (
+		createRun: (
 			options: Parameters<typeof createConnectionRunContext>[0] = {},
 		) =>
 			createConnectionRunContext({
@@ -47,8 +56,8 @@ function harness() {
 }
 
 void test('operation timeout aborts run and operation signal', async () => {
-	const context = harness();
-	const run = context.createContext({
+	const fixture = harness();
+	const run = fixture.createRun({
 		timeouts: {
 			operationTimeoutMs: 50,
 			recoveryTimeoutMs: 80,
@@ -58,9 +67,9 @@ void test('operation timeout aborts run and operation signal', async () => {
 	const signal = run.createOperationSignal('operation');
 
 	assert.equal(signal.aborted, false);
-	assert.equal(context.timers[0]?.delayMs, 50);
+	assert.equal(fixture.timers[0]?.delayMs, 50);
 
-	context.timers[0]?.callback();
+	fixture.timers[0]?.callback();
 
 	assert.equal(run.signal.aborted, true);
 	assert.equal(signal.aborted, true);
@@ -75,8 +84,8 @@ void test('operation timeout aborts run and operation signal', async () => {
 });
 
 void test('recovery timeout is separate from operation timeout', async () => {
-	const context = harness();
-	const run = context.createContext({
+	const fixture = harness();
+	const run = fixture.createRun({
 		timeouts: {
 			operationTimeoutMs: 50,
 			recoveryTimeoutMs: 80,
@@ -85,8 +94,8 @@ void test('recovery timeout is separate from operation timeout', async () => {
 	});
 	const signal = run.createOperationSignal('recovery');
 
-	assert.equal(context.timers[0]?.delayMs, 80);
-	context.timers[0]?.callback();
+	assert.equal(fixture.timers[0]?.delayMs, 80);
+	fixture.timers[0]?.callback();
 
 	assert.equal(signal.aborted, true);
 	assert.equal(run.abortReason, 'timeout');
@@ -95,8 +104,8 @@ void test('recovery timeout is separate from operation timeout', async () => {
 
 void test('caller abort propagates to child operation signal', () => {
 	const caller = new AbortController();
-	const context = harness();
-	const run = context.createContext({
+	const fixture = harness();
+	const run = fixture.createRun({
 		callerSignal: caller.signal,
 		timeouts: {
 			operationTimeoutMs: 50,
@@ -114,9 +123,9 @@ void test('caller abort propagates to child operation signal', () => {
 });
 
 void test('stale run suppresses late successful operation result', async () => {
-	const context = harness();
+	const fixture = harness();
 	let current = true;
-	const run = context.createContext({
+	const run = fixture.createRun({
 		isCurrent: () => current,
 		timeouts: {
 			operationTimeoutMs: 50,
@@ -143,8 +152,8 @@ void test('stale run suppresses late successful operation result', async () => {
 });
 
 void test('cleanup operation remains bounded after operation timeout', async () => {
-	const context = harness();
-	const run = context.createContext({
+	const fixture = harness();
+	const run = fixture.createRun({
 		timeouts: {
 			operationTimeoutMs: 50,
 			recoveryTimeoutMs: 80,
@@ -153,7 +162,7 @@ void test('cleanup operation remains bounded after operation timeout', async () 
 	});
 
 	run.createOperationSignal('operation');
-	context.timers[0]?.callback();
+	fixture.timers[0]?.callback();
 
 	let cleanupSignal: AbortSignal | null = null;
 	const cleanup = run.runOperation('cleanup', (signal) => {
@@ -161,14 +170,14 @@ void test('cleanup operation remains bounded after operation timeout', async () 
 		return Promise.resolve('cleaned');
 	});
 
-	assert.equal(cleanupSignal?.aborted, false);
-	assert.equal(context.timers[1]?.delayMs, 25);
+	assert.equal(requireSignal(cleanupSignal).aborted, false);
+	assert.equal(fixture.timers[1]?.delayMs, 25);
 	assert.deepEqual(await cleanup, { status: 'ok', value: 'cleaned' });
 });
 
 void test('cleanup timeout aborts hanging cleanup operation', async () => {
-	const context = harness();
-	const run = context.createContext({
+	const fixture = harness();
+	const run = fixture.createRun({
 		timeouts: {
 			operationTimeoutMs: 50,
 			recoveryTimeoutMs: 80,
@@ -182,11 +191,11 @@ void test('cleanup timeout aborts hanging cleanup operation', async () => {
 		return new Promise<string>(() => undefined);
 	});
 
-	assert.equal(context.timers[0]?.delayMs, 25);
-	context.timers[0]?.callback();
+	assert.equal(fixture.timers[0]?.delayMs, 25);
+	fixture.timers[0]?.callback();
 	await flushPromises();
 
-	assert.equal(cleanupSignal?.aborted, true);
+	assert.equal(requireSignal(cleanupSignal).aborted, true);
 	assert.deepEqual(await cleanup, {
 		status: 'aborted',
 		reason: 'timeout',
@@ -195,8 +204,8 @@ void test('cleanup timeout aborts hanging cleanup operation', async () => {
 });
 
 void test('finish clears timers and prevents late timeout abort', () => {
-	const context = harness();
-	const run = context.createContext({
+	const fixture = harness();
+	const run = fixture.createRun({
 		timeouts: {
 			operationTimeoutMs: 50,
 			recoveryTimeoutMs: 80,
@@ -206,15 +215,53 @@ void test('finish clears timers and prevents late timeout abort', () => {
 
 	run.createOperationSignal('operation');
 	run.finish();
-	context.timers[0]?.callback();
+	fixture.timers[0]?.callback();
 
-	assert.equal(context.timers[0]?.cleared, true);
+	assert.equal(fixture.timers[0]?.cleared, true);
 	assert.equal(run.signal.aborted, false);
 });
 
+void test('operation scope finish clears timer and prevents late timeout abort', () => {
+	const fixture = harness();
+	const run = fixture.createRun({
+		timeouts: {
+			operationTimeoutMs: 50,
+			recoveryTimeoutMs: 80,
+			cleanupTimeoutMs: 25,
+		},
+	});
+	const scope = run.createOperationScope('operation');
+
+	scope.finish();
+	fixture.timers[0]?.callback();
+
+	assert.equal(fixture.timers[0]?.cleared, true);
+	assert.equal(run.signal.aborted, false);
+	assert.equal(scope.signal.aborted, false);
+});
+
+void test('manual abort accepts lifecycle reasons', () => {
+	const fixture = harness();
+	const run = fixture.createRun({
+		timeouts: {
+			operationTimeoutMs: 50,
+			recoveryTimeoutMs: 80,
+			cleanupTimeoutMs: 25,
+		},
+	});
+	const signal = run.createOperationSignal('operation');
+
+	run.abort('replaced');
+
+	assert.equal(run.signal.aborted, true);
+	assert.equal(signal.aborted, true);
+	assert.equal(run.abortReason, 'replaced');
+	assert.equal(run.timeoutKind, null);
+});
+
 void test('classifyError recognizes context and DOM-style aborts', () => {
-	const context = harness();
-	const run = context.createContext({
+	const fixture = harness();
+	const run = fixture.createRun({
 		timeouts: {
 			operationTimeoutMs: 50,
 			recoveryTimeoutMs: 80,

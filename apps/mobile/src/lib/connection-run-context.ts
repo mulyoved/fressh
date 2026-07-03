@@ -2,7 +2,9 @@ export type ConnectionRunAbortReason =
 	| 'timeout'
 	| 'caller-aborted'
 	| 'stale-run'
-	| 'stopped';
+	| 'stopped'
+	| 'replaced'
+	| 'unmounted';
 
 export type ConnectionRunTimeoutKind = 'operation' | 'recovery' | 'cleanup';
 
@@ -15,6 +17,11 @@ export type ConnectionRunOperationResult<T> =
 			reason: ConnectionRunAbortReason;
 			timeoutKind: ConnectionRunTimeoutKind | null;
 	  };
+
+export type ConnectionRunOperationScope = {
+	signal: AbortSignal;
+	finish: () => void;
+};
 
 export class ConnectionRunAbortedError extends Error {
 	readonly reason: ConnectionRunAbortReason;
@@ -41,6 +48,13 @@ export type ConnectionRunContext = {
 	readonly signal: AbortSignal;
 	readonly abortReason: ConnectionRunAbortReason | null;
 	readonly timeoutKind: ConnectionRunTimeoutKind | null;
+	abort: (
+		reason: ConnectionRunAbortReason,
+		timeoutKind?: ConnectionRunTimeoutKind | null,
+	) => void;
+	createOperationScope: (
+		kind: ConnectionRunOperationKind,
+	) => ConnectionRunOperationScope;
 	createOperationSignal: (kind: ConnectionRunOperationKind) => AbortSignal;
 	runOperation: <T>(
 		kind: ConnectionRunOperationKind,
@@ -134,14 +148,27 @@ export function createConnectionRunContext(
 		runController.abort(new ConnectionRunAbortedError(reason, nextTimeoutKind));
 	}
 
-	function createOperationScope(kind: ConnectionRunOperationKind) {
+	function createOperationScope(
+		kind: ConnectionRunOperationKind,
+	): ConnectionRunOperationScope {
 		const controller = new AbortController();
 		let timer: TimerHandle | null = null;
+		let finishedScope = false;
+		let abortFromRun: (() => void) | null = null;
 
-		function clearSignalTimer() {
+		function finishScope() {
+			if (finishedScope) {
+				return;
+			}
+			finishedScope = true;
 			if (timer !== null) {
 				clearTrackedTimer(timer);
 				timer = null;
+			}
+			controller.signal.removeEventListener('abort', finishScope);
+			if (abortFromRun !== null) {
+				runController.signal.removeEventListener('abort', abortFromRun);
+				abortFromRun = null;
 			}
 		}
 
@@ -156,6 +183,9 @@ export function createConnectionRunContext(
 		}
 
 		timer = startTimer(kind, () => {
+			if (finishedScope) {
+				return;
+			}
 			if (kind === 'cleanup') {
 				abortChild('timeout', 'cleanup');
 				return;
@@ -163,12 +193,12 @@ export function createConnectionRunContext(
 			abortRun('timeout', kind);
 		});
 
-		controller.signal.addEventListener('abort', clearSignalTimer, {
+		controller.signal.addEventListener('abort', finishScope, {
 			once: true,
 		});
 
 		if (kind !== 'cleanup') {
-			const abortFromRun = () => {
+			abortFromRun = () => {
 				abortChild(abortReason ?? 'stopped', timeoutKind);
 			};
 			if (runController.signal.aborted) {
@@ -182,7 +212,7 @@ export function createConnectionRunContext(
 
 		return {
 			signal: controller.signal,
-			clear: clearSignalTimer,
+			finish: finishScope,
 		};
 	}
 
@@ -290,7 +320,7 @@ export function createConnectionRunContext(
 			}
 			throw error;
 		} finally {
-			scope.clear();
+			scope.finish();
 		}
 	}
 
@@ -322,6 +352,10 @@ export function createConnectionRunContext(
 		get timeoutKind() {
 			return timeoutKind;
 		},
+		abort: (reason, nextTimeoutKind = null) => {
+			abortRun(reason, nextTimeoutKind);
+		},
+		createOperationScope,
 		createOperationSignal,
 		runOperation,
 		throwIfAborted,
