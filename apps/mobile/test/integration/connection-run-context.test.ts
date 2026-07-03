@@ -235,6 +235,62 @@ void test('cleanup operation remains bounded after operation timeout', async () 
 	assert.deepEqual(await cleanup, { status: 'ok', value: 'cleaned' });
 });
 
+void test('caller abort stops cleanup started after operation timeout', () => {
+	const caller = new AbortController();
+	const fixture = harness();
+	const run = fixture.createRun({
+		callerSignal: caller.signal,
+		timeouts: {
+			operationTimeoutMs: 50,
+			recoveryTimeoutMs: 80,
+			cleanupTimeoutMs: 25,
+		},
+	});
+
+	run.createOperationScope('operation');
+	fixture.timers[0]?.callback();
+	const cleanupScope = run.createOperationScope('cleanup');
+
+	caller.abort();
+
+	assert.equal(run.abortReason, 'timeout');
+	assert.equal(run.timeoutKind, 'operation');
+	assert.equal(cleanupScope.signal.aborted, true);
+	assert.equal(
+		cleanupScope.signal.reason instanceof ConnectionRunAbortedError,
+		true,
+	);
+	assert.equal(cleanupScope.signal.reason.reason, 'caller-aborted');
+	assert.equal(cleanupScope.signal.reason.timeoutKind, null);
+});
+
+void test('manual abort stops cleanup started after operation timeout', () => {
+	const fixture = harness();
+	const run = fixture.createRun({
+		timeouts: {
+			operationTimeoutMs: 50,
+			recoveryTimeoutMs: 80,
+			cleanupTimeoutMs: 25,
+		},
+	});
+
+	run.createOperationScope('operation');
+	fixture.timers[0]?.callback();
+	const cleanupScope = run.createOperationScope('cleanup');
+
+	run.abort('replaced');
+
+	assert.equal(run.abortReason, 'timeout');
+	assert.equal(run.timeoutKind, 'operation');
+	assert.equal(cleanupScope.signal.aborted, true);
+	assert.equal(
+		cleanupScope.signal.reason instanceof ConnectionRunAbortedError,
+		true,
+	);
+	assert.equal(cleanupScope.signal.reason.reason, 'replaced');
+	assert.equal(cleanupScope.signal.reason.timeoutKind, null);
+});
+
 void test('caller abort propagates to active cleanup scope', () => {
 	const caller = new AbortController();
 	const fixture = harness();

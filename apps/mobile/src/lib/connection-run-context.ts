@@ -65,6 +65,10 @@ export type ConnectionRunContext = {
 };
 
 type TimerHandle = unknown;
+type CleanupAbortListener = (
+	reason: ConnectionRunAbortReason,
+	timeoutKind: ConnectionRunTimeoutKind | null,
+) => void;
 
 type ConnectionRunContextOptions = {
 	callerSignal?: AbortSignal | null;
@@ -85,6 +89,7 @@ export function createConnectionRunContext(
 ): ConnectionRunContext {
 	const runController = new AbortController();
 	const activeTimers = new Set<TimerHandle>();
+	const activeCleanupAbortListeners = new Set<CleanupAbortListener>();
 	const timeouts = { ...defaultTimeouts, ...options.timeouts };
 	const setTimer =
 		options.setTimeout ??
@@ -140,6 +145,11 @@ export function createConnectionRunContext(
 		reason: ConnectionRunAbortReason,
 		nextTimeoutKind: ConnectionRunTimeoutKind | null,
 	) {
+		if (reason !== 'timeout') {
+			for (const listener of [...activeCleanupAbortListeners]) {
+				listener(reason, nextTimeoutKind);
+			}
+		}
 		if (finished || runController.signal.aborted) {
 			return;
 		}
@@ -162,6 +172,7 @@ export function createConnectionRunContext(
 		let timer: TimerHandle | null = null;
 		let finishedScope = false;
 		let abortFromRun: (() => void) | null = null;
+		let abortFromLaterStop: CleanupAbortListener | null = null;
 
 		function finishScope() {
 			if (finishedScope) {
@@ -176,6 +187,10 @@ export function createConnectionRunContext(
 			if (abortFromRun !== null) {
 				runController.signal.removeEventListener('abort', abortFromRun);
 				abortFromRun = null;
+			}
+			if (abortFromLaterStop !== null) {
+				activeCleanupAbortListeners.delete(abortFromLaterStop);
+				abortFromLaterStop = null;
 			}
 		}
 
@@ -216,6 +231,13 @@ export function createConnectionRunContext(
 			runController.signal.addEventListener('abort', abortFromRun, {
 				once: true,
 			});
+		}
+
+		if (kind === 'cleanup') {
+			abortFromLaterStop = (reason, nextTimeoutKind) => {
+				abortChild(reason, nextTimeoutKind);
+			};
+			activeCleanupAbortListeners.add(abortFromLaterStop);
 		}
 
 		return {
