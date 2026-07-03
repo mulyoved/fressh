@@ -117,6 +117,7 @@ export function createConnectionRunContext(
 	const isCurrent = options.isCurrent ?? (() => true);
 	let abortReason: ConnectionRunAbortReason | null = null;
 	let timeoutKind: ConnectionRunTimeoutKind | null = null;
+	let cleanupStopAfterTimeout: OperationAbortMetadata | null = null;
 	let finished = false;
 	let abortFromCaller: (() => void) | null = null;
 
@@ -158,6 +159,12 @@ export function createConnectionRunContext(
 		nextTimeoutKind: ConnectionRunTimeoutKind | null,
 	) {
 		if (reason !== 'timeout') {
+			if (runController.signal.aborted && abortReason === 'timeout') {
+				cleanupStopAfterTimeout = {
+					reason,
+					timeoutKind: nextTimeoutKind,
+				};
+			}
 			for (const listener of [...activeCleanupAbortListeners]) {
 				listener(reason, nextTimeoutKind);
 			}
@@ -246,7 +253,14 @@ export function createConnectionRunContext(
 			activeCleanupAbortListeners.add(abortFromLaterStop);
 		}
 		if (runController.signal.aborted) {
-			abortFromRun();
+			if (kind === 'cleanup' && cleanupStopAfterTimeout !== null) {
+				abortChild(
+					cleanupStopAfterTimeout.reason,
+					cleanupStopAfterTimeout.timeoutKind,
+				);
+			} else {
+				abortFromRun();
+			}
 		} else {
 			runController.signal.addEventListener('abort', abortFromRun, {
 				once: true,
