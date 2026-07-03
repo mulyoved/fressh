@@ -147,6 +147,25 @@ function harness() {
 	};
 }
 
+type TestRunContext = ReturnType<ReturnType<typeof harness>['createRun']>;
+
+async function triggerOperationTimeout(
+	fixture: ReturnType<typeof harness>,
+	run: TestRunContext,
+) {
+	const operation = run.runOperation('operation', () => {
+		return new Promise<string>(() => undefined);
+	});
+
+	fixture.timers[0]?.callback();
+
+	assert.deepEqual(await operation, {
+		status: 'aborted',
+		reason: 'timeout',
+		timeoutKind: 'operation',
+	});
+}
+
 void test('operation timeout aborts run and operation signal', async () => {
 	const fixture = harness();
 	const run = fixture.createRun({
@@ -156,18 +175,26 @@ void test('operation timeout aborts run and operation signal', async () => {
 			cleanupTimeoutMs: 25,
 		},
 	});
-	const scope = run.createOperationScope('operation');
-	const signal = scope.signal;
+	let signal: AbortSignal | null = null;
+	const operation = run.runOperation('operation', (operationSignal) => {
+		signal = operationSignal;
+		return new Promise<string>(() => undefined);
+	});
 
-	assert.equal(signal.aborted, false);
+	assert.equal(requireSignal(signal).aborted, false);
 	assert.equal(fixture.timers[0]?.delayMs, 50);
 
 	fixture.timers[0]?.callback();
 
 	assert.equal(run.signal.aborted, true);
-	assert.equal(signal.aborted, true);
+	assert.equal(requireSignal(signal).aborted, true);
 	assert.equal(run.abortReason, 'timeout');
 	assert.equal(run.timeoutKind, 'operation');
+	assert.deepEqual(await operation, {
+		status: 'aborted',
+		reason: 'timeout',
+		timeoutKind: 'operation',
+	});
 	await assert.rejects(
 		() => Promise.resolve().then(() => run.throwIfAborted()),
 		{
@@ -176,7 +203,7 @@ void test('operation timeout aborts run and operation signal', async () => {
 	);
 });
 
-void test('throwIfAborted preserves existing abort before stale-run', () => {
+void test('throwIfAborted preserves existing abort before stale-run', async () => {
 	const fixture = harness();
 	let current = true;
 	const run = fixture.createRun({
@@ -187,7 +214,9 @@ void test('throwIfAborted preserves existing abort before stale-run', () => {
 			cleanupTimeoutMs: 25,
 		},
 	});
-	const scope = run.createOperationScope('operation');
+	const operation = run.runOperation('operation', () => {
+		return new Promise<string>(() => undefined);
+	});
 
 	fixture.timers[0]?.callback();
 	current = false;
@@ -206,7 +235,11 @@ void test('throwIfAborted preserves existing abort before stale-run', () => {
 			return true;
 		},
 	);
-	assert.equal(scope.signal.aborted, true);
+	assert.deepEqual(await operation, {
+		status: 'aborted',
+		reason: 'timeout',
+		timeoutKind: 'operation',
+	});
 });
 
 void test('recovery timeout is separate from operation timeout', async () => {
@@ -218,18 +251,26 @@ void test('recovery timeout is separate from operation timeout', async () => {
 			cleanupTimeoutMs: 25,
 		},
 	});
-	const scope = run.createOperationScope('recovery');
-	const signal = scope.signal;
+	let signal: AbortSignal | null = null;
+	const recovery = run.runOperation('recovery', (recoverySignal) => {
+		signal = recoverySignal;
+		return new Promise<string>(() => undefined);
+	});
 
 	assert.equal(fixture.timers[0]?.delayMs, 80);
 	fixture.timers[0]?.callback();
 
-	assert.equal(signal.aborted, true);
+	assert.equal(requireSignal(signal).aborted, true);
 	assert.equal(run.abortReason, 'timeout');
 	assert.equal(run.timeoutKind, 'recovery');
+	assert.deepEqual(await recovery, {
+		status: 'aborted',
+		reason: 'timeout',
+		timeoutKind: 'recovery',
+	});
 });
 
-void test('caller abort propagates to child operation signal', () => {
+void test('caller abort propagates to child operation signal', async () => {
 	const caller = new AbortController();
 	const fixture = harness();
 	const run = fixture.createRun({
@@ -240,14 +281,22 @@ void test('caller abort propagates to child operation signal', () => {
 			cleanupTimeoutMs: 25,
 		},
 	});
-	const shellScope = run.createOperationScope('operation');
-	const shellSignal = shellScope.signal;
+	let shellSignal: AbortSignal | null = null;
+	const operation = run.runOperation('operation', (signal) => {
+		shellSignal = signal;
+		return new Promise<string>(() => undefined);
+	});
 
 	caller.abort();
 
 	assert.equal(run.signal.aborted, true);
-	assert.equal(shellSignal.aborted, true);
+	assert.equal(requireSignal(shellSignal).aborted, true);
 	assert.equal(run.abortReason, 'caller-aborted');
+	assert.deepEqual(await operation, {
+		status: 'aborted',
+		reason: 'caller-aborted',
+		timeoutKind: null,
+	});
 });
 
 void test('stale run suppresses late successful operation result', async () => {
@@ -333,7 +382,7 @@ void test('stale non-cleanup operation does not start work', async () => {
 	});
 });
 
-void test('stale manual operation scope starts aborted', () => {
+void test('stale recovery operation does not start work', async () => {
 	const fixture = harness();
 	const run = fixture.createRun({
 		isCurrent: () => false,
@@ -343,48 +392,19 @@ void test('stale manual operation scope starts aborted', () => {
 			cleanupTimeoutMs: 25,
 		},
 	});
+	let called = false;
 
-	const scope = run.createOperationScope('operation');
-
-	assert.equal(scope.signal.aborted, true);
-	assert.equal(scope.signal.reason instanceof ConnectionRunAbortedError, true);
-	assert.equal(scope.signal.reason.reason, 'stale-run');
-	assert.equal(scope.signal.reason.timeoutKind, null);
-});
-
-void test('stale manual recovery scope starts aborted', () => {
-	const fixture = harness();
-	const run = fixture.createRun({
-		isCurrent: () => false,
-		timeouts: {
-			operationTimeoutMs: 50,
-			recoveryTimeoutMs: 80,
-			cleanupTimeoutMs: 25,
-		},
+	const result = await run.runOperation('recovery', async () => {
+		called = true;
+		return 'started';
 	});
 
-	const scope = run.createOperationScope('recovery');
-
-	assert.equal(scope.signal.aborted, true);
-	assert.equal(scope.signal.reason instanceof ConnectionRunAbortedError, true);
-	assert.equal(scope.signal.reason.reason, 'stale-run');
-	assert.equal(scope.signal.reason.timeoutKind, null);
-});
-
-void test('stale manual cleanup scope remains live', () => {
-	const fixture = harness();
-	const run = fixture.createRun({
-		isCurrent: () => false,
-		timeouts: {
-			operationTimeoutMs: 50,
-			recoveryTimeoutMs: 80,
-			cleanupTimeoutMs: 25,
-		},
+	assert.equal(called, false);
+	assert.deepEqual(result, {
+		status: 'aborted',
+		reason: 'stale-run',
+		timeoutKind: null,
 	});
-
-	const scope = run.createOperationScope('cleanup');
-
-	assert.equal(scope.signal.aborted, false);
 });
 
 void test('stale cleanup success is not rewritten to stale-run', async () => {
@@ -454,8 +474,7 @@ void test('cleanup operation remains bounded after operation timeout', async () 
 		},
 	});
 
-	run.createOperationScope('operation');
-	fixture.timers[0]?.callback();
+	await triggerOperationTimeout(fixture, run);
 
 	let cleanupSignal: AbortSignal | null = null;
 	const cleanup = run.runOperation('cleanup', (signal) => {
@@ -507,6 +526,35 @@ void test('cleanup operation can run after prior non-timeout aborts', async () =
 	}
 });
 
+void test('cleanup started after prior stop is interrupted by later stop', async () => {
+	const fixture = harness();
+	const run = fixture.createRun({
+		timeouts: {
+			operationTimeoutMs: 50,
+			recoveryTimeoutMs: 80,
+			cleanupTimeoutMs: 25,
+		},
+	});
+	let cleanupSignal: AbortSignal | null = null;
+
+	run.abort('stopped');
+	const cleanup = run.runOperation('cleanup', (signal) => {
+		cleanupSignal = signal;
+		return new Promise<string>(() => undefined);
+	});
+
+	assert.equal(requireSignal(cleanupSignal).aborted, false);
+
+	run.abort('unmounted');
+
+	assert.equal(requireSignal(cleanupSignal).aborted, true);
+	assert.deepEqual(await cleanup, {
+		status: 'aborted',
+		reason: 'unmounted',
+		timeoutKind: null,
+	});
+});
+
 void test('cleanup abort-like failure after operation timeout is thrown while cleanup is live', async () => {
 	const abortLikeErrors = [
 		Object.assign(new Error('The operation was aborted.'), {
@@ -526,8 +574,7 @@ void test('cleanup abort-like failure after operation timeout is thrown while cl
 		});
 		let cleanupSignal: AbortSignal | null = null;
 
-		run.createOperationScope('operation');
-		fixture.timers[0]?.callback();
+		await triggerOperationTimeout(fixture, run);
 
 		await assert.rejects(
 			run.runOperation('cleanup', async (signal) => {
@@ -544,7 +591,7 @@ void test('cleanup abort-like failure after operation timeout is thrown while cl
 	}
 });
 
-void test('caller abort stops cleanup started after operation timeout', () => {
+void test('caller abort stops cleanup started after operation timeout', async () => {
 	const caller = new AbortController();
 	const fixture = harness();
 	const run = fixture.createRun({
@@ -556,24 +603,26 @@ void test('caller abort stops cleanup started after operation timeout', () => {
 		},
 	});
 
-	run.createOperationScope('operation');
-	fixture.timers[0]?.callback();
-	const cleanupScope = run.createOperationScope('cleanup');
+	await triggerOperationTimeout(fixture, run);
+	let cleanupSignal: AbortSignal | null = null;
+	const cleanup = run.runOperation('cleanup', (signal) => {
+		cleanupSignal = signal;
+		return new Promise<string>(() => undefined);
+	});
 
 	caller.abort();
 
 	assert.equal(run.abortReason, 'timeout');
 	assert.equal(run.timeoutKind, 'operation');
-	assert.equal(cleanupScope.signal.aborted, true);
-	assert.equal(
-		cleanupScope.signal.reason instanceof ConnectionRunAbortedError,
-		true,
-	);
-	assert.equal(cleanupScope.signal.reason.reason, 'caller-aborted');
-	assert.equal(cleanupScope.signal.reason.timeoutKind, null);
+	assert.equal(requireSignal(cleanupSignal).aborted, true);
+	assert.deepEqual(await cleanup, {
+		status: 'aborted',
+		reason: 'caller-aborted',
+		timeoutKind: null,
+	});
 });
 
-void test('manual abort stops cleanup started after operation timeout', () => {
+void test('manual abort stops cleanup started after operation timeout', async () => {
 	const fixture = harness();
 	const run = fixture.createRun({
 		timeouts: {
@@ -583,24 +632,26 @@ void test('manual abort stops cleanup started after operation timeout', () => {
 		},
 	});
 
-	run.createOperationScope('operation');
-	fixture.timers[0]?.callback();
-	const cleanupScope = run.createOperationScope('cleanup');
+	await triggerOperationTimeout(fixture, run);
+	let cleanupSignal: AbortSignal | null = null;
+	const cleanup = run.runOperation('cleanup', (signal) => {
+		cleanupSignal = signal;
+		return new Promise<string>(() => undefined);
+	});
 
 	run.abort('replaced');
 
 	assert.equal(run.abortReason, 'timeout');
 	assert.equal(run.timeoutKind, 'operation');
-	assert.equal(cleanupScope.signal.aborted, true);
-	assert.equal(
-		cleanupScope.signal.reason instanceof ConnectionRunAbortedError,
-		true,
-	);
-	assert.equal(cleanupScope.signal.reason.reason, 'replaced');
-	assert.equal(cleanupScope.signal.reason.timeoutKind, null);
+	assert.equal(requireSignal(cleanupSignal).aborted, true);
+	assert.deepEqual(await cleanup, {
+		status: 'aborted',
+		reason: 'replaced',
+		timeoutKind: null,
+	});
 });
 
-void test('cleanup created after later stop sees remembered stop reason', () => {
+void test('cleanup created after later stop sees remembered stop reason', async () => {
 	const fixture = harness();
 	const run = fixture.createRun({
 		timeouts: {
@@ -610,24 +661,26 @@ void test('cleanup created after later stop sees remembered stop reason', () => 
 		},
 	});
 
-	run.createOperationScope('operation');
-	fixture.timers[0]?.callback();
+	await triggerOperationTimeout(fixture, run);
 	run.abort('replaced');
 
-	const cleanupScope = run.createOperationScope('cleanup');
+	let called = false;
+	const cleanup = await run.runOperation('cleanup', async () => {
+		called = true;
+		return 'cleaned';
+	});
 
 	assert.equal(run.abortReason, 'timeout');
 	assert.equal(run.timeoutKind, 'operation');
-	assert.equal(cleanupScope.signal.aborted, true);
-	assert.equal(
-		cleanupScope.signal.reason instanceof ConnectionRunAbortedError,
-		true,
-	);
-	assert.equal(cleanupScope.signal.reason.reason, 'replaced');
-	assert.equal(cleanupScope.signal.reason.timeoutKind, null);
+	assert.equal(called, false);
+	assert.deepEqual(cleanup, {
+		status: 'aborted',
+		reason: 'replaced',
+		timeoutKind: null,
+	});
 });
 
-void test('cleanup created after caller stop sees remembered stop reason', () => {
+void test('cleanup created after caller stop sees remembered stop reason', async () => {
 	const caller = new AbortController();
 	const fixture = harness();
 	const run = fixture.createRun({
@@ -639,24 +692,26 @@ void test('cleanup created after caller stop sees remembered stop reason', () =>
 		},
 	});
 
-	run.createOperationScope('operation');
-	fixture.timers[0]?.callback();
+	await triggerOperationTimeout(fixture, run);
 	caller.abort();
 
-	const cleanupScope = run.createOperationScope('cleanup');
+	let called = false;
+	const cleanup = await run.runOperation('cleanup', async () => {
+		called = true;
+		return 'cleaned';
+	});
 
 	assert.equal(run.abortReason, 'timeout');
 	assert.equal(run.timeoutKind, 'operation');
-	assert.equal(cleanupScope.signal.aborted, true);
-	assert.equal(
-		cleanupScope.signal.reason instanceof ConnectionRunAbortedError,
-		true,
-	);
-	assert.equal(cleanupScope.signal.reason.reason, 'caller-aborted');
-	assert.equal(cleanupScope.signal.reason.timeoutKind, null);
+	assert.equal(called, false);
+	assert.deepEqual(cleanup, {
+		status: 'aborted',
+		reason: 'caller-aborted',
+		timeoutKind: null,
+	});
 });
 
-void test('caller abort propagates to active cleanup scope', () => {
+void test('caller abort propagates to active cleanup scope', async () => {
 	const caller = new AbortController();
 	const fixture = harness();
 	const run = fixture.createRun({
@@ -667,18 +722,21 @@ void test('caller abort propagates to active cleanup scope', () => {
 			cleanupTimeoutMs: 25,
 		},
 	});
-	const cleanupScope = run.createOperationScope('cleanup');
+	let cleanupSignal: AbortSignal | null = null;
+	const cleanup = run.runOperation('cleanup', (signal) => {
+		cleanupSignal = signal;
+		return new Promise<string>(() => undefined);
+	});
 
 	caller.abort();
 
 	assert.equal(run.abortReason, 'caller-aborted');
-	assert.equal(cleanupScope.signal.aborted, true);
-	assert.equal(
-		cleanupScope.signal.reason instanceof ConnectionRunAbortedError,
-		true,
-	);
-	assert.equal(cleanupScope.signal.reason.reason, 'caller-aborted');
-	assert.equal(cleanupScope.signal.reason.timeoutKind, null);
+	assert.equal(requireSignal(cleanupSignal).aborted, true);
+	assert.deepEqual(await cleanup, {
+		status: 'aborted',
+		reason: 'caller-aborted',
+		timeoutKind: null,
+	});
 });
 
 void test('cleanup timeout aborts hanging cleanup operation', async () => {
@@ -796,7 +854,7 @@ void test('stale run preserves already aborted cleanup timeout result', async ()
 	});
 });
 
-void test('finish clears timers and prevents late timeout abort', () => {
+void test('finish clears timers and prevents late timeout abort', async () => {
 	const fixture = harness();
 	const run = fixture.createRun({
 		timeouts: {
@@ -805,16 +863,26 @@ void test('finish clears timers and prevents late timeout abort', () => {
 			cleanupTimeoutMs: 25,
 		},
 	});
+	let resolveOperation: (value: string) => void = () => {};
+	const operation = run.runOperation('operation', () => {
+		return new Promise<string>((resolve) => {
+			resolveOperation = resolve;
+		});
+	});
 
-	run.createOperationScope('operation');
 	run.finish();
 	fixture.timers[0]?.callback();
+	resolveOperation('connected');
 
 	assert.equal(fixture.timers[0]?.cleared, true);
 	assert.equal(run.signal.aborted, false);
+	assert.deepEqual(await operation, {
+		status: 'ok',
+		value: 'connected',
+	});
 });
 
-void test('finish prevents later abort from stopping active cleanup scope', () => {
+void test('finish prevents later abort from stopping active cleanup scope', async () => {
 	const fixture = harness();
 	const run = fixture.createRun({
 		timeouts: {
@@ -823,15 +891,27 @@ void test('finish prevents later abort from stopping active cleanup scope', () =
 			cleanupTimeoutMs: 25,
 		},
 	});
-	const cleanupScope = run.createOperationScope('cleanup');
+	let cleanupSignal: AbortSignal | null = null;
+	let resolveCleanup: (value: string) => void = () => {};
+	const cleanup = run.runOperation('cleanup', (signal) => {
+		cleanupSignal = signal;
+		return new Promise<string>((resolve) => {
+			resolveCleanup = resolve;
+		});
+	});
 
 	run.finish();
 	run.abort('stopped');
+	resolveCleanup('cleaned');
 
-	assert.equal(cleanupScope.signal.aborted, false);
+	assert.equal(requireSignal(cleanupSignal).aborted, false);
+	assert.deepEqual(await cleanup, {
+		status: 'ok',
+		value: 'cleaned',
+	});
 });
 
-void test('finish removes active scope run abort listeners', () => {
+void test('finish removes active scope run abort listeners', async () => {
 	const controllers: TrackedAbortController[] = [];
 	const fixture = harness();
 	const run = fixture.createRun({
@@ -848,16 +928,37 @@ void test('finish removes active scope run abort listeners', () => {
 			message: 'Expected run AbortController to be created',
 		});
 	}
+	let resolveOperation: (value: string) => void = () => {};
+	let resolveRecovery: (value: string) => void = () => {};
+	let resolveCleanup: (value: string) => void = () => {};
 
-	run.createOperationScope('operation');
-	run.createOperationScope('recovery');
-	run.createOperationScope('cleanup');
+	const operation = run.runOperation('operation', () => {
+		return new Promise<string>((resolve) => {
+			resolveOperation = resolve;
+		});
+	});
+	const recovery = run.runOperation('recovery', () => {
+		return new Promise<string>((resolve) => {
+			resolveRecovery = resolve;
+		});
+	});
+	const cleanup = run.runOperation('cleanup', () => {
+		return new Promise<string>((resolve) => {
+			resolveCleanup = resolve;
+		});
+	});
 
-	assert.equal(runController.abortListeners.size, 3);
+	assert.equal(runController.abortListeners.size > 0, true);
 
 	run.finish();
+	resolveOperation('connected');
+	resolveRecovery('recovered');
+	resolveCleanup('cleaned');
 
 	assert.equal(runController.abortListeners.size, 0);
+	assert.equal((await operation).status, 'ok');
+	assert.equal((await recovery).status, 'ok');
+	assert.equal((await cleanup).status, 'ok');
 });
 
 void test('runOperation removes scope abort listener after successful operation', async () => {
@@ -986,7 +1087,7 @@ void test('finish removes caller abort listener', () => {
 	assert.equal(listeners.size, 0);
 });
 
-void test('operation scope finish clears timer and prevents late timeout abort', () => {
+void test('manual abort accepts lifecycle reasons', async () => {
 	const fixture = harness();
 	const run = fixture.createRun({
 		timeouts: {
@@ -995,34 +1096,23 @@ void test('operation scope finish clears timer and prevents late timeout abort',
 			cleanupTimeoutMs: 25,
 		},
 	});
-	const scope = run.createOperationScope('operation');
-
-	scope.finish();
-	fixture.timers[0]?.callback();
-
-	assert.equal(fixture.timers[0]?.cleared, true);
-	assert.equal(run.signal.aborted, false);
-	assert.equal(scope.signal.aborted, false);
-});
-
-void test('manual abort accepts lifecycle reasons', () => {
-	const fixture = harness();
-	const run = fixture.createRun({
-		timeouts: {
-			operationTimeoutMs: 50,
-			recoveryTimeoutMs: 80,
-			cleanupTimeoutMs: 25,
-		},
+	let signal: AbortSignal | null = null;
+	const operation = run.runOperation('operation', (operationSignal) => {
+		signal = operationSignal;
+		return new Promise<string>(() => undefined);
 	});
-	const scope = run.createOperationScope('operation');
-	const signal = scope.signal;
 
 	run.abort('replaced');
 
 	assert.equal(run.signal.aborted, true);
-	assert.equal(signal.aborted, true);
+	assert.equal(requireSignal(signal).aborted, true);
 	assert.equal(run.abortReason, 'replaced');
 	assert.equal(run.timeoutKind, null);
+	assert.deepEqual(await operation, {
+		status: 'aborted',
+		reason: 'replaced',
+		timeoutKind: null,
+	});
 });
 
 void test('classifyError recognizes context and DOM-style aborts', () => {

@@ -10,23 +10,28 @@ export type ConnectionRunTimeoutKind = 'operation' | 'recovery' | 'cleanup';
 
 export type ConnectionRunOperationKind = 'operation' | 'recovery' | 'cleanup';
 
+type NonTimeoutAbortReason = Exclude<ConnectionRunAbortReason, 'timeout'>;
+
 export type ConnectionRunOperationResult<T> =
 	| { status: 'ok'; value: T }
-	| {
+	| ({
 			status: 'aborted';
-			reason: ConnectionRunAbortReason;
-			timeoutKind: ConnectionRunTimeoutKind | null;
-	  };
+	  } & OperationAbortMetadata);
 
-export type ConnectionRunOperationScope = {
+type ConnectionRunOperationScope = {
 	signal: AbortSignal;
 	finish: () => void;
 };
 
-type OperationAbortMetadata = {
-	reason: ConnectionRunAbortReason;
-	timeoutKind: ConnectionRunTimeoutKind | null;
-};
+type OperationAbortMetadata =
+	| {
+			reason: 'timeout';
+			timeoutKind: ConnectionRunTimeoutKind;
+	  }
+	| {
+			reason: Exclude<ConnectionRunAbortReason, 'timeout'>;
+			timeoutKind: null;
+	  };
 
 type InternalConnectionRunOperationScope = ConnectionRunOperationScope & {
 	getAbortMetadata: () => OperationAbortMetadata | null;
@@ -36,10 +41,18 @@ export class ConnectionRunAbortedError extends Error {
 	readonly reason: ConnectionRunAbortReason;
 	readonly timeoutKind: ConnectionRunTimeoutKind | null;
 
+	constructor(reason: 'timeout', timeoutKind: ConnectionRunTimeoutKind);
+	constructor(reason: NonTimeoutAbortReason, timeoutKind?: null);
 	constructor(
 		reason: ConnectionRunAbortReason,
-		timeoutKind: ConnectionRunTimeoutKind | null,
+		timeoutKind: ConnectionRunTimeoutKind | null = null,
 	) {
+		if (reason === 'timeout' && timeoutKind === null) {
+			throw new Error('Timeout aborts require a timeout kind.');
+		}
+		if (reason !== 'timeout' && timeoutKind !== null) {
+			throw new Error('Only timeout aborts can include a timeout kind.');
+		}
 		super(reason);
 		this.name = 'ConnectionRunAbortedError';
 		this.reason = reason;
@@ -58,12 +71,8 @@ export type ConnectionRunContext = {
 	readonly abortReason: ConnectionRunAbortReason | null;
 	readonly timeoutKind: ConnectionRunTimeoutKind | null;
 	abort: (
-		reason: ConnectionRunAbortReason,
-		timeoutKind?: ConnectionRunTimeoutKind | null,
+		reason: Exclude<ConnectionRunAbortReason, 'timeout' | 'stale-run'>,
 	) => void;
-	createOperationScope: (
-		kind: ConnectionRunOperationKind,
-	) => ConnectionRunOperationScope;
 	runOperation: <T>(
 		kind: ConnectionRunOperationKind,
 		operation: (signal: AbortSignal) => Promise<T>,
@@ -75,8 +84,8 @@ export type ConnectionRunContext = {
 
 type TimerHandle = unknown;
 type CleanupAbortListener = (
-	reason: ConnectionRunAbortReason,
-	timeoutKind: ConnectionRunTimeoutKind | null,
+	reason: NonTimeoutAbortReason,
+	timeoutKind: null,
 ) => void;
 
 type ConnectionRunContextOptions = {
@@ -122,6 +131,52 @@ export function createConnectionRunContext(
 	let finished = false;
 	let abortFromCaller: (() => void) | null = null;
 
+	function createAbortMetadata(
+		reason: 'timeout',
+		nextTimeoutKind: ConnectionRunTimeoutKind,
+	): OperationAbortMetadata;
+	function createAbortMetadata(
+		reason: NonTimeoutAbortReason,
+		nextTimeoutKind?: null,
+	): OperationAbortMetadata;
+	function createAbortMetadata(
+		reason: ConnectionRunAbortReason,
+		nextTimeoutKind: ConnectionRunTimeoutKind | null = null,
+	): OperationAbortMetadata {
+		if (reason === 'timeout') {
+			if (nextTimeoutKind === null) {
+				throw new Error('Timeout aborts require a timeout kind.');
+			}
+			return { reason, timeoutKind: nextTimeoutKind };
+		}
+		return { reason, timeoutKind: null };
+	}
+
+	function getRunAbortMetadata(): OperationAbortMetadata {
+		if (abortReason === 'timeout' && timeoutKind !== null) {
+			return { reason: 'timeout', timeoutKind };
+		}
+		if (abortReason !== null && abortReason !== 'timeout') {
+			return { reason: abortReason, timeoutKind: null };
+		}
+		return { reason: 'stopped', timeoutKind: null };
+	}
+
+	function createAbortError(metadata: OperationAbortMetadata) {
+		return metadata.reason === 'timeout'
+			? new ConnectionRunAbortedError(metadata.reason, metadata.timeoutKind)
+			: new ConnectionRunAbortedError(metadata.reason);
+	}
+
+	function createAbortResult(
+		metadata: OperationAbortMetadata,
+	): ConnectionRunOperationResult<never> {
+		return {
+			status: 'aborted',
+			...metadata,
+		};
+	}
+
 	function getTimeoutMs(kind: ConnectionRunOperationKind) {
 		switch (kind) {
 			case 'cleanup':
@@ -156,21 +211,26 @@ export function createConnectionRunContext(
 	}
 
 	function abortRun(
+		reason: 'timeout',
+		nextTimeoutKind: ConnectionRunTimeoutKind,
+	): void;
+	function abortRun(
+		reason: NonTimeoutAbortReason,
+		nextTimeoutKind?: null,
+	): void;
+	function abortRun(
 		reason: ConnectionRunAbortReason,
-		nextTimeoutKind: ConnectionRunTimeoutKind | null,
+		nextTimeoutKind: ConnectionRunTimeoutKind | null = null,
 	) {
 		if (finished) {
 			return;
 		}
 		if (reason !== 'timeout') {
 			if (runController.signal.aborted && abortReason === 'timeout') {
-				cleanupStopAfterTimeout = {
-					reason,
-					timeoutKind: nextTimeoutKind,
-				};
+				cleanupStopAfterTimeout = createAbortMetadata(reason);
 			}
 			for (const listener of [...activeCleanupAbortListeners]) {
-				listener(reason, nextTimeoutKind);
+				listener(reason, null);
 			}
 		}
 		if (runController.signal.aborted) {
@@ -178,7 +238,14 @@ export function createConnectionRunContext(
 		}
 		abortReason = reason;
 		timeoutKind = nextTimeoutKind;
-		runController.abort(new ConnectionRunAbortedError(reason, nextTimeoutKind));
+		const metadata =
+			reason === 'timeout'
+				? createAbortMetadata(
+						'timeout',
+						nextTimeoutKind as ConnectionRunTimeoutKind,
+					)
+				: createAbortMetadata(reason);
+		runController.abort(createAbortError(metadata));
 	}
 
 	function detachCallerSignal() {
@@ -220,14 +287,36 @@ export function createConnectionRunContext(
 		}
 
 		function abortChild(
+			reason: 'timeout',
+			nextTimeoutKind: ConnectionRunTimeoutKind,
+		): void;
+		function abortChild(
+			reason: NonTimeoutAbortReason,
+			nextTimeoutKind?: null,
+		): void;
+		function abortChild(
 			reason: ConnectionRunAbortReason,
-			nextTimeoutKind: ConnectionRunTimeoutKind | null,
+			nextTimeoutKind: ConnectionRunTimeoutKind | null = null,
 		) {
 			if (controller.signal.aborted) {
 				return;
 			}
-			abortMetadata = { reason, timeoutKind: nextTimeoutKind };
-			controller.abort(new ConnectionRunAbortedError(reason, nextTimeoutKind));
+			abortMetadata =
+				reason === 'timeout'
+					? createAbortMetadata(
+							'timeout',
+							nextTimeoutKind as ConnectionRunTimeoutKind,
+						)
+					: createAbortMetadata(reason);
+			controller.abort(createAbortError(abortMetadata));
+		}
+
+		function abortChildWithMetadata(metadata: OperationAbortMetadata) {
+			if (metadata.reason === 'timeout') {
+				abortChild('timeout', metadata.timeoutKind);
+				return;
+			}
+			abortChild(metadata.reason);
 		}
 
 		controller.signal.addEventListener('abort', finishScope, {
@@ -259,7 +348,15 @@ export function createConnectionRunContext(
 			if (kind === 'cleanup' && abortReason === 'timeout') {
 				return;
 			}
-			abortChild(abortReason ?? 'stopped', timeoutKind);
+			if (abortReason === 'timeout' && timeoutKind !== null) {
+				abortChild('timeout', timeoutKind);
+			} else {
+				abortChild(
+					abortReason !== null && abortReason !== 'timeout'
+						? abortReason
+						: 'stopped',
+				);
+			}
 		};
 		if (kind === 'cleanup') {
 			abortFromLaterStop = (reason, nextTimeoutKind) => {
@@ -270,10 +367,7 @@ export function createConnectionRunContext(
 		if (runController.signal.aborted) {
 			if (kind === 'cleanup') {
 				if (cleanupStopAfterTimeout !== null) {
-					abortChild(
-						cleanupStopAfterTimeout.reason,
-						cleanupStopAfterTimeout.timeoutKind,
-					);
+					abortChildWithMetadata(cleanupStopAfterTimeout);
 				}
 			} else {
 				abortFromRun();
@@ -293,24 +387,24 @@ export function createConnectionRunContext(
 
 	function throwIfAborted() {
 		if (runController.signal.aborted) {
-			throw new ConnectionRunAbortedError(
-				abortReason ?? 'stopped',
-				timeoutKind,
-			);
+			throw createAbortError(getRunAbortMetadata());
 		}
 		if (!isCurrent()) {
-			throw new ConnectionRunAbortedError('stale-run', null);
+			throw new ConnectionRunAbortedError('stale-run');
 		}
 	}
 
 	function getAbortErrorResult(
 		error: ConnectionRunAbortedError,
 	): ConnectionRunOperationResult<never> {
-		return {
-			status: 'aborted',
-			reason: error.reason,
-			timeoutKind: error.timeoutKind,
-		};
+		return createAbortResult(
+			error.reason === 'timeout' && error.timeoutKind !== null
+				? { reason: 'timeout', timeoutKind: error.timeoutKind }
+				: {
+						reason: error.reason === 'timeout' ? 'stopped' : error.reason,
+						timeoutKind: null,
+					},
+		);
 	}
 
 	function isSignalAbortMessage(message: string) {
@@ -335,25 +429,13 @@ export function createConnectionRunContext(
 	): ConnectionRunOperationResult<never> {
 		const metadata = scope.getAbortMetadata();
 		if (metadata !== null) {
-			return {
-				status: 'aborted',
-				reason: metadata.reason,
-				timeoutKind: metadata.timeoutKind,
-			};
+			return createAbortResult(metadata);
 		}
 		const reason = scope.signal.reason;
 		if (reason instanceof ConnectionRunAbortedError) {
-			return {
-				status: 'aborted',
-				reason: reason.reason,
-				timeoutKind: reason.timeoutKind,
-			};
+			return getAbortErrorResult(reason);
 		}
-		return {
-			status: 'aborted',
-			reason: abortReason ?? 'stopped',
-			timeoutKind,
-		};
+		return createAbortResult(getRunAbortMetadata());
 	}
 
 	function isAbortedResult<T>(
@@ -415,11 +497,7 @@ export function createConnectionRunContext(
 				return getScopeAbortResult(scope);
 			}
 			if (runController.signal.aborted && kind !== 'cleanup') {
-				return {
-					status: 'aborted',
-					reason: abortReason ?? 'stopped',
-					timeoutKind,
-				};
+				return createAbortResult(getRunAbortMetadata());
 			}
 			if (kind !== 'cleanup' && !isCurrent()) {
 				return {
@@ -437,11 +515,7 @@ export function createConnectionRunContext(
 				return getScopeAbortResult(scope);
 			}
 			if (runController.signal.aborted && kind !== 'cleanup') {
-				return {
-					status: 'aborted',
-					reason: abortReason ?? 'stopped',
-					timeoutKind,
-				};
+				return createAbortResult(getRunAbortMetadata());
 			}
 			if (kind !== 'cleanup' && !isCurrent()) {
 				return {
@@ -492,10 +566,9 @@ export function createConnectionRunContext(
 		get timeoutKind() {
 			return timeoutKind;
 		},
-		abort: (reason, nextTimeoutKind = null) => {
-			abortRun(reason, nextTimeoutKind);
+		abort: (reason) => {
+			abortRun(reason, null);
 		},
-		createOperationScope,
 		runOperation,
 		throwIfAborted,
 		finish,
