@@ -101,6 +101,7 @@ export function createConnectionRunContext(
 	let abortReason: ConnectionRunAbortReason | null = null;
 	let timeoutKind: ConnectionRunTimeoutKind | null = null;
 	let finished = false;
+	let abortFromCaller: (() => void) | null = null;
 
 	function getTimeoutMs(kind: ConnectionRunOperationKind) {
 		switch (kind) {
@@ -145,6 +146,13 @@ export function createConnectionRunContext(
 		abortReason = reason;
 		timeoutKind = nextTimeoutKind;
 		runController.abort(new ConnectionRunAbortedError(reason, nextTimeoutKind));
+	}
+
+	function detachCallerSignal() {
+		if (options.callerSignal && abortFromCaller !== null) {
+			options.callerSignal.removeEventListener('abort', abortFromCaller);
+			abortFromCaller = null;
+		}
 	}
 
 	function createOperationScope(
@@ -258,6 +266,12 @@ export function createConnectionRunContext(
 		};
 	}
 
+	function isAbortedResult<T>(
+		result: ConnectionRunOperationResult<T>,
+	): result is Extract<ConnectionRunOperationResult<T>, { status: 'aborted' }> {
+		return result.status === 'aborted';
+	}
+
 	async function runOperation<T>(
 		kind: ConnectionRunOperationKind,
 		operation: (signal: AbortSignal) => Promise<T>,
@@ -288,6 +302,9 @@ export function createConnectionRunContext(
 				})),
 				abortResult,
 			]);
+			if (isAbortedResult(result)) {
+				return result;
+			}
 			if (!isCurrent()) {
 				return {
 					status: 'aborted',
@@ -297,13 +314,6 @@ export function createConnectionRunContext(
 			}
 			return result;
 		} catch (error) {
-			if (!isCurrent()) {
-				return {
-					status: 'aborted',
-					reason: 'stale-run',
-					timeoutKind: null,
-				};
-			}
 			if (classifyError(error) === 'aborted') {
 				return signal.aborted
 					? getSignalAbortResult(signal)
@@ -313,6 +323,13 @@ export function createConnectionRunContext(
 							timeoutKind,
 						};
 			}
+			if (!isCurrent()) {
+				return {
+					status: 'aborted',
+					reason: 'stale-run',
+					timeoutKind: null,
+				};
+			}
 			throw error;
 		} finally {
 			scope.finish();
@@ -321,13 +338,15 @@ export function createConnectionRunContext(
 
 	function finish() {
 		finished = true;
+		detachCallerSignal();
 		for (const timer of [...activeTimers]) {
 			clearTrackedTimer(timer);
 		}
 	}
 
 	if (options.callerSignal) {
-		const abortFromCaller = () => {
+		abortFromCaller = () => {
+			abortFromCaller = null;
 			abortRun('caller-aborted', null);
 		};
 		if (options.callerSignal.aborted) {

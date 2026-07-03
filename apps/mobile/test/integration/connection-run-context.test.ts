@@ -206,6 +206,33 @@ void test('cleanup timeout aborts hanging cleanup operation', async () => {
 	});
 });
 
+void test('stale run preserves already aborted cleanup timeout result', async () => {
+	const fixture = harness();
+	let current = true;
+	const run = fixture.createRun({
+		isCurrent: () => current,
+		timeouts: {
+			operationTimeoutMs: 50,
+			recoveryTimeoutMs: 80,
+			cleanupTimeoutMs: 25,
+		},
+	});
+
+	const cleanup = run.runOperation('cleanup', () => {
+		return new Promise<string>(() => undefined);
+	});
+
+	fixture.timers[0]?.callback();
+	current = false;
+	await flushPromises();
+
+	assert.deepEqual(await cleanup, {
+		status: 'aborted',
+		reason: 'timeout',
+		timeoutKind: 'cleanup',
+	});
+});
+
 void test('finish clears timers and prevents late timeout abort', () => {
 	const fixture = harness();
 	const run = fixture.createRun({
@@ -222,6 +249,63 @@ void test('finish clears timers and prevents late timeout abort', () => {
 
 	assert.equal(fixture.timers[0]?.cleared, true);
 	assert.equal(run.signal.aborted, false);
+});
+
+void test('finish removes caller abort listener', () => {
+	const caller = new AbortController();
+	const listeners = new Set<EventListenerOrEventListenerObject>();
+	const originalAddEventListener = caller.signal.addEventListener.bind(caller.signal) as (
+		type: string,
+		listener: EventListenerOrEventListenerObject,
+		options?: boolean | AddEventListenerOptions,
+	) => void;
+	const originalRemoveEventListener = caller.signal.removeEventListener.bind(
+		caller.signal,
+	) as (
+		type: string,
+		listener: EventListenerOrEventListenerObject,
+		options?: boolean | EventListenerOptions,
+	) => void;
+	caller.signal.addEventListener = ((
+		type: string,
+		listener: EventListenerOrEventListenerObject | null,
+		options?: boolean | AddEventListenerOptions,
+	) => {
+		if (type === 'abort' && listener !== null) {
+			listeners.add(listener);
+		}
+		if (listener !== null) {
+			originalAddEventListener(type, listener, options);
+		}
+	}) as AbortSignal['addEventListener'];
+	caller.signal.removeEventListener = ((
+		type: string,
+		listener: EventListenerOrEventListenerObject | null,
+		options?: boolean | EventListenerOptions,
+	) => {
+		if (type === 'abort' && listener !== null) {
+			listeners.delete(listener);
+		}
+		if (listener !== null) {
+			originalRemoveEventListener(type, listener, options);
+		}
+	}) as AbortSignal['removeEventListener'];
+
+	const fixture = harness();
+	const run = fixture.createRun({
+		callerSignal: caller.signal,
+		timeouts: {
+			operationTimeoutMs: 50,
+			recoveryTimeoutMs: 80,
+			cleanupTimeoutMs: 25,
+		},
+	});
+
+	assert.equal(listeners.size, 1);
+
+	run.finish();
+
+	assert.equal(listeners.size, 0);
 });
 
 void test('operation scope finish clears timer and prevents late timeout abort', () => {
