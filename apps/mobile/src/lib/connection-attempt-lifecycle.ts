@@ -74,6 +74,10 @@ type RunAbortConnectionAttemptOutcome = Extract<
 	{ status: 'aborted' | 'timedOut' }
 >;
 
+export type LateCleanupFailureOutcome =
+	| CleanupFailedConnectionAttemptOutcome
+	| RunAbortConnectionAttemptOutcome;
+
 type SavedEntryConnectInput = {
 	phase: SavedEntryConnectAttemptPhase;
 	signal: AbortSignal;
@@ -98,7 +102,7 @@ export type RunSavedEntryConnectionAttemptArgs = {
 		outcome: ConnectedConnectionAttemptOutcome,
 		signal: AbortSignal,
 	) => Promise<void>;
-	onLateCleanupFailure?: (outcome: ConnectionAttemptOutcome) => void;
+	onLateCleanupFailure?: (outcome: LateCleanupFailureOutcome) => void;
 };
 
 export type RunActiveShellReopenAttemptArgs = {
@@ -110,7 +114,7 @@ export type RunActiveShellReopenAttemptArgs = {
 		result: ActiveShellReopenResult,
 		signal: AbortSignal,
 	) => Promise<void>;
-	onLateCleanupFailure?: (outcome: ConnectionAttemptOutcome) => void;
+	onLateCleanupFailure?: (outcome: LateCleanupFailureOutcome) => void;
 };
 
 class ConnectionAttemptOutcomeError extends Error {
@@ -177,8 +181,8 @@ function mapSavedEntryResult(
 }
 
 function reportLateCleanupFailure(
-	reporter: ((outcome: ConnectionAttemptOutcome) => void) | undefined,
-	outcome: ConnectionAttemptOutcome,
+	reporter: ((outcome: LateCleanupFailureOutcome) => void) | undefined,
+	outcome: LateCleanupFailureOutcome,
 ) {
 	try {
 		reporter?.(outcome);
@@ -198,7 +202,7 @@ async function cleanupConnectedOutcome({
 		outcome: ConnectedConnectionAttemptOutcome,
 		signal: AbortSignal,
 	) => Promise<void>;
-}): Promise<ConnectionAttemptOutcome | null> {
+}): Promise<LateCleanupFailureOutcome | null> {
 	try {
 		const cleanupResult = await runContext.runOperation(
 			'cleanup',
@@ -226,7 +230,7 @@ async function cleanupActiveShellResult({
 		result: ActiveShellReopenResult,
 		signal: AbortSignal,
 	) => Promise<void>;
-}): Promise<ConnectionAttemptOutcome | null> {
+}): Promise<LateCleanupFailureOutcome | null> {
 	try {
 		const cleanupResult = await runContext.runOperation(
 			'cleanup',
@@ -265,7 +269,7 @@ async function cleanupLateSavedEntryConnected({
 		signal: AbortSignal,
 	) => Promise<void>;
 	cleanupStarted: () => boolean;
-	onLateCleanupFailure?: (outcome: ConnectionAttemptOutcome) => void;
+	onLateCleanupFailure?: (outcome: LateCleanupFailureOutcome) => void;
 }) {
 	if (lateConnected === null || cleanupStarted()) {
 		return;
