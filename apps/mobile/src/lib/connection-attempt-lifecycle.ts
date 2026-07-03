@@ -16,13 +16,33 @@ export type ConnectionAttemptMode = 'auto-connect' | 'manual-diagnostic';
 
 export type ConnectionAttemptTimeouts = ConnectionRunTimeouts;
 
+type ConnectedConnectionAttemptOutcome = {
+	status: 'connected';
+	connectionId: string;
+	channelId: number;
+	storedConnectionId?: string;
+};
+
+type FailedConnectionAttemptOutcome = {
+	status: 'failed';
+	error: unknown;
+	recoverable: boolean;
+	attentionMessage: string | null;
+};
+
+type AbortedConnectionAttemptOutcome = {
+	status: 'aborted';
+	reason: Exclude<ConnectionRunAbortReason, 'timeout'>;
+};
+
+type CleanupFailedConnectionAttemptOutcome = {
+	status: 'cleanupFailed';
+	error: unknown;
+	priorOutcome: ConnectedConnectionAttemptOutcome;
+};
+
 export type ConnectionAttemptOutcome =
-	| {
-			status: 'connected';
-			connectionId: string;
-			channelId: number;
-			storedConnectionId?: string;
-	  }
+	| ConnectedConnectionAttemptOutcome
 	| {
 			status: 'tmuxAttachFailed';
 			connectionId: string;
@@ -34,31 +54,24 @@ export type ConnectionAttemptOutcome =
 			status: 'blocked';
 			attentionMessage: string | null;
 	  }
-	| {
-			status: 'failed';
-			error: unknown;
-			recoverable: boolean;
-	  }
-	| {
-			status: 'aborted';
-			reason: ConnectionRunAbortReason;
-	  }
+	| FailedConnectionAttemptOutcome
+	| AbortedConnectionAttemptOutcome
 	| {
 			status: 'timedOut';
 			timeoutKind: ConnectionRunTimeoutKind;
 	  }
-	| {
-			status: 'cleanupFailed';
-			error: unknown;
-			priorOutcome?: Exclude<
-				ConnectionAttemptOutcome,
-				{ status: 'cleanupFailed' }
-			>;
-	  };
+	| CleanupFailedConnectionAttemptOutcome;
 
-type ConnectedConnectionAttemptOutcome = Extract<
+export type ActiveShellReopenAttemptOutcome = Exclude<
 	ConnectionAttemptOutcome,
-	{ status: 'connected' }
+	{ status: 'blocked' | 'tmuxAttachFailed' }
+>;
+
+export type SavedEntryConnectionAttemptOutcome = ConnectionAttemptOutcome;
+
+type RunAbortConnectionAttemptOutcome = Extract<
+	ConnectionAttemptOutcome,
+	{ status: 'aborted' | 'timedOut' }
 >;
 
 type SavedEntryConnectInput = {
@@ -110,14 +123,16 @@ class ConnectionAttemptOutcomeError extends Error {
 
 function mapAborted<T>(
 	result: Extract<ConnectionRunOperationResult<T>, { status: 'aborted' }>,
-): ConnectionAttemptOutcome {
+): RunAbortConnectionAttemptOutcome {
 	if (result.reason === 'timeout') {
 		return { status: 'timedOut', timeoutKind: result.timeoutKind };
 	}
 	return { status: 'aborted', reason: result.reason };
 }
 
-function mapCurrentAbort(runContext: ConnectionRunContext) {
+function mapCurrentAbort(
+	runContext: ConnectionRunContext,
+): RunAbortConnectionAttemptOutcome {
 	if (runContext.abortReason === 'timeout' && runContext.timeoutKind !== null) {
 		return {
 			status: 'timedOut' as const,
@@ -126,7 +141,10 @@ function mapCurrentAbort(runContext: ConnectionRunContext) {
 	}
 	return {
 		status: 'aborted' as const,
-		reason: runContext.abortReason ?? 'caller-aborted',
+		reason:
+			runContext.abortReason !== null && runContext.abortReason !== 'timeout'
+				? runContext.abortReason
+				: 'caller-aborted',
 	};
 }
 
@@ -354,12 +372,14 @@ export async function runSavedEntryConnectionAttempt(
 					status: 'failed',
 					error: savedEntryOutcome.error,
 					recoverable: false,
+					attentionMessage: savedEntryOutcome.attentionMessage,
 				};
 			case 'retryFailed':
 				return {
 					status: 'failed',
 					error: savedEntryOutcome.error,
 					recoverable: true,
+					attentionMessage: savedEntryOutcome.attentionMessage,
 				};
 			case 'threw':
 				if (savedEntryOutcome.error instanceof ConnectionAttemptOutcomeError) {
@@ -377,6 +397,7 @@ export async function runSavedEntryConnectionAttempt(
 					status: 'failed',
 					error: savedEntryOutcome.error,
 					recoverable: false,
+					attentionMessage: null,
 				};
 		}
 	} catch (error) {
@@ -390,7 +411,12 @@ export async function runSavedEntryConnectionAttempt(
 		) {
 			return mapCurrentAbort(args.runContext);
 		}
-		return { status: 'failed', error, recoverable: false };
+		return {
+			status: 'failed',
+			error,
+			recoverable: false,
+			attentionMessage: null,
+		};
 	}
 }
 
@@ -398,7 +424,7 @@ export async function runActiveShellReopenAttempt({
 	runContext,
 	startShell,
 	cleanupConnected,
-}: RunActiveShellReopenAttemptArgs): Promise<ConnectionAttemptOutcome> {
+}: RunActiveShellReopenAttemptArgs): Promise<ActiveShellReopenAttemptOutcome> {
 	let lateConnected: ActiveShellReopenResult | null = null;
 	let lateCleanupStarted = false;
 	const cleanupLateConnected = async () => {
@@ -449,6 +475,11 @@ export async function runActiveShellReopenAttempt({
 		) {
 			return mapCurrentAbort(runContext);
 		}
-		return { status: 'failed', error, recoverable: false };
+		return {
+			status: 'failed',
+			error,
+			recoverable: false,
+			attentionMessage: null,
+		};
 	}
 }

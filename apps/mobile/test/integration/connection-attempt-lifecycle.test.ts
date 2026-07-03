@@ -112,6 +112,18 @@ function connectedResult(
 	};
 }
 
+function tmuxAttachFailedResult(
+	connectionId = 'conn-tmux',
+): SavedEntryConnectResult {
+	return {
+		status: 'tmux_attach_failed',
+		connectionId,
+		tmuxAttachFailureReason: 'no-session',
+		tmuxSessionName: 'work',
+		storedConnectionId: 'stored-1',
+	};
+}
+
 void test('saved-entry lifecycle returns connected outcome and passes initial phase', async () => {
 	const { runContext } = runHarness();
 	const phases: SavedEntryConnectAttemptPhase[] = [];
@@ -167,6 +179,27 @@ void test('saved-entry lifecycle maps Tailscale readiness block and does not con
 	assert.match(outcome.attentionMessage ?? '', /Tailscale/i);
 });
 
+void test('saved-entry lifecycle maps tmux attach failure metadata', async () => {
+	const { runContext } = runHarness();
+
+	const outcome = await runSavedEntryConnectionAttempt({
+		platformOS: 'android',
+		mode: 'auto-connect',
+		runContext,
+		recovery: readyRecovery(),
+		connectSavedEntry: async () => tmuxAttachFailedResult(),
+		cleanupConnected: async () => {},
+	});
+
+	assert.deepEqual(outcome, {
+		status: 'tmuxAttachFailed',
+		connectionId: 'conn-tmux',
+		tmuxAttachFailureReason: 'no-session',
+		tmuxSessionName: 'work',
+		storedConnectionId: 'stored-1',
+	});
+});
+
 void test('saved-entry lifecycle treats readiness abort errors as failures when run is active', async () => {
 	const { runContext } = runHarness();
 	const abortError = Object.assign(new Error('The operation was aborted.'), {
@@ -195,6 +228,7 @@ void test('saved-entry lifecycle treats readiness abort errors as failures when 
 		status: 'failed',
 		error: abortError,
 		recoverable: false,
+		attentionMessage: null,
 	});
 });
 
@@ -230,6 +264,94 @@ void test('saved-entry lifecycle retries after Tailscale recovery', async () => 
 	assert.deepEqual(phases, ['initial', 'retry']);
 });
 
+void test('saved-entry lifecycle maps non-network recovery failure as non-recoverable', async () => {
+	const { runContext } = runHarness();
+	const connectError = new Error('permission denied');
+
+	const outcome = await runSavedEntryConnectionAttempt({
+		platformOS: 'android',
+		mode: 'auto-connect',
+		runContext,
+		recovery: readyRecovery({
+			afterFailure: {
+				kind: 'nonNetworkFailure',
+				attempted: false,
+				networkLikeFailure: false,
+				available: true,
+			},
+		}),
+		connectSavedEntry: async () => {
+			throw connectError;
+		},
+		cleanupConnected: async () => {},
+	});
+
+	assert.deepEqual(outcome, {
+		status: 'failed',
+		error: connectError,
+		recoverable: false,
+		attentionMessage: null,
+	});
+});
+
+void test('saved-entry lifecycle preserves Tailscale attention on recovery failure', async () => {
+	const { runContext } = runHarness();
+	const connectError = new Error('No route to host');
+
+	const outcome = await runSavedEntryConnectionAttempt({
+		platformOS: 'android',
+		mode: 'auto-connect',
+		runContext,
+		recovery: readyRecovery({
+			afterFailure: {
+				kind: 'failed',
+				attempted: true,
+				networkLikeFailure: true,
+				available: true,
+			},
+		}),
+		connectSavedEntry: async () => {
+			throw connectError;
+		},
+		cleanupConnected: async () => {},
+	});
+
+	assert.equal(outcome.status, 'failed');
+	if (outcome.status !== 'failed') return;
+	assert.equal(outcome.error, connectError);
+	assert.equal(outcome.recoverable, false);
+	assert.match(outcome.attentionMessage ?? '', /Tailscale/i);
+});
+
+void test('saved-entry lifecycle maps retry failure as recoverable with attention', async () => {
+	const { runContext } = runHarness();
+	const retryError = new Error('No route to host');
+
+	const outcome = await runSavedEntryConnectionAttempt({
+		platformOS: 'android',
+		mode: 'auto-connect',
+		runContext,
+		recovery: readyRecovery({
+			afterFailure: {
+				kind: 'recovered',
+				attempted: true,
+				networkLikeFailure: true,
+				available: true,
+			},
+		}),
+		connectSavedEntry: async () => {
+			throw retryError;
+		},
+		cleanupConnected: async () => {},
+	});
+
+	assert.equal(outcome.status, 'failed');
+	if (outcome.status !== 'failed') return;
+	assert.equal(outcome.error, retryError);
+	assert.equal(outcome.recoverable, true);
+	assert.match(outcome.attentionMessage ?? '', /Tailscale/i);
+});
+
 void test('saved-entry lifecycle treats dependency abort errors as failures when run is active', async () => {
 	const { runContext } = runHarness();
 	const abortError = Object.assign(new Error('The operation was aborted.'), {
@@ -252,6 +374,7 @@ void test('saved-entry lifecycle treats dependency abort errors as failures when
 		status: 'failed',
 		error: abortError,
 		recoverable: false,
+		attentionMessage: null,
 	});
 });
 
@@ -283,6 +406,7 @@ void test('saved-entry lifecycle cleans up success that arrives after operation 
 	const { runContext, timers } = runHarness();
 	const connect = deferred<SavedEntryConnectResult>();
 	let cleanupCount = 0;
+	let cleanedOutcome: unknown = null;
 
 	const outcomePromise = runSavedEntryConnectionAttempt({
 		platformOS: 'android',
@@ -290,8 +414,9 @@ void test('saved-entry lifecycle cleans up success that arrives after operation 
 		runContext,
 		recovery: readyRecovery(),
 		connectSavedEntry: async () => connect.promise,
-		cleanupConnected: async () => {
+		cleanupConnected: async (outcome) => {
 			cleanupCount += 1;
+			cleanedOutcome = outcome;
 		},
 	});
 	await flushPromises();
@@ -309,6 +434,11 @@ void test('saved-entry lifecycle cleans up success that arrives after operation 
 	await flushPromises();
 
 	assert.equal(cleanupCount, 1);
+	assert.deepEqual(cleanedOutcome, {
+		status: 'connected',
+		connectionId: 'conn-1',
+		channelId: 7,
+	});
 });
 
 void test('saved-entry timeout late cleanup keeps deadline after run finish', async () => {
@@ -316,6 +446,7 @@ void test('saved-entry timeout late cleanup keeps deadline after run finish', as
 	const connect = deferred<SavedEntryConnectResult>();
 	const cleanupStarted = deferred<void>();
 	let cleanupSignal: AbortSignal | null = null;
+	let cleanedOutcome: unknown = null;
 
 	const outcomePromise = runSavedEntryConnectionAttempt({
 		platformOS: 'android',
@@ -323,7 +454,8 @@ void test('saved-entry timeout late cleanup keeps deadline after run finish', as
 		runContext,
 		recovery: readyRecovery(),
 		connectSavedEntry: async () => connect.promise,
-		cleanupConnected: async (_outcome, signal) => {
+		cleanupConnected: async (outcome, signal) => {
+			cleanedOutcome = outcome;
 			cleanupSignal = signal;
 			cleanupStarted.resolve();
 			await new Promise<void>(() => {});
@@ -345,6 +477,11 @@ void test('saved-entry timeout late cleanup keeps deadline after run finish', as
 	assert.equal(requireSignal(cleanupSignal).aborted, false);
 	timers.at(-1)?.callback();
 	assert.equal(requireSignal(cleanupSignal).aborted, true);
+	assert.deepEqual(cleanedOutcome, {
+		status: 'connected',
+		connectionId: 'conn-1',
+		channelId: 7,
+	});
 });
 
 void test('saved-entry lifecycle cleans up stale late success', async () => {
@@ -352,6 +489,7 @@ void test('saved-entry lifecycle cleans up stale late success', async () => {
 	const { runContext } = runHarness({ isCurrent: () => current });
 	const connect = deferred<SavedEntryConnectResult>();
 	let cleanupCount = 0;
+	let cleanedOutcome: unknown = null;
 
 	const outcomePromise = runSavedEntryConnectionAttempt({
 		platformOS: 'android',
@@ -359,8 +497,9 @@ void test('saved-entry lifecycle cleans up stale late success', async () => {
 		runContext,
 		recovery: readyRecovery(),
 		connectSavedEntry: async () => connect.promise,
-		cleanupConnected: async () => {
+		cleanupConnected: async (outcome) => {
 			cleanupCount += 1;
+			cleanedOutcome = outcome;
 		},
 	});
 	await flushPromises();
@@ -373,6 +512,11 @@ void test('saved-entry lifecycle cleans up stale late success', async () => {
 		reason: 'stale-run',
 	});
 	assert.equal(cleanupCount, 1);
+	assert.deepEqual(cleanedOutcome, {
+		status: 'connected',
+		connectionId: 'conn-1',
+		channelId: 7,
+	});
 });
 
 void test('saved-entry lifecycle preserves stale outcome when stale cleanup fails', async () => {
@@ -467,6 +611,7 @@ void test('active shell reopen treats dependency abort errors as failures when r
 		status: 'failed',
 		error: abortError,
 		recoverable: false,
+		attentionMessage: null,
 	});
 });
 
@@ -478,12 +623,14 @@ void test('active shell reopen cleans up success that arrives after operation ti
 		close: () => Promise<void>;
 	}>();
 	let cleanupCount = 0;
+	let cleanedShell: unknown = null;
 
 	const outcomePromise = runActiveShellReopenAttempt({
 		runContext,
 		startShell: async () => shell.promise,
-		cleanupConnected: async () => {
+		cleanupConnected: async (result) => {
 			cleanupCount += 1;
+			cleanedShell = result;
 		},
 	});
 	await flushPromises();
@@ -505,6 +652,15 @@ void test('active shell reopen cleans up success that arrives after operation ti
 	await flushPromises();
 
 	assert.equal(cleanupCount, 1);
+	assert.equal(
+		(cleanedShell as { connectionId?: unknown } | null)?.connectionId,
+		'active-1',
+	);
+	assert.equal((cleanedShell as { channelId?: unknown } | null)?.channelId, 9);
+	assert.equal(
+		typeof (cleanedShell as { close?: unknown } | null)?.close,
+		'function',
+	);
 });
 
 void test('active shell timeout late cleanup keeps deadline after run finish', async () => {
@@ -516,11 +672,13 @@ void test('active shell timeout late cleanup keeps deadline after run finish', a
 	}>();
 	const cleanupStarted = deferred<void>();
 	let cleanupSignal: AbortSignal | null = null;
+	let cleanedShell: unknown = null;
 
 	const outcomePromise = runActiveShellReopenAttempt({
 		runContext,
 		startShell: async () => shell.promise,
-		cleanupConnected: async (_result, signal) => {
+		cleanupConnected: async (result, signal) => {
+			cleanedShell = result;
 			cleanupSignal = signal;
 			cleanupStarted.resolve();
 			await new Promise<void>(() => {});
@@ -546,6 +704,15 @@ void test('active shell timeout late cleanup keeps deadline after run finish', a
 	assert.equal(requireSignal(cleanupSignal).aborted, false);
 	timers.at(-1)?.callback();
 	assert.equal(requireSignal(cleanupSignal).aborted, true);
+	assert.equal(
+		(cleanedShell as { connectionId?: unknown } | null)?.connectionId,
+		'active-1',
+	);
+	assert.equal((cleanedShell as { channelId?: unknown } | null)?.channelId, 9);
+	assert.equal(
+		typeof (cleanedShell as { close?: unknown } | null)?.close,
+		'function',
+	);
 });
 
 void test('active shell reopen cleans up stale late success', async () => {
@@ -557,12 +724,14 @@ void test('active shell reopen cleans up stale late success', async () => {
 		close: () => Promise<void>;
 	}>();
 	let cleanupCount = 0;
+	let cleanedShell: unknown = null;
 
 	const outcomePromise = runActiveShellReopenAttempt({
 		runContext,
 		startShell: async () => shell.promise,
-		cleanupConnected: async () => {
+		cleanupConnected: async (result) => {
 			cleanupCount += 1;
+			cleanedShell = result;
 		},
 	});
 	await flushPromises();
@@ -579,6 +748,15 @@ void test('active shell reopen cleans up stale late success', async () => {
 		reason: 'stale-run',
 	});
 	assert.equal(cleanupCount, 1);
+	assert.equal(
+		(cleanedShell as { connectionId?: unknown } | null)?.connectionId,
+		'active-1',
+	);
+	assert.equal((cleanedShell as { channelId?: unknown } | null)?.channelId, 9);
+	assert.equal(
+		typeof (cleanedShell as { close?: unknown } | null)?.close,
+		'function',
+	);
 });
 
 void test('active shell reopen preserves stale outcome when stale cleanup fails', async () => {

@@ -936,6 +936,35 @@ void test('finish prevents later abort from stopping active cleanup scope', asyn
 	});
 });
 
+void test('cleanup operation active during finish keeps cleanup timeout', async () => {
+	const fixture = harness();
+	const run = fixture.createRun({
+		timeouts: {
+			operationTimeoutMs: 50,
+			recoveryTimeoutMs: 80,
+			cleanupTimeoutMs: 25,
+		},
+	});
+	let cleanupSignal: AbortSignal | null = null;
+
+	const cleanup = run.runOperation('cleanup', (signal) => {
+		cleanupSignal = signal;
+		return new Promise<string>(() => undefined);
+	});
+	await flushPromises();
+
+	run.finish();
+	fixture.timers[0]?.callback();
+	await flushPromises();
+
+	assert.equal(requireSignal(cleanupSignal).aborted, true);
+	assert.deepEqual(await cleanup, {
+		status: 'aborted',
+		reason: 'timeout',
+		timeoutKind: 'cleanup',
+	});
+});
+
 void test('cleanup operation started after finish keeps cleanup timeout', async () => {
 	const fixture = harness();
 	const run = fixture.createRun({
@@ -948,7 +977,7 @@ void test('cleanup operation started after finish keeps cleanup timeout', async 
 	let cleanupSignal: AbortSignal | null = null;
 
 	run.finish();
-	void run.runOperation('cleanup', (signal) => {
+	const cleanup = run.runOperation('cleanup', (signal) => {
 		cleanupSignal = signal;
 		return new Promise<string>(() => undefined);
 	});
@@ -959,6 +988,11 @@ void test('cleanup operation started after finish keeps cleanup timeout', async 
 	await flushPromises();
 
 	assert.equal(requireSignal(cleanupSignal).aborted, true);
+	assert.deepEqual(await cleanup, {
+		status: 'aborted',
+		reason: 'timeout',
+		timeoutKind: 'cleanup',
+	});
 });
 
 void test('finish removes active scope run abort listeners', async () => {
