@@ -27,6 +27,45 @@ function requireSignal(signal: AbortSignal | null): AbortSignal {
 	return signal;
 }
 
+function createNoReasonAbortController(): AbortController {
+	const realController = new AbortController();
+	const signal = {
+		get aborted() {
+			return realController.signal.aborted;
+		},
+		get onabort() {
+			return realController.signal.onabort;
+		},
+		set onabort(handler) {
+			realController.signal.onabort = handler;
+		},
+		get reason() {
+			return undefined;
+		},
+		addEventListener: realController.signal.addEventListener.bind(
+			realController.signal,
+		),
+		dispatchEvent: realController.signal.dispatchEvent.bind(
+			realController.signal,
+		),
+		removeEventListener: realController.signal.removeEventListener.bind(
+			realController.signal,
+		),
+		throwIfAborted: () => {
+			if (realController.signal.aborted) {
+				throw new DOMException('Aborted', 'AbortError');
+			}
+		},
+	} as AbortSignal;
+
+	return {
+		signal,
+		abort: () => {
+			realController.abort();
+		},
+	} as AbortController;
+}
+
 function harness() {
 	let nextId = 1;
 	const timers: Timer[] = [];
@@ -399,6 +438,66 @@ void test('cleanup timeout aborts hanging cleanup operation', async () => {
 		status: 'aborted',
 		reason: 'timeout',
 		timeoutKind: 'cleanup',
+	});
+});
+
+void test('cleanup timeout metadata survives abort signals without reason', async () => {
+	const fixture = harness();
+	let abortControllerCount = 0;
+	const run = fixture.createRun({
+		createAbortController: () => {
+			abortControllerCount += 1;
+			return createNoReasonAbortController();
+		},
+		timeouts: {
+			operationTimeoutMs: 50,
+			recoveryTimeoutMs: 80,
+			cleanupTimeoutMs: 25,
+		},
+	});
+
+	const cleanup = run.runOperation('cleanup', () => {
+		return new Promise<string>(() => undefined);
+	});
+
+	fixture.timers[0]?.callback();
+	await flushPromises();
+
+	assert.equal(abortControllerCount > 0, true);
+	assert.deepEqual(await cleanup, {
+		status: 'aborted',
+		reason: 'timeout',
+		timeoutKind: 'cleanup',
+	});
+});
+
+void test('operation timeout metadata survives abort signals without reason', async () => {
+	const fixture = harness();
+	let abortControllerCount = 0;
+	const run = fixture.createRun({
+		createAbortController: () => {
+			abortControllerCount += 1;
+			return createNoReasonAbortController();
+		},
+		timeouts: {
+			operationTimeoutMs: 50,
+			recoveryTimeoutMs: 80,
+			cleanupTimeoutMs: 25,
+		},
+	});
+
+	const operation = run.runOperation('operation', () => {
+		return new Promise<string>(() => undefined);
+	});
+
+	fixture.timers[0]?.callback();
+	await flushPromises();
+
+	assert.equal(abortControllerCount > 0, true);
+	assert.deepEqual(await operation, {
+		status: 'aborted',
+		reason: 'timeout',
+		timeoutKind: 'operation',
 	});
 });
 

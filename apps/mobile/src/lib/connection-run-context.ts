@@ -23,6 +23,15 @@ export type ConnectionRunOperationScope = {
 	finish: () => void;
 };
 
+type OperationAbortMetadata = {
+	reason: ConnectionRunAbortReason;
+	timeoutKind: ConnectionRunTimeoutKind | null;
+};
+
+type InternalConnectionRunOperationScope = ConnectionRunOperationScope & {
+	getAbortMetadata: () => OperationAbortMetadata | null;
+};
+
 export class ConnectionRunAbortedError extends Error {
 	readonly reason: ConnectionRunAbortReason;
 	readonly timeoutKind: ConnectionRunTimeoutKind | null;
@@ -76,6 +85,7 @@ type ConnectionRunContextOptions = {
 	timeouts?: Partial<ConnectionRunTimeouts>;
 	setTimeout?: (callback: () => void, delayMs: number) => TimerHandle;
 	clearTimeout?: (timer: TimerHandle) => void;
+	createAbortController?: () => AbortController;
 };
 
 const defaultTimeouts: ConnectionRunTimeouts = {
@@ -87,7 +97,9 @@ const defaultTimeouts: ConnectionRunTimeouts = {
 export function createConnectionRunContext(
 	options: ConnectionRunContextOptions = {},
 ): ConnectionRunContext {
-	const runController = new AbortController();
+	const createAbortController =
+		options.createAbortController ?? (() => new AbortController());
+	const runController = createAbortController();
 	const activeTimers = new Set<TimerHandle>();
 	const activeCleanupAbortListeners = new Set<CleanupAbortListener>();
 	const timeouts = { ...defaultTimeouts, ...options.timeouts };
@@ -167,12 +179,13 @@ export function createConnectionRunContext(
 
 	function createOperationScope(
 		kind: ConnectionRunOperationKind,
-	): ConnectionRunOperationScope {
-		const controller = new AbortController();
+	): InternalConnectionRunOperationScope {
+		const controller = createAbortController();
 		let timer: TimerHandle | null = null;
 		let finishedScope = false;
 		let abortFromRun: (() => void) | null = null;
 		let abortFromLaterStop: CleanupAbortListener | null = null;
+		let abortMetadata: OperationAbortMetadata | null = null;
 
 		function finishScope() {
 			if (finishedScope) {
@@ -201,6 +214,7 @@ export function createConnectionRunContext(
 			if (controller.signal.aborted) {
 				return;
 			}
+			abortMetadata = { reason, timeoutKind: nextTimeoutKind };
 			controller.abort(new ConnectionRunAbortedError(reason, nextTimeoutKind));
 		}
 
@@ -242,6 +256,7 @@ export function createConnectionRunContext(
 		return {
 			signal: controller.signal,
 			finish: finishScope,
+			getAbortMetadata: () => abortMetadata,
 		};
 	}
 
@@ -284,10 +299,18 @@ export function createConnectionRunContext(
 		return isSignalAbortMessage(error.message) ? 'aborted' : 'failed';
 	}
 
-	function getSignalAbortResult(
-		signal: AbortSignal,
+	function getScopeAbortResult(
+		scope: InternalConnectionRunOperationScope,
 	): ConnectionRunOperationResult<never> {
-		const reason = signal.reason;
+		const metadata = scope.getAbortMetadata();
+		if (metadata !== null) {
+			return {
+				status: 'aborted',
+				reason: metadata.reason,
+				timeoutKind: metadata.timeoutKind,
+			};
+		}
+		const reason = scope.signal.reason;
 		if (reason instanceof ConnectionRunAbortedError) {
 			return {
 				status: 'aborted',
@@ -322,7 +345,7 @@ export function createConnectionRunContext(
 		const scope = createOperationScope(kind);
 		const signal = scope.signal;
 		if (signal.aborted) {
-			return getSignalAbortResult(signal);
+			return getScopeAbortResult(scope);
 		}
 
 		const abortResult = new Promise<ConnectionRunOperationResult<never>>(
@@ -330,7 +353,7 @@ export function createConnectionRunContext(
 				signal.addEventListener(
 					'abort',
 					() => {
-						resolve(getSignalAbortResult(signal));
+						resolve(getScopeAbortResult(scope));
 					},
 					{ once: true },
 				);
@@ -362,7 +385,7 @@ export function createConnectionRunContext(
 			}
 			if (classifyError(error) === 'aborted') {
 				if (signal.aborted) {
-					return getSignalAbortResult(signal);
+					return getScopeAbortResult(scope);
 				}
 				if (runController.signal.aborted) {
 					return {
