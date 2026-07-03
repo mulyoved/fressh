@@ -225,6 +225,19 @@ export function createConnectionRunContext(
 			controller.abort(new ConnectionRunAbortedError(reason, nextTimeoutKind));
 		}
 
+		controller.signal.addEventListener('abort', finishScope, {
+			once: true,
+		});
+
+		if (kind !== 'cleanup' && !runController.signal.aborted && !isCurrent()) {
+			abortChild('stale-run', null);
+			return {
+				signal: controller.signal,
+				finish: finishScope,
+				getAbortMetadata: () => abortMetadata,
+			};
+		}
+
 		timer = startTimer(kind, () => {
 			if (finishedScope) {
 				return;
@@ -234,10 +247,6 @@ export function createConnectionRunContext(
 				return;
 			}
 			abortRun('timeout', kind);
-		});
-
-		controller.signal.addEventListener('abort', finishScope, {
-			once: true,
 		});
 
 		abortFromRun = () => {

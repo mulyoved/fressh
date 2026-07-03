@@ -251,6 +251,60 @@ void test('stale non-cleanup operation does not start work', async () => {
 	});
 });
 
+void test('stale manual operation scope starts aborted', () => {
+	const fixture = harness();
+	const run = fixture.createRun({
+		isCurrent: () => false,
+		timeouts: {
+			operationTimeoutMs: 50,
+			recoveryTimeoutMs: 80,
+			cleanupTimeoutMs: 25,
+		},
+	});
+
+	const scope = run.createOperationScope('operation');
+
+	assert.equal(scope.signal.aborted, true);
+	assert.equal(scope.signal.reason instanceof ConnectionRunAbortedError, true);
+	assert.equal(scope.signal.reason.reason, 'stale-run');
+	assert.equal(scope.signal.reason.timeoutKind, null);
+});
+
+void test('stale manual recovery scope starts aborted', () => {
+	const fixture = harness();
+	const run = fixture.createRun({
+		isCurrent: () => false,
+		timeouts: {
+			operationTimeoutMs: 50,
+			recoveryTimeoutMs: 80,
+			cleanupTimeoutMs: 25,
+		},
+	});
+
+	const scope = run.createOperationScope('recovery');
+
+	assert.equal(scope.signal.aborted, true);
+	assert.equal(scope.signal.reason instanceof ConnectionRunAbortedError, true);
+	assert.equal(scope.signal.reason.reason, 'stale-run');
+	assert.equal(scope.signal.reason.timeoutKind, null);
+});
+
+void test('stale manual cleanup scope remains live', () => {
+	const fixture = harness();
+	const run = fixture.createRun({
+		isCurrent: () => false,
+		timeouts: {
+			operationTimeoutMs: 50,
+			recoveryTimeoutMs: 80,
+			cleanupTimeoutMs: 25,
+		},
+	});
+
+	const scope = run.createOperationScope('cleanup');
+
+	assert.equal(scope.signal.aborted, false);
+});
+
 void test('stale cleanup success is not rewritten to stale-run', async () => {
 	const fixture = harness();
 	const run = fixture.createRun({
