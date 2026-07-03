@@ -268,11 +268,13 @@ export function createConnectionRunContext(
 			activeCleanupAbortListeners.add(abortFromLaterStop);
 		}
 		if (runController.signal.aborted) {
-			if (kind === 'cleanup' && cleanupStopAfterTimeout !== null) {
-				abortChild(
-					cleanupStopAfterTimeout.reason,
-					cleanupStopAfterTimeout.timeoutKind,
-				);
+			if (kind === 'cleanup') {
+				if (cleanupStopAfterTimeout !== null) {
+					abortChild(
+						cleanupStopAfterTimeout.reason,
+						cleanupStopAfterTimeout.timeoutKind,
+					);
+				}
 			} else {
 				abortFromRun();
 			}
@@ -412,10 +414,7 @@ export function createConnectionRunContext(
 			if (signal.aborted) {
 				return getScopeAbortResult(scope);
 			}
-			if (
-				runController.signal.aborted &&
-				!(kind === 'cleanup' && abortReason === 'timeout')
-			) {
+			if (runController.signal.aborted && kind !== 'cleanup') {
 				return {
 					status: 'aborted',
 					reason: abortReason ?? 'stopped',
@@ -437,10 +436,7 @@ export function createConnectionRunContext(
 			if (signal.aborted) {
 				return getScopeAbortResult(scope);
 			}
-			if (
-				runController.signal.aborted &&
-				!(kind === 'cleanup' && abortReason === 'timeout')
-			) {
+			if (runController.signal.aborted && kind !== 'cleanup') {
 				return {
 					status: 'aborted',
 					reason: abortReason ?? 'stopped',

@@ -468,6 +468,45 @@ void test('cleanup operation remains bounded after operation timeout', async () 
 	assert.deepEqual(await cleanup, { status: 'ok', value: 'cleaned' });
 });
 
+void test('cleanup operation can run after prior non-timeout aborts', async () => {
+	const abortReasons = [
+		'caller-aborted',
+		'replaced',
+		'stopped',
+		'unmounted',
+	] as const;
+
+	for (const abortReason of abortReasons) {
+		const fixture = harness();
+		const run = fixture.createRun({
+			timeouts: {
+				operationTimeoutMs: 50,
+				recoveryTimeoutMs: 80,
+				cleanupTimeoutMs: 25,
+			},
+		});
+		let cleanupSignal: AbortSignal | null = null;
+		let called = false;
+
+		run.abort(abortReason);
+
+		const result = await run.runOperation('cleanup', async (signal) => {
+			called = true;
+			cleanupSignal = signal;
+			assert.equal(signal.aborted, false);
+			return `cleaned-${abortReason}`;
+		});
+
+		assert.equal(called, true);
+		assert.equal(requireSignal(cleanupSignal).aborted, false);
+		assert.equal(fixture.timers[0]?.delayMs, 25);
+		assert.deepEqual(result, {
+			status: 'ok',
+			value: `cleaned-${abortReason}`,
+		});
+	}
+});
+
 void test('cleanup abort-like failure after operation timeout is thrown while cleanup is live', async () => {
 	const abortLikeErrors = [
 		Object.assign(new Error('The operation was aborted.'), {
