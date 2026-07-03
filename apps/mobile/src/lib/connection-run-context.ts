@@ -204,17 +204,18 @@ export function createConnectionRunContext(
 			once: true,
 		});
 
-		if (kind !== 'cleanup') {
-			abortFromRun = () => {
-				abortChild(abortReason ?? 'stopped', timeoutKind);
-			};
-			if (runController.signal.aborted) {
-				abortFromRun();
-			} else {
-				runController.signal.addEventListener('abort', abortFromRun, {
-					once: true,
-				});
+		abortFromRun = () => {
+			if (kind === 'cleanup' && abortReason === 'timeout') {
+				return;
 			}
+			abortChild(abortReason ?? 'stopped', timeoutKind);
+		};
+		if (runController.signal.aborted) {
+			abortFromRun();
+		} else {
+			runController.signal.addEventListener('abort', abortFromRun, {
+				once: true,
+			});
 		}
 
 		return {
@@ -233,6 +234,16 @@ export function createConnectionRunContext(
 				timeoutKind,
 			);
 		}
+	}
+
+	function getAbortErrorResult(
+		error: ConnectionRunAbortedError,
+	): ConnectionRunOperationResult<never> {
+		return {
+			status: 'aborted',
+			reason: error.reason,
+			timeoutKind: error.timeoutKind,
+		};
 	}
 
 	function classifyError(error: unknown): 'aborted' | 'failed' {
@@ -314,6 +325,9 @@ export function createConnectionRunContext(
 			}
 			return result;
 		} catch (error) {
+			if (error instanceof ConnectionRunAbortedError) {
+				return getAbortErrorResult(error);
+			}
 			if (classifyError(error) === 'aborted') {
 				return signal.aborted
 					? getSignalAbortResult(signal)
