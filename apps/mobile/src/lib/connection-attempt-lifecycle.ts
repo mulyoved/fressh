@@ -12,8 +12,6 @@ import {
 	type ConnectionRunTimeouts,
 } from './connection-run-context';
 
-export type ConnectionAttemptMode = 'auto-connect' | 'manual-diagnostic';
-
 export type ConnectionAttemptTimeouts = ConnectionRunTimeouts;
 
 type ConnectedConnectionAttemptOutcome = {
@@ -92,7 +90,6 @@ type ActiveShellReopenResult = {
 
 export type RunSavedEntryConnectionAttemptArgs = {
 	platformOS: string;
-	mode: ConnectionAttemptMode;
 	runContext: ConnectionRunContext;
 	recovery: SavedEntryTailscaleRecovery;
 	connectSavedEntry: (
@@ -379,14 +376,7 @@ export async function runSavedEntryConnectionAttempt(
 		switch (savedEntryOutcome.status) {
 			case 'connected': {
 				const outcome = mapSavedEntryResult(savedEntryOutcome.result);
-				if (outcome.status !== 'connected') return outcome;
-				if (args.mode !== 'manual-diagnostic') return outcome;
-				const cleanupOutcome = await cleanupConnectedOutcome({
-					runContext: args.runContext,
-					outcome,
-					cleanupConnected: args.cleanupConnected,
-				});
-				return cleanupOutcome ?? outcome;
+				return outcome;
 			}
 			case 'tmuxAttachFailed':
 				return mapSavedEntryResult(savedEntryOutcome.result);

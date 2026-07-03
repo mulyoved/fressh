@@ -142,6 +142,146 @@ void test('connectAndRememberConnection disconnects if save is abandoned after c
 	assert.equal(disconnectSignal instanceof AbortSignal, true);
 });
 
+void test('connectAndRememberConnection awaits in-flight abort disconnect before rejecting', async () => {
+	const connectAbortController = new AbortController();
+	const abortError = new Error('connect abandoned');
+	let saveStarted!: () => void;
+	let resolveSave!: () => void;
+	let disconnectStarted!: () => void;
+	let resolveDisconnect!: () => void;
+	const saveStartedPromise = new Promise<void>((resolve) => {
+		saveStarted = resolve;
+	});
+	const savePromise = new Promise<void>((resolve) => {
+		resolveSave = resolve;
+	});
+	const disconnectStartedPromise = new Promise<void>((resolve) => {
+		disconnectStarted = resolve;
+	});
+	const disconnectPromise = new Promise<void>((resolve) => {
+		resolveDisconnect = resolve;
+	});
+	let settled = false;
+
+	const resultPromise = connectAndRememberConnection({
+		connectionDetails,
+		resolvedSecurity: { type: 'key', privateKey: 'secret' },
+		abortSignalTimeoutMs: 1,
+		connectSignal: connectAbortController.signal,
+		connect: async () => ({
+			connectionId: 'conn-1',
+			disconnect: async () => {
+				disconnectStarted();
+				await disconnectPromise;
+			},
+		}),
+		saveConnection: async () => {
+			saveStarted();
+			await savePromise;
+		},
+	}).finally(() => {
+		settled = true;
+	});
+	void resultPromise.catch(() => {});
+
+	await saveStartedPromise;
+	connectAbortController.abort(abortError);
+	await disconnectStartedPromise;
+	resolveSave();
+	await new Promise((resolve) => setImmediate(resolve));
+
+	assert.equal(settled, false);
+	resolveDisconnect();
+	await assert.rejects(resultPromise, (error) => error === abortError);
+	assert.equal(settled, true);
+});
+
+void test('connectAndRememberConnection reports abort disconnect failure while save is pending', async () => {
+	const connectAbortController = new AbortController();
+	const disconnectError = new Error('disconnect failed');
+	let saveStarted!: () => void;
+	let reportedError: unknown;
+	const saveStartedPromise = new Promise<void>((resolve) => {
+		saveStarted = resolve;
+	});
+	const reportPromise = new Promise<void>((resolve) => {
+		void connectAndRememberConnection({
+			connectionDetails,
+			resolvedSecurity: { type: 'key', privateKey: 'secret' },
+			abortSignalTimeoutMs: 1,
+			connectSignal: connectAbortController.signal,
+			connect: async () => ({
+				connectionId: 'conn-1',
+				disconnect: async () => {
+					throw disconnectError;
+				},
+			}),
+			saveConnection: async () => {
+				saveStarted();
+				return new Promise(() => {});
+			},
+			onDisconnectAfterAbortFailure: (error) => {
+				reportedError = error;
+				resolve();
+			},
+		});
+	});
+
+	await saveStartedPromise;
+	connectAbortController.abort();
+	await reportPromise;
+
+	assert.equal(reportedError, disconnectError);
+});
+
+void test('connectAndRememberConnection preserves abort reason after rejected in-flight disconnect', async () => {
+	const connectAbortController = new AbortController();
+	const abortError = new Error('connect abandoned');
+	const disconnectError = new Error('disconnect failed');
+	let saveStarted!: () => void;
+	let resolveSave!: () => void;
+	let disconnectCalls = 0;
+	let reportCalls = 0;
+	const saveStartedPromise = new Promise<void>((resolve) => {
+		saveStarted = resolve;
+	});
+	const savePromise = new Promise<void>((resolve) => {
+		resolveSave = resolve;
+	});
+
+	const resultPromise = connectAndRememberConnection({
+		connectionDetails,
+		resolvedSecurity: { type: 'key', privateKey: 'secret' },
+		abortSignalTimeoutMs: 1,
+		connectSignal: connectAbortController.signal,
+		connect: async () => ({
+			connectionId: 'conn-1',
+			disconnect: async () => {
+				disconnectCalls += 1;
+				throw disconnectError;
+			},
+		}),
+		saveConnection: async () => {
+			saveStarted();
+			await savePromise;
+		},
+		onDisconnectAfterAbortFailure: (error) => {
+			assert.equal(error, disconnectError);
+			reportCalls += 1;
+		},
+	});
+	void resultPromise.catch(() => {});
+
+	await saveStartedPromise;
+	connectAbortController.abort(abortError);
+	await new Promise((resolve) => setImmediate(resolve));
+	resolveSave();
+
+	await assert.rejects(resultPromise, (error) => error === abortError);
+	assert.equal(disconnectCalls, 1);
+	assert.equal(reportCalls, 1);
+});
+
 void test('connectAndRememberConnection rejects if save resolves after abort', async () => {
 	const connectAbortController = new AbortController();
 	const abortError = new Error('connect abandoned');
@@ -166,6 +306,65 @@ void test('connectAndRememberConnection rejects if save resolves after abort', a
 		(error) => error === abortError,
 	);
 
+	assert.equal(disconnectCalls, 1);
+});
+
+void test('connectAndRememberConnection handles aborted connect signal without reason', async () => {
+	let saveStarted!: () => void;
+	let resolveSave!: () => void;
+	const saveStartedPromise = new Promise<void>((resolve) => {
+		saveStarted = resolve;
+	});
+	const savePromise = new Promise<void>((resolve) => {
+		resolveSave = resolve;
+	});
+	let disconnectCalls = 0;
+	const listeners = new Set<() => void>();
+	const connectSignal = {
+		aborted: false,
+		reason: undefined,
+		addEventListener: (_type: string, listener: EventListenerOrEventListenerObject) => {
+			listeners.add(listener as () => void);
+		},
+		removeEventListener: (
+			_type: string,
+			listener: EventListenerOrEventListenerObject,
+		) => {
+			listeners.delete(listener as () => void);
+		},
+	} as AbortSignal;
+	const abortWithoutReason = () => {
+		Object.assign(connectSignal, { aborted: true });
+		for (const listener of listeners) listener();
+	};
+
+	const resultPromise = connectAndRememberConnection({
+		connectionDetails,
+		resolvedSecurity: { type: 'key', privateKey: 'secret' },
+		abortSignalTimeoutMs: 1,
+		connectSignal,
+		connect: async () => ({
+			connectionId: 'conn-1',
+			disconnect: async () => {
+				disconnectCalls += 1;
+			},
+		}),
+		saveConnection: async () => {
+			saveStarted();
+			await savePromise;
+		},
+	});
+	void resultPromise.catch(() => {});
+
+	await saveStartedPromise;
+	abortWithoutReason();
+	resolveSave();
+
+	await assert.rejects(
+		resultPromise,
+		(error) =>
+			error instanceof Error && error.message === 'SSH connect aborted',
+	);
 	assert.equal(disconnectCalls, 1);
 });
 

@@ -130,7 +130,6 @@ void test('saved-entry lifecycle returns connected outcome and passes initial ph
 
 	const outcome = await runSavedEntryConnectionAttempt({
 		platformOS: 'android',
-		mode: 'auto-connect',
 		runContext,
 		recovery: readyRecovery(),
 		connectSavedEntry: async ({ phase }) => {
@@ -154,7 +153,6 @@ void test('saved-entry lifecycle maps Tailscale readiness block and does not con
 
 	const outcome = await runSavedEntryConnectionAttempt({
 		platformOS: 'android',
-		mode: 'manual-diagnostic',
 		runContext,
 		recovery: {
 			ensureReady: async () => ({
@@ -184,7 +182,6 @@ void test('saved-entry lifecycle maps tmux attach failure metadata', async () =>
 
 	const outcome = await runSavedEntryConnectionAttempt({
 		platformOS: 'android',
-		mode: 'auto-connect',
 		runContext,
 		recovery: readyRecovery(),
 		connectSavedEntry: async () => tmuxAttachFailedResult(),
@@ -208,7 +205,6 @@ void test('saved-entry lifecycle treats readiness abort errors as failures when 
 
 	const outcome = await runSavedEntryConnectionAttempt({
 		platformOS: 'android',
-		mode: 'auto-connect',
 		runContext,
 		recovery: {
 			ensureReady: async () => {
@@ -238,7 +234,6 @@ void test('saved-entry lifecycle retries after Tailscale recovery', async () => 
 
 	const outcome = await runSavedEntryConnectionAttempt({
 		platformOS: 'android',
-		mode: 'auto-connect',
 		runContext,
 		recovery: readyRecovery({
 			afterFailure: {
@@ -270,7 +265,6 @@ void test('saved-entry lifecycle maps non-network recovery failure as non-recove
 
 	const outcome = await runSavedEntryConnectionAttempt({
 		platformOS: 'android',
-		mode: 'auto-connect',
 		runContext,
 		recovery: readyRecovery({
 			afterFailure: {
@@ -300,7 +294,6 @@ void test('saved-entry lifecycle preserves Tailscale attention on recovery failu
 
 	const outcome = await runSavedEntryConnectionAttempt({
 		platformOS: 'android',
-		mode: 'auto-connect',
 		runContext,
 		recovery: readyRecovery({
 			afterFailure: {
@@ -329,7 +322,6 @@ void test('saved-entry lifecycle maps retry failure as recoverable with attentio
 
 	const outcome = await runSavedEntryConnectionAttempt({
 		platformOS: 'android',
-		mode: 'auto-connect',
 		runContext,
 		recovery: readyRecovery({
 			afterFailure: {
@@ -360,7 +352,6 @@ void test('saved-entry lifecycle treats dependency abort errors as failures when
 
 	const outcome = await runSavedEntryConnectionAttempt({
 		platformOS: 'android',
-		mode: 'auto-connect',
 		runContext,
 		recovery: readyRecovery(),
 		shouldRecoverAfterFailure: () => false,
@@ -383,7 +374,6 @@ void test('saved-entry lifecycle maps operation timeout', async () => {
 
 	const outcomePromise = runSavedEntryConnectionAttempt({
 		platformOS: 'android',
-		mode: 'auto-connect',
 		runContext,
 		recovery: readyRecovery(),
 		connectSavedEntry: async () =>
@@ -410,7 +400,6 @@ void test('saved-entry lifecycle cleans up success that arrives after operation 
 
 	const outcomePromise = runSavedEntryConnectionAttempt({
 		platformOS: 'android',
-		mode: 'auto-connect',
 		runContext,
 		recovery: readyRecovery(),
 		connectSavedEntry: async () => connect.promise,
@@ -451,7 +440,6 @@ void test('saved-entry timeout late cleanup keeps deadline after run finish', as
 
 	const outcomePromise = runSavedEntryConnectionAttempt({
 		platformOS: 'android',
-		mode: 'auto-connect',
 		runContext,
 		recovery: readyRecovery(),
 		connectSavedEntry: async () => connect.promise,
@@ -502,7 +490,6 @@ void test('saved-entry lifecycle cleans up stale late success', async () => {
 
 	const outcomePromise = runSavedEntryConnectionAttempt({
 		platformOS: 'android',
-		mode: 'auto-connect',
 		runContext,
 		recovery: readyRecovery(),
 		connectSavedEntry: async () => connect.promise,
@@ -537,7 +524,6 @@ void test('saved-entry lifecycle preserves stale outcome when stale cleanup fail
 
 	const outcomePromise = runSavedEntryConnectionAttempt({
 		platformOS: 'android',
-		mode: 'auto-connect',
 		runContext,
 		recovery: readyRecovery(),
 		connectSavedEntry: async () => connect.promise,
@@ -572,7 +558,6 @@ void test('saved-entry lifecycle ignores late cleanup failure reporter errors', 
 
 	const outcomePromise = runSavedEntryConnectionAttempt({
 		platformOS: 'android',
-		mode: 'auto-connect',
 		runContext,
 		recovery: readyRecovery(),
 		connectSavedEntry: async () => connect.promise,
@@ -591,31 +576,6 @@ void test('saved-entry lifecycle ignores late cleanup failure reporter errors', 
 	assert.deepEqual(await outcomePromise, {
 		status: 'aborted',
 		reason: 'stale-run',
-	});
-});
-
-void test('manual diagnostic mode returns cleanup failure with prior outcome', async () => {
-	const { runContext } = runHarness();
-	const cleanupError = new Error('disconnect failed');
-
-	const outcome = await runSavedEntryConnectionAttempt({
-		platformOS: 'android',
-		mode: 'manual-diagnostic',
-		runContext,
-		recovery: readyRecovery(),
-		connectSavedEntry: async () => connectedResult(),
-		cleanupConnected: async () => {
-			throw cleanupError;
-		},
-	});
-
-	assert.equal(outcome.status, 'cleanupFailed');
-	if (outcome.status !== 'cleanupFailed') return;
-	assert.equal(outcome.error, cleanupError);
-	assert.deepEqual(outcome.priorOutcome, {
-		status: 'connected',
-		connectionId: 'conn-1',
-		channelId: 7,
 	});
 });
 

@@ -35,6 +35,7 @@ export async function connectAndRememberConnection<
 	abortSignal?: AbortSignal;
 	connectSignal?: AbortSignal;
 	resolvedSecurity: TSecurity;
+	onDisconnectAfterAbortFailure?: (error: unknown) => void;
 }): Promise<{
 	sshConnection: TResult;
 	storedConnectionId: string;
@@ -50,18 +51,28 @@ export async function connectAndRememberConnection<
 			resolvedSecurity: args.resolvedSecurity,
 		});
 
-	let disconnectStarted = false;
-	const disconnectAfterConnect = async () => {
-		if (disconnectStarted) {
+	let disconnectPromise: Promise<void> | undefined;
+	let disconnectAfterAbortFailureReported = false;
+	const reportDisconnectAfterAbortFailure = (error: unknown) => {
+		if (disconnectAfterAbortFailureReported) {
 			return;
 		}
-		disconnectStarted = true;
-		await sshConnection.disconnect?.({
-			signal: AbortSignalTimeout(args.abortSignalTimeoutMs),
-		});
+		disconnectAfterAbortFailureReported = true;
+		args.onDisconnectAfterAbortFailure?.(error);
+	};
+	const disconnectAfterConnect = async () => {
+		if (!disconnectPromise) {
+			disconnectPromise =
+				sshConnection.disconnect?.({
+					signal: AbortSignalTimeout(args.abortSignalTimeoutMs),
+				}) ?? Promise.resolve();
+		}
+		await disconnectPromise;
 	};
 	const disconnectAfterAbort = () => {
-		void disconnectAfterConnect().catch(() => {});
+		void disconnectAfterConnect().catch((error) => {
+			reportDisconnectAfterAbortFailure(error);
+		});
 	};
 	connectSignal.addEventListener('abort', disconnectAfterAbort, {
 		once: true,
@@ -71,34 +82,49 @@ export async function connectAndRememberConnection<
 	});
 
 	const storedConnectionId = getStoredConnectionId(args.connectionDetails);
-	try {
-		if (connectSignal.aborted || args.abortSignal?.aborted) {
-			await disconnectAfterConnect();
-			throw (
-				(connectSignal.aborted ? connectSignal.reason : undefined) ??
-				(args.abortSignal?.aborted ? args.abortSignal.reason : undefined) ??
-				new Error('SSH connect aborted')
-			);
+	const getAbortReason = () => {
+		if (connectSignal.aborted) {
+			return connectSignal.reason ?? new Error('SSH connect aborted');
 		}
+		if (args.abortSignal?.aborted) {
+			return args.abortSignal.reason ?? new Error('SSH connect aborted');
+		}
+		return null;
+	};
+	const throwIfAbortedAfterConnect = async () => {
+		const abortReason = getAbortReason();
+		if (abortReason === null) {
+			return;
+		}
+		try {
+			await disconnectAfterConnect();
+		} catch (error) {
+			reportDisconnectAfterAbortFailure(error);
+		}
+		throw abortReason;
+	};
+	try {
+		await throwIfAbortedAfterConnect();
 		await args.saveConnection({
 			label: `${args.connectionDetails.username}@${args.connectionDetails.host}:${args.connectionDetails.port}`,
 			details: args.connectionDetails,
 			priority: 0,
 		});
-		if (connectSignal.aborted || args.abortSignal?.aborted) {
-			await disconnectAfterConnect();
-			throw (
-				(connectSignal.aborted ? connectSignal.reason : undefined) ??
-				(args.abortSignal?.aborted ? args.abortSignal.reason : undefined) ??
-				new Error('SSH connect aborted')
-			);
-		}
+		await throwIfAbortedAfterConnect();
 		return {
 			sshConnection,
 			storedConnectionId,
 		};
 	} catch (error) {
-		await disconnectAfterConnect();
+		try {
+			await disconnectAfterConnect();
+		} catch (cleanupError) {
+			if (getAbortReason() !== null) {
+				reportDisconnectAfterAbortFailure(cleanupError);
+				throw error;
+			}
+			throw cleanupError;
+		}
 		throw error;
 	} finally {
 		connectSignal.removeEventListener('abort', disconnectAfterAbort);

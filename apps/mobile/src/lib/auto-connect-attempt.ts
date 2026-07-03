@@ -508,7 +508,6 @@ export async function attemptAutoConnectSource({
 
 	const result = await runSavedEntryConnectionAttempt({
 		platformOS,
-		mode: 'auto-connect',
 		runContext,
 		recovery: tracedRecovery,
 		connectSavedEntry: async ({ phase, signal }) =>

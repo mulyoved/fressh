@@ -168,6 +168,12 @@ export async function connectAndOpenShell(args: {
 				connectSignal,
 				resolvedSecurity: security,
 				saveConnection,
+				onDisconnectAfterAbortFailure: (error) => {
+					logger.warn(
+						'Failed to disconnect aborted SSH connection after connect',
+						error,
+					);
+				},
 			}),
 		abortSignal,
 		afterConnectAbort: async (context) => {
