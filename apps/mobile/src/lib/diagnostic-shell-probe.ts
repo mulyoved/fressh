@@ -106,6 +106,16 @@ export async function runDiagnosticShellProbe(args: {
 		}
 	};
 	const storedConnectionId = getStoredConnectionId(connectionDetails);
+	const combineWithProbeTimeout = (signal: AbortSignal | undefined) =>
+		signal
+			? AbortSignalAny([signal, AbortSignalTimeout(abortSignalTimeoutMs)])
+			: undefined;
+	const lifecycleOperationSignals = operationSignals
+		? {
+				connect: combineWithProbeTimeout(operationSignals.connect),
+				shell: combineWithProbeTimeout(operationSignals.shell),
+			}
+		: undefined;
 
 	const cleanupDiagnosticConnection = async (sshConnection: SshConnection) => {
 		const connectedIdentity = {
@@ -152,7 +162,7 @@ export async function runDiagnosticShellProbe(args: {
 		registerInStore: false,
 		traceEvent,
 		onConnectionProgress,
-		operationSignals,
+		operationSignals: lifecycleOperationSignals,
 		connectConnection: async ({ onConnectionProgress, connectSignal }) => {
 			const sshConnection = await connectWithoutRemembering({
 				connectionDetails,

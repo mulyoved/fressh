@@ -15,6 +15,10 @@ import {
 	manualDiagnosticEvents,
 	savedEntryEvents,
 } from './connection-diagnostics/events';
+import {
+	createConnectionRunContext,
+	type ConnectionRunContext,
+} from './connection-run-context';
 import { type SavedConnectionEntry } from './connection-utils';
 import {
 	isDiagnosticShellCleanupError,
@@ -46,6 +50,7 @@ export type ManualConnectionDiagnosticArgs = {
 		connectionDetails: InputConnectionDetails;
 		resolvedSecurity: ResolvedKeySecurity;
 		trace: ConnectionDiagnosticTraceHandle;
+		signal: AbortSignal;
 	}) => Promise<DiagnosticShellProbeResult>;
 	recovery: SavedEntryTailscaleRecovery;
 	formatPrompt?: typeof formatConnectionDiagnosticPrompt;
@@ -53,37 +58,6 @@ export type ManualConnectionDiagnosticArgs = {
 };
 
 const DEFAULT_MANUAL_DIAGNOSTIC_TIMEOUT_MS = 60_000;
-
-class ManualDiagnosticTimeoutError extends Error {
-	constructor(readonly timeoutMs: number) {
-		super(`Connection diagnostic timed out after ${timeoutMs}ms`);
-		this.name = 'ManualDiagnosticTimeoutError';
-	}
-}
-
-async function withManualDiagnosticTimeout<T>(
-	promise: Promise<T>,
-	timeoutMs: number,
-): Promise<T> {
-	let timeoutId: ReturnType<typeof setTimeout> | null = null;
-	try {
-		return await Promise.race([
-			promise,
-			new Promise<never>((_, reject) => {
-				timeoutId = setTimeout(() => {
-					timeoutId = null;
-					reject(new ManualDiagnosticTimeoutError(timeoutMs));
-				}, timeoutMs);
-				const maybeNodeTimer = timeoutId as ReturnType<typeof setTimeout> & {
-					unref?: () => void;
-				};
-				maybeNodeTimer.unref?.();
-			}),
-		]);
-	} finally {
-		if (timeoutId !== null) clearTimeout(timeoutId);
-	}
-}
 
 function promptForTrace(
 	trace: ConnectionDiagnosticTrace,
@@ -132,12 +106,19 @@ type ManualConnectionDiagnosticRunnerState = {
 type ManualConnectionDiagnosticAttemptContext = {
 	setHandle: (next: ConnectionDiagnosticTraceHandle) => void;
 	ensureCurrentRun: () => void;
+	runContext: ConnectionRunContext;
+	signal: AbortSignal;
 };
 
 async function runManualConnectionDiagnosticAttempt(
 	args: ManualConnectionDiagnosticArgs,
 	state: ManualConnectionDiagnosticRunnerState,
-	{ setHandle, ensureCurrentRun }: ManualConnectionDiagnosticAttemptContext,
+	{
+		setHandle,
+		ensureCurrentRun,
+		runContext,
+		signal,
+	}: ManualConnectionDiagnosticAttemptContext,
 ): Promise<ManualConnectionDiagnosticResult> {
 	const traceHandle = args.recorder.startTrace({
 		trigger: 'manual-diagnostic',
@@ -204,6 +185,7 @@ async function runManualConnectionDiagnosticAttempt(
 		phase: SavedEntryConnectAttemptPhase,
 	) => {
 		try {
+			runContext.throwIfAborted();
 			return await Promise.resolve()
 				.then(ensureCurrentRun)
 				.then(() =>
@@ -211,6 +193,7 @@ async function runManualConnectionDiagnosticAttempt(
 						connectionDetails: normalizedDetails,
 						resolvedSecurity,
 						trace: traceHandle,
+						signal,
 					}),
 				);
 		} catch (error) {
@@ -233,8 +216,11 @@ async function runManualConnectionDiagnosticAttempt(
 		platformOS: args.appState.platformOS,
 		recovery: tracedRecovery,
 		connectSavedEntry: tracedConnectSavedEntry,
-		shouldRecoverAfterFailure: (error) => !isDiagnosticShellCleanupError(error),
+		shouldRecoverAfterFailure: (error) =>
+			runContext.abortReason === null && !isDiagnosticShellCleanupError(error),
 	});
+	runContext.throwIfAborted();
+	ensureCurrentRun();
 
 	switch (result.status) {
 		case 'connected':
@@ -292,28 +278,44 @@ async function runManualConnectionDiagnosticWithState(
 			throw new Error('Connection diagnostic run is no longer active');
 		}
 	};
+	const timeoutMs = args.timeoutMs ?? DEFAULT_MANUAL_DIAGNOSTIC_TIMEOUT_MS;
+	const runContext = createConnectionRunContext({
+		callerSignal: undefined,
+		isCurrent: () => state.activeRunToken === runToken,
+		timeouts: {
+			operationTimeoutMs: timeoutMs,
+		},
+	});
 
 	try {
-		return await withManualDiagnosticTimeout(
+		const operation = await runContext.runOperation('operation', (signal) =>
 			runManualConnectionDiagnosticAttempt(args, state, {
 				setHandle: (next) => {
 					handle = next;
 				},
 				ensureCurrentRun,
+				runContext,
+				signal,
 			}),
-			args.timeoutMs ?? DEFAULT_MANUAL_DIAGNOSTIC_TIMEOUT_MS,
 		);
+		if (operation.status === 'aborted' && operation.reason === 'timeout') {
+			throw new Error(`Connection diagnostic timed out after ${timeoutMs}ms`);
+		}
+		if (operation.status === 'aborted') {
+			throw new Error(`Connection diagnostic aborted: ${operation.reason}`);
+		}
+		return operation.value;
 	} catch (error) {
 		if (!handle) {
 			throw error;
 		}
-		const isTimeout = error instanceof ManualDiagnosticTimeoutError;
+		const isTimeout = runContext.abortReason === 'timeout';
 		if (isTimeout) {
 			safeTraceEvent(
 				handle,
 				manualDiagnosticEvents.timeout({
-					timeoutMs: error.timeoutMs,
-					message: error.message,
+					timeoutMs,
+					message: `Connection diagnostic timed out after ${timeoutMs}ms`,
 				}),
 			);
 			return finish(handle, 'failed', args);
@@ -327,6 +329,7 @@ async function runManualConnectionDiagnosticWithState(
 		);
 		return finish(handle, 'failed', args);
 	} finally {
+		runContext.finish();
 		if (state.activeRunToken === runToken) {
 			state.activeTraceHandle = null;
 			state.activeRunToken = null;

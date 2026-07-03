@@ -63,12 +63,21 @@ export async function runConnectionDebugCommand(
 				return null;
 			}
 		},
-		connectSavedEntry: ({ connectionDetails, resolvedSecurity, trace }) =>
+		connectSavedEntry: ({
+			connectionDetails,
+			resolvedSecurity,
+			trace,
+			signal,
+		}) =>
 			args.runDiagnosticShellProbe({
 				connectionDetails,
 				resolvedSecurity,
 				trace,
 				connect: args.connect,
+				operationSignals: {
+					connect: signal,
+					shell: signal,
+				},
 			}),
 		recovery: args.recovery,
 	});

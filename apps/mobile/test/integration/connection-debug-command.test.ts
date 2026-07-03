@@ -194,6 +194,7 @@ void test('debug command wires shell dependencies into probe and delivery', asyn
 			resolvedSecurity,
 			trace,
 			connect: receivedConnect,
+			operationSignals,
 		}) => {
 			assert.equal(connectionDetails.host, 'dev.tailnet.ts.net');
 			assert.deepEqual(resolvedSecurity, {
@@ -201,6 +202,9 @@ void test('debug command wires shell dependencies into probe and delivery', asyn
 				privateKey: 'private-key',
 			});
 			assert.equal(receivedConnect, connect);
+			assert.ok(operationSignals?.connect instanceof AbortSignal);
+			assert.equal(operationSignals.shell, operationSignals.connect);
+			assert.equal(operationSignals.cleanup, undefined);
 			assert.ok(trace);
 			trace.event(
 				sshEvents.connectProgress({
@@ -286,6 +290,92 @@ void test('debug command wires logger, clipboard, and alert dependencies', async
 		'closeMenu',
 		'warn:Connection diagnostic key resolution failed:missing key',
 		'copy:true',
+		'alert:Connection debug prompt copied',
+	]);
+});
+
+void test('debug command forwards manual diagnostic signal into probe operation signals', async () => {
+	const calls: string[] = [];
+	const recorder = createConnectionDiagnosticRecorder({ now: () => 10 });
+	const sentinelSignal = new AbortController().signal;
+
+	const result = await runConnectionDebugCommand({
+		recorder,
+		appState: {
+			platformOS: 'android',
+			isAutoConnecting: false,
+			isReconnecting: false,
+		},
+		closeMenu: () => {
+			calls.push('closeMenu');
+		},
+		loadLatestSavedConnection: async () => {
+			throw new Error('default runner should not load saved entries');
+		},
+		resolvePrivateKey: async () => {
+			throw new Error('default runner should not resolve keys');
+		},
+		runDiagnosticShellProbe: async ({ operationSignals }) => {
+			assert.equal(operationSignals?.connect, sentinelSignal);
+			assert.equal(operationSignals?.shell, sentinelSignal);
+			assert.equal(operationSignals?.cleanup, undefined);
+			calls.push('probe');
+			return {
+				status: 'connected',
+				connectionId: 'conn-1',
+				channelId: 7,
+			};
+		},
+		connect: async () => ({ connectionId: 'conn-1' }) as never,
+		recovery: readyRecovery,
+		allowTerminalPaste: false,
+		pasteIntoTerminal: () => {
+			throw new Error('paste should not run');
+		},
+		copyToClipboard: async (prompt) => {
+			calls.push(`copy:${prompt}`);
+		},
+		showAlert: (title) => {
+			calls.push(`alert:${title}`);
+		},
+		logger: {
+			warn: (message) => {
+				calls.push(`warn:${message}`);
+			},
+		},
+		manualDiagnosticRunner: {
+			run: async (args) => {
+				const trace = args.recorder.startTrace({
+					trigger: 'manual-diagnostic',
+					reason: 'command-menu',
+				});
+				await args.connectSavedEntry({
+					connectionDetails: {
+						...savedEntry.value,
+						useTmux: true,
+						tmuxSessionName: 'main',
+						autoConnect: true,
+					},
+					resolvedSecurity: { type: 'key', privateKey: 'private-key' },
+					trace,
+					signal: sentinelSignal,
+				});
+				trace.finish('connected');
+				return {
+					status: 'connected',
+					prompt: 'signal prompt',
+					trace: trace.trace,
+				};
+			},
+		},
+	});
+
+	assert.equal(result.diagnostic.status, 'connected');
+	assert.deepEqual(result.delivery, { status: 'copied' });
+	assert.deepEqual(calls, [
+		'closeMenu',
+		'probe',
+		'copy:signal prompt',
 		'alert:Connection debug prompt copied',
 	]);
 });

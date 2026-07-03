@@ -382,10 +382,7 @@ void test('manual diagnostic records tmux attach failures in the prompt', async 
 	});
 
 	assert.equal(result.status, 'failed');
-	assert.match(
-		result.prompt,
-		/manual-diagnostic\.tmux-attach-failed/,
-	);
+	assert.match(result.prompt, /manual-diagnostic\.tmux-attach-failed/);
 	assert.match(result.prompt, /missing session/);
 	assert.match(result.prompt, /tmuxSessionName=main/);
 	assert.doesNotMatch(result.prompt, /auto-connect\./);
@@ -468,6 +465,143 @@ void test('manual diagnostic timeout releases single-flight state', async () => 
 	});
 
 	assert.equal(next.status, 'skipped');
+});
+
+void test('manual diagnostic timeout aborts underlying saved-entry work', async () => {
+	const recorder = createConnectionDiagnosticRecorder({ now: () => 10 });
+	const observed = { signal: null as AbortSignal | null };
+	let resolveConnectStarted: () => void = () => {};
+	const connectStarted = new Promise<void>((resolve) => {
+		resolveConnectStarted = resolve;
+	});
+
+	const resultPromise = createManualConnectionDiagnosticRunner().run({
+		recorder,
+		appState: {
+			platformOS: 'android',
+			isAutoConnecting: false,
+			isReconnecting: false,
+		},
+		loadLatestSavedConnection: async () => savedEntry,
+		resolveKeySecurity: async () => ({ type: 'key', privateKey: 'secret' }),
+		connectSavedEntry: async ({ signal }) => {
+			observed.signal = signal;
+			resolveConnectStarted();
+			return new Promise<DiagnosticShellProbeResult>(() => undefined);
+		},
+		recovery: readyRecovery,
+		timeoutMs: 5,
+	});
+
+	await connectStarted;
+	const result = await resultPromise;
+
+	assert.equal(result.status, 'failed');
+	assert.equal(observed.signal?.aborted, true);
+	assert.match(result.prompt, /timed out/i);
+});
+
+void test('manual diagnostic timeout does not recover after abort-aware connect rejects', async () => {
+	const recorder = createConnectionDiagnosticRecorder({ now: () => 10 });
+	let recoveryCalls = 0;
+	let resolveConnectStarted: () => void = () => {};
+	const connectStarted = new Promise<void>((resolve) => {
+		resolveConnectStarted = resolve;
+	});
+
+	const resultPromise = createManualConnectionDiagnosticRunner().run({
+		recorder,
+		appState: {
+			platformOS: 'android',
+			isAutoConnecting: false,
+			isReconnecting: false,
+		},
+		loadLatestSavedConnection: async () => savedEntry,
+		resolveKeySecurity: async () => ({ type: 'key', privateKey: 'secret' }),
+		connectSavedEntry: async ({ signal }) => {
+			resolveConnectStarted();
+			return await new Promise<DiagnosticShellProbeResult>(
+				(_resolve, reject) => {
+					signal.addEventListener(
+						'abort',
+						() => {
+							reject(new Error('connect aborted'));
+						},
+						{ once: true },
+					);
+				},
+			);
+		},
+		recovery: {
+			...readyRecovery,
+			recoverAfterFailure: async () => {
+				recoveryCalls += 1;
+				return {
+					kind: 'recovered',
+					attempted: true,
+					networkLikeFailure: true,
+					available: true,
+				};
+			},
+		},
+		timeoutMs: 5,
+	});
+
+	await connectStarted;
+	const result = await resultPromise;
+	await new Promise((resolve) => setTimeout(resolve, 0));
+
+	assert.equal(result.status, 'failed');
+	assert.match(result.prompt, /timed out/i);
+	assert.equal(recoveryCalls, 0);
+});
+
+void test('manual diagnostic ignores late connected result after timeout', async () => {
+	const recorder = createConnectionDiagnosticRecorder({ now: () => 10 });
+	const observed = { signal: null as AbortSignal | null };
+	let resolveConnectStarted: () => void = () => {};
+	let resolveConnect: (result: DiagnosticShellProbeResult) => void = () => {};
+	const connectStarted = new Promise<void>((resolve) => {
+		resolveConnectStarted = resolve;
+	});
+
+	const resultPromise = createManualConnectionDiagnosticRunner().run({
+		recorder,
+		appState: {
+			platformOS: 'android',
+			isAutoConnecting: false,
+			isReconnecting: false,
+		},
+		loadLatestSavedConnection: async () => savedEntry,
+		resolveKeySecurity: async () => ({ type: 'key', privateKey: 'secret' }),
+		connectSavedEntry: async ({ signal }) => {
+			observed.signal = signal;
+			resolveConnectStarted();
+			return await new Promise<DiagnosticShellProbeResult>((resolve) => {
+				resolveConnect = resolve;
+			});
+		},
+		recovery: readyRecovery,
+		timeoutMs: 5,
+	});
+
+	await connectStarted;
+	const result = await resultPromise;
+	resolveConnect({
+		status: 'connected',
+		connectionId: 'conn-1',
+		channelId: 7,
+	});
+	await new Promise((resolve) => setTimeout(resolve, 0));
+
+	assert.equal(result.status, 'failed');
+	assert.equal(observed.signal?.aborted, true);
+	assert.match(result.prompt, /timed out/i);
+	assert.equal(recorder.getLatestTrace()?.status, 'failed');
+	assert.match(
+		JSON.stringify(recorder.getLatestTrace()?.events),
+		/manual-diagnostic\.timeout/,
+	);
 });
 
 void test('manual diagnostic start trace failure does not wedge single-flight state', async () => {
