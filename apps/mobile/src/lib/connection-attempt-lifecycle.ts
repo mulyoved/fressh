@@ -64,7 +64,7 @@ export type ConnectionAttemptOutcome =
 
 export type ActiveShellReopenAttemptOutcome = Exclude<
 	ConnectionAttemptOutcome,
-	{ status: 'blocked' | 'tmuxAttachFailed' }
+	{ status: 'blocked' | 'cleanupFailed' | 'tmuxAttachFailed' }
 >;
 
 export type SavedEntryConnectionAttemptOutcome = ConnectionAttemptOutcome;
@@ -98,6 +98,7 @@ export type RunSavedEntryConnectionAttemptArgs = {
 		outcome: ConnectedConnectionAttemptOutcome,
 		signal: AbortSignal,
 	) => Promise<void>;
+	onLateCleanupFailure?: (outcome: ConnectionAttemptOutcome) => void;
 };
 
 export type RunActiveShellReopenAttemptArgs = {
@@ -109,6 +110,7 @@ export type RunActiveShellReopenAttemptArgs = {
 		result: ActiveShellReopenResult,
 		signal: AbortSignal,
 	) => Promise<void>;
+	onLateCleanupFailure?: (outcome: ConnectionAttemptOutcome) => void;
 };
 
 class ConnectionAttemptOutcomeError extends Error {
@@ -243,6 +245,7 @@ async function cleanupLateSavedEntryConnected({
 	lateConnected,
 	cleanupConnected,
 	cleanupStarted,
+	onLateCleanupFailure,
 }: {
 	runContext: ConnectionRunContext;
 	lateConnected: ConnectedConnectionAttemptOutcome | null;
@@ -251,15 +254,19 @@ async function cleanupLateSavedEntryConnected({
 		signal: AbortSignal,
 	) => Promise<void>;
 	cleanupStarted: () => boolean;
+	onLateCleanupFailure?: (outcome: ConnectionAttemptOutcome) => void;
 }) {
 	if (lateConnected === null || cleanupStarted()) {
 		return;
 	}
-	await cleanupConnectedOutcome({
+	const cleanupOutcome = await cleanupConnectedOutcome({
 		runContext,
 		outcome: lateConnected,
 		cleanupConnected,
 	});
+	if (cleanupOutcome !== null) {
+		onLateCleanupFailure?.(cleanupOutcome);
+	}
 }
 
 export async function runSavedEntryConnectionAttempt(
@@ -272,6 +279,7 @@ export async function runSavedEntryConnectionAttempt(
 			runContext: args.runContext,
 			lateConnected,
 			cleanupConnected: args.cleanupConnected,
+			onLateCleanupFailure: args.onLateCleanupFailure,
 			cleanupStarted: () => {
 				if (lateCleanupStarted) {
 					return true;
@@ -424,6 +432,7 @@ export async function runActiveShellReopenAttempt({
 	runContext,
 	startShell,
 	cleanupConnected,
+	onLateCleanupFailure,
 }: RunActiveShellReopenAttemptArgs): Promise<ActiveShellReopenAttemptOutcome> {
 	let lateConnected: ActiveShellReopenResult | null = null;
 	let lateCleanupStarted = false;
@@ -432,11 +441,14 @@ export async function runActiveShellReopenAttempt({
 			return;
 		}
 		lateCleanupStarted = true;
-		await cleanupActiveShellResult({
+		const cleanupOutcome = await cleanupActiveShellResult({
 			runContext,
 			result: lateConnected,
 			cleanupConnected,
 		});
+		if (cleanupOutcome !== null) {
+			onLateCleanupFailure?.(cleanupOutcome);
+		}
 	};
 	try {
 		const operation = await runContext.runOperation(

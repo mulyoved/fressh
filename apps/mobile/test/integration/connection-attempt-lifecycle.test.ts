@@ -447,6 +447,7 @@ void test('saved-entry timeout late cleanup keeps deadline after run finish', as
 	const cleanupStarted = deferred<void>();
 	let cleanupSignal: AbortSignal | null = null;
 	let cleanedOutcome: unknown = null;
+	let reportedCleanupFailure: unknown = null;
 
 	const outcomePromise = runSavedEntryConnectionAttempt({
 		platformOS: 'android',
@@ -459,6 +460,9 @@ void test('saved-entry timeout late cleanup keeps deadline after run finish', as
 			cleanupSignal = signal;
 			cleanupStarted.resolve();
 			await new Promise<void>(() => {});
+		},
+		onLateCleanupFailure: (outcome) => {
+			reportedCleanupFailure = outcome;
 		},
 	});
 	await flushPromises();
@@ -476,11 +480,16 @@ void test('saved-entry timeout late cleanup keeps deadline after run finish', as
 
 	assert.equal(requireSignal(cleanupSignal).aborted, false);
 	timers.at(-1)?.callback();
+	await flushPromises();
 	assert.equal(requireSignal(cleanupSignal).aborted, true);
 	assert.deepEqual(cleanedOutcome, {
 		status: 'connected',
 		connectionId: 'conn-1',
 		channelId: 7,
+	});
+	assert.deepEqual(reportedCleanupFailure, {
+		status: 'timedOut',
+		timeoutKind: 'cleanup',
 	});
 });
 
@@ -524,6 +533,7 @@ void test('saved-entry lifecycle preserves stale outcome when stale cleanup fail
 	const { runContext } = runHarness({ isCurrent: () => current });
 	const connect = deferred<SavedEntryConnectResult>();
 	let cleanupCount = 0;
+	let reportedCleanupFailure: unknown = null;
 
 	const outcomePromise = runSavedEntryConnectionAttempt({
 		platformOS: 'android',
@@ -534,6 +544,9 @@ void test('saved-entry lifecycle preserves stale outcome when stale cleanup fail
 		cleanupConnected: async () => {
 			cleanupCount += 1;
 			throw new Error('disconnect failed');
+		},
+		onLateCleanupFailure: (outcome) => {
+			reportedCleanupFailure = outcome;
 		},
 	});
 	await flushPromises();
@@ -546,6 +559,10 @@ void test('saved-entry lifecycle preserves stale outcome when stale cleanup fail
 		reason: 'stale-run',
 	});
 	assert.equal(cleanupCount, 1);
+	assert.equal(
+		(reportedCleanupFailure as { status?: unknown } | null)?.status,
+		'cleanupFailed',
+	);
 });
 
 void test('manual diagnostic mode returns cleanup failure with prior outcome', async () => {
@@ -673,6 +690,7 @@ void test('active shell timeout late cleanup keeps deadline after run finish', a
 	const cleanupStarted = deferred<void>();
 	let cleanupSignal: AbortSignal | null = null;
 	let cleanedShell: unknown = null;
+	let reportedCleanupFailure: unknown = null;
 
 	const outcomePromise = runActiveShellReopenAttempt({
 		runContext,
@@ -682,6 +700,9 @@ void test('active shell timeout late cleanup keeps deadline after run finish', a
 			cleanupSignal = signal;
 			cleanupStarted.resolve();
 			await new Promise<void>(() => {});
+		},
+		onLateCleanupFailure: (outcome) => {
+			reportedCleanupFailure = outcome;
 		},
 	});
 	await flushPromises();
@@ -703,6 +724,7 @@ void test('active shell timeout late cleanup keeps deadline after run finish', a
 
 	assert.equal(requireSignal(cleanupSignal).aborted, false);
 	timers.at(-1)?.callback();
+	await flushPromises();
 	assert.equal(requireSignal(cleanupSignal).aborted, true);
 	assert.equal(
 		(cleanedShell as { connectionId?: unknown } | null)?.connectionId,
@@ -713,6 +735,10 @@ void test('active shell timeout late cleanup keeps deadline after run finish', a
 		typeof (cleanedShell as { close?: unknown } | null)?.close,
 		'function',
 	);
+	assert.deepEqual(reportedCleanupFailure, {
+		status: 'timedOut',
+		timeoutKind: 'cleanup',
+	});
 });
 
 void test('active shell reopen cleans up stale late success', async () => {
@@ -768,6 +794,7 @@ void test('active shell reopen preserves stale outcome when stale cleanup fails'
 		close: () => Promise<void>;
 	}>();
 	let cleanupCount = 0;
+	let reportedCleanupFailure: unknown = null;
 
 	const outcomePromise = runActiveShellReopenAttempt({
 		runContext,
@@ -775,6 +802,9 @@ void test('active shell reopen preserves stale outcome when stale cleanup fails'
 		cleanupConnected: async () => {
 			cleanupCount += 1;
 			throw new Error('close failed');
+		},
+		onLateCleanupFailure: (outcome) => {
+			reportedCleanupFailure = outcome;
 		},
 	});
 	await flushPromises();
@@ -791,4 +821,8 @@ void test('active shell reopen preserves stale outcome when stale cleanup fails'
 		reason: 'stale-run',
 	});
 	assert.equal(cleanupCount, 1);
+	assert.equal(
+		(reportedCleanupFailure as { status?: unknown } | null)?.status,
+		'cleanupFailed',
+	);
 });

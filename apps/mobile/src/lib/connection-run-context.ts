@@ -110,7 +110,6 @@ export function createConnectionRunContext(
 	const runController = createAbortController();
 	const activeTimers = new Map<TimerHandle, ConnectionRunOperationKind>();
 	const activeScopeFinalizers = new Set<() => void>();
-	const activeCleanupScopeFinalizers = new Set<() => void>();
 	const activeCleanupRunAbortFinalizers = new Set<() => void>();
 	const activeCleanupAbortListeners = new Set<CleanupAbortListener>();
 	const timeouts = { ...defaultTimeouts, ...options.timeouts };
@@ -280,7 +279,6 @@ export function createConnectionRunContext(
 			}
 			finishedScope = true;
 			activeScopeFinalizers.delete(finishScope);
-			activeCleanupScopeFinalizers.delete(finishScope);
 			if (timer !== null) {
 				clearTrackedTimer(timer);
 				timer = null;
@@ -329,9 +327,7 @@ export function createConnectionRunContext(
 		controller.signal.addEventListener('abort', finishScope, {
 			once: true,
 		});
-		if (kind === 'cleanup') {
-			activeCleanupScopeFinalizers.add(finishScope);
-		} else {
+		if (kind !== 'cleanup') {
 			activeScopeFinalizers.add(finishScope);
 		}
 
@@ -483,7 +479,6 @@ export function createConnectionRunContext(
 			signal.removeEventListener('abort', abortResultListener);
 			abortResultListener = null;
 			activeScopeFinalizers.delete(detachAbortResultListener);
-			activeCleanupScopeFinalizers.delete(detachAbortResultListener);
 		};
 		const abortResult = new Promise<ConnectionRunOperationResult<never>>(
 			(resolve) => {
@@ -493,9 +488,7 @@ export function createConnectionRunContext(
 				signal.addEventListener('abort', abortResultListener, {
 					once: true,
 				});
-				if (kind === 'cleanup') {
-					activeCleanupScopeFinalizers.add(detachAbortResultListener);
-				} else {
+				if (kind !== 'cleanup') {
 					activeScopeFinalizers.add(detachAbortResultListener);
 				}
 			},
