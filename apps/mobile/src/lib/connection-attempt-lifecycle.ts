@@ -224,12 +224,12 @@ async function cleanupLateSavedEntryConnected(
 	if (lateConnected === null) {
 		return outcome;
 	}
-	const cleanupOutcome = await cleanupConnectedOutcome({
+	await cleanupConnectedOutcome({
 		runContext: args.runContext,
 		outcome: lateConnected,
 		cleanupConnected: args.cleanupConnected,
 	});
-	return cleanupOutcome ?? outcome;
+	return outcome;
 }
 
 export async function runSavedEntryConnectionAttempt(
@@ -371,12 +371,12 @@ export async function runActiveShellReopenAttempt({
 		if (operation.status === 'aborted') {
 			const outcome = mapAborted(operation);
 			if (lateConnected === null) return outcome;
-			const cleanupOutcome = await cleanupActiveShellResult({
+			await cleanupActiveShellResult({
 				runContext,
 				result: lateConnected,
 				cleanupConnected,
 			});
-			return cleanupOutcome ?? outcome;
+			return outcome;
 		}
 		return {
 			status: 'connected',

@@ -242,6 +242,35 @@ void test('saved-entry lifecycle cleans up stale late success', async () => {
 	assert.equal(cleanupCount, 1);
 });
 
+void test('saved-entry lifecycle preserves stale outcome when stale cleanup fails', async () => {
+	let current = true;
+	const { runContext } = runHarness({ isCurrent: () => current });
+	const connect = deferred<SavedEntryConnectResult>();
+	let cleanupCount = 0;
+
+	const outcomePromise = runSavedEntryConnectionAttempt({
+		platformOS: 'android',
+		mode: 'auto-connect',
+		runContext,
+		recovery: readyRecovery(),
+		connectSavedEntry: async () => connect.promise,
+		cleanupConnected: async () => {
+			cleanupCount += 1;
+			throw new Error('disconnect failed');
+		},
+	});
+	await flushPromises();
+
+	current = false;
+	connect.resolve(connectedResult());
+
+	assert.deepEqual(await outcomePromise, {
+		status: 'aborted',
+		reason: 'stale-run',
+	});
+	assert.equal(cleanupCount, 1);
+});
+
 void test('manual diagnostic mode returns cleanup failure with prior outcome', async () => {
 	const { runContext } = runHarness();
 	const cleanupError = new Error('disconnect failed');
@@ -302,6 +331,40 @@ void test('active shell reopen cleans up stale late success', async () => {
 		startShell: async () => shell.promise,
 		cleanupConnected: async () => {
 			cleanupCount += 1;
+		},
+	});
+	await flushPromises();
+
+	current = false;
+	shell.resolve({
+		connectionId: 'active-1',
+		channelId: 9,
+		close: async () => {},
+	});
+
+	assert.deepEqual(await outcomePromise, {
+		status: 'aborted',
+		reason: 'stale-run',
+	});
+	assert.equal(cleanupCount, 1);
+});
+
+void test('active shell reopen preserves stale outcome when stale cleanup fails', async () => {
+	let current = true;
+	const { runContext } = runHarness({ isCurrent: () => current });
+	const shell = deferred<{
+		connectionId: string;
+		channelId: number;
+		close: () => Promise<void>;
+	}>();
+	let cleanupCount = 0;
+
+	const outcomePromise = runActiveShellReopenAttempt({
+		runContext,
+		startShell: async () => shell.promise,
+		cleanupConnected: async () => {
+			cleanupCount += 1;
+			throw new Error('close failed');
 		},
 	});
 	await flushPromises();
