@@ -18,8 +18,9 @@ import { connectWithoutRemembering } from './ssh-connect-flow';
 import {
 	getSshShellLifecycleConnectionIdentity,
 	runSshShellLifecycle,
+	type SshShellLifecycleOperationSignals,
 } from './ssh-shell-lifecycle';
-import { AbortSignalTimeout } from './utils';
+import { AbortSignalAny, AbortSignalTimeout } from './utils';
 
 const logger = rootLogger.extend('DiagnosticShellProbe');
 const DEFAULT_CONNECT_TIMEOUT_MS = 5_000;
@@ -29,6 +30,11 @@ export type DiagnosticShellProbeResult = SavedEntryConnectResult;
 type ProbeTrace = {
 	event: (event: ConnectionDiagnosticEvent) => void;
 };
+
+type DiagnosticShellProbeOperationSignals =
+	SshShellLifecycleOperationSignals & {
+		cleanup?: AbortSignal;
+	};
 
 export class DiagnosticShellCleanupError extends Error {
 	constructor(readonly cleanupError: unknown) {
@@ -81,6 +87,7 @@ export async function runDiagnosticShellProbe(args: {
 	resolvedSecurity: ConnectionDetails['security'];
 	onConnectionProgress?: (progressEvent: SshConnectionProgress) => void;
 	abortSignalTimeoutMs?: number;
+	operationSignals?: DiagnosticShellProbeOperationSignals;
 	trace?: ProbeTrace;
 }): Promise<DiagnosticShellProbeResult> {
 	const {
@@ -89,6 +96,7 @@ export async function runDiagnosticShellProbe(args: {
 		resolvedSecurity,
 		onConnectionProgress,
 		abortSignalTimeoutMs = DEFAULT_CONNECT_TIMEOUT_MS,
+		operationSignals,
 	} = args;
 	const traceEvent = (event: ConnectionDiagnosticEvent) => {
 		try {
@@ -105,10 +113,16 @@ export async function runDiagnosticShellProbe(args: {
 			connectionId: sshConnection.connectionId,
 		};
 		try {
+			const disconnectSignal = operationSignals?.cleanup
+				? AbortSignalAny([
+						operationSignals.cleanup,
+						AbortSignalTimeout(abortSignalTimeoutMs),
+					])
+				: AbortSignalTimeout(abortSignalTimeoutMs);
 			await withDiagnosticDisconnectTimeout(
 				Promise.resolve(
 					sshConnection.disconnect?.({
-						signal: AbortSignalTimeout(abortSignalTimeoutMs),
+						signal: disconnectSignal,
 					}),
 				),
 				abortSignalTimeoutMs,
@@ -138,15 +152,20 @@ export async function runDiagnosticShellProbe(args: {
 		registerInStore: false,
 		traceEvent,
 		onConnectionProgress,
-		connectConnection: async ({ onConnectionProgress }) => {
+		operationSignals,
+		connectConnection: async ({ onConnectionProgress, connectSignal }) => {
 			const sshConnection = await connectWithoutRemembering({
 				connectionDetails,
 				connect,
 				onConnectionProgress,
 				abortSignalTimeoutMs,
+				connectSignal,
 				resolvedSecurity,
 			});
 			return { sshConnection, storedConnectionId };
+		},
+		afterConnectAbort: async ({ sshConnection }) => {
+			await cleanupDiagnosticConnection(sshConnection);
 		},
 		afterShellFailure: async ({ sshConnection }) => {
 			await cleanupDiagnosticConnection(sshConnection);

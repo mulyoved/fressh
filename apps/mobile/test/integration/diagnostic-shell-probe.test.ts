@@ -60,6 +60,106 @@ void test('diagnostic probe disconnects after success and never navigates or sav
 	assert.doesNotMatch(JSON.stringify(events), /secret/);
 });
 
+void test('diagnostic shell probe forwards explicit operation signals', async () => {
+	const connectSignal = new AbortController().signal;
+	const shellSignal = new AbortController().signal;
+	const cleanupController = new AbortController();
+	let connectAbortSignal: AbortSignal | undefined;
+	let shellAbortSignal: AbortSignal | undefined;
+	let disconnectSignal: AbortSignal | undefined;
+
+	const result = await runDiagnosticShellProbe({
+		connectionDetails,
+		resolvedSecurity: { type: 'key', privateKey: 'secret' },
+		operationSignals: {
+			connect: connectSignal,
+			shell: shellSignal,
+			cleanup: cleanupController.signal,
+		},
+		connect: async (params) => {
+			connectAbortSignal = params.abortSignal;
+			return {
+				connectionId: 'conn-1',
+				disconnect: (options?: { signal?: AbortSignal }) => {
+					disconnectSignal = options?.signal;
+				},
+				startShell: async (options?: { abortSignal?: AbortSignal }) => {
+					shellAbortSignal = options?.abortSignal;
+					return { channelId: 7 };
+				},
+			} as never;
+		},
+	});
+
+	assert.equal(result.status, 'connected');
+	assert.equal(connectAbortSignal, connectSignal);
+	assert.equal(shellAbortSignal, shellSignal);
+	assert.equal(disconnectSignal?.aborted, false);
+
+	cleanupController.abort();
+
+	assert.equal(disconnectSignal?.aborted, true);
+});
+
+void test('diagnostic shell probe cleans up if connect signal aborts after connect', async () => {
+	const connectController = new AbortController();
+	let disconnected = 0;
+
+	await assert.rejects(
+		runDiagnosticShellProbe({
+			connectionDetails,
+			resolvedSecurity: { type: 'key', privateKey: 'secret' },
+			operationSignals: { connect: connectController.signal },
+			connect: async () => {
+				connectController.abort(new Error('connect aborted'));
+				return {
+					connectionId: 'conn-1',
+					disconnect: () => {
+						disconnected += 1;
+					},
+					startShell: async () => ({ channelId: 7 }),
+				} as never;
+			},
+		}),
+		/connect aborted/,
+	);
+
+	assert.equal(disconnected, 1);
+});
+
+void test('diagnostic shell probe cleanup signal remains timeout bounded', async () => {
+	const cleanupController = new AbortController();
+	let cleanupAbortObserved = false;
+
+	await assert.rejects(
+		runDiagnosticShellProbe({
+			connectionDetails,
+			resolvedSecurity: { type: 'key', privateKey: 'secret' },
+			abortSignalTimeoutMs: 5,
+			operationSignals: { cleanup: cleanupController.signal },
+			connect: async () =>
+				({
+					connectionId: 'conn-1',
+					disconnect: (options?: { signal?: AbortSignal }) =>
+						new Promise((_resolve, reject) => {
+							options?.signal?.addEventListener(
+								'abort',
+								() => {
+									cleanupAbortObserved = true;
+									reject(new Error('disconnect aborted'));
+								},
+								{ once: true },
+							);
+						}),
+					startShell: async () => ({ channelId: 7 }),
+				}) as never,
+		}),
+		DiagnosticShellCleanupError,
+	);
+
+	assert.equal(cleanupAbortObserved, true);
+});
+
 void test('diagnostic probe fails successful probes when disconnect fails', async () => {
 	const events: unknown[] = [];
 
