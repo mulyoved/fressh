@@ -378,6 +378,14 @@ export function createConnectionRunContext(
 		}
 
 		let abortResultListener: (() => void) | null = null;
+		const detachAbortResultListener = () => {
+			if (abortResultListener === null) {
+				return;
+			}
+			signal.removeEventListener('abort', abortResultListener);
+			abortResultListener = null;
+			activeScopeFinalizers.delete(detachAbortResultListener);
+		};
 		const abortResult = new Promise<ConnectionRunOperationResult<never>>(
 			(resolve) => {
 				abortResultListener = () => {
@@ -386,6 +394,7 @@ export function createConnectionRunContext(
 				signal.addEventListener('abort', abortResultListener, {
 					once: true,
 				});
+				activeScopeFinalizers.add(detachAbortResultListener);
 			},
 		);
 
@@ -425,20 +434,18 @@ export function createConnectionRunContext(
 			if (error instanceof ConnectionRunAbortedError) {
 				return getAbortErrorResult(error);
 			}
-			if (classifyError(error) === 'aborted') {
-				if (signal.aborted) {
-					return getScopeAbortResult(scope);
-				}
-				if (
-					runController.signal.aborted &&
-					!(kind === 'cleanup' && abortReason === 'timeout')
-				) {
-					return {
-						status: 'aborted',
-						reason: abortReason ?? 'stopped',
-						timeoutKind,
-					};
-				}
+			if (signal.aborted) {
+				return getScopeAbortResult(scope);
+			}
+			if (
+				runController.signal.aborted &&
+				!(kind === 'cleanup' && abortReason === 'timeout')
+			) {
+				return {
+					status: 'aborted',
+					reason: abortReason ?? 'stopped',
+					timeoutKind,
+				};
 			}
 			if (kind !== 'cleanup' && !isCurrent()) {
 				return {
@@ -449,9 +456,7 @@ export function createConnectionRunContext(
 			}
 			throw error;
 		} finally {
-			if (abortResultListener !== null) {
-				signal.removeEventListener('abort', abortResultListener);
-			}
+			detachAbortResultListener();
 			scope.finish();
 		}
 	}

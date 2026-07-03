@@ -850,6 +850,44 @@ void test('runOperation removes scope abort listener after successful operation'
 	assert.equal(operationController.abortListeners.size, 0);
 });
 
+void test('finish removes pending runOperation scope abort listener', async () => {
+	const controllers: TrackedAbortController[] = [];
+	const fixture = harness();
+	const run = fixture.createRun({
+		createAbortController: () => createTrackedAbortController(controllers),
+		timeouts: {
+			operationTimeoutMs: 50,
+			recoveryTimeoutMs: 80,
+			cleanupTimeoutMs: 25,
+		},
+	});
+	let resolveOperation: (value: string) => void = () => {};
+
+	const operation = run.runOperation('operation', () => {
+		return new Promise<string>((resolve) => {
+			resolveOperation = resolve;
+		});
+	});
+
+	const operationController = controllers[1];
+	if (!operationController) {
+		throw new assert.AssertionError({
+			message: 'Expected operation AbortController to be created',
+		});
+	}
+	assert.equal(operationController.abortListeners.size, 2);
+
+	run.finish();
+
+	assert.equal(operationController.abortListeners.size, 0);
+
+	resolveOperation('connected');
+	assert.deepEqual(await operation, {
+		status: 'ok',
+		value: 'connected',
+	});
+});
+
 void test('finish removes caller abort listener', () => {
 	const caller = new AbortController();
 	const listeners = new Set<EventListenerOrEventListenerObject>();
@@ -1003,4 +1041,26 @@ void test('runOperation surfaces network abort text when signal is not aborted',
 		}),
 		/software caused connection abort/,
 	);
+});
+
+void test('runOperation preserves actual run abort over non-abort error text', async () => {
+	const fixture = harness();
+	const run = fixture.createRun({
+		timeouts: {
+			operationTimeoutMs: 50,
+			recoveryTimeoutMs: 80,
+			cleanupTimeoutMs: 25,
+		},
+	});
+
+	const result = await run.runOperation('operation', () => {
+		run.abort('stopped');
+		throw new Error('software caused connection abort');
+	});
+
+	assert.deepEqual(result, {
+		status: 'aborted',
+		reason: 'stopped',
+		timeoutKind: null,
+	});
 });
