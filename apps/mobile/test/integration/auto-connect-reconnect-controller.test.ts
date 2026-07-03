@@ -388,10 +388,7 @@ void test('replacement stops current loop and starts a new one', async () => {
 	assert.deepEqual(context.setReconnectingCalls, [true, false, true]);
 	assert.equal(context.timers.length, 1);
 	assert.equal(context.timers[0]?.delayMs, 10);
-	assert.equal(
-		eventKinds(context.events).includes('reconnect.stopped'),
-		true,
-	);
+	assert.equal(eventKinds(context.events).includes('reconnect.stopped'), true);
 	assert.deepEqual(
 		context.events.find(
 			(event) => (event as { kind: string }).kind === 'reconnect.stopped',
@@ -455,6 +452,27 @@ void test('replace aborts the replaced reconnect attempt', async () => {
 
 	assert.equal(attemptSignals[0]?.aborted, true);
 	assert.equal(attemptSignals[1]?.aborted, false);
+});
+
+void test('replace aborts active reconnect attempt before starting new loop', async () => {
+	const abortStates: boolean[] = [];
+	const context = harness({
+		attemptAutoConnect: async (signal) => {
+			abortStates.push(signal.aborted);
+			signal.addEventListener('abort', () => {
+				abortStates.push(signal.aborted);
+			});
+			return new Promise<boolean>(() => undefined);
+		},
+	});
+
+	assert.equal(context.controller.start('shell-drop'), true);
+	await flushPromises();
+	assert.equal(context.controller.replace('manual-reset'), true);
+	await flushPromises();
+
+	assert.deepEqual(abortStates.slice(0, 2), [false, true]);
+	assert.equal(context.controller.isRunning(), true);
 });
 
 void test('replace starts a new loop while the aborted attempt still marks auto-connecting', async () => {
@@ -535,9 +553,7 @@ void test('stopped loops cannot schedule another retry', async () => {
 	assert.equal(context.controller.isRunning(), false);
 	assert.equal(context.timers.length, 0);
 	assert.deepEqual(context.attempts, [0]);
-	assert.deepEqual(eventKinds(context.events).slice(-1), [
-		'reconnect.stopped',
-	]);
+	assert.deepEqual(eventKinds(context.events).slice(-1), ['reconnect.stopped']);
 	assert.deepEqual(context.events.at(-1), {
 		kind: 'reconnect.stopped',
 		source: 'reconnect-controller',
