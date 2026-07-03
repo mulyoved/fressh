@@ -168,7 +168,7 @@ export async function connectAndOpenShell(args: {
 			}),
 		abortSignal,
 		afterShellFailure: async (context) => {
-			if (!abortSignal?.aborted) return;
+			if (!abortSignal?.aborted && !operationSignals?.shell?.aborted) return;
 			await disconnectAbortedConnection(context, abortSignalTimeoutMs);
 		},
 	});

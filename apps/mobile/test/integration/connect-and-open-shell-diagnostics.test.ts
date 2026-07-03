@@ -149,6 +149,43 @@ void test('connectAndOpenShell accepts lifecycle operation signals', async () =>
 	assert.equal(shellSignal, shellAbortController.signal);
 });
 
+void test('connectAndOpenShell disconnects after shell operation abort failure', async () => {
+	const shellAbortController = new AbortController();
+	let disconnectCalls = 0;
+	let navigated = false;
+	const abortError = new Error('shell operation aborted');
+	abortError.name = 'AbortError';
+
+	await assert.rejects(
+		connectAndOpenShell({
+			connectionDetails,
+			resolvedSecurity: { type: 'key', privateKey: 'secret' },
+			operationSignals: {
+				shell: shellAbortController.signal,
+			},
+			connect: async () =>
+				({
+					connectionId: 'conn-1',
+					disconnect: async () => {
+						disconnectCalls += 1;
+					},
+					startShell: async () => {
+						shellAbortController.abort();
+						throw abortError;
+					},
+				}) as never,
+			saveConnection: async () => {},
+			navigate: () => {
+				navigated = true;
+			},
+		}),
+		(error) => error === abortError,
+	);
+
+	assert.equal(navigated, false);
+	assert.equal(disconnectCalls, 1);
+});
+
 void test('connectAndOpenShell cleans up an aborted late success', async () => {
 	const abortController = new AbortController();
 	let closeCalls = 0;
