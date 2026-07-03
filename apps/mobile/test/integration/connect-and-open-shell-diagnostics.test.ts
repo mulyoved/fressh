@@ -226,6 +226,48 @@ void test('connectAndOpenShell cleans up shell operation abort after late shell 
 	assert.equal(disconnectCalls, 1);
 });
 
+void test('connectAndOpenShell follows explicit shell signal when parent aborts after shell success', async () => {
+	const abortController = new AbortController();
+	const shellAbortController = new AbortController();
+	const navigations: unknown[] = [];
+	let closeCalls = 0;
+	let disconnectCalls = 0;
+
+	const result = await connectAndOpenShell({
+		connectionDetails,
+		resolvedSecurity: { type: 'key', privateKey: 'secret' },
+		abortSignal: abortController.signal,
+		operationSignals: {
+			shell: shellAbortController.signal,
+		},
+		connect: async () =>
+			({
+				connectionId: 'conn-1',
+				disconnect: async () => {
+					disconnectCalls += 1;
+				},
+				startShell: async () => {
+					abortController.abort();
+					return {
+						channelId: 7,
+						close: async () => {
+							closeCalls += 1;
+						},
+					};
+				},
+			}) as never,
+		saveConnection: async () => {},
+		navigate: (params) => {
+			navigations.push(params);
+		},
+	});
+
+	assert.equal(result.status, 'connected');
+	assert.deepEqual(navigations, [{ connectionId: 'conn-1', channelId: 7 }]);
+	assert.equal(closeCalls, 0);
+	assert.equal(disconnectCalls, 0);
+});
+
 void test('connectAndOpenShell cleans up an aborted late success', async () => {
 	const abortController = new AbortController();
 	let closeCalls = 0;

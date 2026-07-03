@@ -143,8 +143,9 @@ export async function connectAndOpenShell(args: {
 	};
 	const security =
 		resolvedSecurity ?? (await resolveSecurityFromDetails(connectionDetails));
+	const activeShellAbortSignal = operationSignals?.shell ?? abortSignal;
 	const isShellLifecycleAborted = () =>
-		abortSignal?.aborted === true || operationSignals?.shell?.aborted === true;
+		activeShellAbortSignal?.aborted === true;
 
 	const result = await runSshShellLifecycle({
 		connectionDetails,
