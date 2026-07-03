@@ -1,0 +1,331 @@
+export type ConnectionRunAbortReason =
+	| 'timeout'
+	| 'caller-aborted'
+	| 'stale-run'
+	| 'stopped';
+
+export type ConnectionRunTimeoutKind = 'operation' | 'recovery' | 'cleanup';
+
+export type ConnectionRunOperationKind = 'operation' | 'recovery' | 'cleanup';
+
+export type ConnectionRunOperationResult<T> =
+	| { status: 'ok'; value: T }
+	| {
+			status: 'aborted';
+			reason: ConnectionRunAbortReason;
+			timeoutKind: ConnectionRunTimeoutKind | null;
+	  };
+
+export class ConnectionRunAbortedError extends Error {
+	readonly reason: ConnectionRunAbortReason;
+	readonly timeoutKind: ConnectionRunTimeoutKind | null;
+
+	constructor(
+		reason: ConnectionRunAbortReason,
+		timeoutKind: ConnectionRunTimeoutKind | null,
+	) {
+		super(reason);
+		this.name = 'ConnectionRunAbortedError';
+		this.reason = reason;
+		this.timeoutKind = timeoutKind;
+	}
+}
+
+export type ConnectionRunTimeouts = {
+	operationTimeoutMs: number;
+	recoveryTimeoutMs: number;
+	cleanupTimeoutMs: number;
+};
+
+export type ConnectionRunContext = {
+	readonly signal: AbortSignal;
+	readonly abortReason: ConnectionRunAbortReason | null;
+	readonly timeoutKind: ConnectionRunTimeoutKind | null;
+	createOperationSignal: (kind: ConnectionRunOperationKind) => AbortSignal;
+	runOperation: <T>(
+		kind: ConnectionRunOperationKind,
+		operation: (signal: AbortSignal) => Promise<T>,
+	) => Promise<ConnectionRunOperationResult<T>>;
+	throwIfAborted: () => void;
+	finish: () => void;
+	classifyError: (error: unknown) => 'aborted' | 'failed';
+};
+
+type TimerHandle = unknown;
+
+type ConnectionRunContextOptions = {
+	callerSignal?: AbortSignal | null;
+	isCurrent?: () => boolean;
+	timeouts?: Partial<ConnectionRunTimeouts>;
+	setTimeout?: (callback: () => void, delayMs: number) => TimerHandle;
+	clearTimeout?: (timer: TimerHandle) => void;
+};
+
+const defaultTimeouts: ConnectionRunTimeouts = {
+	operationTimeoutMs: 30_000,
+	recoveryTimeoutMs: 30_000,
+	cleanupTimeoutMs: 5_000,
+};
+
+export function createConnectionRunContext(
+	options: ConnectionRunContextOptions = {},
+): ConnectionRunContext {
+	const runController = new AbortController();
+	const activeTimers = new Set<TimerHandle>();
+	const timeouts = { ...defaultTimeouts, ...options.timeouts };
+	const setTimer =
+		options.setTimeout ??
+		((callback: () => void, delayMs: number) =>
+			globalThis.setTimeout(callback, delayMs));
+	const clearTimer =
+		options.clearTimeout ??
+		((timer: TimerHandle) => {
+			globalThis.clearTimeout(
+				timer as ReturnType<typeof globalThis.setTimeout>,
+			);
+		});
+	const isCurrent = options.isCurrent ?? (() => true);
+	let abortReason: ConnectionRunAbortReason | null = null;
+	let timeoutKind: ConnectionRunTimeoutKind | null = null;
+	let finished = false;
+
+	function getTimeoutMs(kind: ConnectionRunOperationKind) {
+		switch (kind) {
+			case 'cleanup':
+				return timeouts.cleanupTimeoutMs;
+			case 'recovery':
+				return timeouts.recoveryTimeoutMs;
+			case 'operation':
+				return timeouts.operationTimeoutMs;
+		}
+	}
+
+	function clearTrackedTimer(timer: TimerHandle) {
+		if (!activeTimers.delete(timer)) {
+			return;
+		}
+		clearTimer(timer);
+	}
+
+	function startTimer(
+		kind: ConnectionRunOperationKind,
+		onTimeout: () => void,
+	): TimerHandle {
+		const timer = setTimer(() => {
+			if (finished) {
+				return;
+			}
+			activeTimers.delete(timer);
+			onTimeout();
+		}, getTimeoutMs(kind));
+		activeTimers.add(timer);
+		return timer;
+	}
+
+	function abortRun(
+		reason: ConnectionRunAbortReason,
+		nextTimeoutKind: ConnectionRunTimeoutKind | null,
+	) {
+		if (finished || runController.signal.aborted) {
+			return;
+		}
+		abortReason = reason;
+		timeoutKind = nextTimeoutKind;
+		runController.abort(new ConnectionRunAbortedError(reason, nextTimeoutKind));
+	}
+
+	function createOperationScope(kind: ConnectionRunOperationKind) {
+		const controller = new AbortController();
+		let timer: TimerHandle | null = null;
+
+		function clearSignalTimer() {
+			if (timer !== null) {
+				clearTrackedTimer(timer);
+				timer = null;
+			}
+		}
+
+		function abortChild(
+			reason: ConnectionRunAbortReason,
+			nextTimeoutKind: ConnectionRunTimeoutKind | null,
+		) {
+			if (controller.signal.aborted) {
+				return;
+			}
+			controller.abort(new ConnectionRunAbortedError(reason, nextTimeoutKind));
+		}
+
+		timer = startTimer(kind, () => {
+			if (kind === 'cleanup') {
+				abortChild('timeout', 'cleanup');
+				return;
+			}
+			abortRun('timeout', kind);
+		});
+
+		controller.signal.addEventListener('abort', clearSignalTimer, {
+			once: true,
+		});
+
+		if (kind !== 'cleanup') {
+			const abortFromRun = () => {
+				abortChild(abortReason ?? 'stopped', timeoutKind);
+			};
+			if (runController.signal.aborted) {
+				abortFromRun();
+			} else {
+				runController.signal.addEventListener('abort', abortFromRun, {
+					once: true,
+				});
+			}
+		}
+
+		return {
+			signal: controller.signal,
+			clear: clearSignalTimer,
+		};
+	}
+
+	function createOperationSignal(kind: ConnectionRunOperationKind) {
+		return createOperationScope(kind).signal;
+	}
+
+	function throwIfAborted() {
+		if (!isCurrent()) {
+			throw new ConnectionRunAbortedError('stale-run', null);
+		}
+		if (runController.signal.aborted) {
+			throw new ConnectionRunAbortedError(
+				abortReason ?? 'stopped',
+				timeoutKind,
+			);
+		}
+	}
+
+	function classifyError(error: unknown): 'aborted' | 'failed' {
+		if (error instanceof ConnectionRunAbortedError) {
+			return 'aborted';
+		}
+		if (!(error instanceof Error)) {
+			return 'failed';
+		}
+		if (error.name === 'AbortError') {
+			return 'aborted';
+		}
+		return /\babort(?:ed)?\b/i.test(error.message) ? 'aborted' : 'failed';
+	}
+
+	function getSignalAbortResult(
+		signal: AbortSignal,
+	): ConnectionRunOperationResult<never> {
+		const reason = signal.reason;
+		if (reason instanceof ConnectionRunAbortedError) {
+			return {
+				status: 'aborted',
+				reason: reason.reason,
+				timeoutKind: reason.timeoutKind,
+			};
+		}
+		return {
+			status: 'aborted',
+			reason: abortReason ?? 'stopped',
+			timeoutKind,
+		};
+	}
+
+	async function runOperation<T>(
+		kind: ConnectionRunOperationKind,
+		operation: (signal: AbortSignal) => Promise<T>,
+	): Promise<ConnectionRunOperationResult<T>> {
+		const scope = createOperationScope(kind);
+		const signal = scope.signal;
+		if (signal.aborted) {
+			return getSignalAbortResult(signal);
+		}
+
+		const abortResult = new Promise<ConnectionRunOperationResult<never>>(
+			(resolve) => {
+				signal.addEventListener(
+					'abort',
+					() => {
+						resolve(getSignalAbortResult(signal));
+					},
+					{ once: true },
+				);
+			},
+		);
+
+		try {
+			const result = await Promise.race([
+				operation(signal).then<ConnectionRunOperationResult<T>>((value) => ({
+					status: 'ok',
+					value,
+				})),
+				abortResult,
+			]);
+			if (!isCurrent()) {
+				return {
+					status: 'aborted',
+					reason: 'stale-run',
+					timeoutKind: null,
+				};
+			}
+			return result;
+		} catch (error) {
+			if (!isCurrent()) {
+				return {
+					status: 'aborted',
+					reason: 'stale-run',
+					timeoutKind: null,
+				};
+			}
+			if (classifyError(error) === 'aborted') {
+				return signal.aborted
+					? getSignalAbortResult(signal)
+					: {
+							status: 'aborted',
+							reason: abortReason ?? 'stopped',
+							timeoutKind,
+						};
+			}
+			throw error;
+		} finally {
+			scope.clear();
+		}
+	}
+
+	function finish() {
+		finished = true;
+		for (const timer of [...activeTimers]) {
+			clearTrackedTimer(timer);
+		}
+	}
+
+	if (options.callerSignal) {
+		const abortFromCaller = () => {
+			abortRun('caller-aborted', null);
+		};
+		if (options.callerSignal.aborted) {
+			abortFromCaller();
+		} else {
+			options.callerSignal.addEventListener('abort', abortFromCaller, {
+				once: true,
+			});
+		}
+	}
+
+	return {
+		signal: runController.signal,
+		get abortReason() {
+			return abortReason;
+		},
+		get timeoutKind() {
+			return timeoutKind;
+		},
+		createOperationSignal,
+		runOperation,
+		throwIfAborted,
+		finish,
+		classifyError,
+	};
+}
