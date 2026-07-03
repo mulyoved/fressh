@@ -106,10 +106,7 @@ void test('throwIfAborted preserves existing abort before stale-run', () => {
 		},
 		(error) => {
 			assert.equal(error instanceof ConnectionRunAbortedError, true);
-			assert.equal(
-				(error as ConnectionRunAbortedError).reason,
-				'timeout',
-			);
+			assert.equal((error as ConnectionRunAbortedError).reason, 'timeout');
 			assert.equal(
 				(error as ConnectionRunAbortedError).timeoutKind,
 				'operation',
@@ -188,6 +185,67 @@ void test('stale run suppresses late successful operation result', async () => {
 		reason: 'stale-run',
 		timeoutKind: null,
 	});
+});
+
+void test('stale non-cleanup operation does not start work', async () => {
+	const fixture = harness();
+	const run = fixture.createRun({
+		isCurrent: () => false,
+		timeouts: {
+			operationTimeoutMs: 50,
+			recoveryTimeoutMs: 80,
+			cleanupTimeoutMs: 25,
+		},
+	});
+	let called = false;
+
+	const result = await run.runOperation('operation', async () => {
+		called = true;
+		return 'started';
+	});
+
+	assert.equal(called, false);
+	assert.deepEqual(result, {
+		status: 'aborted',
+		reason: 'stale-run',
+		timeoutKind: null,
+	});
+});
+
+void test('stale cleanup success is not rewritten to stale-run', async () => {
+	const fixture = harness();
+	const run = fixture.createRun({
+		isCurrent: () => false,
+		timeouts: {
+			operationTimeoutMs: 50,
+			recoveryTimeoutMs: 80,
+			cleanupTimeoutMs: 25,
+		},
+	});
+
+	assert.deepEqual(await run.runOperation('cleanup', async () => 'cleaned'), {
+		status: 'ok',
+		value: 'cleaned',
+	});
+});
+
+void test('stale cleanup failure is thrown instead of rewritten', async () => {
+	const fixture = harness();
+	const run = fixture.createRun({
+		isCurrent: () => false,
+		timeouts: {
+			operationTimeoutMs: 50,
+			recoveryTimeoutMs: 80,
+			cleanupTimeoutMs: 25,
+		},
+	});
+
+	await assert.rejects(
+		run.runOperation('cleanup', async () => {
+			throw new Error('cleanup failed');
+		}),
+		/cleanup failed/,
+	);
 });
 
 void test('runOperation preserves thrown abort error metadata', async () => {
@@ -392,7 +450,9 @@ void test('finish clears timers and prevents late timeout abort', () => {
 void test('finish removes caller abort listener', () => {
 	const caller = new AbortController();
 	const listeners = new Set<EventListenerOrEventListenerObject>();
-	const originalAddEventListener = caller.signal.addEventListener.bind(caller.signal) as (
+	const originalAddEventListener = caller.signal.addEventListener.bind(
+		caller.signal,
+	) as (
 		type: string,
 		listener: EventListenerOrEventListenerObject,
 		options?: boolean | AddEventListenerOptions,
@@ -506,4 +566,38 @@ void test('classifyError recognizes context and DOM-style aborts', () => {
 	assert.equal(run.classifyError(domAbort), 'aborted');
 	assert.equal(run.classifyError(nativeAbort), 'aborted');
 	assert.equal(run.classifyError(networkError), 'failed');
+});
+
+void test('classifyError leaves SSH connection abort text as failure', () => {
+	const fixture = harness();
+	const run = fixture.createRun({
+		timeouts: {
+			operationTimeoutMs: 50,
+			recoveryTimeoutMs: 80,
+			cleanupTimeoutMs: 25,
+		},
+	});
+
+	assert.equal(
+		run.classifyError(new Error('software caused connection abort')),
+		'failed',
+	);
+});
+
+void test('runOperation surfaces network abort text when signal is not aborted', async () => {
+	const fixture = harness();
+	const run = fixture.createRun({
+		timeouts: {
+			operationTimeoutMs: 50,
+			recoveryTimeoutMs: 80,
+			cleanupTimeoutMs: 25,
+		},
+	});
+
+	await assert.rejects(
+		run.runOperation('operation', async () => {
+			throw new Error('software caused connection abort');
+		}),
+		/software caused connection abort/,
+	);
 });

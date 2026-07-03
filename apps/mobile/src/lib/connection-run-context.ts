@@ -225,19 +225,18 @@ export function createConnectionRunContext(
 			}
 			abortChild(abortReason ?? 'stopped', timeoutKind);
 		};
+		if (kind === 'cleanup') {
+			abortFromLaterStop = (reason, nextTimeoutKind) => {
+				abortChild(reason, nextTimeoutKind);
+			};
+			activeCleanupAbortListeners.add(abortFromLaterStop);
+		}
 		if (runController.signal.aborted) {
 			abortFromRun();
 		} else {
 			runController.signal.addEventListener('abort', abortFromRun, {
 				once: true,
 			});
-		}
-
-		if (kind === 'cleanup') {
-			abortFromLaterStop = (reason, nextTimeoutKind) => {
-				abortChild(reason, nextTimeoutKind);
-			};
-			activeCleanupAbortListeners.add(abortFromLaterStop);
 		}
 
 		return {
@@ -268,6 +267,10 @@ export function createConnectionRunContext(
 		};
 	}
 
+	function isSignalAbortMessage(message: string) {
+		return /\bsignal\b/i.test(message) && /\babort(?:ed)?\b/i.test(message);
+	}
+
 	function classifyError(error: unknown): 'aborted' | 'failed' {
 		if (error instanceof ConnectionRunAbortedError) {
 			return 'aborted';
@@ -278,7 +281,7 @@ export function createConnectionRunContext(
 		if (error.name === 'AbortError') {
 			return 'aborted';
 		}
-		return /\babort(?:ed)?\b/i.test(error.message) ? 'aborted' : 'failed';
+		return isSignalAbortMessage(error.message) ? 'aborted' : 'failed';
 	}
 
 	function getSignalAbortResult(
@@ -309,6 +312,13 @@ export function createConnectionRunContext(
 		kind: ConnectionRunOperationKind,
 		operation: (signal: AbortSignal) => Promise<T>,
 	): Promise<ConnectionRunOperationResult<T>> {
+		if (kind !== 'cleanup' && !runController.signal.aborted && !isCurrent()) {
+			return {
+				status: 'aborted',
+				reason: 'stale-run',
+				timeoutKind: null,
+			};
+		}
 		const scope = createOperationScope(kind);
 		const signal = scope.signal;
 		if (signal.aborted) {
@@ -338,7 +348,7 @@ export function createConnectionRunContext(
 			if (isAbortedResult(result)) {
 				return result;
 			}
-			if (!isCurrent()) {
+			if (kind !== 'cleanup' && !isCurrent()) {
 				return {
 					status: 'aborted',
 					reason: 'stale-run',
@@ -351,15 +361,18 @@ export function createConnectionRunContext(
 				return getAbortErrorResult(error);
 			}
 			if (classifyError(error) === 'aborted') {
-				return signal.aborted
-					? getSignalAbortResult(signal)
-					: {
-							status: 'aborted',
-							reason: abortReason ?? 'stopped',
-							timeoutKind,
-						};
+				if (signal.aborted) {
+					return getSignalAbortResult(signal);
+				}
+				if (runController.signal.aborted) {
+					return {
+						status: 'aborted',
+						reason: abortReason ?? 'stopped',
+						timeoutKind,
+					};
+				}
 			}
-			if (!isCurrent()) {
+			if (kind !== 'cleanup' && !isCurrent()) {
 				return {
 					status: 'aborted',
 					reason: 'stale-run',
