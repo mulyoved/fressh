@@ -226,6 +226,35 @@ void test('stale run suppresses late successful operation result', async () => {
 	});
 });
 
+void test('runOperation returns aborted if run stops before ok result returns', async () => {
+	const fixture = harness();
+	const run = fixture.createRun({
+		timeouts: {
+			operationTimeoutMs: 50,
+			recoveryTimeoutMs: 80,
+			cleanupTimeoutMs: 25,
+		},
+	});
+	let resolveOperation: (value: string) => void = () => {};
+
+	const operation = run.runOperation('operation', () => {
+		return new Promise<string>((resolve) => {
+			resolveOperation = resolve;
+		});
+	});
+
+	resolveOperation('connected');
+	queueMicrotask(() => {
+		run.abort('replaced');
+	});
+
+	assert.deepEqual(await operation, {
+		status: 'aborted',
+		reason: 'replaced',
+		timeoutKind: null,
+	});
+});
+
 void test('stale non-cleanup operation does not start work', async () => {
 	const fixture = harness();
 	const run = fixture.createRun({
@@ -654,6 +683,23 @@ void test('finish clears timers and prevents late timeout abort', () => {
 
 	assert.equal(fixture.timers[0]?.cleared, true);
 	assert.equal(run.signal.aborted, false);
+});
+
+void test('finish prevents later abort from stopping active cleanup scope', () => {
+	const fixture = harness();
+	const run = fixture.createRun({
+		timeouts: {
+			operationTimeoutMs: 50,
+			recoveryTimeoutMs: 80,
+			cleanupTimeoutMs: 25,
+		},
+	});
+	const cleanupScope = run.createOperationScope('cleanup');
+
+	run.finish();
+	run.abort('stopped');
+
+	assert.equal(cleanupScope.signal.aborted, false);
 });
 
 void test('finish removes caller abort listener', () => {

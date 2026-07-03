@@ -158,6 +158,9 @@ export function createConnectionRunContext(
 		reason: ConnectionRunAbortReason,
 		nextTimeoutKind: ConnectionRunTimeoutKind | null,
 	) {
+		if (finished) {
+			return;
+		}
 		if (reason !== 'timeout') {
 			if (runController.signal.aborted && abortReason === 'timeout') {
 				cleanupStopAfterTimeout = {
@@ -169,7 +172,7 @@ export function createConnectionRunContext(
 				listener(reason, nextTimeoutKind);
 			}
 		}
-		if (finished || runController.signal.aborted) {
+		if (runController.signal.aborted) {
 			return;
 		}
 		abortReason = reason;
@@ -394,6 +397,19 @@ export function createConnectionRunContext(
 			if (isAbortedResult(result)) {
 				return result;
 			}
+			if (signal.aborted) {
+				return getScopeAbortResult(scope);
+			}
+			if (
+				runController.signal.aborted &&
+				!(kind === 'cleanup' && abortReason === 'timeout')
+			) {
+				return {
+					status: 'aborted',
+					reason: abortReason ?? 'stopped',
+					timeoutKind,
+				};
+			}
 			if (kind !== 'cleanup' && !isCurrent()) {
 				return {
 					status: 'aborted',
@@ -437,6 +453,7 @@ export function createConnectionRunContext(
 		for (const timer of [...activeTimers]) {
 			clearTrackedTimer(timer);
 		}
+		activeCleanupAbortListeners.clear();
 	}
 
 	if (options.callerSignal) {
