@@ -199,7 +199,7 @@ export function createConnectionRunContext(
 		onTimeout: () => void,
 	): TimerHandle {
 		const timer = setTimer(() => {
-			if (finished) {
+			if (finished && kind !== 'cleanup') {
 				return;
 			}
 			activeTimers.delete(timer);

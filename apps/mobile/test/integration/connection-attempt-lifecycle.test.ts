@@ -49,6 +49,15 @@ function flushPromises() {
 	});
 }
 
+function requireSignal(signal: AbortSignal | null): AbortSignal {
+	if (signal === null) {
+		throw new assert.AssertionError({
+			message: 'Expected cleanup to capture an AbortSignal',
+		});
+	}
+	return signal;
+}
+
 function runHarness(opts?: { isCurrent?: () => boolean }): {
 	runContext: ConnectionRunContext;
 	timers: Timer[];
@@ -246,6 +255,42 @@ void test('saved-entry lifecycle cleans up success that arrives after operation 
 	assert.equal(cleanupCount, 1);
 });
 
+void test('saved-entry timeout late cleanup keeps deadline after run finish', async () => {
+	const { runContext, timers } = runHarness();
+	const connect = deferred<SavedEntryConnectResult>();
+	const cleanupStarted = deferred<void>();
+	let cleanupSignal: AbortSignal | null = null;
+
+	const outcomePromise = runSavedEntryConnectionAttempt({
+		platformOS: 'android',
+		mode: 'auto-connect',
+		runContext,
+		recovery: readyRecovery(),
+		connectSavedEntry: async () => connect.promise,
+		cleanupConnected: async (_outcome, signal) => {
+			cleanupSignal = signal;
+			cleanupStarted.resolve();
+			await new Promise<void>(() => {});
+		},
+	});
+	await flushPromises();
+
+	timers[1]?.callback();
+
+	assert.deepEqual(await outcomePromise, {
+		status: 'timedOut',
+		timeoutKind: 'operation',
+	});
+	runContext.finish();
+
+	connect.resolve(connectedResult());
+	await cleanupStarted.promise;
+
+	assert.equal(requireSignal(cleanupSignal).aborted, false);
+	timers.at(-1)?.callback();
+	assert.equal(requireSignal(cleanupSignal).aborted, true);
+});
+
 void test('saved-entry lifecycle cleans up stale late success', async () => {
 	let current = true;
 	const { runContext } = runHarness({ isCurrent: () => current });
@@ -383,6 +428,47 @@ void test('active shell reopen cleans up success that arrives after operation ti
 	await flushPromises();
 
 	assert.equal(cleanupCount, 1);
+});
+
+void test('active shell timeout late cleanup keeps deadline after run finish', async () => {
+	const { runContext, timers } = runHarness();
+	const shell = deferred<{
+		connectionId: string;
+		channelId: number;
+		close: () => Promise<void>;
+	}>();
+	const cleanupStarted = deferred<void>();
+	let cleanupSignal: AbortSignal | null = null;
+
+	const outcomePromise = runActiveShellReopenAttempt({
+		runContext,
+		startShell: async () => shell.promise,
+		cleanupConnected: async (_result, signal) => {
+			cleanupSignal = signal;
+			cleanupStarted.resolve();
+			await new Promise<void>(() => {});
+		},
+	});
+	await flushPromises();
+
+	timers[0]?.callback();
+
+	assert.deepEqual(await outcomePromise, {
+		status: 'timedOut',
+		timeoutKind: 'operation',
+	});
+	runContext.finish();
+
+	shell.resolve({
+		connectionId: 'active-1',
+		channelId: 9,
+		close: async () => {},
+	});
+	await cleanupStarted.promise;
+
+	assert.equal(requireSignal(cleanupSignal).aborted, false);
+	timers.at(-1)?.callback();
+	assert.equal(requireSignal(cleanupSignal).aborted, true);
 });
 
 void test('active shell reopen cleans up stale late success', async () => {
