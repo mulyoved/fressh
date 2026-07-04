@@ -434,6 +434,39 @@ void test('retries once after recovered network-like failure', async () => {
 	assert.deepEqual(context.attention, []);
 });
 
+void test('returns aborted outcome after recovered retry aborts', async () => {
+	const phases: SavedEntryConnectAttemptPhase[] = [];
+	const networkError = new Error('No route to host');
+	const abortReason = new Error('saved-entry retry aborted');
+	const context = harness({
+		recovery: recoveryFixture({
+			afterFailure: {
+				kind: 'recovered',
+				attempted: true,
+				networkLikeFailure: true,
+				available: true,
+			},
+		}),
+		connectSavedEntry: async (phase) => {
+			phases.push(phase);
+			if (phase === 'initial') {
+				throw networkError;
+			}
+			return abortedResult(abortReason);
+		},
+	});
+
+	assert.deepEqual(await context.attempt(), {
+		connected: false,
+		aborted: true,
+		reason: abortReason,
+	});
+	assert.deepEqual(phases, ['initial', 'retry']);
+	assert.equal(context.clearAttentionCount, 0);
+	assert.deepEqual(context.attention, []);
+	assert.deepEqual(context.warnings, []);
+});
+
 void test('passes explicit connect attempt phases to saved-entry connector', async () => {
 	const phases: unknown[] = [];
 	let connectCalls = 0;

@@ -174,6 +174,31 @@ void test('saved-entry lifecycle maps saved-entry aborted result', async () => {
 	});
 });
 
+for (const abortReason of [
+	'caller-aborted',
+	'stale-run',
+	'stopped',
+	'replaced',
+	'unmounted',
+] as const) {
+	void test(`saved-entry lifecycle preserves ${abortReason} aborted result`, async () => {
+		const { runContext } = runHarness();
+
+		const outcome = await runSavedEntryConnectionAttempt({
+			platformOS: 'android',
+			runContext,
+			recovery: readyRecovery(),
+			connectSavedEntry: async () => abortedResult(abortReason),
+			cleanupConnected: async () => {},
+		});
+
+		assert.deepEqual(outcome, {
+			status: 'aborted',
+			reason: abortReason,
+		});
+	});
+}
+
 void test('saved-entry lifecycle maps Tailscale readiness block and does not connect', async () => {
 	const { runContext } = runHarness();
 	let connectCount = 0;
