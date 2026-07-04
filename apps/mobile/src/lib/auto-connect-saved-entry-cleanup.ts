@@ -23,8 +23,11 @@ export async function cleanupAutoConnectSavedEntryResult(
 export function toAutoConnectSavedEntryResult(
 	result: ConnectAndOpenShellResult,
 ): SavedEntryConnectResult {
-	if (result.status !== 'connected') {
+	if (result.status === 'tmux_attach_failed') {
 		return result as TmuxAttachFailedResult;
+	}
+	if (result.status === 'aborted') {
+		return result;
 	}
 	return {
 		status: 'connected',

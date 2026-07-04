@@ -124,6 +124,13 @@ function tmuxAttachFailedResult(
 	};
 }
 
+function abortedResult(reason: unknown = 'caller-aborted'): SavedEntryConnectResult {
+	return {
+		status: 'aborted',
+		reason,
+	};
+}
+
 void test('saved-entry lifecycle returns connected outcome and passes initial phase', async () => {
 	const { runContext } = runHarness();
 	const phases: SavedEntryConnectAttemptPhase[] = [];
@@ -146,6 +153,51 @@ void test('saved-entry lifecycle returns connected outcome and passes initial ph
 	});
 	assert.deepEqual(phases, ['initial']);
 });
+
+void test('saved-entry lifecycle maps saved-entry aborted result', async () => {
+	const { runContext } = runHarness();
+	const abortReason = new Error('connect helper aborted after cleanup');
+
+	const outcome = await runSavedEntryConnectionAttempt({
+		platformOS: 'android',
+		runContext,
+		recovery: readyRecovery(),
+		connectSavedEntry: async () => abortedResult(abortReason),
+		cleanupConnected: async () => {
+			throw new Error('aborted saved-entry result should not clean up again');
+		},
+	});
+
+	assert.deepEqual(outcome, {
+		status: 'aborted',
+		reason: 'caller-aborted',
+	});
+});
+
+for (const abortReason of [
+	'caller-aborted',
+	'stale-run',
+	'stopped',
+	'replaced',
+	'unmounted',
+] as const) {
+	void test(`saved-entry lifecycle preserves ${abortReason} aborted result`, async () => {
+		const { runContext } = runHarness();
+
+		const outcome = await runSavedEntryConnectionAttempt({
+			platformOS: 'android',
+			runContext,
+			recovery: readyRecovery(),
+			connectSavedEntry: async () => abortedResult(abortReason),
+			cleanupConnected: async () => {},
+		});
+
+		assert.deepEqual(outcome, {
+			status: 'aborted',
+			reason: abortReason,
+		});
+	});
+}
 
 void test('saved-entry lifecycle maps Tailscale readiness block and does not connect', async () => {
 	const { runContext } = runHarness();

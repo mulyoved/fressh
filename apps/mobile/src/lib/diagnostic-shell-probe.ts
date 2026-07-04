@@ -25,7 +25,10 @@ import { AbortSignalAny, AbortSignalTimeout } from './utils';
 const logger = rootLogger.extend('DiagnosticShellProbe');
 const DEFAULT_CONNECT_TIMEOUT_MS = 5_000;
 
-export type DiagnosticShellProbeResult = SavedEntryConnectResult;
+export type DiagnosticShellProbeResult = Exclude<
+	SavedEntryConnectResult,
+	{ status: 'aborted' }
+>;
 
 type ProbeTrace = {
 	event: (event: ConnectionDiagnosticEvent) => void;

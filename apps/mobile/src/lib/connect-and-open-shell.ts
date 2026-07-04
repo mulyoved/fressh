@@ -29,7 +29,11 @@ type TmuxAttachFailedSshShellLifecycleResult = Extract<
 
 export type ConnectAndOpenShellResult =
 	| Omit<ConnectedSshShellLifecycleResult, 'storedConnectionId'>
-	| TmuxAttachFailedSshShellLifecycleResult;
+	| TmuxAttachFailedSshShellLifecycleResult
+	| {
+			status: 'aborted';
+			reason: unknown;
+	  };
 
 type SaveConnection = (params: {
 	details: InputConnectionDetails;
@@ -102,6 +106,17 @@ async function resolveSecurityFromDetails(
 		type: 'key',
 		privateKey,
 	};
+}
+
+function getConnectionAbortReason(
+	activeShellAbortSignal: AbortSignal | undefined,
+	abortSignal: AbortSignal | undefined,
+) {
+	return (
+		activeShellAbortSignal?.reason ??
+		abortSignal?.reason ??
+		new Error('Connection attempt aborted')
+	);
 }
 
 // Shared connect flow used by saved-entry and silent auto-connect.
@@ -202,7 +217,10 @@ export async function connectAndOpenShell(args: {
 	);
 	if (cleanupOnAbort && isShellLifecycleAborted()) {
 		await cleanupAbortedConnection(result, abortSignalTimeoutMs);
-		return result;
+		return {
+			status: 'aborted',
+			reason: getConnectionAbortReason(activeShellAbortSignal, abortSignal),
+		};
 	}
 	navigate({
 		connectionId: result.sshConnection.connectionId,

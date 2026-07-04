@@ -1,6 +1,7 @@
 import {
 	attemptSavedEntryWithTailscaleRecovery,
 	type SavedEntryConnectAttemptPhase,
+	type SavedEntryConnectResult,
 	type SavedEntryTailscaleRecovery,
 } from './auto-connect-saved-entry';
 import { formatConnectionDiagnosticPrompt } from './connection-diagnostic-prompt';
@@ -20,10 +21,7 @@ import {
 	type ConnectionRunContext,
 } from './connection-run-context';
 import { type SavedConnectionEntry } from './connection-utils';
-import {
-	isDiagnosticShellCleanupError,
-	type DiagnosticShellProbeResult,
-} from './diagnostic-shell-probe';
+import { isDiagnosticShellCleanupError } from './diagnostic-shell-probe';
 import { createSavedEntryTailscaleDiagnosticRecovery } from './saved-entry-tailscale-diagnostic-recovery';
 // eslint-disable-next-line import/consistent-type-specifier-style -- keep secrets-manager type-only so Node integration tests do not load React Native at runtime
 import type { InputConnectionDetails } from './secrets-manager';
@@ -51,7 +49,7 @@ export type ManualConnectionDiagnosticArgs = {
 		resolvedSecurity: ResolvedKeySecurity;
 		trace: ConnectionDiagnosticTraceHandle;
 		signal: AbortSignal;
-	}) => Promise<DiagnosticShellProbeResult>;
+	}) => Promise<SavedEntryConnectResult>;
 	recovery: SavedEntryTailscaleRecovery;
 	formatPrompt?: typeof formatConnectionDiagnosticPrompt;
 	timeoutMs?: number;
@@ -235,6 +233,10 @@ async function runManualConnectionDiagnosticAttempt(
 				}),
 			);
 			return finish(traceHandle, 'failed', args);
+		case 'aborted':
+			throw result.result.reason instanceof Error
+				? result.result.reason
+				: new Error('Saved-entry connection aborted');
 		case 'blocked':
 		case 'recoveryNotAttempted':
 		case 'retryFailed':

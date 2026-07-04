@@ -38,6 +38,13 @@ function tmuxAttachFailedResult(
 	};
 }
 
+function abortedResult(reason: unknown = 'caller-aborted'): SavedEntryConnectResult {
+	return {
+		status: 'aborted',
+		reason,
+	};
+}
+
 function recoveryFixture(opts?: {
 	ready?: TailscaleReadyResult;
 	afterFailure?: TailscaleRecoverAfterFailureResult;
@@ -81,6 +88,8 @@ function harness(opts?: {
 			case 'tmuxAttachFailed':
 				tmuxFailures.push(result.result);
 				return { connected: false };
+			case 'aborted':
+				return { connected: false, aborted: true, reason: result.result.reason };
 			case 'blocked':
 			case 'recoveryNotAttempted':
 				if (result.attentionMessage !== null) {
@@ -135,6 +144,73 @@ void test('saved-entry recovery helper returns connected outcome', async () => {
 	assert.equal(result.status, 'connected');
 	if (result.status !== 'connected') return;
 	assert.deepEqual(result.result, connectedResult());
+});
+
+void test('saved-entry recovery helper returns aborted outcome without recovery', async () => {
+	let connectCount = 0;
+	let recoveryCount = 0;
+	const abortReason = new Error('saved-entry connect aborted');
+	const context = harness({
+		recovery: {
+			ensureReady: async () => ({
+				kind: 'ready',
+				attempted: true,
+				available: true,
+			}),
+			recoverAfterFailure: async () => {
+				recoveryCount += 1;
+				return {
+					kind: 'recovered',
+					attempted: true,
+					networkLikeFailure: true,
+					available: true,
+				};
+			},
+		},
+		connectSavedEntry: async () => {
+			connectCount += 1;
+			return abortedResult(abortReason);
+		},
+	});
+
+	const result = await context.attempt();
+
+	assert.deepEqual(result, {
+		connected: false,
+		aborted: true,
+		reason: abortReason,
+	});
+	assert.equal(connectCount, 1);
+	assert.equal(recoveryCount, 0);
+	assert.equal(context.clearAttentionCount, 0);
+	assert.deepEqual(context.attention, []);
+});
+
+void test('saved-entry recovery helper exposes aborted result directly', async () => {
+	const abortReason = new Error('saved-entry direct abort');
+
+	const result = await attemptSavedEntryWithTailscaleRecovery({
+		platformOS: 'android',
+		recovery: {
+			ensureReady: async () => ({
+				kind: 'ready',
+				attempted: true,
+				available: true,
+			}),
+			recoverAfterFailure: async () => {
+				throw new Error('aborted result should not recover');
+			},
+		},
+		connectSavedEntry: async () => abortedResult(abortReason),
+	});
+
+	assert.deepEqual(result, {
+		status: 'aborted',
+		result: {
+			status: 'aborted',
+			reason: abortReason,
+		},
+	});
 });
 
 void test('Tailscale diagnostic recovery ignores ensure-ready emit failures', async () => {
@@ -356,6 +432,39 @@ void test('retries once after recovered network-like failure', async () => {
 	assert.deepEqual(calls, ['connect', 'connect']);
 	assert.equal(context.clearAttentionCount, 1);
 	assert.deepEqual(context.attention, []);
+});
+
+void test('returns aborted outcome after recovered retry aborts', async () => {
+	const phases: SavedEntryConnectAttemptPhase[] = [];
+	const networkError = new Error('No route to host');
+	const abortReason = new Error('saved-entry retry aborted');
+	const context = harness({
+		recovery: recoveryFixture({
+			afterFailure: {
+				kind: 'recovered',
+				attempted: true,
+				networkLikeFailure: true,
+				available: true,
+			},
+		}),
+		connectSavedEntry: async (phase) => {
+			phases.push(phase);
+			if (phase === 'initial') {
+				throw networkError;
+			}
+			return abortedResult(abortReason);
+		},
+	});
+
+	assert.deepEqual(await context.attempt(), {
+		connected: false,
+		aborted: true,
+		reason: abortReason,
+	});
+	assert.deepEqual(phases, ['initial', 'retry']);
+	assert.equal(context.clearAttentionCount, 0);
+	assert.deepEqual(context.attention, []);
+	assert.deepEqual(context.warnings, []);
 });
 
 void test('passes explicit connect attempt phases to saved-entry connector', async () => {

@@ -20,11 +20,20 @@ export type SavedEntryConnectResult =
 			tmuxAttachFailureReason: string | null;
 			tmuxSessionName: string;
 			storedConnectionId: string;
+	  }
+	| {
+			status: 'aborted';
+			reason: unknown;
 	  };
 
 export type TmuxAttachFailedResult = Extract<
 	SavedEntryConnectResult,
 	{ status: 'tmux_attach_failed' }
+>;
+
+export type AbortedSavedEntryConnectResult = Extract<
+	SavedEntryConnectResult,
+	{ status: 'aborted' }
 >;
 
 export type SavedEntryConnectAttemptPhase = 'initial' | 'retry';
@@ -47,6 +56,7 @@ export type SavedEntryRecoveryOutcome =
 			result: Extract<SavedEntryConnectResult, { status: 'connected' }>;
 	  }
 	| { status: 'tmuxAttachFailed'; result: TmuxAttachFailedResult }
+	| { status: 'aborted'; result: AbortedSavedEntryConnectResult }
 	| {
 			status: 'recoveryNotAttempted';
 			error: unknown;
@@ -110,6 +120,9 @@ export async function attemptSavedEntryWithTailscaleRecovery({
 	): SavedEntryRecoveryOutcome => {
 		if (result.status === 'tmux_attach_failed') {
 			return { status: 'tmuxAttachFailed', result };
+		}
+		if (result.status === 'aborted') {
+			return { status: 'aborted', result };
 		}
 
 		return { status: 'connected', result };
