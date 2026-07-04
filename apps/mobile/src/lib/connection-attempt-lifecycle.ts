@@ -156,11 +156,26 @@ function hasRunAbort(runContext: ConnectionRunContext) {
 	return runContext.abortReason !== null || runContext.signal.aborted;
 }
 
+function normalizeSavedEntryAbortReason(
+	reason: unknown,
+): Exclude<ConnectionRunAbortReason, 'timeout'> {
+	switch (reason) {
+		case 'caller-aborted':
+		case 'stale-run':
+		case 'stopped':
+		case 'replaced':
+		case 'unmounted':
+			return reason;
+		default:
+			return 'caller-aborted';
+	}
+}
+
 function mapSavedEntryResult(
 	result: SavedEntryConnectResult,
 ): Extract<
 	ConnectionAttemptOutcome,
-	{ status: 'connected' | 'tmuxAttachFailed' }
+	{ status: 'connected' | 'tmuxAttachFailed' | 'aborted' }
 > {
 	if (result.status === 'tmux_attach_failed') {
 		return {
@@ -169,6 +184,12 @@ function mapSavedEntryResult(
 			tmuxAttachFailureReason: result.tmuxAttachFailureReason,
 			tmuxSessionName: result.tmuxSessionName,
 			storedConnectionId: result.storedConnectionId,
+		};
+	}
+	if (result.status === 'aborted') {
+		return {
+			status: 'aborted',
+			reason: normalizeSavedEntryAbortReason(result.reason),
 		};
 	}
 	const outcome: ConnectedConnectionAttemptOutcome = {
@@ -379,6 +400,8 @@ export async function runSavedEntryConnectionAttempt(
 				return outcome;
 			}
 			case 'tmuxAttachFailed':
+				return mapSavedEntryResult(savedEntryOutcome.result);
+			case 'aborted':
 				return mapSavedEntryResult(savedEntryOutcome.result);
 			case 'blocked':
 				return {

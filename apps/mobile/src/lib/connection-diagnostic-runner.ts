@@ -235,6 +235,10 @@ async function runManualConnectionDiagnosticAttempt(
 				}),
 			);
 			return finish(traceHandle, 'failed', args);
+		case 'aborted':
+			throw result.result.reason instanceof Error
+				? result.result.reason
+				: new Error('Saved-entry connection aborted');
 		case 'blocked':
 		case 'recoveryNotAttempted':
 		case 'retryFailed':
