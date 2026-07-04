@@ -228,6 +228,39 @@ void test('manual diagnostic records failed connection and produces prompt', asy
 	assert.equal(initialWarning?.message, 'Saved-entry connection threw.');
 });
 
+void test('manual diagnostic records returned saved-entry abort as failed diagnostic', async () => {
+	const recorder = createConnectionDiagnosticRecorder({ now: () => 10 });
+	const abortReason = new Error('saved-entry connect aborted');
+
+	const result = await runManualConnectionDiagnostic({
+		recorder,
+		appState: {
+			platformOS: 'android',
+			isAutoConnecting: false,
+			isReconnecting: true,
+		},
+		loadLatestSavedConnection: async () => savedEntry,
+		resolveKeySecurity: async () => ({ type: 'key', privateKey: 'secret' }),
+		connectSavedEntry: async () => ({
+			status: 'aborted',
+			reason: abortReason,
+		}),
+		recovery: unsupportedRecovery,
+		formatPrompt: formatConnectionDiagnosticPrompt,
+	});
+
+	assert.equal(result.status, 'failed');
+	assert.equal(recorder.getLatestTrace()?.status, 'failed');
+	assert.match(result.prompt, /manual-diagnostic\.failed/);
+	assert.match(result.prompt, /saved-entry connect aborted/);
+	assert.doesNotMatch(result.prompt, /auto-connect\./);
+	assert.doesNotMatch(result.prompt, /secret/);
+	const failedEvent = result.trace?.events.find(
+		(event) => event.kind === 'manual-diagnostic.failed',
+	);
+	assert.equal(failedEvent?.error.message, 'saved-entry connect aborted');
+});
+
 void test('manual diagnostic records Tailscale attention without auto-connect events', async () => {
 	const recorder = createConnectionDiagnosticRecorder({ now: () => 10 });
 
