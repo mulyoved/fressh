@@ -4,29 +4,42 @@ Use this matrix after the stable workflow has established the review target, dif
 
 ## Reviewer Routing
 
-The reviewer names below are Codex `agent_type` values from the Compound Engineering agent installation. Invoke them by exact `agent_type` name when they are available in the current Codex session. If a listed reviewer is unavailable, skip it and record `skipped:not-available-in-environment`.
+The reviewer names below are local persona prompt files in the `code-review-ce1` skill directory. Resolve persona and schema paths relative to `code-review-ce1`: load selected personas from `references/personas/`, and use `references/findings-schema.json` as the expected structured finding contract.
 
-- Always consider `ce-correctness-reviewer` for code changes.
-- Add `ce-maintainability-reviewer` when the diff changes structure, ownership boundaries, abstractions, naming patterns, or module responsibilities.
-- Add `ce-testing-reviewer` when coverage, regression risk, test design, or verification confidence is material to the review.
+For each selected reviewer, build a generic subagent prompt that includes:
+
+1. The full local persona prompt file.
+2. The exact review scope established by the stable workflow.
+3. The changed files and diff context available from the stable workflow.
+4. The existing stable review findings, so duplicates can be marked as confirmed rather than counted as new.
+5. The finding output expectation from `code-review-ce1`'s `references/findings-schema.json`.
+
+If a selected persona file is missing, skip that reviewer and record `skipped:missing-local-persona`.
+If a generic subagent cannot run, skip that reviewer and record `skipped:subagent-unavailable`.
+If a reviewer returns unusable output, skip that reviewer and record `skipped:invalid-output`.
+
+- Always consider `correctness-reviewer.md` for code changes.
+- Add `maintainability-reviewer.md` when the diff changes structure, ownership boundaries, abstractions, naming patterns, or module responsibilities.
+- Add `testing-reviewer.md` when coverage, regression risk, test design, or verification confidence is material to the review.
 - Add specialist reviewers only when the changed diff clearly matches their domain.
 
 Specialist examples:
 
-- Use `ce-security-reviewer` for auth, permissions, public endpoints, secret handling, or user input security risks.
-- Use `ce-api-contract-reviewer` for request or response contracts, exported types, serialization, versioning, or public API behavior.
-- Use `ce-data-migrations-reviewer` or `ce-data-integrity-guardian` for migrations, schema changes, backfills, persistent data shape, or data privacy risk.
-- Use `ce-performance-reviewer` for database queries, caching, loop-heavy transforms, I/O-heavy paths, or scaling risk.
-- Use `ce-reliability-reviewer` for retries, timeouts, circuit breakers, error propagation, background jobs, or async failure modes.
-- Use frontend specialist reviewers only when the diff touches UI lifecycle, async frontend behavior, or user-facing interaction risk.
+- Use `security-reviewer.md` for auth, permissions, public endpoints, secret handling, or user input security risks.
+- Use `api-contract-reviewer.md` for request or response contracts, exported types, serialization, versioning, or public API behavior.
+- Use `data-migration-reviewer.md` for migrations, schema changes, backfills, persistent data shape, or data privacy risk.
+- Use `performance-reviewer.md` for database queries, caching, loop-heavy transforms, I/O-heavy paths, or scaling risk.
+- Use `reliability-reviewer.md` for retries, timeouts, circuit breakers, error propagation, background jobs, or async failure modes.
+- Use `julik-frontend-races-reviewer.md` when the diff touches Stimulus, Turbo, DOM event wiring, timers, async UI flows, animations, or frontend state transitions with race potential.
+- Use `swift-ios-reviewer.md` when the diff touches Swift, SwiftUI, UIKit, entitlements, Core Data, privacy manifests, packages, storyboards, XIBs, or semantic `.pbxproj` changes.
 
-Do not run a large reviewer panel for tiny changes. Prefer one to three CE reviewers unless the diff clearly spans more domains.
+Do not run a large reviewer panel for tiny changes. Prefer one to three CE1 persona reviewers unless the diff clearly spans more domains.
 
 ## Reporting Rules
 
-- If a CE reviewer finds a new valid issue, record it under `Findings added by CE1`.
-- If a CE reviewer duplicates an existing finding, record it as confirmed by CE1.
-- If a CE reviewer cannot run cleanly, record it under `Reviewers skipped` with the failure reason.
+- If a CE1 persona reviewer finds a new valid issue, record it under `Findings added by CE1`.
+- If a CE1 persona reviewer duplicates an existing finding, record it as confirmed by CE1.
+- If a CE1 persona reviewer cannot run cleanly, record it under `Reviewers skipped` with the failure reason.
 - If CE1 finds no material issues, report that directly.
 - If a reviewer was considered and skipped, explain the reason in one short phrase.
 
@@ -36,7 +49,7 @@ Use this shape in the final report:
 
 ```md
 CE1 contribution:
-- Reviewers run: list exact CE reviewers that ran
+- Reviewers run: list exact local persona reviewers that ran
 - Reviewers skipped: list considered reviewers and short reasons
 - Findings added by CE1: list new valid findings or say "none"
 - Findings confirmed by CE1: list duplicated findings that increased confidence or say "none"
