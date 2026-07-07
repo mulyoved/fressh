@@ -20,6 +20,33 @@ export const hiddenTailscaleRecoveryUiState: TailscaleRecoveryBannerState = {
 	phase: 'hidden',
 };
 
+export function registerTailscaleRecoveryUiActions(
+	actions: TailscaleRecoveryUiActions,
+): () => void {
+	useTailscaleRecoveryUiStore.getState().setActions(actions);
+	return () => {
+		useTailscaleRecoveryUiStore.getState().clearActions();
+	};
+}
+
+export function clearTailscaleRecoveryUiState(): void {
+	useTailscaleRecoveryUiStore.getState().clearRecoveryState();
+}
+
+export function markTailscaleRecoveryUiNeedsAttention(message: string): void {
+	useTailscaleRecoveryUiStore.getState().setRecoveryState({
+		phase: 'needsAttention',
+		message,
+	});
+}
+
+export function markTailscaleRecoveryUiRecovering(message: string): void {
+	useTailscaleRecoveryUiStore.getState().setRecoveryState({
+		phase: 'recovering',
+		message,
+	});
+}
+
 export const useTailscaleRecoveryUiStore = create<TailscaleRecoveryUiStore>(
 	(set) => ({
 		recoveryState: hiddenTailscaleRecoveryUiState,

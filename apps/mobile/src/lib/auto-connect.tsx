@@ -46,9 +46,10 @@ import {
 	type TailscaleRecoveryCoordinator,
 } from './tailscale-recovery-actions';
 import {
-	hiddenTailscaleRecoveryUiState,
-	type TailscaleRecoveryUiActions,
-	useTailscaleRecoveryUiStore,
+	clearTailscaleRecoveryUiState,
+	markTailscaleRecoveryUiNeedsAttention,
+	markTailscaleRecoveryUiRecovering,
+	registerTailscaleRecoveryUiActions,
 } from './tailscale-recovery-ui-store';
 import { queryClient } from './utils';
 
@@ -163,15 +164,10 @@ export function AutoConnectManager() {
 	const tailscaleRecoveryCoordinatorRef =
 		React.useRef<TailscaleRecoveryCoordinator | null>(null);
 	const clearTailscaleAttentionState = React.useCallback(() => {
-		useTailscaleRecoveryUiStore
-			.getState()
-			.setRecoveryState(hiddenTailscaleRecoveryUiState);
+		clearTailscaleRecoveryUiState();
 	}, []);
 	const markTailscaleAttentionState = React.useCallback((message: string) => {
-		useTailscaleRecoveryUiStore.getState().setRecoveryState({
-			phase: 'needsAttention',
-			message,
-		});
+		markTailscaleRecoveryUiNeedsAttention(message);
 	}, []);
 	const clearTailscaleAttention = React.useCallback(() => {
 		tailscaleRecoveryCoordinatorRef.current?.clearAutomaticAttention();
@@ -237,10 +233,7 @@ export function AutoConnectManager() {
 				clear: clearTailscaleAttentionState,
 				mark: markTailscaleAttentionState,
 				recovering: (message) => {
-					useTailscaleRecoveryUiStore.getState().setRecoveryState({
-						phase: 'recovering',
-						message,
-					});
+					markTailscaleRecoveryUiRecovering(message);
 				},
 			},
 			logger,
@@ -735,15 +728,11 @@ export function AutoConnectManager() {
 	}, []);
 
 	React.useEffect(() => {
-		const actions: TailscaleRecoveryUiActions = {
+		return registerTailscaleRecoveryUiActions({
 			openTailscale: handleOpenTailscale,
 			retry: handleRetryAfterTailscaleRecovery,
 			reset: handleResetTailscale,
-		};
-		useTailscaleRecoveryUiStore.getState().setActions(actions);
-		return () => {
-			useTailscaleRecoveryUiStore.getState().clearActions();
-		};
+		});
 	}, [
 		handleOpenTailscale,
 		handleResetTailscale,
