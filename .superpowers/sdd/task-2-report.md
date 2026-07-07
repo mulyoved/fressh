@@ -41,3 +41,19 @@ Test output:
 
 - Test run: 6 tests, 6 passed, 0 failed
 - Typecheck: exited cleanly with no diagnostics
+
+## CE1 Fix
+
+- Replaced the source-regex panel test with behavior tests that import and execute `getTailscaleRecoveryPanelModel`.
+- Added a pure panel model helper to `apps/mobile/src/lib/TailscaleRecoveryPanel.tsx` and updated the component to render from that helper.
+- Kept the existing UI unchanged while verifying hidden, unavailable-actions, enabled-actions, and recovering-state behavior.
+
+## Verification
+
+- `pnpm --filter @fressh/mobile exec tsx --test test/integration/tailscale-recovery-banner.test.ts test/integration/tailscale-recovery-panel.test.ts`
+- `pnpm --filter @fressh/mobile typecheck`
+
+Test output:
+
+- Test run: 8 tests, 8 passed, 0 failed
+- Typecheck: exited cleanly with no diagnostics

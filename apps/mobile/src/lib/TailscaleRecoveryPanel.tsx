@@ -1,24 +1,85 @@
 import React from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import type {
+	TextStyle,
+	ViewStyle,
+	PressableProps,
+	TextProps,
+	ViewProps,
+} from 'react-native';
 import {
 	getTailscaleRecoveryBannerPresentation,
 	type TailscaleRecoveryBannerState,
 } from './TailscaleRecoveryBannerPresentation';
 import { type TailscaleRecoveryUiActions } from './tailscale-recovery-ui-store';
-import { useTheme } from './theme';
+
+export type TailscaleRecoveryPanelHandlers = {
+	openTailscale?: () => void;
+	retry?: () => void;
+	reset?: () => void;
+};
+
+type TailscaleRecoveryPanelPresentation = Exclude<
+	ReturnType<typeof getTailscaleRecoveryBannerPresentation>,
+	{ visible: false }
+>;
+
+type ReactNativeModule = {
+	Pressable: React.ComponentType<PressableProps>;
+	Text: React.ComponentType<TextProps>;
+	View: React.ComponentType<ViewProps>;
+};
+
+const getReactNative = () => require('react-native') as ReactNativeModule;
+
+export type TailscaleRecoveryPanelModel =
+	| { visible: false }
+	| {
+			visible: true;
+			presentation: TailscaleRecoveryPanelPresentation;
+			handlers?: TailscaleRecoveryPanelHandlers;
+	  };
+
+export function getTailscaleRecoveryPanelModel(input: {
+	state: TailscaleRecoveryBannerState;
+	colors: Parameters<typeof getTailscaleRecoveryBannerPresentation>[1];
+	actions: TailscaleRecoveryUiActions | null;
+}): TailscaleRecoveryPanelModel {
+	const presentation = getTailscaleRecoveryBannerPresentation(
+		input.state,
+		input.colors,
+		{ actionsAvailable: input.actions !== null },
+	);
+
+	if (!presentation.visible) return { visible: false };
+
+	return {
+		visible: true,
+		presentation,
+		handlers: input.actions
+			? {
+					openTailscale: input.actions.openTailscale,
+					retry: input.actions.retry,
+					reset: input.actions.reset,
+				}
+			: undefined,
+	};
+}
 
 export function TailscaleRecoveryPanel(props: {
 	state: TailscaleRecoveryBannerState;
 	actions: TailscaleRecoveryUiActions | null;
 }): React.ReactElement | null {
+	const { useTheme } = require('./theme') as typeof import('./theme');
 	const theme = useTheme();
-	const presentation = getTailscaleRecoveryBannerPresentation(
-		props.state,
-		theme.colors,
-		{ actionsAvailable: props.actions !== null },
-	);
+	const { Pressable, Text, View } = getReactNative();
+	const model = getTailscaleRecoveryPanelModel({
+		state: props.state,
+		colors: theme.colors,
+		actions: props.actions,
+	});
 
-	if (!presentation.visible) return null;
+	if (!model.visible) return null;
+	const { presentation, handlers } = model;
 	const [openAction, retryAction, resetAction] = presentation.actions;
 
 	return (
@@ -42,7 +103,7 @@ export function TailscaleRecoveryPanel(props: {
 				<Pressable
 					accessibilityRole="button"
 					disabled={openAction.disabled}
-					onPress={props.actions?.openTailscale}
+					onPress={handlers?.openTailscale}
 					style={[
 						styles.button,
 						styles.primaryButton,
@@ -62,7 +123,7 @@ export function TailscaleRecoveryPanel(props: {
 				<Pressable
 					accessibilityRole="button"
 					disabled={retryAction.disabled}
-					onPress={props.actions?.retry}
+					onPress={handlers?.retry}
 					style={[
 						styles.button,
 						styles.secondaryButton,
@@ -80,7 +141,7 @@ export function TailscaleRecoveryPanel(props: {
 				<Pressable
 					accessibilityRole="button"
 					disabled={resetAction.disabled}
-					onPress={props.actions?.reset}
+					onPress={handlers?.reset}
 					style={[
 						styles.button,
 						styles.secondaryButton,
@@ -100,7 +161,17 @@ export function TailscaleRecoveryPanel(props: {
 	);
 }
 
-const styles = StyleSheet.create({
+const styles: {
+	panel: ViewStyle;
+	title: TextStyle;
+	message: TextStyle;
+	actions: ViewStyle;
+	button: ViewStyle;
+	primaryButton: ViewStyle;
+	secondaryButton: ViewStyle;
+	disabledButton: ViewStyle;
+	buttonText: TextStyle;
+} = {
 	panel: {
 		borderRadius: 8,
 		borderWidth: 1,
@@ -146,4 +217,4 @@ const styles = StyleSheet.create({
 		fontSize: 12,
 		fontWeight: '700',
 	},
-});
+};
