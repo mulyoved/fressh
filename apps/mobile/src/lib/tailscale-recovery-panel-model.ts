@@ -1,8 +1,10 @@
 import {
+	type TailscaleRecoveryUiActions,
+} from './tailscale-recovery-ui-store';
+import {
 	getTailscaleRecoveryBannerPresentation,
 	type TailscaleRecoveryBannerState,
 } from './TailscaleRecoveryBannerPresentation';
-import { type TailscaleRecoveryUiActions } from './tailscale-recovery-ui-store';
 
 export type TailscaleRecoveryPanelHandlers = {
 	openTailscale?: () => void;

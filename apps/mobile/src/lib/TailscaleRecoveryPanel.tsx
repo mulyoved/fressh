@@ -1,7 +1,7 @@
 import { Pressable, StyleSheet, Text, View } from 'react-native';
-import { type TailscaleRecoveryBannerState } from './TailscaleRecoveryBannerPresentation';
 import { getTailscaleRecoveryPanelModel } from './tailscale-recovery-panel-model';
 import { type TailscaleRecoveryUiActions } from './tailscale-recovery-ui-store';
+import { type TailscaleRecoveryBannerState } from './TailscaleRecoveryBannerPresentation';
 
 import { useTheme } from './theme';
 

@@ -14,7 +14,6 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAppForm, useFieldContext } from '@/components/form-components';
 import { KeyPickerSheet } from '@/components/key-manager/KeyPickerSheet';
-import { TailscaleRecoveryPanel } from '@/lib/TailscaleRecoveryPanel';
 import { pickLatestConnection } from '@/lib/connection-utils';
 import {
 	getEmptyKeyPickerMessage,
@@ -30,6 +29,7 @@ import {
 	type StoredConnectionDetails,
 } from '@/lib/secrets-manager';
 import { useTailscaleRecoveryUiStore } from '@/lib/tailscale-recovery-ui-store';
+import { TailscaleRecoveryPanel } from '@/lib/TailscaleRecoveryPanel';
 import { useTheme } from '@/lib/theme';
 import { useBottomTabSpacing } from '@/lib/useBottomTabSpacing';
 
