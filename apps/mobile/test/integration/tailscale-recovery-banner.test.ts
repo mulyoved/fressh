@@ -89,6 +89,7 @@ void test('Tailscale recovery presentation disables visible actions when handler
 	assert.equal(presentation.visible, true);
 	if (!presentation.visible) return;
 
+	assert.equal(presentation.primaryBackgroundColor, colors.primaryDisabled);
 	assert.deepEqual(
 		presentation.actions.map((action) => ({
 			id: action.id,
