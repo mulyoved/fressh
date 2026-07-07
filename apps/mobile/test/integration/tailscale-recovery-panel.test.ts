@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { getTailscaleRecoveryPanelModel } from '../../src/lib/TailscaleRecoveryPanel';
+import { getTailscaleRecoveryPanelModel } from '../../src/lib/tailscale-recovery-panel-model';
 
 const colors = {
 	primary: '#2563EB',

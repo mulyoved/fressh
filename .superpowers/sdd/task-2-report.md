@@ -57,3 +57,19 @@ Test output:
 
 - Test run: 8 tests, 8 passed, 0 failed
 - Typecheck: exited cleanly with no diagnostics
+
+## CE1 Fix 2
+
+- Split the pure `getTailscaleRecoveryPanelModel(...)` logic into `apps/mobile/src/lib/tailscale-recovery-panel-model.ts`.
+- Updated `apps/mobile/src/lib/TailscaleRecoveryPanel.tsx` to use static `react-native` imports, `useTheme`, and `StyleSheet.create(...)` while keeping the rendered panel behavior unchanged.
+- Updated `apps/mobile/test/integration/tailscale-recovery-panel.test.ts` to import the model from the new pure module.
+
+## Verification
+
+- `pnpm --filter @fressh/mobile exec tsx --test test/integration/tailscale-recovery-banner.test.ts test/integration/tailscale-recovery-panel.test.ts`
+- `pnpm --filter @fressh/mobile typecheck`
+
+Test output:
+
+- Test run: 8 tests, 8 passed, 0 failed
+- Typecheck: exited cleanly with no diagnostics
