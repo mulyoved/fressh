@@ -75,3 +75,29 @@ void test('Tailscale recovery banner presentation disables recovering actions', 
 		],
 	);
 });
+
+void test('Tailscale recovery presentation disables visible actions when handlers are unavailable', () => {
+	const presentation = getTailscaleRecoveryBannerPresentation(
+		{
+			phase: 'needsAttention',
+			message: 'Open Tailscale, then retry Fressh.',
+		},
+		colors,
+		{ actionsAvailable: false },
+	);
+
+	assert.equal(presentation.visible, true);
+	if (!presentation.visible) return;
+
+	assert.deepEqual(
+		presentation.actions.map((action) => ({
+			id: action.id,
+			disabled: action.disabled,
+		})),
+		[
+			{ id: 'openTailscale', disabled: true },
+			{ id: 'retry', disabled: true },
+			{ id: 'reset', disabled: true },
+		],
+	);
+});
