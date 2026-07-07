@@ -46,9 +46,10 @@ import {
 	type TailscaleRecoveryCoordinator,
 } from './tailscale-recovery-actions';
 import {
-	TailscaleRecoveryBanner,
-	type TailscaleRecoveryBannerState,
-} from './TailscaleRecoveryBanner';
+	hiddenTailscaleRecoveryUiState,
+	type TailscaleRecoveryUiActions,
+	useTailscaleRecoveryUiStore,
+} from './tailscale-recovery-ui-store';
 import { queryClient } from './utils';
 
 const logger = rootLogger.extend('AutoConnect');
@@ -60,12 +61,6 @@ const TAILSCALE_RESET_WAIT_FOR_IDLE_MS = 5_000;
 const AUTO_CONNECT_OPERATION_TIMEOUT_MS = 60_000;
 const AUTO_CONNECT_RECOVERY_TIMEOUT_MS = 60_000;
 const AUTO_CONNECT_CLEANUP_TIMEOUT_MS = 5_000;
-
-type TailscaleRecoveryUiState = TailscaleRecoveryBannerState;
-
-const hiddenTailscaleRecoveryState: TailscaleRecoveryUiState = {
-	phase: 'hidden',
-};
 
 function finishTrace(
 	trace: ConnectionDiagnosticTraceHandle | null,
@@ -167,13 +162,16 @@ export function AutoConnectManager() {
 	const launchUrlSuppressAutoConnectRef = React.useRef(false);
 	const tailscaleRecoveryCoordinatorRef =
 		React.useRef<TailscaleRecoveryCoordinator | null>(null);
-	const [tailscaleRecoveryUiState, setTailscaleRecoveryUiState] =
-		React.useState<TailscaleRecoveryUiState>(hiddenTailscaleRecoveryState);
 	const clearTailscaleAttentionState = React.useCallback(() => {
-		setTailscaleRecoveryUiState(hiddenTailscaleRecoveryState);
+		useTailscaleRecoveryUiStore
+			.getState()
+			.setRecoveryState(hiddenTailscaleRecoveryUiState);
 	}, []);
 	const markTailscaleAttentionState = React.useCallback((message: string) => {
-		setTailscaleRecoveryUiState({ phase: 'needsAttention', message });
+		useTailscaleRecoveryUiStore.getState().setRecoveryState({
+			phase: 'needsAttention',
+			message,
+		});
 	}, []);
 	const clearTailscaleAttention = React.useCallback(() => {
 		tailscaleRecoveryCoordinatorRef.current?.clearAutomaticAttention();
@@ -239,7 +237,7 @@ export function AutoConnectManager() {
 				clear: clearTailscaleAttentionState,
 				mark: markTailscaleAttentionState,
 				recovering: (message) => {
-					setTailscaleRecoveryUiState({
+					useTailscaleRecoveryUiStore.getState().setRecoveryState({
 						phase: 'recovering',
 						message,
 					});
@@ -736,17 +734,25 @@ export function AutoConnectManager() {
 		void tailscaleRecoveryCoordinatorRef.current?.reset();
 	}, []);
 
+	React.useEffect(() => {
+		const actions: TailscaleRecoveryUiActions = {
+			openTailscale: handleOpenTailscale,
+			retry: handleRetryAfterTailscaleRecovery,
+			reset: handleResetTailscale,
+		};
+		useTailscaleRecoveryUiStore.getState().setActions(actions);
+		return () => {
+			useTailscaleRecoveryUiStore.getState().clearActions();
+		};
+	}, [
+		handleOpenTailscale,
+		handleResetTailscale,
+		handleRetryAfterTailscaleRecovery,
+	]);
+
 	return (
-		<>
-			<AgentNotificationBridgeManager
-				preservePendingWithoutTarget={reconnectExpectedFromShellDrop}
-			/>
-			<TailscaleRecoveryBanner
-				state={tailscaleRecoveryUiState}
-				onOpenTailscale={handleOpenTailscale}
-				onRetry={handleRetryAfterTailscaleRecovery}
-				onReset={handleResetTailscale}
-			/>
-		</>
+		<AgentNotificationBridgeManager
+			preservePendingWithoutTarget={reconnectExpectedFromShellDrop}
+		/>
 	);
 }

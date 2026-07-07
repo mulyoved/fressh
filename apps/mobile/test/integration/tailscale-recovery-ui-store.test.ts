@@ -1,10 +1,14 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { beforeEach, test } from 'node:test';
 import {
 	hiddenTailscaleRecoveryUiState,
 	type TailscaleRecoveryUiActions,
 	useTailscaleRecoveryUiStore,
 } from '../../src/lib/tailscale-recovery-ui-store';
+
+const require = createRequire(import.meta.url);
 
 function resetStore() {
 	useTailscaleRecoveryUiStore.setState({
@@ -78,4 +82,15 @@ void test('Tailscale recovery UI store registers and clears action handlers', ()
 	useTailscaleRecoveryUiStore.getState().clearActions();
 
 	assert.equal(useTailscaleRecoveryUiStore.getState().actions, null);
+});
+
+void test('AutoConnectManager owns recovery policy without rendering the Tailscale overlay', () => {
+	const source = readFileSync(
+		require.resolve('../../src/lib/auto-connect.tsx'),
+		'utf8',
+	);
+
+	assert.match(source, /useTailscaleRecoveryUiStore/);
+	assert.doesNotMatch(source, /TailscaleRecoveryBanner/);
+	assert.doesNotMatch(source, /<TailscaleRecoveryBanner/);
 });
