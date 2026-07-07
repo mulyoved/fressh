@@ -10,7 +10,21 @@ void test('Connect tab owns the inline Tailscale recovery panel', () => {
 		require.resolve('../../src/app/(tabs)/index.tsx'),
 		'utf8',
 	);
+	const titleSentinel = 'A fast, friendly SSH client';
+	const panelSentinel = '<TailscaleRecoveryPanel';
+	const formSentinel = '<connectionForm.AppForm>';
+	const titleIndex = source.indexOf(titleSentinel);
+	const panelIndex = source.indexOf(panelSentinel);
+	const formIndex = source.indexOf(formSentinel);
 
+	assert.notEqual(titleIndex, -1);
+	assert.notEqual(panelIndex, -1);
+	assert.notEqual(formIndex, -1);
+	assert.ok(titleIndex < panelIndex, 'title should appear before recovery panel');
+	assert.ok(
+		panelIndex < formIndex,
+		'recovery panel should appear before connection form',
+	);
 	assert.match(source, /TailscaleRecoveryPanel/);
 	assert.match(source, /useTailscaleRecoveryUiStore/);
 	assert.match(source, /state=\{tailscaleRecoveryUiState\}/);
