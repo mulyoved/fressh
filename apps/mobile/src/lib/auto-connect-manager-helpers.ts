@@ -3,6 +3,7 @@ import {
 	type AutoConnectAttemptSourceArgs,
 	type AutoConnectReconnectContext,
 } from './auto-connect-attempt';
+import { type AutoConnectReconnectAttemptResult } from './auto-connect-reconnect-controller';
 import {
 	getStoredConnectionId,
 	pickLatestConnection,
@@ -44,6 +45,42 @@ export function pickLatestSavedReconnectConnection(
 	entries?: SavedConnectionEntry[] | null,
 ): SavedConnectionEntry | null {
 	return pickLatestConnection(entries);
+}
+
+function reconnectAttemptIsTerminal(
+	result: AutoConnectReconnectAttemptResult | boolean,
+) {
+	if (typeof result === 'boolean') return result;
+	return result.status !== 'retry';
+}
+
+export function createReconnectContextCycleState() {
+	let pendingReconnectContext: AutoConnectReconnectContext | null = null;
+	let activeReconnectContext: AutoConnectReconnectContext | null = null;
+
+	return {
+		replacePendingReconnectContext(next: AutoConnectReconnectContext) {
+			pendingReconnectContext = next;
+			activeReconnectContext = null;
+		},
+		getReconnectContextForReconnectAttempt() {
+			if (pendingReconnectContext !== null) {
+				activeReconnectContext = pendingReconnectContext;
+			}
+			return activeReconnectContext ?? undefined;
+		},
+		settleReconnectAttempt(
+			result: AutoConnectReconnectAttemptResult | boolean,
+		) {
+			if (!reconnectAttemptIsTerminal(result)) return;
+			pendingReconnectContext = null;
+			activeReconnectContext = null;
+		},
+		clearReconnectContext() {
+			pendingReconnectContext = null;
+			activeReconnectContext = null;
+		},
+	};
 }
 
 export async function attemptAutoConnectFromManager({

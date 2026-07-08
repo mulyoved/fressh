@@ -3,14 +3,22 @@ import test from 'node:test';
 import {
 	attemptAutoConnectFromManager,
 	buildPendingReconnectContext,
+	createReconnectContextCycleState,
 	pickLatestSavedReconnectConnection,
 } from '../../src/lib/auto-connect-manager-helpers';
 import { type AutoConnectAttemptSourceArgs } from '../../src/lib/auto-connect-attempt';
+import { createAutoConnectReconnectController } from '../../src/lib/auto-connect-reconnect-controller';
 import { createConnectionRunContext } from '../../src/lib/connection-run-context';
 import {
 	getAutoConnectLaunchActionForUrl,
 	shouldSkipInitialAutoConnectForUrl,
 } from '../../src/lib/auto-connect-launch';
+
+function flushPromises() {
+	return new Promise<void>((resolve) => {
+		setImmediate(resolve);
+	});
+}
 
 function createSavedEntry({
 	metadata,
@@ -273,4 +281,204 @@ void test('manager reconnect wiring passes dropped identity and unfiltered recon
 		(await capturedArgs?.loadLatestSavedReconnectConnection?.())?.value.host,
 		'100.64.0.10',
 	);
+});
+
+void test('reconnect retry loop preserves dropped reconnect context for every production adapter call', async () => {
+	const reconnectContextState = createReconnectContextCycleState();
+	reconnectContextState.replacePendingReconnectContext(
+		buildPendingReconnectContext({
+			pathname: '/shell/detail',
+			shells: [
+				{
+					connectionId: 'conn-dropped',
+					channelId: 7,
+					createdAtMs: 20,
+				},
+			],
+			connections: {
+				'conn-dropped': {
+					connectionDetails: {
+						username: 'muly',
+						host: '100.64.0.10',
+						port: 22,
+					},
+				},
+			},
+		}),
+	);
+	const savedEntries = [
+		createSavedEntry({
+			metadata: {
+				createdAtMs: 1,
+				modifiedAtMs: 10,
+				priority: 0,
+			},
+			value: {
+				username: 'muly',
+				host: '100.64.0.11',
+				port: 22,
+				useTmux: true,
+				tmuxSessionName: 'main',
+				autoConnect: true,
+				security: { type: 'key', keyId: 'key-1' },
+			},
+		}),
+		createSavedEntry({
+			metadata: {
+				createdAtMs: 2,
+				modifiedAtMs: 20,
+				priority: 0,
+			},
+			value: {
+				username: 'muly',
+				host: '100.64.0.10',
+				port: 22,
+				useTmux: true,
+				tmuxSessionName: 'main',
+				autoConnect: false,
+				security: { type: 'key', keyId: 'key-2' },
+			},
+		}),
+	];
+	let nowMs = 0;
+	const timers: Array<{
+		delayMs: number;
+		callback: () => void;
+		cleared: boolean;
+	}> = [];
+	const capturedAttempts: Array<{
+		reconnectContext: AutoConnectAttemptSourceArgs['reconnectContext'];
+		latestHost: string | undefined;
+		reconnectHost: string | undefined;
+	}> = [];
+	const controller = createAutoConnectReconnectController({
+		delaysMs: [10],
+		windowMs: 100,
+		now: () => nowMs,
+		setTimeout: (callback, delayMs) => {
+			const timer = { delayMs, callback, cleared: false };
+			timers.push(timer);
+			return timer;
+		},
+		clearTimeout: (timer) => {
+			(timer as { cleared: boolean }).cleared = true;
+		},
+		getSnapshot: () => ({
+			isAutoConnecting: false,
+			isReconnecting: false,
+			resetInFlight: false,
+			platformOS: 'android',
+			appActive: true,
+			backgroundWorkAllowed: true,
+			foregroundServiceRequired: false,
+		}),
+		setReconnecting: () => {},
+		attemptAutoConnect: async () => {
+			const reconnectContext =
+				reconnectContextState.getReconnectContextForReconnectAttempt();
+			const runContext = createConnectionRunContext({
+				timeouts: {
+					operationTimeoutMs: 1_000,
+					recoveryTimeoutMs: 1_000,
+					cleanupTimeoutMs: 1_000,
+				},
+			});
+
+			try {
+				const result = await attemptAutoConnectFromManager({
+					platformOS: 'android',
+					pathname: '/shell/detail',
+					latestShell: null,
+					connections: {},
+					reconnectContext,
+					openSavedEntryShell: async () => {
+						throw new Error('saved-entry connect should not run');
+					},
+					loadSavedConnections: async () => savedEntries,
+					loadSavedConnectionByStoredId: async () => null,
+					resolveKeySecurity: async () => null,
+					navigateToShell: () => {},
+					recovery: {
+						ensureReady: async () => ({
+							kind: 'ready' as const,
+							attempted: true as const,
+							available: true as const,
+						}),
+						recoverAfterFailure: async () => ({
+							kind: 'nonNetworkFailure' as const,
+							attempted: false as const,
+							networkLikeFailure: false as const,
+							available: true as const,
+						}),
+					},
+					markTailscaleAttention: () => {},
+					clearTailscaleAttention: () => {},
+					logger: {
+						info: () => {},
+						warn: () => {},
+					},
+					runContext,
+					attemptAutoConnectSourceImpl: async (args) => {
+						capturedAttempts.push({
+							reconnectContext: args.reconnectContext,
+							latestHost: (
+								await args.loadLatestSavedConnection()
+							)?.value.host,
+							reconnectHost: (
+								await args.loadLatestSavedReconnectConnection?.()
+							)?.value.host,
+						});
+						return capturedAttempts.length === 1
+							? { status: 'retry', message: 'retry-once' }
+							: { status: 'connected' };
+					},
+				});
+				reconnectContextState.settleReconnectAttempt(result);
+				return result;
+			} finally {
+				runContext.finish();
+			}
+		},
+		logger: {
+			info: () => {},
+			warn: () => {},
+		},
+	});
+
+	assert.equal(controller.start('shell-drop'), true);
+	await flushPromises();
+
+	const retryTimer = timers.find(
+		(timer) => timer.delayMs === 10 && timer.cleared === false,
+	);
+	assert.ok(retryTimer);
+	nowMs = 10;
+	retryTimer.callback();
+	await flushPromises();
+
+	assert.deepEqual(capturedAttempts, [
+		{
+			reconnectContext: {
+				trigger: 'reconnect',
+				pathname: '/shell/detail',
+				droppedConnectionId: 'conn-dropped',
+				droppedChannelId: 7,
+				droppedStoredConnectionId: 'muly-100_64_0_10-22',
+			},
+			latestHost: '100.64.0.11',
+			reconnectHost: '100.64.0.10',
+		},
+		{
+			reconnectContext: {
+				trigger: 'reconnect',
+				pathname: '/shell/detail',
+				droppedConnectionId: 'conn-dropped',
+				droppedChannelId: 7,
+				droppedStoredConnectionId: 'muly-100_64_0_10-22',
+			},
+			latestHost: '100.64.0.11',
+			reconnectHost: '100.64.0.10',
+		},
+	]);
+	assert.equal(controller.isRunning(), false);
 });
