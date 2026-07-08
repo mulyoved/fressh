@@ -15,7 +15,7 @@ The machine already provides shared skills globally:
 
 The repository still contains several local or legacy tool surfaces:
 
-- `.codex/skills/` has four Fressh/mobile-specific skills.
+- `.codex/skills/` has Fressh/mobile-specific skills.
 - `.agents/` is a working-tree symlink to a global shared skills location, while
   Git still tracks older `.agents/skills/*` entries with `skip-worktree`.
 - `app/.agents/skills/` is a tracked copy of older OpenClaw-style skills, some
@@ -35,6 +35,7 @@ Keep only these repository-local skills:
 - `.codex/skills/upgrading-expo`
 - `.codex/skills/qa-testing-android`
 - `.codex/skills/ios-android-logs`
+- `.codex/skills/modify-mobile-keyboard`
 
 Remove these folders from the repository:
 
@@ -76,7 +77,7 @@ Use targeted path searches to find stale references after deletion:
 ## Non-Goals
 
 - Do not remove or alter global user/machine skills.
-- Do not move the four Fressh-specific Codex skills to global storage.
+- Do not move the Fressh-specific Codex skills to global storage.
 - Do not change application source code, package manager config, mobile build
   config, or generated artifacts.
 - Do not rewrite historical product docs solely because they mention Claude,
@@ -90,8 +91,7 @@ After implementation:
 - `git ls-files` confirms removed folders are no longer tracked.
 - `rg` confirms removed local path references are gone or intentionally absent
   from current-facing docs.
-- `.codex/skills` still contains exactly the four approved Fressh-specific
-  skills.
+- `.codex/skills` still contains exactly the approved Fressh-specific skills.
 
 No app build or test run is required because the cleanup is limited to local
 agent/tooling metadata and docs.

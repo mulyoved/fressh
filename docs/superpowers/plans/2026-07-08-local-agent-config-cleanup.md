@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Remove stale repository-local agent, prompt, context, editor, and CI configuration while keeping only the four approved Fressh-specific Codex skills.
+**Goal:** Remove stale repository-local agent, prompt, context, editor, and CI configuration while keeping only approved Fressh-specific Codex skills.
 
 **Architecture:** Treat `.codex/skills` as the only repository-local skill surface. Remove shared workflow skills and prompts from the Git index, then clean local symlinks without touching global skill directories. Documentation cleanup removes stale local-path references while allowing this cleanup spec and plan to preserve the audit trail.
 
@@ -14,6 +14,7 @@
 - Keep `.codex/skills/upgrading-expo`.
 - Keep `.codex/skills/qa-testing-android`.
 - Keep `.codex/skills/ios-android-logs`.
+- Keep `.codex/skills/modify-mobile-keyboard`.
 - Remove `.agents`, `app/.agents`, `.claude`, `.codex/prompts`, `.ai`, `.vscode`, and `.github` from the repository.
 - Do not remove or alter `~/.codex/skills`, `~/.claude/skills`, or `/home/muly/code/skills/skills`.
 - Do not change application source code, package manager config, mobile build config, or generated artifacts.
@@ -160,6 +161,7 @@ Expected exactly:
 ```text
 .codex/skills/expo-deployment
 .codex/skills/ios-android-logs
+.codex/skills/modify-mobile-keyboard
 .codex/skills/qa-testing-android
 .codex/skills/upgrading-expo
 ```
@@ -355,7 +357,7 @@ test -d /home/muly/.claude/skills
 
 Expected: All commands exit `0`.
 
-- [ ] **Step 4: Confirm exactly four local Fressh-specific Codex skills remain**
+- [ ] **Step 4: Confirm exactly the approved local Fressh-specific Codex skills remain**
 
 Run:
 
@@ -368,6 +370,7 @@ Expected exactly:
 ```text
 .codex/skills/expo-deployment
 .codex/skills/ios-android-logs
+.codex/skills/modify-mobile-keyboard
 .codex/skills/qa-testing-android
 .codex/skills/upgrading-expo
 ```
@@ -401,7 +404,7 @@ Report these facts:
 
 ```text
 Removed repo-local agent/tooling folders.
-Kept .codex/skills with four Fressh-specific skills.
+Kept .codex/skills with the approved Fressh-specific skills.
 Verified removed folders are untracked and absent from the worktree.
 Verified no stale local path references outside the cleanup docs.
 No app build was run because no app source or package config changed.
