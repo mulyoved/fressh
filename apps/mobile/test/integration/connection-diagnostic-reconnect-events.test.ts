@@ -67,6 +67,26 @@ void test('reconnect diagnostic events include shell drop, transport invalidatio
 	assert.equal(invalidated.kind, 'reconnect.transport.invalidated');
 	assert.equal(completed.destination, 'hostPage');
 	assert.equal(staleInput.kind, 'reconnect.stale-input');
+	assert.deepEqual(formatReconnectEventFields(shellDropped), [
+		'connectionId=conn-1',
+		'channelId=7',
+		'networkDisappeared=true',
+	]);
+	assert.deepEqual(formatReconnectEventFields(invalidated), [
+		'connectionId=conn-1',
+		'channelId=7',
+		'hadShell=true',
+		'bridgeDisposed=true',
+		'bridgeRequestInFlight=true',
+	]);
+	assert.deepEqual(formatReconnectEventFields(completed), [
+		'outcome=needsAttention',
+		'destination=hostPage',
+	]);
+	assert.deepEqual(formatReconnectEventFields(staleInput), [
+		'connectionId=conn-1',
+		'channelId=7',
+	]);
 	assert.deepEqual(formatReconnectEventFields(uiTransition), [
 		'from=terminalOverlay',
 		'to=hostPage',

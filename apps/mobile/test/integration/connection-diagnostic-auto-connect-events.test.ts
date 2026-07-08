@@ -243,3 +243,138 @@ void test('saved-entry connect events accept auto-connect trigger and format it'
 		'port=2222',
 	]);
 });
+
+void test('saved-entry metadata formatter covers added event kinds', () => {
+	const connected = autoConnectEvents.savedEntryConnectConnected({
+		source: 'saved-entry',
+		connection: {
+			savedConnectionId: 'saved-1',
+			connectionId: 'conn-1',
+			host: 'dev-host',
+			port: 22,
+		},
+		connectionId: 'conn-1',
+		channelId: 4,
+		storedConnectionId: 'stored-1',
+		trigger: 'reconnect',
+		tmuxSessionName: 'main',
+		failureClass: 'failedNetwork',
+	});
+	const failed = autoConnectEvents.savedEntryConnectFailed({
+		source: 'saved-entry',
+		connectionId: 'conn-2',
+		storedConnectionId: 'stored-2',
+		trigger: 'reconnect',
+		host: 'failed-host',
+		port: 2022,
+		tmuxSessionName: 'ops',
+		failureClass: 'failedAuth',
+	});
+	const tmuxAttachFailed = autoConnectEvents.savedEntryConnectTmuxAttachFailed({
+		source: 'saved-entry',
+		connection: {
+			savedConnectionId: 'saved-3',
+			connectionId: 'conn-3',
+			host: 'tmux-host',
+			port: 2200,
+		},
+		connectionId: 'conn-3',
+		tmuxAttachFailureReason: 'session-missing',
+		tmuxSessionName: 'shared',
+		storedConnectionId: 'stored-3',
+		trigger: 'manual-diagnostic',
+		failureClass: 'failedTmuxAttach',
+	});
+	const started = autoConnectEvents.savedEntryConnectStarted({
+		source: 'saved-entry',
+		trigger: 'manual-diagnostic',
+		host: 'start-host',
+		port: 2223,
+		tmuxSessionName: 'diag',
+		failureClass: 'failedNetwork',
+	});
+	const retryStarted = autoConnectEvents.savedEntryRetryStarted({
+		source: 'saved-entry',
+		trigger: 'reconnect',
+		host: 'retry-host',
+		port: 2224,
+		tmuxSessionName: 'retry',
+		failureClass: 'timeout',
+	});
+	const threw = autoConnectEvents.savedEntryConnectThrew({
+		source: 'saved-entry',
+		error: new Error('connect threw'),
+		trigger: 'manual-diagnostic',
+		host: 'throw-host',
+		port: 2225,
+		tmuxSessionName: 'throw',
+		failureClass: 'startupFailed',
+	});
+	const retryThrew = autoConnectEvents.savedEntryRetryThrew({
+		source: 'saved-entry',
+		error: new Error('retry threw'),
+		trigger: 'reconnect',
+		host: 'retry-throw-host',
+		port: 2226,
+		tmuxSessionName: 'retry-throw',
+		failureClass: 'cleanupFailed',
+	});
+
+	assert.deepEqual(formatAutoConnectEventFields(connected), [
+		'connectionId=conn-1',
+		'channelId=4',
+		'trigger=reconnect',
+		'storedConnectionId=stored-1',
+		'host=dev-host',
+		'port=22',
+		'tmuxSessionName=main',
+		'failureClass=failedNetwork',
+	]);
+	assert.deepEqual(formatAutoConnectEventFields(failed), [
+		'trigger=reconnect',
+		'connectionId=conn-2',
+		'storedConnectionId=stored-2',
+		'host=failed-host',
+		'port=2022',
+		'tmuxSessionName=ops',
+		'failureClass=failedAuth',
+	]);
+	assert.deepEqual(formatAutoConnectEventFields(tmuxAttachFailed), [
+		'connectionId=conn-3',
+		'trigger=manual-diagnostic',
+		'tmuxAttachFailureReason=session-missing',
+		'tmuxSessionName=shared',
+		'storedConnectionId=stored-3',
+		'host=tmux-host',
+		'port=2200',
+		'failureClass=failedTmuxAttach',
+	]);
+	assert.deepEqual(formatAutoConnectEventFields(started), [
+		'trigger=manual-diagnostic',
+		'host=start-host',
+		'port=2223',
+		'tmuxSessionName=diag',
+		'failureClass=failedNetwork',
+	]);
+	assert.deepEqual(formatAutoConnectEventFields(retryStarted), [
+		'trigger=reconnect',
+		'host=retry-host',
+		'port=2224',
+		'tmuxSessionName=retry',
+		'failureClass=timeout',
+	]);
+	assert.deepEqual(formatAutoConnectEventFields(threw), [
+		'trigger=manual-diagnostic',
+		'host=throw-host',
+		'port=2225',
+		'tmuxSessionName=throw',
+		'failureClass=startupFailed',
+	]);
+	assert.deepEqual(formatAutoConnectEventFields(retryThrew), [
+		'trigger=reconnect',
+		'host=retry-throw-host',
+		'port=2226',
+		'tmuxSessionName=retry-throw',
+		'failureClass=cleanupFailed',
+	]);
+});

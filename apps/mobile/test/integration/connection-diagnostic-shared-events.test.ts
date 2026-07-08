@@ -15,6 +15,7 @@ import {
 	type connectionDiagnosticEventKinds,
 	type ConnectionDiagnosticEvent,
 	type manualDiagnosticEvents,
+	type mdevBridgeDiagnosticEvents,
 	type reconnectEvents,
 	type savedEntryEvents,
 	type sshEvents,
@@ -208,6 +209,7 @@ type DiagnosticEventBuilder =
 	| (typeof sshEvents)[keyof typeof sshEvents]
 	| (typeof autoConnectEvents)[keyof typeof autoConnectEvents]
 	| (typeof manualDiagnosticEvents)[keyof typeof manualDiagnosticEvents]
+	| (typeof mdevBridgeDiagnosticEvents)[keyof typeof mdevBridgeDiagnosticEvents]
 	| (typeof tailscaleDiagnosticEvents)[keyof typeof tailscaleDiagnosticEvents]
 	| (typeof reconnectEvents)[keyof typeof reconnectEvents];
 type DiagnosticEventBuilderKind = ReturnType<DiagnosticEventBuilder>['kind'];
