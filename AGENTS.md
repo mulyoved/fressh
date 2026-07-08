@@ -80,5 +80,5 @@ adb connect 100.113.210.6:5555
   Release commits often use `chore(scope): release vX.Y.Z`.
 - Keep commits scoped to a package when possible (monorepo-friendly diffs).
 - PRs should describe the change, include testing notes, and ensure
-  lint/typecheck/tests pass (CI uses `.github/workflows/check.yml`). Add
-  screenshots for UI changes (mobile/web) and link relevant issues.
+  relevant lint/typecheck/tests pass. Add screenshots for UI changes
+  (mobile/web) and link relevant issues.

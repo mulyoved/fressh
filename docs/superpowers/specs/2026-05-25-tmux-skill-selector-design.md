@@ -17,9 +17,7 @@ Discovery is limited to local skill roots at the active pane cwd and each
 ancestor up to the git root:
 
 ```text
-<active-pane-cwd>/.agents/skills/*/SKILL.md
 <active-pane-cwd>/.codex/skills/*/SKILL.md
-<ancestor-up-to-git-root>/.agents/skills/*/SKILL.md
 <ancestor-up-to-git-root>/.codex/skills/*/SKILL.md
 ```
 
@@ -98,8 +96,8 @@ The shell detail screen owns:
 3. The macro dispatches `OPEN_SKILL_SELECTOR`.
 4. Shell detail opens `SkillSelectorModal` and starts discovery.
 5. Shell detail resolves the active tmux pane cwd.
-6. Discovery runs a side-channel command against local `.agents/skills` and
-   `.codex/skills` roots from the pane cwd up to the git root.
+6. Discovery runs a side-channel command against local `.codex/skills` roots
+   from the pane cwd up to the git root.
 7. The modal filters discovered skills as the user types.
 8. Selecting a skill sends `$skill-name ` to the terminal and closes the modal.
 
