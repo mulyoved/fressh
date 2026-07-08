@@ -19,6 +19,19 @@ export type AutoConnectReconnectSnapshot = {
 	foregroundServiceRequired: boolean;
 };
 
+export type AutoConnectReconnectAttemptResult =
+	| { status: 'connected'; message?: string }
+	| { status: 'retry'; message?: string }
+	| {
+			status:
+				| 'needsAttention'
+				| 'failedNetwork'
+				| 'failedAuth'
+				| 'failedTmuxAttach'
+				| 'cleanupFailed';
+			message?: string;
+	  };
+
 type AutoConnectReconnectLogger = {
 	info: (message: string, context?: unknown) => void;
 	warn: (message: string, context?: unknown) => void;
@@ -36,7 +49,9 @@ export type AutoConnectReconnectControllerOptions = {
 	clearTimeout: (timer: unknown) => void;
 	getSnapshot: () => AutoConnectReconnectSnapshot;
 	setReconnecting: (next: boolean) => void;
-	attemptAutoConnect: (signal: AbortSignal) => Promise<boolean>;
+	attemptAutoConnect: (
+		signal: AbortSignal,
+	) => Promise<AutoConnectReconnectAttemptResult | boolean>;
 	logger: AutoConnectReconnectLogger;
 	trace?: AutoConnectReconnectTrace;
 };
@@ -47,6 +62,21 @@ export type AutoConnectReconnectController = {
 	stop: (reason: string) => void;
 	isRunning: () => boolean;
 };
+
+function normalizeReconnectAttemptResult(
+	result: AutoConnectReconnectAttemptResult | boolean,
+): AutoConnectReconnectAttemptResult {
+	if (typeof result === 'boolean') {
+		return result ? { status: 'connected' } : { status: 'retry' };
+	}
+	return result;
+}
+
+function destinationForReconnectOutcome(
+	status: AutoConnectReconnectAttemptResult['status'],
+): 'terminal' | 'hostPage' {
+	return status === 'connected' ? 'terminal' : 'hostPage';
+}
 
 export function createAutoConnectReconnectController({
 	delaysMs,
@@ -159,7 +189,10 @@ export function createAutoConnectReconnectController({
 			if (!isCurrentLoop(loopGeneration)) {
 				return { status: 'aborted' as const };
 			}
-			return { status: 'completed' as const, success: result.value };
+			return {
+				status: 'completed' as const,
+				result: normalizeReconnectAttemptResult(result.value),
+			};
 		} finally {
 			runContext.finish();
 			if (activeRunContext === runContext) {
@@ -280,7 +313,9 @@ export function createAutoConnectReconnectController({
 					reconnectElapsedMs: elapsedMs,
 				}),
 			);
-			let success = false;
+			let attemptResultValue: AutoConnectReconnectAttemptResult = {
+				status: 'retry',
+			};
 			try {
 				const attemptResult = await runAttemptWithDeadline(
 					windowMs - elapsedMs,
@@ -303,7 +338,7 @@ export function createAutoConnectReconnectController({
 				if (attemptResult.status === 'aborted') {
 					return;
 				}
-				success = attemptResult.success;
+				attemptResultValue = attemptResult.result;
 			} catch (error) {
 				if (!isCurrentLoop(loopGeneration)) return;
 				logger.warn('Reconnect attempt threw', error);
@@ -317,10 +352,28 @@ export function createAutoConnectReconnectController({
 				return;
 			}
 			if (!isCurrentLoop(loopGeneration)) return;
+			const success = attemptResultValue.status === 'connected';
 			traceAttemptResult(success, elapsedMs);
+			if (attemptResultValue.status !== 'retry') {
+				traceEvent(
+					reconnectEvents.completed({
+						source: 'reconnect-controller',
+						message:
+							attemptResultValue.message ?? attemptResultValue.status,
+						outcome: attemptResultValue.status,
+						destination: destinationForReconnectOutcome(
+							attemptResultValue.status,
+						),
+					}),
+				);
+			}
 			if (success) {
 				logger.info('Reconnected successfully', { elapsedMs });
 				stop('reconnected');
+				return;
+			}
+			if (attemptResultValue.status !== 'retry') {
+				stop(attemptResultValue.status);
 				return;
 			}
 			if (getSnapshot().resetInFlight) {

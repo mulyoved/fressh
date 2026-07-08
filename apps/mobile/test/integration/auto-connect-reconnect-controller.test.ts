@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
 	createAutoConnectReconnectController,
+	type AutoConnectReconnectAttemptResult,
 	type AutoConnectReconnectSnapshot,
 } from '../../src/lib/auto-connect-reconnect-controller';
 
@@ -32,8 +33,10 @@ function harness(
 	opts: Partial<AutoConnectReconnectSnapshot> & {
 		delaysMs?: readonly number[];
 		windowMs?: number;
-		attemptResults?: boolean[];
-		attemptAutoConnect?: (signal: AbortSignal) => Promise<boolean>;
+		attemptResults?: (AutoConnectReconnectAttemptResult | boolean)[];
+		attemptAutoConnect?: (
+			signal: AbortSignal,
+		) => Promise<AutoConnectReconnectAttemptResult | boolean>;
 	} = {},
 ) {
 	let nowMs = 0;
@@ -628,6 +631,7 @@ void test('successful reconnect stops the loop', async () => {
 		'reconnect.started',
 		'reconnect.attempt.started',
 		'reconnect.attempt.connected',
+		'reconnect.completed',
 		'reconnect.stopped',
 	]);
 	assert.deepEqual(context.events[2], {
@@ -637,6 +641,13 @@ void test('successful reconnect stops the loop', async () => {
 		reconnectElapsedMs: 0,
 	});
 	assert.deepEqual(context.events[3], {
+		kind: 'reconnect.completed',
+		source: 'reconnect-controller',
+		message: 'connected',
+		outcome: 'connected',
+		destination: 'terminal',
+	});
+	assert.deepEqual(context.events[4], {
 		kind: 'reconnect.stopped',
 		source: 'reconnect-controller',
 		message: 'reconnected',
@@ -646,6 +657,52 @@ void test('successful reconnect stops the loop', async () => {
 		context.logs.some((log) => log.message === 'Reconnected successfully'),
 		true,
 	);
+});
+
+void test('classified needs-attention attempt stops and records host-page completion', async () => {
+	const context = harness({
+		attemptAutoConnect: async () => ({
+			status: 'needsAttention',
+			message: 'Tailscale needs attention',
+		}),
+	});
+
+	assert.equal(context.controller.start('shell-drop'), true);
+	await flushPromises();
+
+	assert.equal(context.controller.isRunning(), false);
+	assert.deepEqual(eventKinds(context.events), [
+		'reconnect.started',
+		'reconnect.attempt.started',
+		'reconnect.attempt.failed',
+		'reconnect.completed',
+		'reconnect.stopped',
+	]);
+	assert.deepEqual(context.events.at(-2), {
+		kind: 'reconnect.completed',
+		source: 'reconnect-controller',
+		message: 'Tailscale needs attention',
+		outcome: 'needsAttention',
+		destination: 'hostPage',
+	});
+});
+
+void test('classified connected attempt records terminal completion and stops', async () => {
+	const context = harness({
+		attemptAutoConnect: async () => ({ status: 'connected' }),
+	});
+
+	assert.equal(context.controller.start('shell-drop'), true);
+	await flushPromises();
+
+	assert.equal(context.controller.isRunning(), false);
+	assert.deepEqual(context.events.at(-2), {
+		kind: 'reconnect.completed',
+		source: 'reconnect-controller',
+		message: 'connected',
+		outcome: 'connected',
+		destination: 'terminal',
+	});
 });
 
 void test('reset-in-flight snapshot blocks start and retry', async () => {
@@ -1037,9 +1094,17 @@ void test('records successful reconnect trace events', async () => {
 			'reconnect.started',
 			'reconnect.attempt.started',
 			'reconnect.attempt.connected',
+			'reconnect.completed',
 			'reconnect.stopped',
 		],
 	);
+	assert.deepEqual(events.at(-2), {
+		kind: 'reconnect.completed',
+		source: 'reconnect-controller',
+		message: 'connected',
+		outcome: 'connected',
+		destination: 'terminal',
+	});
 	assert.deepEqual(events.at(-1), {
 		kind: 'reconnect.stopped',
 		source: 'reconnect-controller',
