@@ -3,7 +3,10 @@ import {
 	attemptAutoConnectSource as attemptAutoConnectSourceBase,
 } from '../../src/lib/auto-connect-attempt';
 import { createConnectionRunContext } from '../../src/lib/connection-run-context';
-import { type SavedConnectionEntry } from '../../src/lib/connection-utils';
+import {
+	pickLatestConnection,
+	type SavedConnectionEntry,
+} from '../../src/lib/connection-utils';
 import type { InputConnectionDetails } from '../../src/lib/secrets-manager';
 
 export type OpenSavedEntryShellArgs = {
@@ -92,17 +95,69 @@ export function createAutoConnectRunContext(callerSignal?: AbortSignal) {
 	});
 }
 
-export async function attemptAutoConnectSource(
-	args: Omit<AutoConnectAttemptSourceArgs, 'runContext'> & {
-		runContext?: AutoConnectAttemptSourceArgs['runContext'];
-		abortSignal?: AbortSignal;
-	},
-) {
+type LegacyAttemptSourceArgs = Omit<
+	AutoConnectAttemptSourceArgs,
+	'loadLatestSavedConnection' | 'loadSavedConnections' | 'runContext'
+> & {
+	loadLatestSavedConnection?: AutoConnectAttemptSourceArgs['loadLatestSavedConnection'];
+	loadSavedConnections?: AutoConnectAttemptSourceArgs['loadSavedConnections'];
+	loadLatestSavedAutoConnectConnection?: () => Promise<
+		SavedConnectionEntry | null
+	>;
+	runContext?: AutoConnectAttemptSourceArgs['runContext'];
+	abortSignal?: AbortSignal;
+};
+
+async function loadSavedConnectionsForTest({
+	loadSavedConnections,
+	loadLatestSavedConnection,
+	loadLatestSavedAutoConnectConnection,
+}: Pick<
+	LegacyAttemptSourceArgs,
+	| 'loadSavedConnections'
+	| 'loadLatestSavedConnection'
+	| 'loadLatestSavedAutoConnectConnection'
+>): Promise<SavedConnectionEntry[] | null> {
+	if (loadSavedConnections) return await loadSavedConnections();
+	const entries = [
+		(await loadLatestSavedConnection?.()) ?? null,
+		(await loadLatestSavedAutoConnectConnection?.()) ?? null,
+	].filter((entry): entry is SavedConnectionEntry => entry !== null);
+	if (entries.length === 0) return null;
+	return Array.from(new Map(entries.map((entry) => [entry.id, entry])).values());
+}
+
+export async function attemptAutoConnectSource(args: LegacyAttemptSourceArgs) {
 	const runContext =
 		args.runContext ?? createAutoConnectRunContext(args.abortSignal);
 	try {
-		const { abortSignal: _abortSignal, ...sourceArgs } = args;
-		return await attemptAutoConnectSourceBase({ ...sourceArgs, runContext });
+		const {
+			abortSignal: _abortSignal,
+			loadSavedConnections,
+			loadLatestSavedConnection,
+			loadLatestSavedAutoConnectConnection,
+			...sourceArgs
+		} = args;
+		return await attemptAutoConnectSourceBase({
+			...sourceArgs,
+			loadLatestSavedConnection:
+				loadLatestSavedConnection ??
+				(async () =>
+					pickLatestConnection(
+						await loadSavedConnectionsForTest({
+							loadSavedConnections,
+							loadLatestSavedConnection,
+							loadLatestSavedAutoConnectConnection,
+						}),
+					)),
+			loadSavedConnections: async () =>
+				await loadSavedConnectionsForTest({
+					loadSavedConnections,
+					loadLatestSavedConnection,
+					loadLatestSavedAutoConnectConnection,
+				}),
+			runContext,
+		});
 	} finally {
 		if (!args.runContext) {
 			runContext.finish();

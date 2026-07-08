@@ -28,6 +28,7 @@ import {
 import { type AutoConnectReconnectAttemptResult } from './auto-connect-reconnect-controller';
 import {
 	getStoredConnectionId,
+	pickLatestConnection,
 	type SavedConnectionEntry,
 } from './connection-utils';
 // eslint-disable-next-line import/consistent-type-specifier-style -- keep secrets-manager fully type-only so Node integration tests do not load React Native at runtime
@@ -82,10 +83,7 @@ export type AutoConnectAttemptSourceArgs = {
 	connections: Record<string, ActiveConnectionSnapshot>;
 	openSavedEntryShell: OpenSavedEntryShell;
 	loadLatestSavedConnection: () => Promise<SavedConnectionEntry | null>;
-	loadLatestSavedAutoConnectConnection?: () => Promise<
-		SavedConnectionEntry | null
-	>;
-	loadLatestSavedReconnectConnection?: () => Promise<SavedConnectionEntry | null>;
+	loadSavedConnections: () => Promise<SavedConnectionEntry[] | null>;
 	loadSavedConnectionByStoredId?: (
 		storedConnectionId: string,
 	) => Promise<SavedConnectionEntry | null>;
@@ -184,8 +182,7 @@ export async function attemptAutoConnectSource({
 	connections,
 	openSavedEntryShell,
 	loadLatestSavedConnection,
-	loadLatestSavedAutoConnectConnection = loadLatestSavedConnection,
-	loadLatestSavedReconnectConnection = loadLatestSavedConnection,
+	loadSavedConnections,
 	loadSavedConnectionByStoredId = loadStoredConnectionByStoredId,
 	resolveKeySecurity,
 	navigateToShell,
@@ -205,6 +202,8 @@ export async function attemptAutoConnectSource({
 	const traceEvent = (event: ConnectionDiagnosticEvent) => {
 		emitTrace(trace, logger, event);
 	};
+	const loadLatestSavedReconnectConnection = async () =>
+		pickLatestConnection(await loadSavedConnections());
 
 	if (isAborted()) return false;
 
@@ -443,7 +442,7 @@ export async function attemptAutoConnectSource({
 
 	const latestEntryResult = await runContext.runOperation(
 		'operation',
-		async () => await loadLatestSavedAutoConnectConnection(),
+		async () => await loadLatestSavedConnection(),
 	);
 	if (latestEntryResult.status === 'aborted') return false;
 	const latestEntry = latestEntryResult.value;

@@ -117,8 +117,8 @@ export async function attemptAutoConnectFromManager({
 	...args
 }: Omit<
 	AutoConnectAttemptSourceArgs,
+	| 'loadSavedConnections'
 	| 'loadLatestSavedConnection'
-	| 'loadLatestSavedReconnectConnection'
 	| 'loadSavedConnectionByStoredId'
 > & {
 	loadSavedConnections: () => Promise<SavedConnectionEntry[] | null>;
@@ -130,11 +130,8 @@ export async function attemptAutoConnectFromManager({
 	return await attemptAutoConnectSourceImpl({
 		...args,
 		loadLatestSavedConnection: async () =>
-			pickLatestSavedReconnectConnection(await loadSavedConnections()),
-		loadLatestSavedAutoConnectConnection: async () =>
 			pickLatestSavedAutoConnectConnection(await loadSavedConnections()),
-		loadLatestSavedReconnectConnection: async () =>
-			pickLatestSavedReconnectConnection(await loadSavedConnections()),
+		loadSavedConnections,
 		loadSavedConnectionByStoredId,
 	});
 }

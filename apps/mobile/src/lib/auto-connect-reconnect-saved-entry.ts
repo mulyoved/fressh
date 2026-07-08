@@ -74,6 +74,40 @@ function reconnectCleanupFailureMessage(error: unknown): string {
 		: `cleanup-failed: ${detail}`;
 }
 
+function reconnectSetupFailureClass(
+	result: ReconnectSetupFailureResult,
+): string {
+	return result.status;
+}
+
+function emitReconnectSetupFailed({
+	traceEvent,
+	reconnectContext,
+	result,
+	entry,
+}: {
+	traceEvent: (event: ConnectionDiagnosticEvent) => void;
+	reconnectContext: AutoConnectReconnectContext;
+	result: ReconnectSetupFailureResult;
+	entry?: PreparedSavedEntryAttempt;
+}) {
+	traceEvent(
+		autoConnectEvents.savedEntryConnectFailed({
+			source: 'saved-entry',
+			connection: entry?.latestEntryConnection,
+			storedConnectionId:
+				entry?.latestEntryConnection.savedConnectionId ??
+				reconnectContext.droppedStoredConnectionId,
+			trigger: 'reconnect',
+			host: entry?.latestEntryConnection.host,
+			port: entry?.latestEntryConnection.port,
+			tmuxSessionName: entry?.normalizedDetails.tmuxSessionName,
+			failureClass: reconnectSetupFailureClass(result),
+			message: result.message,
+		}),
+	);
+}
+
 export function classifyReconnectSetupFailure(
 	error: unknown,
 	stage: 'saved-entry-load' | 'key-resolution',
@@ -268,6 +302,7 @@ async function runSavedEntryReconnectAttempt({
 	recovery,
 	traceEvent,
 	latestEntry,
+	reconnectContext,
 	resolveKeySecurity,
 	openSavedEntryShell,
 	navigateToShell,
@@ -280,6 +315,7 @@ async function runSavedEntryReconnectAttempt({
 	recovery: SavedEntryTailscaleRecovery;
 	traceEvent: (event: ConnectionDiagnosticEvent) => void;
 	latestEntry: SavedConnectionEntry;
+	reconnectContext: AutoConnectReconnectContext;
 	resolveKeySecurity: (
 		details: StoredConnectionDetails,
 	) => Promise<ResolvedKeySecurity | null>;
@@ -318,7 +354,14 @@ async function runSavedEntryReconnectAttempt({
 			return { status: 'retry' };
 		}
 		logger.warn('Reconnect key resolution failed', error);
-		return classifyReconnectSetupFailure(error, 'key-resolution');
+		const result = classifyReconnectSetupFailure(error, 'key-resolution');
+		emitReconnectSetupFailed({
+			traceEvent,
+			reconnectContext,
+			result,
+			entry: prepared,
+		});
+		return result;
 	}
 	if (resolvedSecurityResult.status === 'aborted') {
 		return { status: 'retry' };
@@ -451,7 +494,13 @@ export async function attemptReconnectThroughSavedEntry({
 			return { status: 'retry' };
 		}
 		logger.warn('Reconnect saved-entry lookup failed', error);
-		return classifyReconnectSetupFailure(error, 'saved-entry-load');
+		const result = classifyReconnectSetupFailure(error, 'saved-entry-load');
+		emitReconnectSetupFailed({
+			traceEvent,
+			reconnectContext,
+			result,
+		});
+		return result;
 	}
 	if (reconnectEntryResult.status === 'aborted') return { status: 'retry' };
 	const reconnectEntry = reconnectEntryResult.value;
@@ -469,6 +518,7 @@ export async function attemptReconnectThroughSavedEntry({
 		recovery,
 		traceEvent,
 		latestEntry: reconnectEntry,
+		reconnectContext,
 		resolveKeySecurity,
 		openSavedEntryShell,
 		navigateToShell,

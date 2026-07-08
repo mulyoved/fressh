@@ -5,6 +5,7 @@ import {
 	buildPendingReconnectContext,
 	createReconnectContextCycleState,
 	installPendingReconnectContext,
+	pickLatestSavedAutoConnectConnection,
 	pickLatestSavedReconnectConnection,
 	preserveShellReferencedConnections,
 } from '../../src/lib/auto-connect-manager-helpers';
@@ -428,6 +429,7 @@ void test('manager reconnect wiring passes dropped identity and unfiltered recon
 		throw new Error('manager args should be captured');
 	}
 	const receivedArgs: AutoConnectAttemptSourceArgs = capturedArgs;
+	const receivedSavedConnections = await receivedArgs.loadSavedConnections();
 	assert.deepEqual(receivedArgs.reconnectContext, {
 		trigger: 'reconnect',
 		pathname: '/shell/detail',
@@ -436,11 +438,11 @@ void test('manager reconnect wiring passes dropped identity and unfiltered recon
 		droppedStoredConnectionId: 'muly-100_64_0_10-22',
 	});
 	assert.equal(
-		(await receivedArgs.loadLatestSavedConnection())?.value.host,
+		pickLatestSavedReconnectConnection(receivedSavedConnections)?.value.host,
 		'100.64.0.10',
 	);
 	assert.equal(
-		(await receivedArgs.loadLatestSavedAutoConnectConnection?.())?.value.host,
+		pickLatestSavedAutoConnectConnection(receivedSavedConnections)?.value.host,
 		'100.64.0.11',
 	);
 });
@@ -545,13 +547,14 @@ void test('app-resume-no-shell without a dropped shell keeps normal auto-connect
 		throw new Error('manager args should be captured');
 	}
 	const receivedArgs: AutoConnectAttemptSourceArgs = capturedArgs;
+	const receivedSavedConnections = await receivedArgs.loadSavedConnections();
 	assert.equal(receivedArgs.reconnectContext, undefined);
 	assert.equal(
-		(await receivedArgs.loadLatestSavedConnection())?.value.host,
+		pickLatestSavedReconnectConnection(receivedSavedConnections)?.value.host,
 		'100.64.0.10',
 	);
 	assert.equal(
-		(await receivedArgs.loadLatestSavedAutoConnectConnection?.())?.value.host,
+		pickLatestSavedAutoConnectConnection(receivedSavedConnections)?.value.host,
 		'100.64.0.11',
 	);
 });
@@ -823,14 +826,13 @@ void test('reconnect retry loop preserves dropped reconnect context for every pr
 					},
 					runContext,
 					attemptAutoConnectSourceImpl: async (args) => {
+						const savedConnections = await args.loadSavedConnections();
 						capturedAttempts.push({
 							reconnectContext: args.reconnectContext,
-							latestHost: (
-								await args.loadLatestSavedConnection()
-							)?.value.host,
-							autoConnectHost: (
-								await args.loadLatestSavedAutoConnectConnection?.()
-							)?.value.host,
+							latestHost:
+								pickLatestSavedReconnectConnection(savedConnections)?.value.host,
+							autoConnectHost:
+								pickLatestSavedAutoConnectConnection(savedConnections)?.value.host,
 						});
 						return capturedAttempts.length === 1
 							? { status: 'retry', message: 'retry-once' }

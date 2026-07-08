@@ -81,6 +81,7 @@ void test('reconnect saved-entry invalid legacy tmux fields return a classified 
 
 void test('reconnect saved-entry loader exception returns a classified result', async () => {
 	const { logger } = createLogger();
+	const events: unknown[] = [];
 
 	const result = await attemptAutoConnectSource({
 		platformOS: 'android',
@@ -103,12 +104,13 @@ void test('reconnect saved-entry loader exception returns a classified result', 
 		loadLatestSavedConnection: async () => {
 			throw new Error('latest reconnect fallback should not run');
 		},
-		resolveKeySecurity: async () => {
-			throw new Error('security should not resolve');
-		},
-		navigateToShell: () => {
-			throw new Error('navigation should not run');
-		},
+			resolveKeySecurity: async () => {
+				throw new Error('security should not resolve');
+			},
+			trace: { event: (event) => events.push(event) },
+			navigateToShell: () => {
+				throw new Error('navigation should not run');
+			},
 		recovery: readyRecovery,
 		markTailscaleAttention: () => {},
 		clearTailscaleAttention: () => {},
@@ -119,6 +121,22 @@ void test('reconnect saved-entry loader exception returns a classified result', 
 		status: 'cleanupFailed',
 		message: 'saved entry lookup failed',
 	});
+	const failedEvent = events.find(
+		(event) =>
+			(event as { kind?: string }).kind ===
+			'auto-connect.saved-entry.connect.failed',
+	) as
+		| {
+				message?: string;
+				storedConnectionId?: string;
+				trigger?: string;
+				failureClass?: string;
+		  }
+		| undefined;
+	assert.equal(failedEvent?.message, 'saved entry lookup failed');
+	assert.equal(failedEvent?.storedConnectionId, 'muly-host_example-22');
+	assert.equal(failedEvent?.trigger, 'reconnect');
+	assert.equal(failedEvent?.failureClass, 'cleanupFailed');
 });
 
 void test('reconnect saved-entry loader network-like exception returns failedNetwork', async () => {
@@ -165,6 +183,7 @@ void test('reconnect saved-entry loader network-like exception returns failedNet
 
 void test('reconnect key resolver exception returns a classified result', async () => {
 	const { logger } = createLogger();
+	const events: unknown[] = [];
 
 	const result = await attemptAutoConnectSource({
 		platformOS: 'android',
@@ -185,12 +204,13 @@ void test('reconnect key resolver exception returns a classified result', async 
 		loadLatestSavedConnection: async () => {
 			throw new Error('latest reconnect fallback should not run');
 		},
-		resolveKeySecurity: async () => {
-			throw new Error('key resolver failed');
-		},
-		navigateToShell: () => {
-			throw new Error('navigation should not run');
-		},
+			resolveKeySecurity: async () => {
+				throw new Error('key resolver failed');
+			},
+			trace: { event: (event) => events.push(event) },
+			navigateToShell: () => {
+				throw new Error('navigation should not run');
+			},
 		recovery: readyRecovery,
 		markTailscaleAttention: () => {},
 		clearTailscaleAttention: () => {},
@@ -201,6 +221,29 @@ void test('reconnect key resolver exception returns a classified result', async 
 		status: 'failedAuth',
 		message: 'key resolver failed',
 	});
+	const failedEvent = events.find(
+		(event) =>
+			(event as { kind?: string }).kind ===
+			'auto-connect.saved-entry.connect.failed',
+	) as
+		| {
+				message?: string;
+				connection?: { savedConnectionId?: string; host?: string };
+				storedConnectionId?: string;
+				trigger?: string;
+				host?: string;
+				tmuxSessionName?: string;
+				failureClass?: string;
+		  }
+		| undefined;
+	assert.equal(failedEvent?.message, 'key resolver failed');
+	assert.equal(failedEvent?.connection?.savedConnectionId, 'saved-1');
+	assert.equal(failedEvent?.connection?.host, 'host.example');
+	assert.equal(failedEvent?.storedConnectionId, 'saved-1');
+	assert.equal(failedEvent?.trigger, 'reconnect');
+	assert.equal(failedEvent?.host, 'host.example');
+	assert.equal(failedEvent?.tmuxSessionName, 'main');
+	assert.equal(failedEvent?.failureClass, 'failedAuth');
 });
 
 void test('reconnect key resolver tmux-tagged exception returns failedTmuxAttach', async () => {
@@ -456,20 +499,34 @@ void test('tmux reconnect prefers the dropped stored connection when the dropped
 void test('reconnect falls back to the dropped saved entry without a reconnect-specific loader', async () => {
 	const events: unknown[] = [];
 	const navigations: { connectionId: string; channelId: number }[] = [];
-	const autoConnectLatestEntry = createSavedEntryWithId('auto-connect-only', {
+	const autoConnectLatestEntry = {
+		...createSavedEntryWithId('auto-connect-only', {
 		...baseDetails,
 		host: '203.0.113.20',
 		autoConnect: true,
 		useTmux: true,
 		tmuxSessionName: 'main',
-	});
-	const reconnectLatestEntry = createSavedEntryWithId('muly-100_64_0_10-22', {
+		}),
+		metadata: {
+			createdAtMs: 1,
+			modifiedAtMs: 10,
+			priority: 0,
+		},
+	};
+	const reconnectLatestEntry = {
+		...createSavedEntryWithId('muly-100_64_0_10-22', {
 		...baseDetails,
 		host: '100.64.0.10',
 		autoConnect: false,
 		useTmux: true,
 		tmuxSessionName: 'main',
-	});
+		}),
+		metadata: {
+			createdAtMs: 2,
+			modifiedAtMs: 20,
+			priority: 0,
+		},
+	};
 	let openSavedEntryCalls = 0;
 
 	const result = await attemptAutoConnectSource({
@@ -484,8 +541,10 @@ void test('reconnect falls back to the dropped saved entry without a reconnect-s
 			droppedStoredConnectionId: reconnectLatestEntry.id,
 			pathname: '/shell/detail',
 		},
-		loadLatestSavedConnection: async () => reconnectLatestEntry,
-		loadLatestSavedAutoConnectConnection: async () => autoConnectLatestEntry,
+		loadSavedConnections: async () => [
+			autoConnectLatestEntry,
+			reconnectLatestEntry,
+		],
 		loadSavedConnectionByStoredId: async () => null,
 		openSavedEntryShell: async ({ connectionDetails }) => {
 			openSavedEntryCalls += 1;
