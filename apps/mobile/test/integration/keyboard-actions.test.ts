@@ -625,6 +625,34 @@ void test('workmux keyboard command returns disposed-by-reconnect failure class'
 	]);
 });
 
+void test('workmux keyboard command drops unknown runtime failure classes', async () => {
+	const failures: { message: string; failureClass?: string }[] = [];
+	const error = new Error('unexpected failure') as Error & {
+		failureClass: string;
+	};
+	error.failureClass = 'bogus';
+	const runner = createWorkmuxKeyboardCommandRunner({
+		isTmuxEnabled: () => true,
+		getSessionName: () => 'main',
+		runWorkmuxCommand: async () => {
+			throw error;
+		},
+		showFailure: (failure) => failures.push(failure),
+		getErrorMessage: (error) =>
+			error instanceof Error ? error.message : String(error),
+	});
+
+	assert.deepEqual(await runner.run({ type: 'focus', target: 'codex' }), {
+		status: 'handled',
+	});
+	assert.deepEqual(failures, [
+		{
+			message: 'unexpected failure',
+			failureClass: undefined,
+		},
+	]);
+});
+
 void test('Workmux keyboard runner has no host command fallback', () => {
 	const source = readFileSync('src/lib/keyboard-actions.ts', 'utf8');
 	assert.doesNotMatch(source, /runHostCommand/);

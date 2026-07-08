@@ -50,6 +50,7 @@ import {
 } from '@/lib/agent-notification-visibility';
 import { useAutoConnectStore } from '@/lib/auto-connect';
 import { restartCodexWithBridge } from '@/lib/codex-restart';
+import { type ConnectionDiagnosticEvent } from '@/lib/connection-diagnostics';
 import { getStoredConnectionId } from '@/lib/connection-utils';
 import {
 	planDetectedOpenShortcutPress,
@@ -72,7 +73,6 @@ import {
 import { runMacro } from '@/lib/keyboard-runtime';
 import { rootLogger } from '@/lib/logger';
 import { resolveLucideIcon } from '@/lib/lucide-utils';
-import { type MdevBridgeFailureClass } from '@/lib/mdev-bridge-client';
 import { OrderedWriter } from '@/lib/ordered-writer';
 import { preferences } from '@/lib/preferences';
 import {
@@ -194,7 +194,10 @@ import {
 	runShellScrollbackInactiveCleanup,
 	shouldTreatShellWorkmuxScrollbackFailureAsAlreadyInactive,
 } from './shell-scrollback-policy';
-import { shouldShowShellWorkmuxKeyboardFailure } from './shell-workmux-keyboard-policy';
+import {
+	runShellWorkmuxKeyboardCommand,
+	showShellWorkmuxKeyboardFailure,
+} from './shell-workmux-keyboard-policy';
 import { resolveShellTouchScrollPolicy } from './shell-touch-scroll';
 
 const logger = rootLogger.extend('TabsShellDetail');
@@ -308,16 +311,6 @@ type TmuxAttachErrorScreenProps = {
 	sessionName: string;
 	onEdit: () => void;
 };
-
-class WorkmuxCommandFailure extends Error {
-	readonly failureClass?: MdevBridgeFailureClass;
-
-	constructor(message: string, failureClass?: MdevBridgeFailureClass) {
-		super(message);
-		this.name = 'WorkmuxCommandFailure';
-		this.failureClass = failureClass;
-	}
-}
 
 function TmuxAttachErrorScreen({
 	failureReason,
@@ -517,6 +510,21 @@ function ShellDetail() {
 		searchParams.storedConnectionId ?? connectionStoredConnectionId;
 	const isAutoConnecting = useAutoConnectStore((s) => s.isAutoConnecting);
 	const isReconnecting = useAutoConnectStore((s) => s.isReconnecting);
+	const activeDiagnosticTrace = useAutoConnectStore(
+		(s) => s.activeDiagnosticTrace,
+	);
+	const activeDiagnosticTraceRef = useRef(activeDiagnosticTrace);
+	useLayoutEffect(() => {
+		activeDiagnosticTraceRef.current = activeDiagnosticTrace;
+	}, [activeDiagnosticTrace]);
+	const workmuxDiagnosticTrace = useMemo(
+		() => ({
+			event: (event: ConnectionDiagnosticEvent) => {
+				activeDiagnosticTraceRef.current?.event(event);
+			},
+		}),
+		[],
+	);
 	const [tmuxTarget, setTmuxTarget] = useState(
 		tmuxSessionName?.trim().length ? tmuxSessionName.trim() : 'main',
 	);
@@ -528,8 +536,9 @@ function ShellDetail() {
 		void normalizedTmuxTarget;
 		return createWorkmuxControlChannel({
 			connection: connection ?? null,
+			trace: workmuxDiagnosticTrace,
 		});
-	}, [connection, normalizedTmuxTarget]);
+	}, [connection, normalizedTmuxTarget, workmuxDiagnosticTrace]);
 	const workmuxControlChannelRef = useRef(workmuxControlChannel);
 	useLayoutEffect(() => {
 		workmuxControlChannelRef.current = workmuxControlChannel;
@@ -999,6 +1008,10 @@ function ShellDetail() {
 				: 'unmount';
 			disposeWorkmuxControlChannelAfterCleanup({
 				cleanup,
+				prepareDispose: () =>
+					workmuxControlChannel.prepareDispose({
+						reason: disposeReason,
+					}),
 				dispose: () =>
 					workmuxControlChannel.dispose({
 						reason: disposeReason,
@@ -2432,29 +2445,21 @@ function ShellDetail() {
 				isTmuxEnabled: () => workmuxKeyboardTmuxEnabledRef.current,
 				getSessionName: () => workmuxKeyboardTmuxTargetRef.current,
 				getNavScope: () => preferences.workmuxNavScope.get(),
-				runWorkmuxCommand: async (argv, timeoutMs) => {
-					const result = await workmuxControlChannelRef.current.command(argv, {
+				runWorkmuxCommand: (argv, timeoutMs) =>
+					runShellWorkmuxKeyboardCommand({
+						argv,
+						runCommand: (commandArgv, options) =>
+							workmuxControlChannelRef.current.command(commandArgv, options),
 						timeoutMs,
-					});
-					if (!result.success) {
-						throw new WorkmuxCommandFailure(
-							result.error || result.output || 'Workmux command failed.',
-							result.failureClass,
-						);
-					}
-					return result.output;
-				},
+					}),
 				showFailure: ({ message, failureClass }) => {
-					if (
-						!shouldShowShellWorkmuxKeyboardFailure({
+					showShellWorkmuxKeyboardFailure({
 							failureClass,
 							isFocused: isFocusedRef.current,
 							isAppActive: isAppActiveRef.current,
-						})
-					) {
-						return;
-					}
-					Alert.alert('Workmux action failed', message);
+						message,
+						showAlert: Alert.alert,
+					});
 				},
 				getErrorMessage,
 			}),

@@ -5,6 +5,7 @@ import {
 	type MdevBridgeFailureClass,
 	type MdevBridgeStreamConnection,
 } from './mdev-bridge-client';
+import { type ConnectionDiagnosticEvent } from './connection-diagnostics';
 import { type WorkmuxScrollDirection } from './workmux-app-commands';
 import {
 	type MdevBridgeOperationRequest,
@@ -58,11 +59,13 @@ export type WorkmuxControlChannel = {
 		move: (input: WorkmuxScrollMove) => Promise<WorkmuxControlCommandResult>;
 		exit: (input: WorkmuxScrollTarget) => Promise<WorkmuxControlCommandResult>;
 	};
+	prepareDispose: (opts?: MdevBridgeDisposeOptions) => void;
 	dispose: (opts?: MdevBridgeDisposeOptions) => Promise<void>;
 };
 
 export type WorkmuxControlChannelCleanupOptions = {
 	cleanup?: Promise<unknown> | null;
+	prepareDispose?: () => void;
 	dispose: () => Promise<void>;
 	onCleanupError?: (error: unknown) => void;
 	onDisposeError?: (error: unknown) => void;
@@ -116,10 +119,12 @@ export function createWorkmuxControlChannel({
 	connection,
 	bridgeClient,
 	directTmuxTransport = createDirectTmuxControlTransport({ connection }),
+	trace,
 }: {
 	connection: WorkmuxControlConnection | null;
 	bridgeClient?: MdevBridgeClient;
 	directTmuxTransport?: DirectTmuxControlTransport;
+	trace?: { event: (event: ConnectionDiagnosticEvent) => void };
 }): WorkmuxControlChannel {
 	let disposed = false;
 	const resolvedBridgeClient =
@@ -129,6 +134,7 @@ export function createWorkmuxControlChannel({
 					connection,
 					requiredOperations: WORKMUX_REQUIRED_MDEV_BRIDGE_OPERATIONS,
 					requestTimeoutMs: DEFAULT_WORKMUX_CONTROL_COMMAND_TIMEOUT_MS,
+					trace,
 				})
 			: null);
 
@@ -204,6 +210,9 @@ export function createWorkmuxControlChannel({
 			exit: (input) =>
 				runScroll(() => buildDirectTmuxScrollExitCommand(input.sessionName)),
 		},
+		prepareDispose: (opts) => {
+			resolvedBridgeClient?.prepareDispose(opts);
+		},
 		dispose: async (opts) => {
 			disposed = true;
 			await Promise.all([
@@ -216,10 +225,12 @@ export function createWorkmuxControlChannel({
 
 export function disposeWorkmuxControlChannelAfterCleanup({
 	cleanup,
+	prepareDispose,
 	dispose,
 	onCleanupError,
 	onDisposeError,
 }: WorkmuxControlChannelCleanupOptions): void {
+	prepareDispose?.();
 	const disposeChannel = () => {
 		void dispose().catch((error: unknown) => {
 			onDisposeError?.(error);

@@ -204,10 +204,24 @@ void describe('shell detail Workmux control channel wiring', () => {
 		assert.notEqual(disposeReasonIndex, -1);
 		assert.notEqual(deferredDisposeIndex, -1);
 		assert.ok(disposeReasonIndex < deferredDisposeIndex);
+		assert.match(deferredBlock, /prepareDispose:\s*\(\)\s*=>/);
+		assert.match(deferredBlock, /workmuxControlChannel\.prepareDispose\(\{/);
 		assert.match(deferredBlock, /reason:\s*disposeReason/);
 		assert.doesNotMatch(
 			deferredBlock,
 			/useAutoConnectStore\.getState\(\)\.isReconnecting/,
+		);
+	});
+
+	void test('wires active diagnostic trace into production WorkmuxControlChannel', () => {
+		const source = readFileSync(detailSourcePath, 'utf8');
+		const memoBlock = extractWorkmuxControlChannelMemoBlock(source);
+
+		assert.match(source, /activeDiagnosticTraceRef\.current\?\.event\(event\)/);
+		assert.match(memoBlock, /trace:\s*workmuxDiagnosticTrace/);
+		assert.match(
+			memoBlock,
+			/\[\s*connection\s*,\s*normalizedTmuxTarget\s*,\s*workmuxDiagnosticTrace\s*\]/,
 		);
 	});
 
@@ -216,6 +230,7 @@ void describe('shell detail Workmux control channel wiring', () => {
 		const block = extractCreateWorkmuxControlChannelBlock(source);
 
 		assert.match(block, /connection:\s*connection\s*\?\?\s*null/);
+		assert.match(block, /trace:\s*workmuxDiagnosticTrace/);
 		assert.doesNotMatch(block, /runRemoteCommand/);
 		assert.doesNotMatch(block, /executeRemoteCommand/);
 	});
@@ -224,7 +239,10 @@ void describe('shell detail Workmux control channel wiring', () => {
 		const source = readFileSync(detailSourcePath, 'utf8');
 		const block = extractWorkmuxControlChannelMemoBlock(source);
 
-		assert.match(block, /\[\s*connection\s*,\s*normalizedTmuxTarget\s*\]/);
+		assert.match(
+			block,
+			/\[\s*connection\s*,\s*normalizedTmuxTarget\s*,\s*workmuxDiagnosticTrace\s*\]/,
+		);
 	});
 
 	void test('retries routed agent notifications when the Workmux command channel changes', () => {

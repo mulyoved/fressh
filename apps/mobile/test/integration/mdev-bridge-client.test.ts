@@ -283,6 +283,59 @@ void test('dispose with reconnect classifies pending operation as disposedByReco
 	);
 });
 
+void test('prepared reconnect dispose keeps later stream close classified as disposedByReconnect', async () => {
+	const fixture = createBridgeFixture();
+	const events: unknown[] = [];
+	const client = createMdevBridgeClient({
+		connection: fixture.connection,
+		requiredOperations: ['op.one'],
+		requestTimeoutMs: 100,
+		trace: { event: (event) => events.push(event) },
+	});
+
+	const resultPromise = client.runOperation({
+		operation: 'op.one',
+		params: {},
+		timeoutMs: 1_000,
+	});
+	await nextTick();
+	fixture.emitJson(helloResponse());
+	await nextTick();
+	assert.equal(fixture.writes.length, 2);
+
+	client.prepareDispose({ reason: 'reconnect' });
+	fixture.emit({ type: 'closed' });
+
+	assert.deepEqual(await resultPromise, {
+		success: false,
+		output: '',
+		error: 'mdev bridge stream closed.',
+		failureClass: 'disposedByReconnect',
+	});
+	assert.deepEqual(
+		events
+			.filter(
+				(event): event is { kind: string; stage: string; closeClass?: string } =>
+					typeof event === 'object' &&
+					event !== null &&
+					(event as { kind?: unknown }).kind === 'mdev-bridge.lifecycle',
+			)
+			.filter(
+				(event) =>
+					event.stage === 'client-disposed' ||
+					event.stage === 'stream-closed',
+			)
+			.map((event) => ({
+				stage: event.stage,
+				closeClass: event.closeClass,
+			})),
+		[
+			{ stage: 'client-disposed', closeClass: 'disposedByReconnect' },
+			{ stage: 'stream-closed', closeClass: 'disposedByReconnect' },
+		],
+	);
+});
+
 void test('missing operation capability fails with update message and does not send operation', async () => {
 	const fixture = createBridgeFixture();
 	const client = createMdevBridgeClient({

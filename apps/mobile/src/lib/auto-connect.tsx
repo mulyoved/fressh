@@ -84,15 +84,21 @@ function finishTrace(
 }
 
 type AutoConnectState = {
+	activeDiagnosticTrace: ConnectionDiagnosticTraceHandle | null;
 	isAutoConnecting: boolean;
 	isReconnecting: boolean;
+	setActiveDiagnosticTrace: (
+		trace: ConnectionDiagnosticTraceHandle | null,
+	) => void;
 	setAutoConnecting: (next: boolean) => void;
 	setReconnecting: (next: boolean) => void;
 };
 
 export const useAutoConnectStore = create<AutoConnectState>((set) => ({
+	activeDiagnosticTrace: null,
 	isAutoConnecting: false,
 	isReconnecting: false,
+	setActiveDiagnosticTrace: (trace) => set({ activeDiagnosticTrace: trace }),
 	setAutoConnecting: (next) => set({ isAutoConnecting: next }),
 	setReconnecting: (next) => set({ isReconnecting: next }),
 }));
@@ -372,6 +378,7 @@ export function AutoConnectManager() {
 					reason: 'auto-connect-attempt',
 				});
 			activeDiagnosticTraceRef.current = trace;
+			useAutoConnectStore.getState().setActiveDiagnosticTrace(trace);
 
 			try {
 				const result = await attemptAutoConnectFromManager({
@@ -432,6 +439,7 @@ export function AutoConnectManager() {
 				}
 				if (ownsTrace && activeDiagnosticTraceRef.current === trace) {
 					activeDiagnosticTraceRef.current = null;
+					useAutoConnectStore.getState().setActiveDiagnosticTrace(null);
 				}
 			}
 		},
@@ -501,12 +509,14 @@ export function AutoConnectManager() {
 							reason: 'reconnect-controller',
 						});
 						activeDiagnosticTraceRef.current = trace;
+						useAutoConnectStore.getState().setActiveDiagnosticTrace(trace);
 					}
 					trace.event(event);
 					if (event.kind === 'reconnect.start.blocked') {
 						finishTrace(trace, 'skipped');
 						if (activeDiagnosticTraceRef.current === trace) {
 							activeDiagnosticTraceRef.current = null;
+							useAutoConnectStore.getState().setActiveDiagnosticTrace(null);
 						}
 						return;
 					}
@@ -520,6 +530,7 @@ export function AutoConnectManager() {
 						);
 						if (activeDiagnosticTraceRef.current === trace) {
 							activeDiagnosticTraceRef.current = null;
+							useAutoConnectStore.getState().setActiveDiagnosticTrace(null);
 						}
 					}
 				},

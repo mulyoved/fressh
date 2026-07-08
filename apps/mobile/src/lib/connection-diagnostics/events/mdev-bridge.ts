@@ -12,14 +12,26 @@ export type MdevBridgeLifecycleStage =
 	| 'stream-closed'
 	| 'client-disposed';
 
-export type MdevBridgeCloseClass =
-	| 'disposedByReconnect'
-	| 'clientDisposed'
-	| 'remoteClosed'
-	| 'sendFailed'
-	| 'timeout'
-	| 'protocolError'
-	| 'startupFailed';
+export const mdevBridgeCloseClasses = [
+	'disposedByReconnect',
+	'clientDisposed',
+	'remoteClosed',
+	'sendFailed',
+	'timeout',
+	'protocolError',
+	'startupFailed',
+] as const;
+
+export type MdevBridgeCloseClass = (typeof mdevBridgeCloseClasses)[number];
+
+export function isMdevBridgeCloseClass(
+	value: unknown,
+): value is MdevBridgeCloseClass {
+	return (
+		typeof value === 'string' &&
+		(mdevBridgeCloseClasses as readonly string[]).includes(value)
+	);
+}
 
 export type MdevBridgeLifecycleEvent = ConnectionDiagnosticEventBase & {
 	kind: 'mdev-bridge.lifecycle';

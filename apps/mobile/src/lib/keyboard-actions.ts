@@ -13,7 +13,10 @@ import {
 	type WorkmuxNavAction,
 	type WorkmuxNavScope,
 } from '@/lib/workmux-app-commands';
-import { type MdevBridgeFailureClass } from '@/lib/mdev-bridge-client';
+import {
+	isMdevBridgeFailureClass,
+	type MdevBridgeFailureClass,
+} from '@/lib/mdev-bridge-client';
 
 // Action IDs emitted by runtime config are handled here at runtime.
 
@@ -262,9 +265,7 @@ function getWorkmuxCommandFailureClass(
 ): MdevBridgeFailureClass | undefined {
 	if (!error || typeof error !== 'object') return undefined;
 	const failureClass = (error as { failureClass?: unknown }).failureClass;
-	return typeof failureClass === 'string' && failureClass.length > 0
-		? (failureClass as MdevBridgeFailureClass)
-		: undefined;
+	return isMdevBridgeFailureClass(failureClass) ? failureClass : undefined;
 }
 
 function isWorkmuxKeyboardLocalPreconditionFailure(message: string): boolean {

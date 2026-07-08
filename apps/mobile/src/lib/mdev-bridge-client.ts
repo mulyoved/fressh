@@ -1,6 +1,8 @@
 import {
+	isMdevBridgeCloseClass,
 	mdevBridgeDiagnosticEvents,
 	type ConnectionDiagnosticEvent,
+	type MdevBridgeCloseClass,
 } from './connection-diagnostics';
 import { prepareWorkmuxBridgeCommandForRemoteShell } from './workmux-app-commands';
 
@@ -36,20 +38,14 @@ export type MdevBridgeClient = {
 		params: Record<string, unknown>;
 		timeoutMs?: number;
 	}) => Promise<MdevBridgeResult>;
+	prepareDispose: (opts?: MdevBridgeDisposeOptions) => void;
 	dispose: (opts?: MdevBridgeDisposeOptions) => Promise<void>;
 };
 
 export const MDEV_BRIDGE_DISPOSED_BY_RECONNECT_FAILURE_CLASS =
 	'disposedByReconnect';
 
-export type MdevBridgeFailureClass =
-	| typeof MDEV_BRIDGE_DISPOSED_BY_RECONNECT_FAILURE_CLASS
-	| 'clientDisposed'
-	| 'remoteClosed'
-	| 'sendFailed'
-	| 'timeout'
-	| 'protocolError'
-	| 'startupFailed';
+export type MdevBridgeFailureClass = MdevBridgeCloseClass;
 
 export type MdevBridgeResult = {
 	success: boolean;
@@ -100,6 +96,12 @@ export function isMdevBridgeDisposedByReconnectFailureClass(
 	failureClass: unknown,
 ): failureClass is typeof MDEV_BRIDGE_DISPOSED_BY_RECONNECT_FAILURE_CLASS {
 	return failureClass === MDEV_BRIDGE_DISPOSED_BY_RECONNECT_FAILURE_CLASS;
+}
+
+export function isMdevBridgeFailureClass(
+	failureClass: unknown,
+): failureClass is MdevBridgeFailureClass {
+	return isMdevBridgeCloseClass(failureClass);
 }
 
 function fatalResult(error: string): MdevBridgeValidationResult {
@@ -439,6 +441,16 @@ export function createMdevBridgeClient({
 			case 'exitStatus':
 			case 'exitSignal':
 			case 'closed':
+				if (disposed) {
+					emitLifecycle({
+						stage: 'stream-closed',
+						operation: pending?.operation,
+						requestId: pending?.id,
+						closeClass: disposedClass,
+						message: disposedError,
+					});
+					return;
+				}
 				emitLifecycle({
 					stage: 'stream-closed',
 					operation: pending?.operation,
@@ -493,7 +505,7 @@ export function createMdevBridgeClient({
 				startupDisposeRejecters = [];
 			}
 			if (disposed) {
-				throw new Error(MDEV_BRIDGE_CLIENT_DISPOSED_ERROR);
+				throw new Error(disposedError);
 			}
 			failedError = failedError ?? MDEV_BRIDGE_UPDATE_MESSAGE;
 			failedClass = failedClass ?? 'startupFailed';
@@ -523,7 +535,7 @@ export function createMdevBridgeClient({
 					startupDisposeRejecters = [];
 				}
 				if (disposed) {
-					throw new Error(MDEV_BRIDGE_CLIENT_DISPOSED_ERROR);
+					throw new Error(disposedError);
 				}
 				if (failedError) {
 					throw new Error(failedError);
@@ -718,6 +730,31 @@ export function createMdevBridgeClient({
 		}
 	}
 
+	function prepareDispose(opts: MdevBridgeDisposeOptions = {}) {
+		if (disposed) return;
+		const closeClass: MdevBridgeFailureClass =
+			opts.reason === 'reconnect'
+				? MDEV_BRIDGE_DISPOSED_BY_RECONNECT_FAILURE_CLASS
+				: 'clientDisposed';
+		const error = isMdevBridgeDisposedByReconnectFailureClass(closeClass)
+			? MDEV_BRIDGE_STREAM_CLOSED_ERROR
+			: MDEV_BRIDGE_CLIENT_DISPOSED_ERROR;
+		disposedError = error;
+		disposedClass = closeClass;
+		emitLifecycle({
+			stage: 'client-disposed',
+			operation: pending?.operation,
+			requestId: pending?.id,
+			closeClass,
+			message: error,
+		});
+		disposed = true;
+		startupAbortController?.abort();
+		startupAbortController = null;
+		rejectStartupWaiters(new Error(disposedError));
+		finishPending(disposedResult());
+	}
+
 	return {
 		runOperation: (input) => {
 			const deadline = createRequestDeadline(
@@ -737,30 +774,9 @@ export function createMdevBridgeClient({
 				deadline,
 			);
 		},
+		prepareDispose,
 		dispose: async (opts = {}) => {
-			if (disposed) return;
-			const closeClass: MdevBridgeFailureClass =
-				opts.reason === 'reconnect'
-					? MDEV_BRIDGE_DISPOSED_BY_RECONNECT_FAILURE_CLASS
-					: 'clientDisposed';
-			const error =
-				isMdevBridgeDisposedByReconnectFailureClass(closeClass)
-					? MDEV_BRIDGE_STREAM_CLOSED_ERROR
-					: MDEV_BRIDGE_CLIENT_DISPOSED_ERROR;
-			disposedError = error;
-			disposedClass = closeClass;
-			emitLifecycle({
-				stage: 'client-disposed',
-				operation: pending?.operation,
-				requestId: pending?.id,
-				closeClass,
-				message: error,
-			});
-			disposed = true;
-			startupAbortController?.abort();
-			startupAbortController = null;
-			rejectStartupWaiters(new Error(disposedError));
-			finishPending(disposedResult());
+			prepareDispose(opts);
 			await closeStream();
 		},
 	};

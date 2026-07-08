@@ -4,6 +4,8 @@ import {
 	connectionDiagnosticEventKinds,
 	formatConnectionDiagnosticEventFields,
 	formatMdevBridgeEventFields,
+	isMdevBridgeCloseClass,
+	mdevBridgeCloseClasses,
 	mdevBridgeDiagnosticEvents,
 } from '../../src/lib/connection-diagnostics/events';
 
@@ -47,4 +49,16 @@ void test('mdev bridge lifecycle event records classified stream closure', () =>
 		'bridgeRequestInFlight=true',
 		'closeClass=disposedByReconnect',
 	]);
+});
+
+void test('mdev bridge close class guard accepts only known lifecycle classes', () => {
+	assert.deepEqual(
+		mdevBridgeCloseClasses.map((closeClass) =>
+			isMdevBridgeCloseClass(closeClass),
+		),
+		mdevBridgeCloseClasses.map(() => true),
+	);
+	assert.equal(isMdevBridgeCloseClass('bogus'), false);
+	assert.equal(isMdevBridgeCloseClass(''), false);
+	assert.equal(isMdevBridgeCloseClass(null), false);
 });
