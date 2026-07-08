@@ -33,13 +33,19 @@ type TailscaleRecoveryBannerColors = {
 	primaryDisabled: string;
 };
 
+type TailscaleRecoveryBannerPresentationOptions = {
+	actionsAvailable?: boolean;
+};
+
 export function getTailscaleRecoveryBannerPresentation(
 	state: TailscaleRecoveryBannerState,
 	colors: TailscaleRecoveryBannerColors,
+	options: TailscaleRecoveryBannerPresentationOptions = {},
 ): TailscaleRecoveryBannerPresentation {
 	if (state.phase === 'hidden') return { visible: false };
 
-	const disabled = state.phase === 'recovering';
+	const disabled =
+		state.phase === 'recovering' || options.actionsAvailable === false;
 	return {
 		visible: true,
 		title: 'Tailscale connection needs attention',

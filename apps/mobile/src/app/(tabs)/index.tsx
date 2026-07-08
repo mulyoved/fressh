@@ -28,6 +28,8 @@ import {
 	type InputConnectionDetails,
 	type StoredConnectionDetails,
 } from '@/lib/secrets-manager';
+import { useTailscaleRecoveryUiStore } from '@/lib/tailscale-recovery-ui-store';
+import { TailscaleRecoveryPanel } from '@/lib/TailscaleRecoveryPanel';
 import { useTheme } from '@/lib/theme';
 import { useBottomTabSpacing } from '@/lib/useBottomTabSpacing';
 
@@ -52,6 +54,12 @@ const defaultValues: InputConnectionDetails = {
 
 function Host() {
 	const theme = useTheme();
+	const tailscaleRecoveryUiState = useTailscaleRecoveryUiStore(
+		(state) => state.recoveryState,
+	);
+	const tailscaleRecoveryActions = useTailscaleRecoveryUiStore(
+		(state) => state.actions,
+	);
 	const searchParams = useLocalSearchParams<{
 		editConnectionId?: string;
 	}>();
@@ -188,15 +196,19 @@ function Host() {
 						>
 							fressh
 						</Text>
-						<Text
-							style={{ marginTop: 4, fontSize: 13, color: theme.colors.muted }}
-						>
-							A fast, friendly SSH client
-						</Text>
-					</View>
-					<View
-						style={{
-							backgroundColor: theme.colors.surface,
+					<Text
+						style={{ marginTop: 4, fontSize: 13, color: theme.colors.muted }}
+					>
+						A fast, friendly SSH client
+					</Text>
+				</View>
+				<TailscaleRecoveryPanel
+					state={tailscaleRecoveryUiState}
+					actions={tailscaleRecoveryActions}
+				/>
+				<View
+					style={{
+						backgroundColor: theme.colors.surface,
 							borderRadius: 20,
 							padding: 24,
 							marginHorizontal: 4,
