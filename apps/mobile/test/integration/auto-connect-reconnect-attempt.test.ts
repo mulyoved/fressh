@@ -453,6 +453,89 @@ void test('tmux reconnect prefers the dropped stored connection when the dropped
 	);
 });
 
+void test('reconnect falls back to the dropped saved entry without a reconnect-specific loader', async () => {
+	const events: unknown[] = [];
+	const navigations: { connectionId: string; channelId: number }[] = [];
+	const autoConnectLatestEntry = createSavedEntryWithId('auto-connect-only', {
+		...baseDetails,
+		host: '203.0.113.20',
+		autoConnect: true,
+		useTmux: true,
+		tmuxSessionName: 'main',
+	});
+	const reconnectLatestEntry = createSavedEntryWithId('muly-100_64_0_10-22', {
+		...baseDetails,
+		host: '100.64.0.10',
+		autoConnect: false,
+		useTmux: true,
+		tmuxSessionName: 'main',
+	});
+	let openSavedEntryCalls = 0;
+
+	const result = await attemptAutoConnectSource({
+		platformOS: 'android',
+		pathname: '/shell/detail',
+		latestShell: null,
+		connections: {},
+		reconnectContext: {
+			trigger: 'reconnect',
+			droppedConnectionId: 'active-conn-1',
+			droppedChannelId: 4,
+			droppedStoredConnectionId: reconnectLatestEntry.id,
+			pathname: '/shell/detail',
+		},
+		loadLatestSavedConnection: async () => reconnectLatestEntry,
+		loadLatestSavedAutoConnectConnection: async () => autoConnectLatestEntry,
+		loadSavedConnectionByStoredId: async () => null,
+		openSavedEntryShell: async ({ connectionDetails }) => {
+			openSavedEntryCalls += 1;
+			assert.equal(connectionDetails.host, '100.64.0.10');
+			return {
+				status: 'connected',
+				connectionId: 'fresh-conn-1',
+				channelId: 9,
+			};
+		},
+		trace: { event: (event) => events.push(event) },
+		navigateToShell: (connectionId, channelId) => {
+			navigations.push({ connectionId, channelId });
+		},
+		resolveKeySecurity: async () => ({
+			type: 'key',
+			privateKey: 'private-key',
+		}),
+		recovery: readyRecovery,
+		markTailscaleAttention: () => {},
+		clearTailscaleAttention: () => {},
+		logger: createLogger().logger,
+	});
+
+	assert.deepEqual(result, { status: 'connected' });
+	assert.equal(openSavedEntryCalls, 1);
+	assert.deepEqual(navigations, [
+		{ connectionId: 'fresh-conn-1', channelId: 9 },
+	]);
+	assert.deepEqual(
+		events.find(
+			(event) =>
+				(event as { kind?: string }).kind === 'saved-entry.selected',
+		),
+		{
+			kind: 'saved-entry.selected',
+			source: 'saved-entry',
+			connection: {
+				savedConnectionId: reconnectLatestEntry.id,
+				username: 'muly',
+				host: '100.64.0.10',
+				port: 22,
+				keyId: 'key-1',
+				useTmux: true,
+				tmuxSessionName: 'main',
+			},
+		},
+	);
+});
+
 void test('android tmux reconnect traces Tailscale readiness before saved-entry reconnect', async () => {
 	const events: unknown[] = [];
 	const callOrder: string[] = [];
@@ -632,6 +715,7 @@ void test('reconnect maps saved-entry lifecycle outcomes into reconnect result s
 	let sawTrace = false;
 	let sawAttention = false;
 	let sawClearAttention = false;
+	const cleanupFailureEvents: unknown[] = [];
 	const { logger } = createLogger();
 	const prepared = {
 		latestEntryConnection: {
@@ -774,8 +858,11 @@ void test('reconnect maps saved-entry lifecycle outcomes into reconnect result s
 			result: testCase.result,
 			prepared,
 			latestEntryId: 'muly-100_64_0_10-22',
-			traceEvent: () => {
+			traceEvent: (event) => {
 				sawTrace = true;
+				if (testCase.name === 'cleanup failure') {
+					cleanupFailureEvents.push(event);
+				}
 			},
 			markTailscaleAttention: () => {
 				sawAttention = true;
@@ -792,6 +879,29 @@ void test('reconnect maps saved-entry lifecycle outcomes into reconnect result s
 	assert.equal(sawTrace, true);
 	assert.equal(sawAttention, true);
 	assert.equal(sawClearAttention, true);
+	assert.deepEqual(cleanupFailureEvents, [
+		{
+			kind: 'auto-connect.saved-entry.connect.failed',
+			source: 'saved-entry',
+			message: 'cleanup-failed: cleanup failed',
+			connection: {
+				savedConnectionId: 'saved-1',
+				username: 'muly',
+				host: '100.64.0.10',
+				port: 22,
+				keyId: 'key-1',
+				useTmux: true,
+				tmuxSessionName: 'main',
+			},
+			connectionId: 'fresh-conn-1',
+			storedConnectionId: 'muly-100_64_0_10-22',
+			trigger: 'reconnect',
+			host: '100.64.0.10',
+			port: 22,
+			tmuxSessionName: 'main',
+			failureClass: 'cleanupFailed',
+		},
+	]);
 });
 
 void test('reconnect maps timeout and caller abort into retry', async () => {

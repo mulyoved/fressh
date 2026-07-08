@@ -67,6 +67,13 @@ function reconnectFailureMessage(
 		: fallbackMessage;
 }
 
+function reconnectCleanupFailureMessage(error: unknown): string {
+	const detail = reconnectFailureMessage(error, 'cleanup-failed');
+	return detail === 'cleanup-failed'
+		? detail
+		: `cleanup-failed: ${detail}`;
+}
+
 export function classifyReconnectSetupFailure(
 	error: unknown,
 	stage: 'saved-entry-load' | 'key-resolution',
@@ -236,9 +243,22 @@ export function mapReconnectSavedEntryAttemptOutcome({
 		case 'aborted':
 		case 'timedOut':
 			return { status: 'retry' };
-		case 'cleanupFailed':
+		case 'cleanupFailed': {
 			logger.warn('Auto-connect cleanup failed', result.error);
+			traceEvent(
+				autoConnectEvents.savedEntryConnectFailed({
+					source: 'saved-entry',
+					connection: prepared.latestEntryConnection,
+					connectionId: result.priorOutcome.connectionId,
+					storedConnectionId: latestEntryId,
+					trigger: 'reconnect',
+					tmuxSessionName: prepared.normalizedDetails.tmuxSessionName,
+					failureClass: 'cleanupFailed',
+					message: reconnectCleanupFailureMessage(result.error),
+				}),
+			);
 			return { status: 'cleanupFailed' };
+		}
 	}
 }
 

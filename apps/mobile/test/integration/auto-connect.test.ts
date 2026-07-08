@@ -437,11 +437,11 @@ void test('manager reconnect wiring passes dropped identity and unfiltered recon
 	});
 	assert.equal(
 		(await receivedArgs.loadLatestSavedConnection())?.value.host,
-		'100.64.0.11',
+		'100.64.0.10',
 	);
 	assert.equal(
-		(await receivedArgs.loadLatestSavedReconnectConnection?.())?.value.host,
-		'100.64.0.10',
+		(await receivedArgs.loadLatestSavedAutoConnectConnection?.())?.value.host,
+		'100.64.0.11',
 	);
 });
 
@@ -548,6 +548,10 @@ void test('app-resume-no-shell without a dropped shell keeps normal auto-connect
 	assert.equal(receivedArgs.reconnectContext, undefined);
 	assert.equal(
 		(await receivedArgs.loadLatestSavedConnection())?.value.host,
+		'100.64.0.10',
+	);
+	assert.equal(
+		(await receivedArgs.loadLatestSavedAutoConnectConnection?.())?.value.host,
 		'100.64.0.11',
 	);
 });
@@ -749,7 +753,7 @@ void test('reconnect retry loop preserves dropped reconnect context for every pr
 	const capturedAttempts: Array<{
 		reconnectContext: AutoConnectAttemptSourceArgs['reconnectContext'];
 		latestHost: string | undefined;
-		reconnectHost: string | undefined;
+		autoConnectHost: string | undefined;
 	}> = [];
 	const controller = createAutoConnectReconnectController({
 		delaysMs: [10],
@@ -824,8 +828,8 @@ void test('reconnect retry loop preserves dropped reconnect context for every pr
 							latestHost: (
 								await args.loadLatestSavedConnection()
 							)?.value.host,
-							reconnectHost: (
-								await args.loadLatestSavedReconnectConnection?.()
+							autoConnectHost: (
+								await args.loadLatestSavedAutoConnectConnection?.()
 							)?.value.host,
 						});
 						return capturedAttempts.length === 1
@@ -865,8 +869,8 @@ void test('reconnect retry loop preserves dropped reconnect context for every pr
 				droppedChannelId: 7,
 				droppedStoredConnectionId: 'muly-100_64_0_10-22',
 			},
-			latestHost: '100.64.0.11',
-			reconnectHost: '100.64.0.10',
+			latestHost: '100.64.0.10',
+			autoConnectHost: '100.64.0.11',
 		},
 		{
 			reconnectContext: {
@@ -876,8 +880,8 @@ void test('reconnect retry loop preserves dropped reconnect context for every pr
 				droppedChannelId: 7,
 				droppedStoredConnectionId: 'muly-100_64_0_10-22',
 			},
-			latestHost: '100.64.0.11',
-			reconnectHost: '100.64.0.10',
+			latestHost: '100.64.0.10',
+			autoConnectHost: '100.64.0.11',
 		},
 	]);
 	assert.equal(controller.isRunning(), false);

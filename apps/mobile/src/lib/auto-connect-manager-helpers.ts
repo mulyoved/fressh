@@ -130,6 +130,8 @@ export async function attemptAutoConnectFromManager({
 	return await attemptAutoConnectSourceImpl({
 		...args,
 		loadLatestSavedConnection: async () =>
+			pickLatestSavedReconnectConnection(await loadSavedConnections()),
+		loadLatestSavedAutoConnectConnection: async () =>
 			pickLatestSavedAutoConnectConnection(await loadSavedConnections()),
 		loadLatestSavedReconnectConnection: async () =>
 			pickLatestSavedReconnectConnection(await loadSavedConnections()),

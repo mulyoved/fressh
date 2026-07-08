@@ -82,6 +82,9 @@ export type AutoConnectAttemptSourceArgs = {
 	connections: Record<string, ActiveConnectionSnapshot>;
 	openSavedEntryShell: OpenSavedEntryShell;
 	loadLatestSavedConnection: () => Promise<SavedConnectionEntry | null>;
+	loadLatestSavedAutoConnectConnection?: () => Promise<
+		SavedConnectionEntry | null
+	>;
 	loadLatestSavedReconnectConnection?: () => Promise<SavedConnectionEntry | null>;
 	loadSavedConnectionByStoredId?: (
 		storedConnectionId: string,
@@ -181,6 +184,7 @@ export async function attemptAutoConnectSource({
 	connections,
 	openSavedEntryShell,
 	loadLatestSavedConnection,
+	loadLatestSavedAutoConnectConnection = loadLatestSavedConnection,
 	loadLatestSavedReconnectConnection = loadLatestSavedConnection,
 	loadSavedConnectionByStoredId = loadStoredConnectionByStoredId,
 	resolveKeySecurity,
@@ -439,7 +443,7 @@ export async function attemptAutoConnectSource({
 
 	const latestEntryResult = await runContext.runOperation(
 		'operation',
-		async () => await loadLatestSavedConnection(),
+		async () => await loadLatestSavedAutoConnectConnection(),
 	);
 	if (latestEntryResult.status === 'aborted') return false;
 	const latestEntry = latestEntryResult.value;
