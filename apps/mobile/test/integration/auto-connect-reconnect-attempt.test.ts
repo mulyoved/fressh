@@ -519,6 +519,73 @@ void test('reconnect key-resolution timeout returns retry without shell open or 
 	}
 });
 
+void test('reconnect key-resolution caller abort returns retry without shell open or failure diagnostic', async () => {
+	const abortController = new AbortController();
+	const runContext = createConnectionRunContext({
+		callerSignal: abortController.signal,
+		timeouts: {
+			operationTimeoutMs: 60_000,
+			recoveryTimeoutMs: 60_000,
+			cleanupTimeoutMs: 5_000,
+		},
+	});
+	let openerCalls = 0;
+	let navigationCalls = 0;
+	const events: unknown[] = [];
+	const { logger } = createLogger();
+
+	try {
+		const result = await attemptAutoConnectSource({
+			platformOS: 'android',
+			pathname: '/shell/detail',
+			latestShell: null,
+			connections: {},
+			reconnectContext: {
+				trigger: 'reconnect',
+				droppedConnectionId: 'dropped-1',
+				droppedChannelId: 9,
+				droppedStoredConnectionId: 'muly-host_example-22',
+				pathname: '/shell/detail',
+			},
+			openSavedEntryShell: async () => {
+				openerCalls += 1;
+				throw new Error('connect should not run');
+			},
+			loadSavedConnectionByStoredId: async () => createSavedEntry(),
+			loadLatestSavedConnection: async () => {
+				throw new Error('latest reconnect fallback should not run');
+			},
+			resolveKeySecurity: async () => {
+				abortController.abort();
+				return await new Promise(() => {});
+			},
+			trace: { event: (event) => events.push(event) },
+			navigateToShell: () => {
+				navigationCalls += 1;
+			},
+			recovery: readyRecovery,
+			markTailscaleAttention: () => {},
+			clearTailscaleAttention: () => {},
+			logger,
+			runContext,
+		});
+
+		assert.deepEqual(result, { status: 'retry' });
+		assert.equal(openerCalls, 0);
+		assert.equal(navigationCalls, 0);
+		assert.equal(
+			events.some(
+				(event) =>
+					(event as { kind?: string }).kind ===
+					'auto-connect.saved-entry.connect.failed',
+			),
+			false,
+		);
+	} finally {
+		runContext.finish();
+	}
+});
+
 void test('tmux reconnect prefers the dropped stored connection when the dropped session is already gone', async () => {
 	const startShellCalls: unknown[] = [];
 	const events: unknown[] = [];
