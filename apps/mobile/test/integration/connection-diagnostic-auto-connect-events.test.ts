@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
 	autoConnectEvents,
+	formatAutoConnectEventFields,
 	connectionDiagnosticEventKinds,
 	type ConnectionDiagnosticConnectionIdentity,
 	type ConnectionDiagnosticEvent,
@@ -221,4 +222,24 @@ void test('saved-entry connect events carry reconnect trigger and tmux metadata'
 	assert.equal(started.tmuxSessionName, 'main');
 	assert.equal(started.connection?.host, 'dev-host');
 	assert.equal(failed.failureClass, 'failedNetwork');
+});
+
+void test('saved-entry connect events accept auto-connect trigger and format it', () => {
+	const started = autoConnectEvents.savedEntryConnectStarted({
+		source: 'saved-entry',
+		trigger: 'auto-connect',
+		connection: {
+			connectionId: 'stored-host-2',
+			host: 'dev-host-2',
+			port: 2222,
+		},
+		message: 'starting saved-entry auto-connect',
+	});
+
+	assert.equal(started.trigger, 'auto-connect');
+	assert.deepEqual(formatAutoConnectEventFields(started), [
+		'trigger=auto-connect',
+		'host=dev-host-2',
+		'port=2222',
+	]);
 });

@@ -11,14 +11,15 @@ import {
 	type ConnectionDiagnosticError,
 	type ConnectionDiagnosticEventBase,
 	type ConnectionDiagnosticSource,
-	type ConnectionDiagnosticTrigger,
 } from './types';
 
+export type AutoConnectSavedEntryTrigger =
+	| 'auto-connect'
+	| 'reconnect'
+	| 'manual-diagnostic';
+
 type AutoConnectSavedEntryMetadata = {
-	trigger?: Extract<
-		ConnectionDiagnosticTrigger,
-		'initial-auto-connect' | 'reconnect' | 'manual-diagnostic'
-	>;
+	trigger?: AutoConnectSavedEntryTrigger;
 	host?: string;
 	port?: number;
 	tmuxSessionName?: string;
