@@ -12,6 +12,7 @@ import { type SavedEntryConnectionAttemptOutcome } from './connection-attempt-li
 import { type ConnectionDiagnosticEvent } from './connection-diagnostic-types';
 import {
 	autoConnectEvents,
+	buildSavedEntryIdentity,
 	savedEntryEvents,
 } from './connection-diagnostics/events';
 import {
@@ -81,22 +82,25 @@ function emitReconnectSetupFailed({
 	reconnectContext,
 	result,
 	entry,
+	connection,
 }: {
 	traceEvent: (event: ConnectionDiagnosticEvent) => void;
 	reconnectContext: AutoConnectReconnectContext;
 	result: ReconnectSetupFailureResult;
 	entry?: PreparedSavedEntryAttempt;
+	connection?: ReturnType<typeof buildSavedEntryIdentity>;
 }) {
+	const failureConnection = entry?.latestEntryConnection ?? connection;
 	traceEvent(
 		autoConnectEvents.savedEntryConnectFailed({
 			source: 'saved-entry',
-			connection: entry?.latestEntryConnection,
+			connection: failureConnection,
 			storedConnectionId:
-				entry?.latestEntryConnection.savedConnectionId ??
+				failureConnection?.savedConnectionId ??
 				reconnectContext.droppedStoredConnectionId,
 			trigger: 'reconnect',
-			host: entry?.latestEntryConnection.host,
-			port: entry?.latestEntryConnection.port,
+			host: failureConnection?.host,
+			port: failureConnection?.port,
 			tmuxSessionName: entry?.normalizedDetails.tmuxSessionName,
 			failureClass: result.status,
 			message: result.message,
@@ -333,6 +337,15 @@ async function runSavedEntryReconnectAttempt({
 		traceEvent,
 	});
 	if (!prepared) {
+		emitReconnectSetupFailed({
+			traceEvent,
+			reconnectContext,
+			result: {
+				status: 'failedTmuxAttach',
+				message: 'invalid-tmux-settings',
+			},
+			connection: buildSavedEntryIdentity(latestEntry.id, latestEntry.value),
+		});
 		return {
 			status: 'failedTmuxAttach',
 			message: 'invalid-tmux-settings',
@@ -372,6 +385,15 @@ async function runSavedEntryReconnectAttempt({
 	const resolvedSecurity = resolvedSecurityResult.value;
 	if (runContext.signal.aborted) return { status: 'retry' };
 	if (!resolvedSecurity) {
+		emitReconnectSetupFailed({
+			traceEvent,
+			reconnectContext,
+			result: {
+				status: 'failedAuth',
+				message: 'key-missing',
+			},
+			entry: prepared,
+		});
 		return { status: 'failedAuth', message: 'key-missing' };
 	}
 

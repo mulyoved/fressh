@@ -31,6 +31,7 @@ void test('reconnect saved-entry invalid legacy tmux fields return a classified 
 		let recoveryCalls = 0;
 		let openerCalls = 0;
 		const { logger } = createLogger();
+		const events: unknown[] = [];
 
 		const result = await attemptAutoConnectSource({
 			platformOS: 'android',
@@ -55,6 +56,7 @@ void test('reconnect saved-entry invalid legacy tmux fields return a classified 
 			resolveKeySecurity: async () => {
 				throw new Error('security should not resolve');
 			},
+			trace: { event: (event) => events.push(event) },
 			navigateToShell: () => {
 				throw new Error('navigation should not run');
 			},
@@ -79,6 +81,22 @@ void test('reconnect saved-entry invalid legacy tmux fields return a classified 
 		});
 		assert.equal(recoveryCalls, 0);
 		assert.equal(openerCalls, 0);
+		const failedEvent = events.find(
+			(event) =>
+				(event as { kind?: string }).kind ===
+				'auto-connect.saved-entry.connect.failed',
+		) as
+			| {
+					message?: string;
+					storedConnectionId?: string;
+					trigger?: string;
+					failureClass?: string;
+			  }
+			| undefined;
+		assert.equal(failedEvent?.message, 'invalid-tmux-settings');
+		assert.equal(failedEvent?.storedConnectionId, 'saved-1');
+		assert.equal(failedEvent?.trigger, 'reconnect');
+		assert.equal(failedEvent?.failureClass, 'failedTmuxAttach');
 	}
 });
 
@@ -294,6 +312,7 @@ void test('reconnect key-missing returns failedAuth without opening a shell', as
 	let navigationCalls = 0;
 	let recoveryCalls = 0;
 	const { logger } = createLogger();
+	const events: unknown[] = [];
 
 	const result = await attemptAutoConnectSource({
 		platformOS: 'android',
@@ -316,6 +335,7 @@ void test('reconnect key-missing returns failedAuth without opening a shell', as
 			throw new Error('latest reconnect fallback should not run');
 		},
 		resolveKeySecurity: async () => null,
+		trace: { event: (event) => events.push(event) },
 		navigateToShell: () => {
 			navigationCalls += 1;
 		},
@@ -341,6 +361,29 @@ void test('reconnect key-missing returns failedAuth without opening a shell', as
 	assert.equal(openerCalls, 0);
 	assert.equal(navigationCalls, 0);
 	assert.equal(recoveryCalls, 0);
+	const failedEvent = events.find(
+		(event) =>
+			(event as { kind?: string }).kind ===
+			'auto-connect.saved-entry.connect.failed',
+	) as
+		| {
+				message?: string;
+				connection?: { savedConnectionId?: string; host?: string };
+				storedConnectionId?: string;
+				trigger?: string;
+				host?: string;
+				tmuxSessionName?: string;
+				failureClass?: string;
+		  }
+		| undefined;
+	assert.equal(failedEvent?.message, 'key-missing');
+	assert.equal(failedEvent?.connection?.savedConnectionId, 'saved-1');
+	assert.equal(failedEvent?.connection?.host, 'host.example');
+	assert.equal(failedEvent?.storedConnectionId, 'saved-1');
+	assert.equal(failedEvent?.trigger, 'reconnect');
+	assert.equal(failedEvent?.host, 'host.example');
+	assert.equal(failedEvent?.tmuxSessionName, 'main');
+	assert.equal(failedEvent?.failureClass, 'failedAuth');
 });
 
 void test('reconnect saved-entry lookup timeout returns retry without key resolution or shell open', async () => {
