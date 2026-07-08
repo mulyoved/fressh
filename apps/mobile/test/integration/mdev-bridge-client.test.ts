@@ -232,6 +232,39 @@ void test('starts bridge, sends hello before operation, validates capabilities, 
 	});
 });
 
+void test('bridge lifecycle trace sink failures do not affect successful operations', async () => {
+	const fixture = createBridgeFixture();
+	const client = createMdevBridgeClient({
+		connection: fixture.connection,
+		requiredOperations: ['op.one'],
+		requestTimeoutMs: 250,
+		trace: {
+			event: () => {
+				throw new Error('trace failed');
+			},
+		},
+	});
+
+	const resultPromise = client.runOperation({
+		operation: 'op.one',
+		params: { target: 'pane' },
+		timeoutMs: 250,
+	});
+	await nextTick();
+	fixture.emitJson(helloResponse());
+	await nextTick();
+	fixture.emitJson({
+		id: 'mdev-bridge-2',
+		ok: true,
+		result: { changed: true },
+	});
+
+	assert.deepEqual(await resultPromise, {
+		success: true,
+		output: '{"changed":true}\n',
+	});
+});
+
 void test('dispose with reconnect classifies pending operation as disposedByReconnect and traces lifecycle', async () => {
 	const fixture = createBridgeFixture();
 	const events: unknown[] = [];

@@ -711,6 +711,59 @@ void test('disposeWorkmuxControlChannelAfterCleanup prepares disposal before scr
 	assert.deepEqual(events, ['prepare', 'dispose']);
 });
 
+void test('disposeWorkmuxControlChannelAfterCleanup disposes after cleanup timeout', async () => {
+	const cleanup = deferred<void>();
+	const events: string[] = [];
+	const timers: (() => void)[] = [];
+	const clearedTimers: unknown[] = [];
+	const timer = { id: 1 };
+
+	disposeWorkmuxControlChannelAfterCleanup({
+		cleanup: cleanup.promise,
+		cleanupTimeoutMs: 50,
+		setTimeout: (callback, delayMs) => {
+			events.push(`timer:${delayMs}`);
+			timers.push(callback);
+			return timer;
+		},
+		clearTimeout: (clearedTimer) => {
+			clearedTimers.push(clearedTimer);
+		},
+		dispose: async () => {
+			events.push('dispose');
+		},
+		onCleanupError: (error) => {
+			events.push(
+				error instanceof Error ? `cleanup:${error.message}` : String(error),
+			);
+		},
+	});
+
+	await settle();
+	assert.deepEqual(events, ['timer:50']);
+	assert.equal(timers.length, 1);
+
+	timers[0]?.();
+	await settle();
+
+	assert.deepEqual(events, [
+		'timer:50',
+		'cleanup:Workmux control channel cleanup timed out.',
+		'dispose',
+	]);
+	assert.deepEqual(clearedTimers, [timer]);
+
+	cleanup.reject('late cleanup failure');
+	await cleanup.promise.catch(() => {});
+	await settle();
+
+	assert.deepEqual(events, [
+		'timer:50',
+		'cleanup:Workmux control channel cleanup timed out.',
+		'dispose',
+	]);
+});
+
 void test('disposeWorkmuxControlChannelAfterCleanup disposes after failed cleanup', async () => {
 	const cleanup = deferred<void>();
 	const events: string[] = [];

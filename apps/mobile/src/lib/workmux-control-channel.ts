@@ -65,13 +65,17 @@ export type WorkmuxControlChannel = {
 
 export type WorkmuxControlChannelCleanupOptions = {
 	cleanup?: Promise<unknown> | null;
+	cleanupTimeoutMs?: number;
+	clearTimeout?: (timer: unknown) => void;
 	prepareDispose?: () => void;
 	dispose: () => Promise<void>;
 	onCleanupError?: (error: unknown) => void;
 	onDisposeError?: (error: unknown) => void;
+	setTimeout?: (callback: () => void, delayMs: number) => unknown;
 };
 
 const DEFAULT_WORKMUX_CONTROL_COMMAND_TIMEOUT_MS = 10_000;
+const DEFAULT_WORKMUX_CONTROL_CLEANUP_TIMEOUT_MS = 5_000;
 
 function successResult(): WorkmuxControlCommandResult {
 	return { success: true, output: '' };
@@ -225,13 +229,29 @@ export function createWorkmuxControlChannel({
 
 export function disposeWorkmuxControlChannelAfterCleanup({
 	cleanup,
+	cleanupTimeoutMs = DEFAULT_WORKMUX_CONTROL_CLEANUP_TIMEOUT_MS,
+	clearTimeout = (timer) => {
+		globalThis.clearTimeout(timer as ReturnType<typeof globalThis.setTimeout>);
+	},
 	prepareDispose,
 	dispose,
 	onCleanupError,
 	onDisposeError,
+	setTimeout = (callback, delayMs) => globalThis.setTimeout(callback, delayMs),
 }: WorkmuxControlChannelCleanupOptions): void {
 	prepareDispose?.();
+	let disposed = false;
+	let cleanupSettled = false;
+	let cleanupTimedOut = false;
+	let cleanupTimer: unknown = null;
+
 	const disposeChannel = () => {
+		if (disposed) return;
+		disposed = true;
+		if (cleanupTimer !== null) {
+			clearTimeout(cleanupTimer);
+			cleanupTimer = null;
+		}
 		void dispose().catch((error: unknown) => {
 			onDisposeError?.(error);
 		});
@@ -242,9 +262,26 @@ export function disposeWorkmuxControlChannelAfterCleanup({
 		return;
 	}
 
+	if (cleanupTimeoutMs > 0) {
+		cleanupTimer = setTimeout(() => {
+			if (cleanupSettled) return;
+			cleanupTimedOut = true;
+			onCleanupError?.(new Error('Workmux control channel cleanup timed out.'));
+			disposeChannel();
+		}, cleanupTimeoutMs);
+		const maybeNodeTimer = cleanupTimer as { unref?: () => void };
+		maybeNodeTimer.unref?.();
+	}
+
 	void cleanup
-		.catch((error: unknown) => {
-			onCleanupError?.(error);
-		})
-		.finally(disposeChannel);
+		.then(
+			() => {},
+			(error: unknown) => {
+				if (!cleanupTimedOut) onCleanupError?.(error);
+			},
+		)
+		.finally(() => {
+			cleanupSettled = true;
+			disposeChannel();
+		});
 }
