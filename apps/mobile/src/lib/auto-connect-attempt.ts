@@ -199,6 +199,24 @@ export async function attemptAutoConnectSource({
 	const traceEvent = (event: ConnectionDiagnosticEvent) => {
 		emitTrace(trace, logger, event);
 	};
+	const attemptReconnectSavedEntry = async (
+		currentReconnectContext: AutoConnectReconnectContext,
+	) =>
+		await attemptReconnectThroughSavedEntry({
+			platformOS,
+			runContext,
+			reconnectContext: currentReconnectContext,
+			connections,
+			loadSavedConnectionByStoredId,
+			recovery,
+			traceEvent,
+			resolveKeySecurity,
+			openSavedEntryShell,
+			navigateToShell,
+			markTailscaleAttention,
+			clearTailscaleAttention,
+			logger,
+		});
 
 	if (isAborted()) return false;
 
@@ -234,22 +252,8 @@ export async function attemptAutoConnectSource({
 					message: 'stale transport marked for replacement',
 				}),
 			);
-				return await attemptReconnectThroughSavedEntry({
-					platformOS,
-					runContext,
-					reconnectContext,
-					connections,
-					loadSavedConnectionByStoredId,
-					recovery,
-					traceEvent,
-					resolveKeySecurity,
-					openSavedEntryShell,
-					navigateToShell,
-					markTailscaleAttention,
-					clearTailscaleAttention,
-					logger,
-				});
-			}
+			return await attemptReconnectSavedEntry(reconnectContext);
+		}
 		const activeConnectionIdentity = buildActiveConnectionIdentity({
 			connectionId: activeConnection.connectionId,
 			connectionDetails: {
@@ -416,21 +420,7 @@ export async function attemptAutoConnectSource({
 	}
 
 	if (reconnectContext?.trigger === 'reconnect') {
-		return await attemptReconnectThroughSavedEntry({
-			platformOS,
-			runContext,
-			reconnectContext,
-			connections,
-			loadSavedConnectionByStoredId,
-			recovery,
-			traceEvent,
-			resolveKeySecurity,
-			openSavedEntryShell,
-			navigateToShell,
-			markTailscaleAttention,
-			clearTailscaleAttention,
-			logger,
-		});
+		return await attemptReconnectSavedEntry(reconnectContext);
 	}
 
 	const latestEntryResult = await runContext.runOperation(

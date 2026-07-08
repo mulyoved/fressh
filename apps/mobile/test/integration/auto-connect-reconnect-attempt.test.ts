@@ -17,6 +17,20 @@ import {
 	readyRecovery,
 } from './auto-connect-attempt-test-helpers';
 
+function omitUndefinedFields(value: unknown): unknown {
+	if (Array.isArray(value)) {
+		return value.map((item) => omitUndefinedFields(item));
+	}
+	if (value !== null && typeof value === 'object') {
+		return Object.fromEntries(
+			Object.entries(value as Record<string, unknown>)
+				.filter(([, item]) => item !== undefined)
+				.map(([key, item]) => [key, omitUndefinedFields(item)]),
+		);
+	}
+	return value;
+}
+
 void test('reconnect saved-entry invalid legacy tmux fields return a classified result', async () => {
 	for (const value of [
 		{
@@ -840,21 +854,20 @@ void test('reconnect derives dropped stored id from active connections before la
 });
 
 void test('reconnect maps saved-entry lifecycle outcomes into reconnect result statuses', async () => {
-	let sawTrace = false;
 	let sawAttention = false;
 	let sawClearAttention = false;
-	const cleanupFailureEvents: unknown[] = [];
 	const { logger } = createLogger();
+	const connectionIdentity = {
+		savedConnectionId: 'saved-1',
+		username: 'muly',
+		host: '100.64.0.10',
+		port: 22,
+		keyId: 'key-1',
+		useTmux: true,
+		tmuxSessionName: 'main',
+	};
 	const prepared = {
-		latestEntryConnection: {
-			savedConnectionId: 'saved-1',
-			username: 'muly',
-			host: '100.64.0.10',
-			port: 22,
-			keyId: 'key-1',
-			useTmux: true,
-			tmuxSessionName: 'main',
-		},
+		latestEntryConnection: connectionIdentity,
 		normalizedDetails: {
 			...baseDetails,
 			host: '100.64.0.10',
@@ -866,7 +879,20 @@ void test('reconnect maps saved-entry lifecycle outcomes into reconnect result s
 			autoConnect: false,
 		},
 	};
-	const cases = [
+	type ReconnectOutcomeCase = {
+		name: string;
+		result: Parameters<typeof mapReconnectSavedEntryAttemptOutcome>[0]['result'];
+		expected:
+			| { status: 'failedTmuxAttach' }
+			| { status: 'needsAttention'; message: string }
+			| { status: 'failedNetwork'; message: string }
+			| { status: 'failedAuth'; message: string }
+			| { status: 'cleanupFailed' }
+			| { status: 'retry' }
+			| { status: 'connected' };
+		expectedTraceEvents: unknown[];
+	};
+	const cases: ReconnectOutcomeCase[] = [
 		{
 			name: 'tmux attach failure',
 			result: {
@@ -877,6 +903,37 @@ void test('reconnect maps saved-entry lifecycle outcomes into reconnect result s
 				storedConnectionId: 'muly-100_64_0_10-22',
 			},
 			expected: { status: 'failedTmuxAttach' as const },
+			expectedTraceEvents: [
+				{
+					kind: 'auto-connect.saved-entry.connect.tmux-attach-failed',
+					source: 'saved-entry',
+					connection: {
+						...connectionIdentity,
+						connectionId: 'fresh-conn-1',
+						tmuxSessionName: 'main',
+					},
+					connectionId: 'fresh-conn-1',
+					tmuxAttachFailureReason: 'missing session',
+					tmuxSessionName: 'main',
+					storedConnectionId: 'muly-100_64_0_10-22',
+					trigger: 'reconnect',
+					host: '100.64.0.10',
+					port: 22,
+					failureClass: 'failedTmuxAttach',
+				},
+				{
+					kind: 'auto-connect.saved-entry.connect.failed',
+					source: 'saved-entry',
+					connection: connectionIdentity,
+					connectionId: 'fresh-conn-1',
+					storedConnectionId: 'muly-100_64_0_10-22',
+					trigger: 'reconnect',
+					host: '100.64.0.10',
+					port: 22,
+					tmuxSessionName: 'main',
+					failureClass: 'failedTmuxAttach',
+				},
+			],
 		},
 		{
 			name: 'blocked readiness',
@@ -890,6 +947,18 @@ void test('reconnect maps saved-entry lifecycle outcomes into reconnect result s
 				message:
 					'Tailscale is required for this SSH connection. Open Tailscale, then retry Fressh.',
 			},
+			expectedTraceEvents: [
+				{
+					kind: 'auto-connect.saved-entry.connect.failed',
+					source: 'saved-entry',
+					connection: connectionIdentity,
+					trigger: 'reconnect',
+					host: '100.64.0.10',
+					port: 22,
+					tmuxSessionName: 'main',
+					failureClass: 'needsAttention',
+				},
+			],
 		},
 		{
 			name: 'network failure',
@@ -903,6 +972,18 @@ void test('reconnect maps saved-entry lifecycle outcomes into reconnect result s
 				status: 'failedNetwork' as const,
 				message: 'No route to host',
 			},
+			expectedTraceEvents: [
+				{
+					kind: 'auto-connect.saved-entry.connect.failed',
+					source: 'saved-entry',
+					connection: connectionIdentity,
+					trigger: 'reconnect',
+					host: '100.64.0.10',
+					port: 22,
+					tmuxSessionName: 'main',
+					failureClass: 'failedNetwork',
+				},
+			],
 		},
 		{
 			name: 'auth failure',
@@ -916,6 +997,18 @@ void test('reconnect maps saved-entry lifecycle outcomes into reconnect result s
 				status: 'failedAuth' as const,
 				message: 'auth failed',
 			},
+			expectedTraceEvents: [
+				{
+					kind: 'auto-connect.saved-entry.connect.failed',
+					source: 'saved-entry',
+					connection: connectionIdentity,
+					trigger: 'reconnect',
+					host: '100.64.0.10',
+					port: 22,
+					tmuxSessionName: 'main',
+					failureClass: 'failedAuth',
+				},
+			],
 		},
 		{
 			name: 'unknown failure',
@@ -929,6 +1022,18 @@ void test('reconnect maps saved-entry lifecycle outcomes into reconnect result s
 				status: 'needsAttention' as const,
 				message: 'boom',
 			},
+			expectedTraceEvents: [
+				{
+					kind: 'auto-connect.saved-entry.connect.failed',
+					source: 'saved-entry',
+					connection: connectionIdentity,
+					trigger: 'reconnect',
+					host: '100.64.0.10',
+					port: 22,
+					tmuxSessionName: 'main',
+					failureClass: 'needsAttention',
+				},
+			],
 		},
 		{
 			name: 'cleanup failure',
@@ -942,6 +1047,21 @@ void test('reconnect maps saved-entry lifecycle outcomes into reconnect result s
 				},
 			},
 			expected: { status: 'cleanupFailed' as const },
+			expectedTraceEvents: [
+				{
+					kind: 'auto-connect.saved-entry.connect.failed',
+					source: 'saved-entry',
+					message: 'cleanup-failed: cleanup failed',
+					connection: connectionIdentity,
+					connectionId: 'fresh-conn-1',
+					storedConnectionId: 'muly-100_64_0_10-22',
+					trigger: 'reconnect',
+					host: '100.64.0.10',
+					port: 22,
+					tmuxSessionName: 'main',
+					failureClass: 'cleanupFailed',
+				},
+			],
 		},
 		{
 			name: 'timeout retry',
@@ -950,6 +1070,7 @@ void test('reconnect maps saved-entry lifecycle outcomes into reconnect result s
 				timeoutKind: 'operation' as const,
 			},
 			expected: { status: 'retry' as const },
+			expectedTraceEvents: [],
 		},
 		{
 			name: 'abort retry',
@@ -958,6 +1079,7 @@ void test('reconnect maps saved-entry lifecycle outcomes into reconnect result s
 				reason: 'caller-aborted' as const,
 			},
 			expected: { status: 'retry' as const },
+			expectedTraceEvents: [],
 		},
 		{
 			name: 'connected',
@@ -967,30 +1089,34 @@ void test('reconnect maps saved-entry lifecycle outcomes into reconnect result s
 				channelId: 9,
 			},
 			expected: { status: 'connected' as const },
+			expectedTraceEvents: [
+				{
+					kind: 'auto-connect.saved-entry.connect.connected',
+					source: 'saved-entry',
+					connection: {
+						...connectionIdentity,
+						connectionId: 'fresh-conn-1',
+					},
+					connectionId: 'fresh-conn-1',
+					channelId: 9,
+					storedConnectionId: 'muly-100_64_0_10-22',
+					trigger: 'reconnect',
+					host: '100.64.0.10',
+					port: 22,
+					tmuxSessionName: 'main',
+				},
+			],
 		},
-	] satisfies Array<{
-		name: string;
-		result: Parameters<typeof mapReconnectSavedEntryAttemptOutcome>[0]['result'];
-		expected:
-			| { status: 'failedTmuxAttach' }
-			| { status: 'needsAttention'; message: string }
-			| { status: 'failedNetwork'; message: string }
-			| { status: 'failedAuth'; message: string }
-			| { status: 'cleanupFailed' }
-			| { status: 'retry' }
-			| { status: 'connected' };
-	}>;
+	];
 
 	for (const testCase of cases) {
+		const traceEvents: unknown[] = [];
 		const result = mapReconnectSavedEntryAttemptOutcome({
 			result: testCase.result,
 			prepared,
 			latestEntryId: 'muly-100_64_0_10-22',
 			traceEvent: (event) => {
-				sawTrace = true;
-				if (testCase.name === 'cleanup failure') {
-					cleanupFailureEvents.push(event);
-				}
+				traceEvents.push(event);
 			},
 			markTailscaleAttention: () => {
 				sawAttention = true;
@@ -1002,34 +1128,15 @@ void test('reconnect maps saved-entry lifecycle outcomes into reconnect result s
 		});
 
 		assert.deepEqual(result, testCase.expected, testCase.name);
+		assert.deepEqual(
+			omitUndefinedFields(traceEvents),
+			omitUndefinedFields(testCase.expectedTraceEvents),
+			testCase.name,
+		);
 	}
 
-	assert.equal(sawTrace, true);
 	assert.equal(sawAttention, true);
 	assert.equal(sawClearAttention, true);
-	assert.deepEqual(cleanupFailureEvents, [
-		{
-			kind: 'auto-connect.saved-entry.connect.failed',
-			source: 'saved-entry',
-			message: 'cleanup-failed: cleanup failed',
-			connection: {
-				savedConnectionId: 'saved-1',
-				username: 'muly',
-				host: '100.64.0.10',
-				port: 22,
-				keyId: 'key-1',
-				useTmux: true,
-				tmuxSessionName: 'main',
-			},
-			connectionId: 'fresh-conn-1',
-			storedConnectionId: 'muly-100_64_0_10-22',
-			trigger: 'reconnect',
-			host: '100.64.0.10',
-			port: 22,
-			tmuxSessionName: 'main',
-			failureClass: 'cleanupFailed',
-		},
-	]);
 });
 
 void test('reconnect maps timeout and caller abort into retry', async () => {
