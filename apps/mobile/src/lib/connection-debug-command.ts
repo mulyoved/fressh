@@ -11,6 +11,7 @@ import {
 import {
 	type ConnectionDiagnosticAppState,
 	type ConnectionDiagnosticRecorder,
+	type ConnectionDiagnosticTrace,
 } from './connection-diagnostic-types';
 import { type SavedConnectionEntry } from './connection-utils';
 import { type runDiagnosticShellProbe } from './diagnostic-shell-probe';
@@ -40,6 +41,53 @@ export type ConnectionDebugCommandArgs = {
 	logger: ConnectionDebugLogger;
 	manualDiagnosticRunner?: ManualConnectionDiagnosticRunner;
 };
+
+function readEventMessage(event: ConnectionDiagnosticTrace['events'][number]) {
+	const message = (event as { message?: unknown }).message;
+	return typeof message === 'string' && message.length > 0 ? message : null;
+}
+
+function readEventDestination(
+	event: ConnectionDiagnosticTrace['events'][number],
+) {
+	const destination = (event as { destination?: unknown }).destination;
+	return typeof destination === 'string' && destination.length > 0
+		? destination
+		: null;
+}
+
+export function formatRecordedConnectionDiagnosticTrace(
+	trace: ConnectionDiagnosticTrace,
+): string {
+	const lines = [
+		`trace: ${trace.id}`,
+		`trigger: ${trace.trigger}`,
+		`reason: ${trace.reason}`,
+		`status: ${trace.status}`,
+	];
+	for (const event of trace.events) {
+		lines.push(`- ${event.kind}`);
+		const message = readEventMessage(event);
+		if (message) lines.push(`  message: ${message}`);
+		const destination = readEventDestination(event);
+		if (destination) lines.push(`  destination=${destination}`);
+	}
+	return lines.join('\n');
+}
+
+function formatRecordedReconnectTraceHistory(
+	recorder: ConnectionDiagnosticRecorder,
+): string {
+	const reconnectTraces = recorder
+		.getHistory()
+		.filter((trace) => trace.trigger === 'reconnect');
+	if (reconnectTraces.length === 0) return '';
+	return [
+		'Recorded reconnect traces',
+		'',
+		...reconnectTraces.map(formatRecordedConnectionDiagnosticTrace),
+	].join('\n');
+}
 
 export async function runConnectionDebugCommand(
 	args: ConnectionDebugCommandArgs,
@@ -81,8 +129,12 @@ export async function runConnectionDebugCommand(
 			}),
 		recovery: args.recovery,
 	});
+	const recordedHistory = formatRecordedReconnectTraceHistory(args.recorder);
+	const prompt = recordedHistory
+		? `${recordedHistory}\n\n${diagnostic.prompt}`
+		: diagnostic.prompt;
 	const delivery = await deliverConnectionDiagnosticPrompt({
-		prompt: diagnostic.prompt,
+		prompt,
 		allowTerminalPaste: args.allowTerminalPaste,
 		pasteIntoTerminal: args.pasteIntoTerminal,
 		copyToClipboard: args.copyToClipboard,

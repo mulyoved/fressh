@@ -1,8 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { runConnectionDebugCommand } from '../../src/lib/connection-debug-command';
+import {
+	formatRecordedConnectionDiagnosticTrace,
+	runConnectionDebugCommand,
+} from '../../src/lib/connection-debug-command';
 import {
 	createConnectionDiagnosticRecorder,
+	reconnectEvents,
 	sshEvents,
 } from '../../src/lib/connection-diagnostics';
 import { type SavedConnectionEntry } from '../../src/lib/connection-utils';
@@ -110,6 +114,73 @@ void test('debug command closes menu, probes latest saved entry, and pastes prom
 		'probe:dev.tailnet.ts.net',
 		'paste:true',
 	]);
+});
+
+void test('debug command includes recorded reconnect trace history', async () => {
+	const recorder = createConnectionDiagnosticRecorder({ now: () => 1000 });
+	const trace = recorder.startTrace({
+		trigger: 'reconnect',
+		reason: 'shell-drop',
+	});
+	trace.event(
+		reconnectEvents.completed({
+			source: 'reconnect-controller',
+			outcome: 'needsAttention',
+			destination: 'hostPage',
+			message: 'Tailscale needs attention',
+		}),
+	);
+	trace.finish('failed');
+	const formattedTrace = formatRecordedConnectionDiagnosticTrace(trace.trace);
+	assert.match(formattedTrace, /reason: shell-drop/);
+	assert.match(formattedTrace, /reconnect.completed/);
+	assert.match(formattedTrace, /destination=hostPage/);
+	let copiedPrompt = '';
+
+	const result = await runConnectionDebugCommand({
+		recorder,
+		appState: {
+			platformOS: 'android',
+			isAutoConnecting: false,
+			isReconnecting: false,
+		},
+		closeMenu: () => {},
+		loadLatestSavedConnection: async () => {
+			throw new Error('manual diagnostic runner should not load saved entries');
+		},
+		resolvePrivateKey: async () => {
+			throw new Error('manual diagnostic runner should not resolve keys');
+		},
+		runDiagnosticShellProbe: async () => {
+			throw new Error('manual diagnostic runner should not probe');
+		},
+		connect: async () => ({ connectionId: 'conn-1' }) as never,
+		recovery: readyRecovery,
+		allowTerminalPaste: false,
+		pasteIntoTerminal: () => {
+			throw new Error('paste should not run');
+		},
+		copyToClipboard: async (prompt) => {
+			copiedPrompt = prompt;
+		},
+		showAlert: () => {},
+		logger: {
+			warn: () => {},
+		},
+		manualDiagnosticRunner: {
+			run: async () => ({
+				prompt: 'manual diagnostic prompt',
+				trace: null,
+				status: 'skipped',
+			}),
+		},
+	});
+
+	assert.deepEqual(result.delivery, { status: 'copied' });
+	assert.match(copiedPrompt, /Recorded reconnect traces/);
+	assert.match(copiedPrompt, /reason: shell-drop/);
+	assert.match(copiedPrompt, /reconnect.completed/);
+	assert.match(copiedPrompt, /destination=hostPage/);
 });
 
 void test('debug command reports key resolution failure through prompt delivery', async () => {
