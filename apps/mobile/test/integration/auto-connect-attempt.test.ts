@@ -70,6 +70,7 @@ function createSavedEntryWithId(
 function activeConnectionFixture(overrides: {
 	connectionId: string;
 	host: string;
+	connectedAtMs?: number;
 	startShell: AutoConnectAttemptSourceArgs['connections'][string]['startShell'];
 }): AutoConnectAttemptSourceArgs['connections'][string] {
 	return {
@@ -78,7 +79,7 @@ function activeConnectionFixture(overrides: {
 			...baseDetails,
 			host: overrides.host,
 		},
-		connectedAtMs: 10,
+		connectedAtMs: overrides.connectedAtMs ?? 10,
 		startShell: overrides.startShell,
 	};
 }
@@ -1473,7 +1474,7 @@ void test('records saved-entry tmux attach failure and connect failure payloads'
 	assert.equal(failureEvent.storedConnectionId, 'stored-tmux');
 });
 
-void test('tmux reconnect does not reopen stale active shell and reconnects saved entry for dropped connection', async () => {
+void test('tmux reconnect prefers the dropped stored connection when the dropped session is already gone', async () => {
 	const startShellCalls: unknown[] = [];
 	const events: unknown[] = [];
 	const navigations: { connectionId: string; channelId: number }[] = [];
@@ -1491,9 +1492,10 @@ void test('tmux reconnect does not reopen stale active shell and reconnects save
 		pathname: '/shell/detail',
 		latestShell: null,
 		connections: {
-			'active-conn-1': activeConnectionFixture({
-				connectionId: 'active-conn-1',
-				host: '100.64.0.10',
+			'other-conn-1': activeConnectionFixture({
+				connectionId: 'other-conn-1',
+				host: '203.0.113.99',
+				connectedAtMs: 50,
 				startShell: async () => {
 					startShellCalls.push({});
 					throw new Error('must not be called');
@@ -1504,6 +1506,7 @@ void test('tmux reconnect does not reopen stale active shell and reconnects save
 			trigger: 'reconnect',
 			droppedConnectionId: 'active-conn-1',
 			droppedChannelId: 4,
+			droppedStoredConnectionId: 'muly-100_64_0_10-22',
 			pathname: '/shell/detail',
 		},
 		loadTmuxSettings: async () => ({
@@ -1550,6 +1553,23 @@ void test('tmux reconnect does not reopen stale active shell and reconnects save
 				'auto-connect.active-connection.shell-started',
 		),
 		false,
+	);
+	assert.deepEqual(
+		events.find(
+			(event) =>
+				(event as { kind?: string }).kind ===
+				'reconnect.transport.invalidated',
+		),
+		{
+			kind: 'reconnect.transport.invalidated',
+			source: 'reconnect',
+			connectionId: 'active-conn-1',
+			channelId: 4,
+			hadShell: true,
+			bridgeDisposed: false,
+			bridgeRequestInFlight: false,
+			message: 'stale transport marked for replacement',
+		},
 	);
 });
 

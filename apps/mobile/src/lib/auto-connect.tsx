@@ -11,6 +11,12 @@ import {
 } from './auto-connect-attempt';
 import { getAutoConnectLaunchActionForUrl } from './auto-connect-launch';
 import {
+	buildPendingReconnectContext,
+	pickLatestSavedAutoConnectConnection,
+	pickLatestSavedReconnectConnection,
+	pickLatestShellSnapshot,
+} from './auto-connect-manager-helpers';
+import {
 	createAutoConnectReconnectController,
 	type AutoConnectReconnectAttemptResult,
 	type AutoConnectReconnectController,
@@ -20,7 +26,6 @@ import { connectAndOpenShell } from './connect-and-open-shell';
 import { connectionDiagnosticRecorder } from './connection-diagnostic-recorder';
 import { type ConnectionDiagnosticTraceHandle } from './connection-diagnostic-types';
 import { createConnectionRunContext } from './connection-run-context';
-import { pickLatestConnection } from './connection-utils';
 import {
 	startForegroundService,
 	stopForegroundService,
@@ -120,12 +125,10 @@ export function AutoConnectManager() {
 	const foregroundServiceStarted = useForegroundServiceRuntimeStore(
 		(s) => s.started,
 	);
-	const latestShell = React.useMemo(() => {
-		if (shells.length === 0) return null;
-		return shells.reduce((latest, shell) =>
-			shell.createdAtMs > latest.createdAtMs ? shell : latest,
-		);
-	}, [shells]);
+	const latestShell = React.useMemo(
+		() => pickLatestShellSnapshot(shells),
+		[shells],
+	);
 
 	const {
 		isAutoConnecting,
@@ -161,6 +164,8 @@ export function AutoConnectManager() {
 	const activeDiagnosticTraceRef =
 		React.useRef<ConnectionDiagnosticTraceHandle | null>(null);
 	const prevShellCountRef = React.useRef(shells.length);
+	const previousShellsRef = React.useRef(shells);
+	const previousConnectionsRef = React.useRef(connections);
 	const pendingReconnectContextRef =
 		React.useRef<AutoConnectReconnectContext | null>(null);
 	const isActiveRef = React.useRef(isActiveState(AppState.currentState));
@@ -318,8 +323,14 @@ export function AutoConnectManager() {
 		const entries = await queryClient.fetchQuery(
 			secretsManager.connections.query.list,
 		);
-		const eligible = entries?.filter((entry) => entry.value.autoConnect);
-		return pickLatestConnection(eligible);
+		return pickLatestSavedAutoConnectConnection(entries);
+	}, []);
+
+	const loadLatestSavedReconnectConnection = React.useCallback(async () => {
+		const entries = await queryClient.fetchQuery(
+			secretsManager.connections.query.list,
+		);
+		return pickLatestSavedReconnectConnection(entries);
 	}, []);
 
 	const loadSavedConnectionByStoredId = React.useCallback(
@@ -394,6 +405,7 @@ export function AutoConnectManager() {
 						return toAutoConnectSavedEntryResult(result);
 					},
 					loadLatestSavedConnection,
+					loadLatestSavedReconnectConnection,
 					loadSavedConnectionByStoredId,
 					resolveKeySecurity,
 					navigateToShell,
@@ -437,6 +449,7 @@ export function AutoConnectManager() {
 			clearTailscaleAttention,
 			latestShell,
 			loadLatestSavedConnection,
+			loadLatestSavedReconnectConnection,
 			loadSavedConnectionByStoredId,
 			markTailscaleAttention,
 			navigateToShell,
@@ -746,14 +759,17 @@ export function AutoConnectManager() {
 			return;
 		}
 		if (prevShellCountRef.current > 0 && shells.length === 0) {
-			pendingReconnectContextRef.current = {
-				trigger: 'reconnect',
+			pendingReconnectContextRef.current = buildPendingReconnectContext({
 				pathname: '/shell/detail',
-			};
+				shells: previousShellsRef.current,
+				connections: previousConnectionsRef.current,
+			});
 			scheduleReconnect('shell-drop');
 		}
 		prevShellCountRef.current = shells.length;
-	}, [scheduleReconnect, shells.length]);
+		previousShellsRef.current = shells;
+		previousConnectionsRef.current = connections;
+	}, [connections, scheduleReconnect, shells]);
 
 	const handleOpenTailscale = React.useCallback(() => {
 		void tailscaleRecoveryCoordinatorRef.current?.open();

@@ -100,6 +100,7 @@ export type AutoConnectAttemptSourceArgs = {
 	connections: Record<string, ActiveConnectionSnapshot>;
 	openSavedEntryShell: OpenSavedEntryShell;
 	loadLatestSavedConnection: () => Promise<SavedConnectionEntry | null>;
+	loadLatestSavedReconnectConnection?: () => Promise<SavedConnectionEntry | null>;
 	loadSavedConnectionByStoredId?: (
 		storedConnectionId: string,
 	) => Promise<SavedConnectionEntry | null>;
@@ -124,6 +125,7 @@ export type AutoConnectReconnectContext = {
 	trigger: 'reconnect';
 	droppedConnectionId?: string;
 	droppedChannelId?: number;
+	droppedStoredConnectionId?: string;
 	pathname: string;
 };
 
@@ -184,24 +186,32 @@ function classifyReconnectFailure(error: unknown): Extract<
 }
 
 async function resolveReconnectSavedEntry({
-	activeConnection,
+	reconnectContext,
+	connections,
 	loadSavedConnectionByStoredId,
-	loadLatestSavedConnection,
+	loadLatestSavedReconnectConnection,
 }: {
-	activeConnection: ActiveConnectionSnapshot | null;
+	reconnectContext: AutoConnectReconnectContext;
+	connections: Record<string, ActiveConnectionSnapshot>;
 	loadSavedConnectionByStoredId?: (
 		storedConnectionId: string,
 	) => Promise<SavedConnectionEntry | null>;
-	loadLatestSavedConnection: () => Promise<SavedConnectionEntry | null>;
+	loadLatestSavedReconnectConnection: () => Promise<SavedConnectionEntry | null>;
 }): Promise<SavedConnectionEntry | null> {
-	const storedConnectionId = activeConnection
-		? getStoredConnectionId(activeConnection.connectionDetails)
-		: null;
+	const droppedConnection =
+		reconnectContext.droppedConnectionId !== undefined
+			? connections[reconnectContext.droppedConnectionId] ?? null
+			: null;
+	const storedConnectionId =
+		reconnectContext.droppedStoredConnectionId ??
+		(droppedConnection
+			? getStoredConnectionId(droppedConnection.connectionDetails)
+			: null);
 	if (storedConnectionId && loadSavedConnectionByStoredId) {
 		const entry = await loadSavedConnectionByStoredId(storedConnectionId);
 		if (entry) return entry;
 	}
-	return await loadLatestSavedConnection();
+	return await loadLatestSavedReconnectConnection();
 }
 
 function emitTrace(
@@ -504,6 +514,7 @@ export async function attemptAutoConnectSource({
 	connections,
 	openSavedEntryShell,
 	loadLatestSavedConnection,
+	loadLatestSavedReconnectConnection = loadLatestSavedConnection,
 	loadSavedConnectionByStoredId = loadStoredConnectionByStoredId,
 	resolveKeySecurity,
 	navigateToShell,
@@ -562,9 +573,10 @@ export async function attemptAutoConnectSource({
 				'operation',
 				async () =>
 					await resolveReconnectSavedEntry({
-						activeConnection,
+						reconnectContext,
+						connections,
 						loadSavedConnectionByStoredId,
-						loadLatestSavedConnection,
+						loadLatestSavedReconnectConnection,
 					}),
 			);
 			if (reconnectEntryResult.status === 'aborted') return { status: 'retry' };
@@ -761,9 +773,10 @@ export async function attemptAutoConnectSource({
 			'operation',
 			async () =>
 				await resolveReconnectSavedEntry({
-					activeConnection: null,
+					reconnectContext,
+					connections,
 					loadSavedConnectionByStoredId,
-					loadLatestSavedConnection,
+					loadLatestSavedReconnectConnection,
 				}),
 		);
 		if (reconnectEntryResult.status === 'aborted') return { status: 'retry' };
