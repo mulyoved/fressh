@@ -4,6 +4,11 @@ import {
 	formatAutoConnectEventFields,
 } from './auto-connect';
 import {
+	formatMdevBridgeEventFields,
+	type MdevBridgeLifecycleEvent,
+	mdevBridgeDiagnosticEventKinds,
+} from './mdev-bridge';
+import {
 	formatManualDiagnosticEventFields,
 	type ManualDiagnosticEvent,
 	manualDiagnosticEventKinds,
@@ -36,6 +41,7 @@ import {
 export * from './auto-connect';
 export * from './identity';
 export * from './manual';
+export * from './mdev-bridge';
 export * from './prompt-format';
 export * from './reconnect';
 export * from './saved-entry';
@@ -49,6 +55,7 @@ export type ConnectionDiagnosticEvent =
 	| SshDiagnosticEvent
 	| AutoConnectEvent
 	| ManualDiagnosticEvent
+	| MdevBridgeLifecycleEvent
 	| TailscaleDiagnosticEvent
 	| ReconnectEvent;
 export type ConnectionDiagnosticTimedEvent =
@@ -61,6 +68,7 @@ export const connectionDiagnosticEventKinds = [
 	...sshDiagnosticEventKinds,
 	...autoConnectEventKinds,
 	...manualDiagnosticEventKinds,
+	...mdevBridgeDiagnosticEventKinds,
 	...tailscaleDiagnosticEventKinds,
 	...reconnectEventKinds,
 ] as const satisfies readonly ConnectionDiagnosticEvent['kind'][];
@@ -94,6 +102,9 @@ export function formatConnectionDiagnosticEventFields(
 	}
 	if (isConnectionDiagnosticEventKind(event, manualDiagnosticEventKinds)) {
 		return formatManualDiagnosticEventFields(event);
+	}
+	if (isConnectionDiagnosticEventKind(event, mdevBridgeDiagnosticEventKinds)) {
+		return formatMdevBridgeEventFields(event);
 	}
 	if (isConnectionDiagnosticEventKind(event, tailscaleDiagnosticEventKinds)) {
 		return formatTailscaleDiagnosticEventFields(event);

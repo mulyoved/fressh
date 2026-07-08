@@ -1,0 +1,83 @@
+import { safeDiagnosticString } from './snapshot';
+import {
+	type ConnectionDiagnosticEventBase,
+	type ConnectionDiagnosticSource,
+} from './types';
+
+export type MdevBridgeLifecycleStage =
+	| 'stream-starting'
+	| 'hello-complete'
+	| 'request-started'
+	| 'request-failed'
+	| 'stream-closed'
+	| 'client-disposed';
+
+export type MdevBridgeCloseClass =
+	| 'disposedByReconnect'
+	| 'clientDisposed'
+	| 'remoteClosed'
+	| 'sendFailed'
+	| 'timeout'
+	| 'protocolError'
+	| 'startupFailed';
+
+export type MdevBridgeLifecycleEvent = ConnectionDiagnosticEventBase & {
+	kind: 'mdev-bridge.lifecycle';
+	stage: MdevBridgeLifecycleStage;
+	operation?: string;
+	requestId?: string;
+	helloComplete?: boolean;
+	bridgeRequestInFlight?: boolean;
+	closeClass?: MdevBridgeCloseClass;
+};
+
+export const mdevBridgeDiagnosticEventKinds = [
+	'mdev-bridge.lifecycle',
+] as const satisfies readonly MdevBridgeLifecycleEvent['kind'][];
+
+export const mdevBridgeDiagnosticEvents = {
+	lifecycle: (input: {
+		source: ConnectionDiagnosticSource;
+		stage: MdevBridgeLifecycleStage;
+		operation?: string;
+		requestId?: string;
+		helloComplete?: boolean;
+		bridgeRequestInFlight?: boolean;
+		closeClass?: MdevBridgeCloseClass;
+		message?: string;
+	}): MdevBridgeLifecycleEvent =>
+		({
+			kind: 'mdev-bridge.lifecycle',
+			source: input.source,
+			message: input.message,
+			stage: input.stage,
+			operation: input.operation,
+			requestId: input.requestId,
+			helloComplete: input.helloComplete,
+			bridgeRequestInFlight: input.bridgeRequestInFlight,
+			closeClass: input.closeClass,
+		}),
+} as const;
+
+export function formatMdevBridgeEventFields(
+	event: MdevBridgeLifecycleEvent,
+): string[] {
+	return [
+		`stage=${safeDiagnosticString(event.stage)}`,
+		...(event.operation
+			? [`operation=${safeDiagnosticString(event.operation)}`]
+			: []),
+		...(event.requestId
+			? [`requestId=${safeDiagnosticString(event.requestId)}`]
+			: []),
+		...(typeof event.helloComplete === 'boolean'
+			? [`helloComplete=${String(event.helloComplete)}`]
+			: []),
+		...(typeof event.bridgeRequestInFlight === 'boolean'
+			? [`bridgeRequestInFlight=${String(event.bridgeRequestInFlight)}`]
+			: []),
+		...(event.closeClass
+			? [`closeClass=${safeDiagnosticString(event.closeClass)}`]
+			: []),
+	];
+}

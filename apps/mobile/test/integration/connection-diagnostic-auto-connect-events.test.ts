@@ -195,3 +195,30 @@ void test('auto-connect optional saved-entry events preserve omitted connection 
 	assert.equal(retryStarted.connection, undefined);
 	assert.equal(retryThrew.connection, undefined);
 });
+
+void test('saved-entry connect events carry reconnect trigger and tmux metadata', () => {
+	const started = autoConnectEvents.savedEntryConnectStarted({
+		source: 'saved-entry',
+		trigger: 'reconnect',
+		connection: {
+			connectionId: 'stored-host-1',
+			username: 'muly',
+			host: 'dev-host',
+			port: 22,
+		},
+		tmuxSessionName: 'main',
+	});
+	const failed = autoConnectEvents.savedEntryConnectFailed({
+		source: 'saved-entry',
+		trigger: 'reconnect',
+		connectionId: 'conn-2',
+		storedConnectionId: 'stored-host-1',
+		failureClass: 'failedNetwork',
+		message: 'network failure',
+	});
+
+	assert.equal(started.trigger, 'reconnect');
+	assert.equal(started.tmuxSessionName, 'main');
+	assert.equal(started.connection?.host, 'dev-host');
+	assert.equal(failed.failureClass, 'failedNetwork');
+});

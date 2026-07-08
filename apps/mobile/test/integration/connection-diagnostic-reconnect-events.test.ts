@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+	formatReconnectEventFields,
 	reconnectEvents,
 	type ConnectionDiagnosticEvent,
 } from '../../src/lib/connection-diagnostics/events';
@@ -24,4 +25,50 @@ void test('reconnect events keep reconnect-specific timing fields', () => {
 	);
 	assert.equal(timeout.reconnectElapsedMs, 30_000);
 	assert.equal(timeout.windowMs, 30_000);
+});
+
+void test('reconnect diagnostic events include shell drop, transport invalidation, completion, stale input, and UI transition', () => {
+	const shellDropped = reconnectEvents.shellDropped({
+		source: 'reconnect',
+		connectionId: 'conn-1',
+		channelId: 7,
+		networkDisappeared: true,
+		message: 'shell dropped',
+	});
+	const invalidated = reconnectEvents.transportInvalidated({
+		source: 'reconnect',
+		connectionId: 'conn-1',
+		channelId: 7,
+		hadShell: true,
+		bridgeDisposed: true,
+		bridgeRequestInFlight: true,
+		message: 'disposed stale transport',
+	});
+	const completed = reconnectEvents.completed({
+		source: 'reconnect-controller',
+		outcome: 'needsAttention',
+		destination: 'hostPage',
+		message: 'Tailscale recovery failed',
+	});
+	const staleInput = reconnectEvents.staleInput({
+		source: 'reconnect',
+		connectionId: 'conn-1',
+		channelId: 7,
+		message: 'input arrived without shell',
+	});
+	const uiTransition = reconnectEvents.uiTransition({
+		source: 'reconnect',
+		from: 'terminalOverlay',
+		to: 'hostPage',
+		message: 'routing to host page',
+	});
+
+	assert.equal(shellDropped.kind, 'reconnect.shell-dropped');
+	assert.equal(invalidated.kind, 'reconnect.transport.invalidated');
+	assert.equal(completed.destination, 'hostPage');
+	assert.equal(staleInput.kind, 'reconnect.stale-input');
+	assert.deepEqual(formatReconnectEventFields(uiTransition), [
+		'from=terminalOverlay',
+		'to=hostPage',
+	]);
 });
