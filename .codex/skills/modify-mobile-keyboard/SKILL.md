@@ -50,7 +50,7 @@ If it is not `dev`, ask before publishing.
 2. Inspect the keyboard config:
 
 ```bash
-node .agents/skills/modify-mobile-keyboard/scripts/summarize-keyboards.mjs
+node .codex/skills/modify-mobile-keyboard/scripts/summarize-keyboards.mjs
 ```
 
 3. Read reference details only as needed:
@@ -67,13 +67,13 @@ keyboard is 4 rows x 10 columns.
 5. Bump metadata:
 
 ```bash
-node .agents/skills/modify-mobile-keyboard/scripts/bump-shell-config-metadata.mjs
+node .codex/skills/modify-mobile-keyboard/scripts/bump-shell-config-metadata.mjs
 ```
 
 6. Validate:
 
 ```bash
-.agents/skills/modify-mobile-keyboard/scripts/verify-keyboard-config.sh
+.codex/skills/modify-mobile-keyboard/scripts/verify-keyboard-config.sh
 ```
 
 7. Inspect the diff:

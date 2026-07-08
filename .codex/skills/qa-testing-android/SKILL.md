@@ -132,7 +132,7 @@ adb shell screenrecord /sdcard/demo.mp4
 Preferred: Gradle Managed Devices (GMD). See `references/gradle-managed-devices.md`.
 
 ```yaml
-# .github/workflows/android.yml
+# Example Android CI workflow
 name: Android CI
 on: [push, pull_request]
 jobs:
