@@ -294,7 +294,10 @@ async function runSavedEntryReconnectAttempt({
 				tmuxSessionNameType: typeof details.tmuxSessionName,
 			}),
 		);
-		return false;
+		return {
+			status: 'failedTmuxAttach',
+			message: 'invalid-tmux-settings',
+		};
 	}
 
 	const normalizedDetails: InputConnectionDetails = {

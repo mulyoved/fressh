@@ -1075,6 +1075,71 @@ void test('saved-entry path returns false for invalid legacy tmux fields', async
 	}
 });
 
+void test('reconnect saved-entry invalid legacy tmux fields return a classified result', async () => {
+	for (const value of [
+		{
+			...baseDetails,
+			useTmux: undefined,
+		},
+		{
+			...baseDetails,
+			tmuxSessionName: undefined,
+		},
+	]) {
+		let recoveryCalls = 0;
+		let openerCalls = 0;
+		const { logger } = createLogger();
+
+		const result = await attemptAutoConnectSource({
+			platformOS: 'android',
+			pathname: '/shell/detail',
+			latestShell: null,
+			connections: {},
+			reconnectContext: {
+				trigger: 'reconnect',
+				droppedConnectionId: 'dropped-1',
+				droppedChannelId: 9,
+				droppedStoredConnectionId: 'muly-host_example-22',
+				pathname: '/shell/detail',
+			},
+			openSavedEntryShell: async () => {
+				openerCalls += 1;
+				throw new Error('connect should not run');
+			},
+			loadSavedConnectionByStoredId: async () => createSavedEntry(value),
+			loadLatestSavedConnection: async () => {
+				throw new Error('latest reconnect fallback should not run');
+			},
+			resolveKeySecurity: async () => {
+				throw new Error('security should not resolve');
+			},
+			navigateToShell: () => {
+				throw new Error('navigation should not run');
+			},
+			recovery: {
+				ensureReady: async () => {
+					recoveryCalls += 1;
+					return readyRecovery.ensureReady();
+				},
+				recoverAfterFailure: async () => {
+					recoveryCalls += 1;
+					return readyRecovery.recoverAfterFailure();
+				},
+			},
+			markTailscaleAttention: () => {},
+			clearTailscaleAttention: () => {},
+			logger,
+		});
+
+		assert.deepEqual(result, {
+			status: 'failedTmuxAttach',
+			message: 'invalid-tmux-settings',
+		});
+		assert.equal(recoveryCalls, 0);
+		assert.equal(openerCalls, 0);
+	}
+});
+
 void test('saved-entry path skips when key security cannot resolve', async () => {
 	const { logger } = createLogger();
 

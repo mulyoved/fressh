@@ -1,4 +1,8 @@
-import { type AutoConnectReconnectContext } from './auto-connect-attempt';
+import {
+	attemptAutoConnectSource,
+	type AutoConnectAttemptSourceArgs,
+	type AutoConnectReconnectContext,
+} from './auto-connect-attempt';
 import {
 	getStoredConnectionId,
 	pickLatestConnection,
@@ -40,6 +44,33 @@ export function pickLatestSavedReconnectConnection(
 	entries?: SavedConnectionEntry[] | null,
 ): SavedConnectionEntry | null {
 	return pickLatestConnection(entries);
+}
+
+export async function attemptAutoConnectFromManager({
+	attemptAutoConnectSourceImpl = attemptAutoConnectSource,
+	loadSavedConnections,
+	loadSavedConnectionByStoredId,
+	...args
+}: Omit<
+	AutoConnectAttemptSourceArgs,
+	| 'loadLatestSavedConnection'
+	| 'loadLatestSavedReconnectConnection'
+	| 'loadSavedConnectionByStoredId'
+> & {
+	loadSavedConnections: () => Promise<SavedConnectionEntry[] | null>;
+	loadSavedConnectionByStoredId: NonNullable<
+		AutoConnectAttemptSourceArgs['loadSavedConnectionByStoredId']
+	>;
+	attemptAutoConnectSourceImpl?: typeof attemptAutoConnectSource;
+}) {
+	return await attemptAutoConnectSourceImpl({
+		...args,
+		loadLatestSavedConnection: async () =>
+			pickLatestSavedAutoConnectConnection(await loadSavedConnections()),
+		loadLatestSavedReconnectConnection: async () =>
+			pickLatestSavedReconnectConnection(await loadSavedConnections()),
+		loadSavedConnectionByStoredId,
+	});
 }
 
 export function buildPendingReconnectContext({

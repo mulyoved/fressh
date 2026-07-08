@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+	attemptAutoConnectFromManager,
 	buildPendingReconnectContext,
 	pickLatestSavedReconnectConnection,
 } from '../../src/lib/auto-connect-manager-helpers';
+import { type AutoConnectAttemptSourceArgs } from '../../src/lib/auto-connect-attempt';
+import { createConnectionRunContext } from '../../src/lib/connection-run-context';
 import {
 	getAutoConnectLaunchActionForUrl,
 	shouldSkipInitialAutoConnectForUrl,
@@ -147,4 +150,127 @@ void test('reconnect fallback can choose the latest saved entry even when auto-c
 
 	assert.equal(selected?.value.autoConnect, false);
 	assert.equal(selected?.value.host, '100.64.0.10');
+});
+
+void test('manager reconnect wiring passes dropped identity and unfiltered reconnect fallback into attempt source', async () => {
+	const reconnectContext = buildPendingReconnectContext({
+		pathname: '/shell/detail',
+		shells: [
+			{
+				connectionId: 'conn-dropped',
+				channelId: 7,
+				createdAtMs: 20,
+			},
+		],
+		connections: {
+			'conn-dropped': {
+				connectionDetails: {
+					username: 'muly',
+					host: '100.64.0.10',
+					port: 22,
+				},
+			},
+		},
+	});
+	const savedEntries = [
+		createSavedEntry({
+			metadata: {
+				createdAtMs: 1,
+				modifiedAtMs: 10,
+				priority: 0,
+			},
+			value: {
+				username: 'muly',
+				host: '100.64.0.11',
+				port: 22,
+				useTmux: true,
+				tmuxSessionName: 'main',
+				autoConnect: true,
+				security: { type: 'key', keyId: 'key-1' },
+			},
+		}),
+		createSavedEntry({
+			metadata: {
+				createdAtMs: 2,
+				modifiedAtMs: 20,
+				priority: 0,
+			},
+			value: {
+				username: 'muly',
+				host: '100.64.0.10',
+				port: 22,
+				useTmux: true,
+				tmuxSessionName: 'main',
+				autoConnect: false,
+				security: { type: 'key', keyId: 'key-2' },
+			},
+		}),
+	];
+	let capturedArgs: AutoConnectAttemptSourceArgs | null = null;
+	const runContext = createConnectionRunContext({
+		timeouts: {
+			operationTimeoutMs: 1_000,
+			recoveryTimeoutMs: 1_000,
+			cleanupTimeoutMs: 1_000,
+		},
+	});
+
+	try {
+		await attemptAutoConnectFromManager({
+			platformOS: 'android',
+			pathname: '/shell/detail',
+			latestShell: null,
+			connections: {},
+			reconnectContext,
+			openSavedEntryShell: async () => {
+				throw new Error('saved-entry connect should not run');
+			},
+			loadSavedConnections: async () => savedEntries,
+			loadSavedConnectionByStoredId: async () => null,
+			resolveKeySecurity: async () => null,
+			navigateToShell: () => {},
+			recovery: {
+				ensureReady: async () => ({
+					kind: 'ready' as const,
+					attempted: true as const,
+					available: true as const,
+				}),
+				recoverAfterFailure: async () => ({
+					kind: 'nonNetworkFailure' as const,
+					attempted: false as const,
+					networkLikeFailure: false as const,
+					available: true as const,
+				}),
+			},
+			markTailscaleAttention: () => {},
+			clearTailscaleAttention: () => {},
+			logger: {
+				info: () => {},
+				warn: () => {},
+			},
+			runContext,
+			attemptAutoConnectSourceImpl: async (args) => {
+				capturedArgs = args;
+				return false;
+			},
+		});
+	} finally {
+		runContext.finish();
+	}
+
+	assert.deepEqual(capturedArgs?.reconnectContext, {
+		trigger: 'reconnect',
+		pathname: '/shell/detail',
+		droppedConnectionId: 'conn-dropped',
+		droppedChannelId: 7,
+		droppedStoredConnectionId: 'muly-100_64_0_10-22',
+	});
+	assert.equal(
+		(await capturedArgs?.loadLatestSavedConnection?.())?.value.host,
+		'100.64.0.11',
+	);
+	assert.equal(
+		(await capturedArgs?.loadLatestSavedReconnectConnection?.())?.value.host,
+		'100.64.0.10',
+	);
 });

@@ -5,15 +5,11 @@ import { AppState, Platform } from 'react-native';
 import { create } from 'zustand';
 import { useShallow } from 'zustand/react/shallow';
 import { AgentNotificationBridgeManager } from './AgentNotificationBridgeManager';
-import {
-	attemptAutoConnectSource,
-	type AutoConnectReconnectContext,
-} from './auto-connect-attempt';
+import { type AutoConnectReconnectContext } from './auto-connect-attempt';
 import { getAutoConnectLaunchActionForUrl } from './auto-connect-launch';
 import {
+	attemptAutoConnectFromManager,
 	buildPendingReconnectContext,
-	pickLatestSavedAutoConnectConnection,
-	pickLatestSavedReconnectConnection,
 	pickLatestShellSnapshot,
 } from './auto-connect-manager-helpers';
 import {
@@ -319,19 +315,11 @@ export function AutoConnectManager() {
 		[router, stopReconnectCycle],
 	);
 
-	const loadLatestSavedConnection = React.useCallback(async () => {
-		const entries = await queryClient.fetchQuery(
-			secretsManager.connections.query.list,
-		);
-		return pickLatestSavedAutoConnectConnection(entries);
-	}, []);
-
-	const loadLatestSavedReconnectConnection = React.useCallback(async () => {
-		const entries = await queryClient.fetchQuery(
-			secretsManager.connections.query.list,
-		);
-		return pickLatestSavedReconnectConnection(entries);
-	}, []);
+	const loadSavedConnections = React.useCallback(
+		async () =>
+			await queryClient.fetchQuery(secretsManager.connections.query.list),
+		[],
+	);
 
 	const loadSavedConnectionByStoredId = React.useCallback(
 		async (storedConnectionId: string) =>
@@ -381,7 +369,7 @@ export function AutoConnectManager() {
 			activeDiagnosticTraceRef.current = trace;
 
 			try {
-				const result = await attemptAutoConnectSource({
+				const result = await attemptAutoConnectFromManager({
 					platformOS: Platform.OS,
 					pathname,
 					latestShell,
@@ -404,8 +392,7 @@ export function AutoConnectManager() {
 						});
 						return toAutoConnectSavedEntryResult(result);
 					},
-					loadLatestSavedConnection,
-					loadLatestSavedReconnectConnection,
+					loadSavedConnections,
 					loadSavedConnectionByStoredId,
 					resolveKeySecurity,
 					navigateToShell,
@@ -448,8 +435,7 @@ export function AutoConnectManager() {
 			connections,
 			clearTailscaleAttention,
 			latestShell,
-			loadLatestSavedConnection,
-			loadLatestSavedReconnectConnection,
+			loadSavedConnections,
 			loadSavedConnectionByStoredId,
 			markTailscaleAttention,
 			navigateToShell,
