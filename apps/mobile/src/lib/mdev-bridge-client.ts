@@ -1,7 +1,6 @@
 import {
 	mdevBridgeDiagnosticEvents,
 	type ConnectionDiagnosticEvent,
-	type MdevBridgeCloseClass,
 } from './connection-diagnostics';
 import { prepareWorkmuxBridgeCommandForRemoteShell } from './workmux-app-commands';
 
@@ -38,10 +37,19 @@ export type MdevBridgeClient = {
 		timeoutMs?: number;
 	}) => Promise<MdevBridgeResult>;
 	dispose: (opts?: MdevBridgeDisposeOptions) => Promise<void>;
-	getSnapshot: () => MdevBridgeSnapshot;
 };
 
-export type MdevBridgeFailureClass = MdevBridgeCloseClass;
+export const MDEV_BRIDGE_DISPOSED_BY_RECONNECT_FAILURE_CLASS =
+	'disposedByReconnect';
+
+export type MdevBridgeFailureClass =
+	| typeof MDEV_BRIDGE_DISPOSED_BY_RECONNECT_FAILURE_CLASS
+	| 'clientDisposed'
+	| 'remoteClosed'
+	| 'sendFailed'
+	| 'timeout'
+	| 'protocolError'
+	| 'startupFailed';
 
 export type MdevBridgeResult = {
 	success: boolean;
@@ -52,13 +60,6 @@ export type MdevBridgeResult = {
 
 export type MdevBridgeDisposeOptions = {
 	reason?: 'reconnect' | 'unmount' | 'manual';
-};
-
-export type MdevBridgeSnapshot = {
-	pendingRequestId: string | null;
-	pendingOperation: string | null;
-	helloComplete: boolean;
-	failedError: string | null;
 };
 
 type MdevBridgeValidationResult = {
@@ -93,6 +94,12 @@ function errorResult(
 	return failureClass
 		? { success: false, output: '', error, failureClass }
 		: { success: false, output: '', error };
+}
+
+export function isMdevBridgeDisposedByReconnectFailureClass(
+	failureClass: unknown,
+): failureClass is typeof MDEV_BRIDGE_DISPOSED_BY_RECONNECT_FAILURE_CLASS {
+	return failureClass === MDEV_BRIDGE_DISPOSED_BY_RECONNECT_FAILURE_CLASS;
 }
 
 function fatalResult(error: string): MdevBridgeValidationResult {
@@ -268,6 +275,8 @@ export function createMdevBridgeClient({
 	trace?: { event: (event: ConnectionDiagnosticEvent) => void };
 }): MdevBridgeClient {
 	let disposed = false;
+	let disposedError = MDEV_BRIDGE_CLIENT_DISPOSED_ERROR;
+	let disposedClass: MdevBridgeFailureClass = 'clientDisposed';
 	let failedError: string | null = null;
 	let failedClass: MdevBridgeFailureClass | undefined;
 	let nextRequestId = 1;
@@ -326,6 +335,10 @@ export function createMdevBridgeClient({
 		request.resolve(result);
 	}
 
+	function disposedResult(): MdevBridgeResult {
+		return errorResult(disposedError, disposedClass);
+	}
+
 	function closeStartedStreamInBackground() {
 		const startedStream = stream;
 		if (!startedStream) return;
@@ -358,7 +371,7 @@ export function createMdevBridgeClient({
 
 	function waitForStartupDispose(): Promise<never> {
 		if (disposed) {
-			return Promise.reject(new Error(MDEV_BRIDGE_CLIENT_DISPOSED_ERROR));
+			return Promise.reject(new Error(disposedError));
 		}
 		return new Promise((_, reject) => {
 			startupDisposeRejecters.push(reject);
@@ -497,7 +510,7 @@ export function createMdevBridgeClient({
 					void closeStreamWithTimeout(startedStream);
 					throw new Error(
 						disposed
-							? MDEV_BRIDGE_CLIENT_DISPOSED_ERROR
+							? disposedError
 							: (failedError ?? MDEV_BRIDGE_REQUEST_TIMEOUT_ERROR),
 					);
 				}
@@ -555,7 +568,7 @@ export function createMdevBridgeClient({
 		validate: PendingRequest['validate'];
 	}): Promise<MdevBridgeResult> {
 		if (disposed) {
-			return errorResult(MDEV_BRIDGE_CLIENT_DISPOSED_ERROR, 'clientDisposed');
+			return disposedResult();
 		}
 		if (failedError) return errorResult(failedError, failedClass);
 
@@ -566,7 +579,7 @@ export function createMdevBridgeClient({
 
 		const startedStream = await ensureStream(startupTimeoutMs);
 		if (disposed) {
-			return errorResult(MDEV_BRIDGE_CLIENT_DISPOSED_ERROR, 'clientDisposed');
+			return disposedResult();
 		}
 		if (failedError) return errorResult(failedError, failedClass);
 
@@ -667,7 +680,7 @@ export function createMdevBridgeClient({
 		deadline: MdevBridgeRequestDeadline,
 	): Promise<MdevBridgeResult> {
 		if (disposed) {
-			return errorResult(MDEV_BRIDGE_CLIENT_DISPOSED_ERROR, 'clientDisposed');
+			return disposedResult();
 		}
 		if (failedError) return errorResult(failedError, failedClass);
 
@@ -676,7 +689,7 @@ export function createMdevBridgeClient({
 			if (helloResult) return helloResult;
 
 			if (disposed) {
-				return errorResult(MDEV_BRIDGE_CLIENT_DISPOSED_ERROR, 'clientDisposed');
+				return disposedResult();
 			}
 			if (failedError) return errorResult(failedError, failedClass);
 
@@ -696,7 +709,7 @@ export function createMdevBridgeClient({
 			});
 		} catch {
 			if (disposed) {
-				return errorResult(MDEV_BRIDGE_CLIENT_DISPOSED_ERROR, 'clientDisposed');
+				return disposedResult();
 			}
 			return errorResult(
 				failedError ?? MDEV_BRIDGE_UPDATE_MESSAGE,
@@ -727,11 +740,15 @@ export function createMdevBridgeClient({
 		dispose: async (opts = {}) => {
 			if (disposed) return;
 			const closeClass: MdevBridgeFailureClass =
-				opts.reason === 'reconnect' ? 'disposedByReconnect' : 'clientDisposed';
+				opts.reason === 'reconnect'
+					? MDEV_BRIDGE_DISPOSED_BY_RECONNECT_FAILURE_CLASS
+					: 'clientDisposed';
 			const error =
-				closeClass === 'disposedByReconnect'
+				isMdevBridgeDisposedByReconnectFailureClass(closeClass)
 					? MDEV_BRIDGE_STREAM_CLOSED_ERROR
 					: MDEV_BRIDGE_CLIENT_DISPOSED_ERROR;
+			disposedError = error;
+			disposedClass = closeClass;
 			emitLifecycle({
 				stage: 'client-disposed',
 				operation: pending?.operation,
@@ -742,15 +759,9 @@ export function createMdevBridgeClient({
 			disposed = true;
 			startupAbortController?.abort();
 			startupAbortController = null;
-			rejectStartupWaiters(new Error(MDEV_BRIDGE_CLIENT_DISPOSED_ERROR));
-			finishPending(errorResult(error, closeClass));
+			rejectStartupWaiters(new Error(disposedError));
+			finishPending(disposedResult());
 			await closeStream();
 		},
-		getSnapshot: () => ({
-			pendingRequestId: pending?.id ?? null,
-			pendingOperation: pending?.operation ?? null,
-			helloComplete,
-			failedError,
-		}),
 	};
 }

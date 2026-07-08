@@ -13,6 +13,7 @@ import {
 	type WorkmuxNavAction,
 	type WorkmuxNavScope,
 } from '@/lib/workmux-app-commands';
+import { type MdevBridgeFailureClass } from '@/lib/mdev-bridge-client';
 
 // Action IDs emitted by runtime config are handled here at runtime.
 
@@ -108,10 +109,9 @@ export type ActionId = KnownActionId | (string & {});
 export type WorkmuxKeyboardCommandRunResult =
 	| { status: 'handled' }
 	| { status: 'superseded' };
-export type WorkmuxCommandFailureClass = 'disposedByReconnect' | (string & {});
 export type ShowWorkmuxKeyboardFailure = (failure: {
 	message: string;
-	failureClass?: WorkmuxCommandFailureClass;
+	failureClass?: MdevBridgeFailureClass;
 }) => void;
 export const WORKMUX_KEYBOARD_COMMAND_DISABLED_MESSAGE =
 	'Workmux actions require a Workmux-enabled connection.';
@@ -259,11 +259,11 @@ export function createWorkmuxKeyboardCommandRunner({
 
 function getWorkmuxCommandFailureClass(
 	error: unknown,
-): WorkmuxCommandFailureClass | undefined {
+): MdevBridgeFailureClass | undefined {
 	if (!error || typeof error !== 'object') return undefined;
 	const failureClass = (error as { failureClass?: unknown }).failureClass;
 	return typeof failureClass === 'string' && failureClass.length > 0
-		? failureClass
+		? (failureClass as MdevBridgeFailureClass)
 		: undefined;
 }
 

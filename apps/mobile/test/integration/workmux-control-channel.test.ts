@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { type MdevBridgeClient } from '../../src/lib/mdev-bridge-client';
+import {
+	type MdevBridgeClient,
+	type MdevBridgeDisposeOptions,
+} from '../../src/lib/mdev-bridge-client';
 import {
 	createWorkmuxControlChannel,
 	disposeWorkmuxControlChannelAfterCleanup,
@@ -41,23 +44,24 @@ function createRecordingBridgeClient(
 		params: Record<string, unknown>;
 		timeoutMs?: number;
 	}[] = [];
+	const disposeOptions: (MdevBridgeDisposeOptions | undefined)[] = [];
 	let disposeCount = 0;
 	const bridgeClient: MdevBridgeClient = {
 		runOperation: async (input) => {
 			calls.push(input);
 			return result;
 		},
-		dispose: async () => {
+		dispose: async (opts) => {
+			disposeOptions.push(opts);
 			disposeCount += 1;
 		},
-		getSnapshot: () => ({
-			pendingRequestId: null,
-			pendingOperation: null,
-			helloComplete: true,
-			failedError: null,
-		}),
 	};
-	return { bridgeClient, calls, getDisposeCount: () => disposeCount };
+	return {
+		bridgeClient,
+		calls,
+		disposeOptions,
+		getDisposeCount: () => disposeCount,
+	};
 }
 
 function createSequencedBridgeClient(results: WorkmuxControlCommandResult[]) {
@@ -66,6 +70,7 @@ function createSequencedBridgeClient(results: WorkmuxControlCommandResult[]) {
 		params: Record<string, unknown>;
 		timeoutMs?: number;
 	}[] = [];
+	const disposeOptions: (MdevBridgeDisposeOptions | undefined)[] = [];
 	let disposeCount = 0;
 	const bridgeClient: MdevBridgeClient = {
 		runOperation: async (input) => {
@@ -78,17 +83,17 @@ function createSequencedBridgeClient(results: WorkmuxControlCommandResult[]) {
 				}
 			);
 		},
-		dispose: async () => {
+		dispose: async (opts) => {
+			disposeOptions.push(opts);
 			disposeCount += 1;
 		},
-		getSnapshot: () => ({
-			pendingRequestId: null,
-			pendingOperation: null,
-			helloComplete: true,
-			failedError: null,
-		}),
 	};
-	return { bridgeClient, calls, getDisposeCount: () => disposeCount };
+	return {
+		bridgeClient,
+		calls,
+		disposeOptions,
+		getDisposeCount: () => disposeCount,
+	};
 }
 
 void test('WorkmuxControlChannel.command routes mapped argv through bridge operations, preserving timeout', async () => {
@@ -146,12 +151,6 @@ void test('workmux command exposes disposed-by-reconnect bridge classification',
 				failureClass: 'disposedByReconnect',
 			}),
 			dispose: async () => undefined,
-			getSnapshot: () => ({
-				pendingRequestId: null,
-				pendingOperation: null,
-				helloComplete: true,
-				failedError: 'mdev bridge stream closed.',
-			}),
 		},
 	});
 
@@ -447,6 +446,22 @@ void test('WorkmuxControlChannel.dispose delegates to bridge and DirectMux trans
 
 	assert.equal(bridge.getDisposeCount(), 1);
 	assert.equal(directMuxDisposeCount, 1);
+});
+
+void test('WorkmuxControlChannel.dispose forwards reconnect reason to bridge client', async () => {
+	const bridge = createRecordingBridgeClient();
+	const channel = createWorkmuxControlChannel({
+		connection: null,
+		bridgeClient: bridge.bridgeClient,
+		directTmuxTransport: {
+			send: async () => true,
+			dispose: async () => {},
+		},
+	});
+
+	await channel.dispose({ reason: 'reconnect' });
+
+	assert.deepEqual(bridge.disposeOptions, [{ reason: 'reconnect' }]);
 });
 
 void test('WorkmuxControlChannel rejects commands after dispose', async () => {

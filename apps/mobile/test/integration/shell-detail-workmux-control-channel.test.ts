@@ -182,6 +182,35 @@ void describe('shell detail Workmux control channel wiring', () => {
 		assert.doesNotMatch(source, /debugTelemetry:\s*__DEV__/);
 	});
 
+	void test('captures reconnect disposal reason before deferred channel cleanup', () => {
+		const source = readFileSync(detailSourcePath, 'utf8');
+		const cleanupIndex = source.indexOf(
+			'const cleanup = disposeTmuxScrollbackRuntimeStateForUiReset',
+		);
+		const disposeReasonIndex = source.indexOf(
+			'const disposeReason = useAutoConnectStore.getState().isReconnecting',
+			cleanupIndex,
+		);
+		const deferredDisposeIndex = source.indexOf(
+			'disposeWorkmuxControlChannelAfterCleanup',
+			cleanupIndex,
+		);
+		const deferredBlock = source.slice(
+			deferredDisposeIndex,
+			source.indexOf('onDisposeError', deferredDisposeIndex),
+		);
+
+		assert.notEqual(cleanupIndex, -1);
+		assert.notEqual(disposeReasonIndex, -1);
+		assert.notEqual(deferredDisposeIndex, -1);
+		assert.ok(disposeReasonIndex < deferredDisposeIndex);
+		assert.match(deferredBlock, /reason:\s*disposeReason/);
+		assert.doesNotMatch(
+			deferredBlock,
+			/useAutoConnectStore\.getState\(\)\.isReconnecting/,
+		);
+	});
+
 	void test('passes only the connection into WorkmuxControlChannel for Workmux control commands', () => {
 		const source = readFileSync(detailSourcePath, 'utf8');
 		const block = extractCreateWorkmuxControlChannelBlock(source);

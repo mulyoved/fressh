@@ -251,7 +251,16 @@ void test('dispose with reconnect classifies pending operation as disposedByReco
 	fixture.emitJson(helloResponse());
 	await nextTick();
 
-	assert.equal(client.getSnapshot().pendingOperation, 'op.one');
+	assert.equal(
+		events.some(
+			(event) =>
+				(event as { kind?: string; stage?: string; operation?: string })
+					.kind === 'mdev-bridge.lifecycle' &&
+				(event as { stage?: string }).stage === 'request-started' &&
+				(event as { operation?: string }).operation === 'op.one',
+		),
+		true,
+	);
 	await client.dispose({ reason: 'reconnect' });
 	const result = await withTestTimeout(resultPromise);
 
@@ -1827,9 +1836,106 @@ void test('dispose during pending startup settles run and closes late stream', a
 			success: false,
 			output: '',
 			error: 'mdev bridge client disposed.',
-		failureClass: 'clientDisposed',
+			failureClass: 'clientDisposed',
 		});
 		await withTestTimeout(disposePromise);
+
+		assert.ok(resolveStart, 'start promise resolver was not captured');
+		resolveStart({
+			sendData: async () => {},
+			close: async (opts) => {
+				closeOptions.push(opts);
+				throw new Error('late startup close failed');
+			},
+		});
+		await waitTimeout(20);
+
+		assert.equal(closeOptions.length, 1);
+		assert.equal(closeOptions[0]?.signal instanceof AbortSignal, true);
+		assert.deepEqual(unhandledRejections, []);
+	} finally {
+		process.off('unhandledRejection', onUnhandledRejection);
+	}
+});
+
+void test('reconnect dispose during pending startup classifies active and queued operations', async () => {
+	const unhandledRejections: unknown[] = [];
+	const onUnhandledRejection = (reason: unknown) => {
+		unhandledRejections.push(reason);
+	};
+	const events: unknown[] = [];
+	let capturedStart:
+		| {
+				command: string;
+				abortSignal: AbortSignal | undefined;
+		  }
+		| undefined;
+	let resolveStart:
+		| ((stream: {
+				sendData: (data: ArrayBuffer) => Promise<void>;
+				close: (opts?: { signal?: AbortSignal }) => Promise<void>;
+		  }) => void)
+		| undefined;
+	const closeOptions: ({ signal?: AbortSignal } | undefined)[] = [];
+	const connection: MdevBridgeStreamConnection = {
+		startCommandStream: async (opts) => {
+			capturedStart = {
+				command: opts.command,
+				abortSignal: opts.abortSignal,
+			};
+			return await new Promise((resolve) => {
+				resolveStart = resolve;
+			});
+		},
+	};
+	const client = createMdevBridgeClient({
+		connection,
+		requiredOperations: ['op.one', 'op.two'],
+		requestTimeoutMs: 100,
+		trace: { event: (event) => events.push(event) },
+	});
+
+	process.on('unhandledRejection', onUnhandledRejection);
+	try {
+		const firstResultPromise = client.runOperation({
+			operation: 'op.one',
+			params: {},
+		});
+		const secondResultPromise = client.runOperation({
+			operation: 'op.two',
+			params: {},
+		});
+		await nextTick();
+
+		const disposePromise = client.dispose({ reason: 'reconnect' });
+
+		assert.equal(capturedStart?.command, EXPECTED_MDEV_BRIDGE_COMMAND);
+		assert.equal(capturedStart?.abortSignal instanceof AbortSignal, true);
+		assert.equal(capturedStart?.abortSignal?.aborted, true);
+		assert.deepEqual(await withTestTimeout(firstResultPromise), {
+			success: false,
+			output: '',
+			error: 'mdev bridge stream closed.',
+			failureClass: 'disposedByReconnect',
+		});
+		assert.deepEqual(await withTestTimeout(secondResultPromise), {
+			success: false,
+			output: '',
+			error: 'mdev bridge stream closed.',
+			failureClass: 'disposedByReconnect',
+		});
+		await withTestTimeout(disposePromise);
+		assert.equal(
+			events.some(
+				(event) =>
+					(event as { kind?: string; stage?: string; closeClass?: string })
+						.kind === 'mdev-bridge.lifecycle' &&
+					(event as { stage?: string }).stage === 'client-disposed' &&
+					(event as { closeClass?: string }).closeClass ===
+						'disposedByReconnect',
+			),
+			true,
+		);
 
 		assert.ok(resolveStart, 'start promise resolver was not captured');
 		resolveStart({

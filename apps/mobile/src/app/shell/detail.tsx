@@ -67,12 +67,12 @@ import {
 	type ActionContext,
 	type ActionId,
 	type RunActionOptions,
-	type WorkmuxCommandFailureClass,
 	type WorkmuxKeyboardCommand,
 } from '@/lib/keyboard-actions';
 import { runMacro } from '@/lib/keyboard-runtime';
 import { rootLogger } from '@/lib/logger';
 import { resolveLucideIcon } from '@/lib/lucide-utils';
+import { type MdevBridgeFailureClass } from '@/lib/mdev-bridge-client';
 import { OrderedWriter } from '@/lib/ordered-writer';
 import { preferences } from '@/lib/preferences';
 import {
@@ -194,6 +194,7 @@ import {
 	runShellScrollbackInactiveCleanup,
 	shouldTreatShellWorkmuxScrollbackFailureAsAlreadyInactive,
 } from './shell-scrollback-policy';
+import { shouldShowShellWorkmuxKeyboardFailure } from './shell-workmux-keyboard-policy';
 import { resolveShellTouchScrollPolicy } from './shell-touch-scroll';
 
 const logger = rootLogger.extend('TabsShellDetail');
@@ -309,9 +310,9 @@ type TmuxAttachErrorScreenProps = {
 };
 
 class WorkmuxCommandFailure extends Error {
-	readonly failureClass?: WorkmuxCommandFailureClass;
+	readonly failureClass?: MdevBridgeFailureClass;
 
-	constructor(message: string, failureClass?: WorkmuxCommandFailureClass) {
+	constructor(message: string, failureClass?: MdevBridgeFailureClass) {
 		super(message);
 		this.name = 'WorkmuxCommandFailure';
 		this.failureClass = failureClass;
@@ -993,13 +994,14 @@ function ShellDetail() {
 				cleanupGeneration: tmuxRemoteScrollbackCopyModeGenerationRef,
 				targetName: normalizedTmuxTarget,
 			});
+			const disposeReason = useAutoConnectStore.getState().isReconnecting
+				? 'reconnect'
+				: 'unmount';
 			disposeWorkmuxControlChannelAfterCleanup({
 				cleanup,
 				dispose: () =>
 					workmuxControlChannel.dispose({
-						reason: useAutoConnectStore.getState().isReconnecting
-							? 'reconnect'
-							: 'unmount',
+						reason: disposeReason,
 					}),
 				onCleanupError: (error) => {
 					logger.warn('Workmux scrollback dispose exit failed', error);
@@ -2443,11 +2445,9 @@ function ShellDetail() {
 					return result.output;
 				},
 				showFailure: ({ message, failureClass }) => {
-					if (failureClass === 'disposedByReconnect') {
-						return;
-					}
 					if (
-						!shouldShowFocusedActiveFeedback({
+						!shouldShowShellWorkmuxKeyboardFailure({
+							failureClass,
 							isFocused: isFocusedRef.current,
 							isAppActive: isAppActiveRef.current,
 						})
