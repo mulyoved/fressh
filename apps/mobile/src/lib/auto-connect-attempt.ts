@@ -682,6 +682,90 @@ async function runSavedEntryReconnectAttempt({
 	}
 }
 
+async function attemptReconnectThroughSavedEntry({
+	platformOS,
+	runContext,
+	reconnectContext,
+	connections,
+	loadSavedConnectionByStoredId,
+	loadLatestSavedReconnectConnection,
+	recovery,
+	traceEvent,
+	resolveKeySecurity,
+	openSavedEntryShell,
+	navigateToShell,
+	markTailscaleAttention,
+	clearTailscaleAttention,
+	logger,
+}: {
+	platformOS: string;
+	runContext: ConnectionRunContext;
+	reconnectContext: AutoConnectReconnectContext;
+	connections: Record<string, ActiveConnectionSnapshot>;
+	loadSavedConnectionByStoredId?: (
+		storedConnectionId: string,
+	) => Promise<SavedConnectionEntry | null>;
+	loadLatestSavedReconnectConnection: () => Promise<SavedConnectionEntry | null>;
+	recovery: SavedEntryTailscaleRecovery;
+	traceEvent: (event: ConnectionDiagnosticEvent) => void;
+	resolveKeySecurity: (
+		details: StoredConnectionDetails,
+	) => Promise<ResolvedKeySecurity | null>;
+	openSavedEntryShell: OpenSavedEntryShell;
+	navigateToShell: (connectionId: string, channelId: number) => void;
+	markTailscaleAttention: (message: string) => void;
+	clearTailscaleAttention: () => void;
+	logger: Logger;
+}): Promise<AutoConnectReconnectAttemptResult | boolean> {
+	let reconnectEntryResult: ConnectionRunOperationResult<
+		SavedConnectionEntry | null
+	>;
+	try {
+		reconnectEntryResult = await runContext.runOperation(
+			'operation',
+			async () =>
+				await resolveReconnectSavedEntry({
+					reconnectContext,
+					connections,
+					loadSavedConnectionByStoredId,
+					loadLatestSavedReconnectConnection,
+				}),
+		);
+	} catch (error) {
+		if (
+			runContext.classifyError(error) === 'aborted' ||
+			runContext.signal.aborted
+		) {
+			return { status: 'retry' };
+		}
+		logger.warn('Reconnect saved-entry lookup failed', error);
+		return classifyReconnectSetupFailure(error, 'saved-entry-load');
+	}
+	if (reconnectEntryResult.status === 'aborted') return { status: 'retry' };
+	const reconnectEntry = reconnectEntryResult.value;
+	if (!reconnectEntry) {
+		traceEvent(
+			savedEntryEvents.missing({
+				source: 'saved-entry',
+			}),
+		);
+		return { status: 'retry' };
+	}
+	return await runSavedEntryReconnectAttempt({
+		platformOS,
+		runContext,
+		recovery,
+		traceEvent,
+		latestEntry: reconnectEntry,
+		resolveKeySecurity,
+		openSavedEntryShell,
+		navigateToShell,
+		markTailscaleAttention,
+		clearTailscaleAttention,
+		logger,
+	});
+}
+
 export async function attemptAutoConnectSource({
 	platformOS,
 	pathname,
@@ -744,46 +828,15 @@ export async function attemptAutoConnectSource({
 					message: 'stale transport marked for replacement',
 				}),
 			);
-			let reconnectEntryResult: ConnectionRunOperationResult<
-				SavedConnectionEntry | null
-			>;
-			try {
-				reconnectEntryResult = await runContext.runOperation(
-					'operation',
-					async () =>
-						await resolveReconnectSavedEntry({
-							reconnectContext,
-							connections,
-							loadSavedConnectionByStoredId,
-							loadLatestSavedReconnectConnection,
-						}),
-				);
-			} catch (error) {
-				if (
-					runContext.classifyError(error) === 'aborted' ||
-					runContext.signal.aborted
-				) {
-					return { status: 'retry' };
-				}
-				logger.warn('Reconnect saved-entry lookup failed', error);
-				return classifyReconnectSetupFailure(error, 'saved-entry-load');
-			}
-			if (reconnectEntryResult.status === 'aborted') return { status: 'retry' };
-			const reconnectEntry = reconnectEntryResult.value;
-			if (!reconnectEntry) {
-				traceEvent(
-					savedEntryEvents.missing({
-						source: 'saved-entry',
-					}),
-				);
-				return { status: 'retry' };
-			}
-			return await runSavedEntryReconnectAttempt({
+			return await attemptReconnectThroughSavedEntry({
 				platformOS,
 				runContext,
+				reconnectContext,
+				connections,
+				loadSavedConnectionByStoredId,
+				loadLatestSavedReconnectConnection,
 				recovery,
 				traceEvent,
-				latestEntry: reconnectEntry,
 				resolveKeySecurity,
 				openSavedEntryShell,
 				navigateToShell,
@@ -958,46 +1011,15 @@ export async function attemptAutoConnectSource({
 	}
 
 	if (reconnectContext?.trigger === 'reconnect') {
-		let reconnectEntryResult: ConnectionRunOperationResult<
-			SavedConnectionEntry | null
-		>;
-		try {
-			reconnectEntryResult = await runContext.runOperation(
-				'operation',
-				async () =>
-					await resolveReconnectSavedEntry({
-						reconnectContext,
-						connections,
-						loadSavedConnectionByStoredId,
-						loadLatestSavedReconnectConnection,
-					}),
-			);
-		} catch (error) {
-			if (
-				runContext.classifyError(error) === 'aborted' ||
-				runContext.signal.aborted
-			) {
-				return { status: 'retry' };
-			}
-			logger.warn('Reconnect saved-entry lookup failed', error);
-			return classifyReconnectSetupFailure(error, 'saved-entry-load');
-		}
-		if (reconnectEntryResult.status === 'aborted') return { status: 'retry' };
-		const reconnectEntry = reconnectEntryResult.value;
-		if (!reconnectEntry) {
-			traceEvent(
-				savedEntryEvents.missing({
-					source: 'saved-entry',
-				}),
-			);
-			return { status: 'retry' };
-		}
-		return await runSavedEntryReconnectAttempt({
+		return await attemptReconnectThroughSavedEntry({
 			platformOS,
 			runContext,
+			reconnectContext,
+			connections,
+			loadSavedConnectionByStoredId,
+			loadLatestSavedReconnectConnection,
 			recovery,
 			traceEvent,
-			latestEntry: reconnectEntry,
 			resolveKeySecurity,
 			openSavedEntryShell,
 			navigateToShell,
