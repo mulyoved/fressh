@@ -28,6 +28,7 @@ import {
 	type InputConnectionDetails,
 	type StoredConnectionDetails,
 } from '@/lib/secrets-manager';
+import { formatSshErrorMessage } from '@/lib/ssh-error-details';
 import { useTailscaleRecoveryUiStore } from '@/lib/tailscale-recovery-ui-store';
 import { TailscaleRecoveryPanel } from '@/lib/TailscaleRecoveryPanel';
 import { useTheme } from '@/lib/theme';
@@ -298,10 +299,7 @@ function Host() {
 							</View>
 							{sshConnMutation.isError ? (
 								<Text style={{ color: theme.colors.danger, marginTop: 8 }}>
-									{String(
-										(sshConnMutation.error as Error)?.message ??
-											'Failed to connect',
-									)}
+									{formatSshErrorMessage(sshConnMutation.error)}
 								</Text>
 							) : null}
 						</connectionForm.AppForm>
