@@ -9,8 +9,8 @@ import { type AutoConnectReconnectContext } from './auto-connect-attempt';
 import { getAutoConnectLaunchActionForUrl } from './auto-connect-launch';
 import {
 	attemptAutoConnectFromManager,
-	buildPendingReconnectContext,
 	createReconnectContextCycleState,
+	installPendingReconnectContext,
 	pickLatestShellSnapshot,
 } from './auto-connect-manager-helpers';
 import {
@@ -726,6 +726,12 @@ export function AutoConnectManager() {
 			}
 			if (!wasActive && isActiveRef.current) {
 				if (shells.length === 0) {
+					installPendingReconnectContext({
+						reconnectContextState: reconnectContextCycleRef.current,
+						pathname: '/shell/detail',
+						shells: previousShellsRef.current,
+						connections: previousConnectionsRef.current,
+					});
 					scheduleReconnect('app-resume-no-shell');
 				} else {
 					void runAutoConnectOnce();
@@ -753,13 +759,12 @@ export function AutoConnectManager() {
 			return;
 		}
 		if (prevShellCountRef.current > 0 && shells.length === 0) {
-			reconnectContextCycleRef.current.replacePendingReconnectContext(
-				buildPendingReconnectContext({
-					pathname: '/shell/detail',
-					shells: previousShellsRef.current,
-					connections: previousConnectionsRef.current,
-				}),
-			);
+			installPendingReconnectContext({
+				reconnectContextState: reconnectContextCycleRef.current,
+				pathname: '/shell/detail',
+				shells: previousShellsRef.current,
+				connections: previousConnectionsRef.current,
+			});
 			scheduleReconnect('shell-drop');
 		}
 		prevShellCountRef.current = shells.length;

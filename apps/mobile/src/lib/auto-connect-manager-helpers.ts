@@ -83,6 +83,10 @@ export function createReconnectContextCycleState() {
 	};
 }
 
+type ReconnectContextCycleState = ReturnType<
+	typeof createReconnectContextCycleState
+>;
+
 export async function attemptAutoConnectFromManager({
 	attemptAutoConnectSourceImpl = attemptAutoConnectSource,
 	loadSavedConnections,
@@ -132,4 +136,24 @@ export function buildPendingReconnectContext({
 			? getStoredConnectionId(droppedConnection.connectionDetails)
 			: undefined,
 	};
+}
+
+export function installPendingReconnectContext({
+	reconnectContextState,
+	pathname,
+	shells,
+	connections,
+}: {
+	reconnectContextState: ReconnectContextCycleState;
+	pathname: string;
+	shells: ShellSnapshot[];
+	connections: Record<string, ConnectionSnapshot | undefined>;
+}) {
+	reconnectContextState.replacePendingReconnectContext(
+		buildPendingReconnectContext({
+			pathname,
+			shells,
+			connections,
+		}),
+	);
 }

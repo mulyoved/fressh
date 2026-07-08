@@ -117,6 +117,12 @@ function eventKinds(events: unknown[]) {
 	return events.map((event) => (event as { kind: string }).kind);
 }
 
+function createTaggedError(message: string, tag: string) {
+	const error = new Error(message) as Error & { tag: string };
+	error.tag = tag;
+	return error;
+}
+
 const unsupportedRecovery = {
 	ensureReady: async () => ({
 		kind: 'unsupported' as const,
@@ -1182,6 +1188,48 @@ void test('reconnect saved-entry loader exception returns a classified result', 
 	});
 });
 
+void test('reconnect saved-entry loader network-like exception returns failedNetwork', async () => {
+	const { logger } = createLogger();
+
+	const result = await attemptAutoConnectSource({
+		platformOS: 'android',
+		pathname: '/shell/detail',
+		latestShell: null,
+		connections: {},
+		reconnectContext: {
+			trigger: 'reconnect',
+			droppedConnectionId: 'dropped-1',
+			droppedChannelId: 9,
+			droppedStoredConnectionId: 'muly-host_example-22',
+			pathname: '/shell/detail',
+		},
+		openSavedEntryShell: async () => {
+			throw new Error('connect should not run');
+		},
+		loadSavedConnectionByStoredId: async () => {
+			throw new Error('No route to host');
+		},
+		loadLatestSavedConnection: async () => {
+			throw new Error('latest reconnect fallback should not run');
+		},
+		resolveKeySecurity: async () => {
+			throw new Error('security should not resolve');
+		},
+		navigateToShell: () => {
+			throw new Error('navigation should not run');
+		},
+		recovery: readyRecovery,
+		markTailscaleAttention: () => {},
+		clearTailscaleAttention: () => {},
+		logger,
+	});
+
+	assert.deepEqual(result, {
+		status: 'failedNetwork',
+		message: 'No route to host',
+	});
+});
+
 void test('reconnect key resolver exception returns a classified result', async () => {
 	const { logger } = createLogger();
 
@@ -1219,6 +1267,46 @@ void test('reconnect key resolver exception returns a classified result', async 
 	assert.deepEqual(result, {
 		status: 'failedAuth',
 		message: 'key resolver failed',
+	});
+});
+
+void test('reconnect key resolver tmux-tagged exception returns failedTmuxAttach', async () => {
+	const { logger } = createLogger();
+
+	const result = await attemptAutoConnectSource({
+		platformOS: 'android',
+		pathname: '/shell/detail',
+		latestShell: null,
+		connections: {},
+		reconnectContext: {
+			trigger: 'reconnect',
+			droppedConnectionId: 'dropped-1',
+			droppedChannelId: 9,
+			droppedStoredConnectionId: 'muly-host_example-22',
+			pathname: '/shell/detail',
+		},
+		openSavedEntryShell: async () => {
+			throw new Error('connect should not run');
+		},
+		loadSavedConnectionByStoredId: async () => createSavedEntry(),
+		loadLatestSavedConnection: async () => {
+			throw new Error('latest reconnect fallback should not run');
+		},
+		resolveKeySecurity: async () => {
+			throw createTaggedError('tmux attach failed', 'TmuxAttachFailed');
+		},
+		navigateToShell: () => {
+			throw new Error('navigation should not run');
+		},
+		recovery: readyRecovery,
+		markTailscaleAttention: () => {},
+		clearTailscaleAttention: () => {},
+		logger,
+	});
+
+	assert.deepEqual(result, {
+		status: 'failedTmuxAttach',
+		message: 'tmux attach failed',
 	});
 });
 
@@ -1773,11 +1861,13 @@ void test('android tmux reconnect traces Tailscale readiness before saved-entry 
 
 	assert.deepEqual(result, { status: 'connected' });
 	assert.deepEqual(callOrder, ['ensure-ready', 'connect']);
-	assert.equal(
-		events.some(
-			(event) =>
-				(event as { kind?: string }).kind === 'tailscale.ensure-ready.result',
-		),
-		true,
-	);
+	assert.deepEqual(eventKinds(events), [
+		'auto-connect.latest-shell.missing',
+		'auto-connect.active-connection.missing',
+		'saved-entry.selected',
+		'key.resolved',
+		'tailscale.ensure-ready.result',
+		'auto-connect.saved-entry.connect.started',
+		'auto-connect.saved-entry.connect.connected',
+	]);
 });

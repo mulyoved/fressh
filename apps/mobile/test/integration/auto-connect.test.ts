@@ -4,6 +4,7 @@ import {
 	attemptAutoConnectFromManager,
 	buildPendingReconnectContext,
 	createReconnectContextCycleState,
+	installPendingReconnectContext,
 	pickLatestSavedReconnectConnection,
 } from '../../src/lib/auto-connect-manager-helpers';
 import { type AutoConnectAttemptSourceArgs } from '../../src/lib/auto-connect-attempt';
@@ -281,6 +282,137 @@ void test('manager reconnect wiring passes dropped identity and unfiltered recon
 		(await capturedArgs?.loadLatestSavedReconnectConnection?.())?.value.host,
 		'100.64.0.10',
 	);
+});
+
+void test('app-resume-no-shell reconnect installs dropped context so stale active transport reconnects through tmux saved-entry fallback', async () => {
+	const reconnectContextState = createReconnectContextCycleState();
+	installPendingReconnectContext({
+		reconnectContextState,
+		pathname: '/shell/detail',
+		shells: [
+			{
+				connectionId: 'active-conn-1',
+				channelId: 4,
+				createdAtMs: 20,
+			},
+		],
+		connections: {
+			'active-conn-1': {
+				connectionDetails: {
+					username: 'muly',
+					host: '100.64.0.10',
+					port: 22,
+				},
+			},
+		},
+	});
+
+	const reconnectContext =
+		reconnectContextState.getReconnectContextForReconnectAttempt();
+	const savedEntries = [
+		createSavedEntry({
+			metadata: {
+				createdAtMs: 2,
+				modifiedAtMs: 20,
+				priority: 0,
+			},
+			value: {
+				username: 'muly',
+				host: '100.64.0.10',
+				port: 22,
+				useTmux: true,
+				tmuxSessionName: 'main',
+				autoConnect: false,
+				security: { type: 'key', keyId: 'key-2' },
+			},
+		}),
+	];
+	const loadedIds: string[] = [];
+	const startShellCalls: unknown[] = [];
+	const navigations: Array<{ connectionId: string; channelId: number }> = [];
+	const runContext = createConnectionRunContext({
+		timeouts: {
+			operationTimeoutMs: 1_000,
+			recoveryTimeoutMs: 1_000,
+			cleanupTimeoutMs: 1_000,
+		},
+	});
+
+	try {
+		const result = await attemptAutoConnectFromManager({
+			platformOS: 'android',
+			pathname: '/shell/detail',
+			latestShell: null,
+			connections: {
+				'active-conn-1': {
+					connectionId: 'active-conn-1',
+					connectionDetails: {
+						username: 'muly',
+						host: '100.64.0.10',
+						port: 22,
+					},
+					connectedAtMs: 50,
+					startShell: async () => {
+						startShellCalls.push({});
+						throw new Error('stale active shell must not reopen');
+					},
+				},
+			},
+			reconnectContext,
+			openSavedEntryShell: async ({ connectionDetails }) => {
+				assert.equal(connectionDetails.useTmux, true);
+				assert.equal(connectionDetails.tmuxSessionName, 'main');
+				return {
+					status: 'connected',
+					connectionId: 'fresh-conn-1',
+					channelId: 9,
+					cleanup: async () => undefined,
+				};
+			},
+			loadSavedConnections: async () => savedEntries,
+			loadSavedConnectionByStoredId: async (storedConnectionId) => {
+				loadedIds.push(storedConnectionId);
+				return null;
+			},
+			resolveKeySecurity: async () => ({
+				type: 'key',
+				privateKey: 'private-key',
+			}),
+			navigateToShell: (connectionId, channelId) => {
+				navigations.push({ connectionId, channelId });
+			},
+			recovery: {
+				ensureReady: async () => ({
+					kind: 'ready' as const,
+					attempted: true as const,
+					available: true as const,
+				}),
+				recoverAfterFailure: async () => ({
+					kind: 'nonNetworkFailure' as const,
+					attempted: false as const,
+					networkLikeFailure: false as const,
+					available: true as const,
+				}),
+			},
+			markTailscaleAttention: () => {},
+			clearTailscaleAttention: () => {},
+			logger: {
+				info: () => {},
+				warn: () => {},
+			},
+			runContext,
+		});
+
+		assert.deepEqual(result, { status: 'connected' });
+	} finally {
+		runContext.finish();
+	}
+
+	assert.deepEqual(loadedIds, ['muly-100_64_0_10-22']);
+	assert.deepEqual(startShellCalls, []);
+	assert.deepEqual(navigations, [
+		{ connectionId: 'fresh-conn-1', channelId: 9 },
+	]);
 });
 
 void test('reconnect retry loop preserves dropped reconnect context for every production adapter call', async () => {
