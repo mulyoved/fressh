@@ -1,3 +1,8 @@
+import {
+	type ActiveConnectionSnapshot,
+	type AutoConnectReconnectContext,
+} from './auto-connect-attempt';
+import { type AutoConnectReconnectAttemptResult } from './auto-connect-reconnect-controller';
 import { type SavedEntryTailscaleRecovery } from './auto-connect-saved-entry';
 import {
 	type Logger,
@@ -19,20 +24,15 @@ import {
 	type ConnectionRunContext,
 	type ConnectionRunOperationResult,
 } from './connection-run-context';
-import { type AutoConnectReconnectAttemptResult } from './auto-connect-reconnect-controller';
 import {
 	getStoredConnectionId,
 	pickLatestConnection,
 	type SavedConnectionEntry,
 } from './connection-utils';
-import { queryClient } from './utils';
 // eslint-disable-next-line import/consistent-type-specifier-style -- keep secrets-manager fully type-only so Node integration tests do not load React Native at runtime
 import type { StoredConnectionDetails } from './secrets-manager';
 import { isNetworkLikeSshError } from './tailscale-recovery-core';
-import type {
-	ActiveConnectionSnapshot,
-	AutoConnectReconnectContext,
-} from './auto-connect-attempt';
+import { queryClient } from './utils';
 
 type ReconnectFailureStatus = Extract<
 	AutoConnectReconnectAttemptResult['status'],

@@ -7,6 +7,7 @@ import {
 	pickLatestConnection,
 	type SavedConnectionEntry,
 } from '../../src/lib/connection-utils';
+// eslint-disable-next-line import/consistent-type-specifier-style -- keep secrets-manager fully type-only so Node integration tests do not load React Native at runtime
 import type { InputConnectionDetails } from '../../src/lib/secrets-manager';
 
 export type OpenSavedEntryShellArgs = {

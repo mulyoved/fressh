@@ -4,15 +4,15 @@ import {
 	formatAutoConnectEventFields,
 } from './auto-connect';
 import {
-	formatMdevBridgeEventFields,
-	type MdevBridgeLifecycleEvent,
-	mdevBridgeDiagnosticEventKinds,
-} from './mdev-bridge';
-import {
 	formatManualDiagnosticEventFields,
 	type ManualDiagnosticEvent,
 	manualDiagnosticEventKinds,
 } from './manual';
+import {
+	formatMdevBridgeEventFields,
+	type MdevBridgeLifecycleEvent,
+	mdevBridgeDiagnosticEventKinds,
+} from './mdev-bridge';
 import {
 	formatReconnectEventFields,
 	type ReconnectEvent,

@@ -1,18 +1,18 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { type ConnectionDiagnosticEvent } from '../../src/lib/connection-diagnostics';
 import {
 	type MdevBridgeClient,
 	type MdevBridgeDisposeOptions,
 	type MdevBridgeStreamEvent,
 } from '../../src/lib/mdev-bridge-client';
-import { type ConnectionDiagnosticEvent } from '../../src/lib/connection-diagnostics';
+import { WORKMUX_REQUIRED_MDEV_BRIDGE_OPERATIONS } from '../../src/lib/workmux-bridge-operations';
 import {
 	createWorkmuxControlChannel,
 	disposeWorkmuxControlChannelAfterCleanup,
 	type WorkmuxControlConnection,
 	type WorkmuxControlCommandResult,
 } from '../../src/lib/workmux-control-channel';
-import { WORKMUX_REQUIRED_MDEV_BRIDGE_OPERATIONS } from '../../src/lib/workmux-bridge-operations';
 
 function bytes(text: string): ArrayBuffer {
 	return new TextEncoder().encode(text).buffer as ArrayBuffer;

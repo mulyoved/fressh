@@ -895,7 +895,7 @@ void test('android tmux reconnect traces Tailscale readiness before saved-entry 
 });
 
 void test('reconnect successful saved-entry opener navigate callback only navigates once', async () => {
-	const navigations: Array<{ connectionId: string; channelId: number }> = [];
+	const navigations: { connectionId: string; channelId: number }[] = [];
 	const savedEntry = createSavedEntryWithId('muly-100_64_0_10-22', {
 		...baseDetails,
 		host: '100.64.0.10',

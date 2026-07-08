@@ -20,14 +20,14 @@ import {
 	type AutoConnectReconnectController,
 } from './auto-connect-reconnect-controller';
 import { toAutoConnectSavedEntryResult } from './auto-connect-saved-entry-cleanup';
-import { connectAndOpenShell } from './connect-and-open-shell';
-import { connectionDiagnosticRecorder } from './connection-diagnostic-recorder';
-import { type ConnectionDiagnosticTraceHandle } from './connection-diagnostic-types';
-import { createConnectionRunContext } from './connection-run-context';
 import {
 	handleAutoConnectReconnectTraceEvent,
 	useAutoConnectStore,
 } from './auto-connect-store';
+import { connectAndOpenShell } from './connect-and-open-shell';
+import { connectionDiagnosticRecorder } from './connection-diagnostic-recorder';
+import { type ConnectionDiagnosticTraceHandle } from './connection-diagnostic-types';
+import { createConnectionRunContext } from './connection-run-context';
 import {
 	startForegroundService,
 	stopForegroundService,

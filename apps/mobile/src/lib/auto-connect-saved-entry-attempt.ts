@@ -18,6 +18,7 @@ import {
 } from './connection-run-context';
 import { type SavedConnectionEntry } from './connection-utils';
 import { createSavedEntryTailscaleDiagnosticRecovery } from './saved-entry-tailscale-diagnostic-recovery';
+// eslint-disable-next-line import/consistent-type-specifier-style -- keep secrets-manager fully type-only so Node integration tests do not load React Native at runtime
 import type {
 	InputConnectionDetails,
 	StoredConnectionDetails,

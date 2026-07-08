@@ -1,3 +1,5 @@
+import { type AutoConnectReconnectAttemptResult } from './auto-connect-reconnect-controller';
+import { attemptReconnectThroughSavedEntry } from './auto-connect-reconnect-saved-entry';
 import { type SavedEntryTailscaleRecovery } from './auto-connect-saved-entry';
 import {
 	type Logger,
@@ -12,7 +14,6 @@ import {
 	type ConnectionAttemptTimeouts,
 	type SavedEntryConnectionAttemptOutcome,
 } from './connection-attempt-lifecycle';
-import { attemptReconnectThroughSavedEntry } from './auto-connect-reconnect-saved-entry';
 import { type ConnectionDiagnosticEvent } from './connection-diagnostic-types';
 import {
 	autoConnectEvents,
@@ -25,7 +26,6 @@ import {
 	createConnectionRunContext,
 	type ConnectionRunContext,
 } from './connection-run-context';
-import { type AutoConnectReconnectAttemptResult } from './auto-connect-reconnect-controller';
 import {
 	getStoredConnectionId,
 	type SavedConnectionEntry,

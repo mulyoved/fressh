@@ -4,6 +4,10 @@ import {
 } from '@/lib/host-browser-actions';
 import { rootLogger } from '@/lib/logger';
 import {
+	isMdevBridgeFailureClass,
+	type MdevBridgeFailureClass,
+} from '@/lib/mdev-bridge-client';
+import {
 	WORKMUX_APP_COMMAND_UPDATE_MESSAGE,
 	buildWorkmuxAppFocusArgv,
 	buildWorkmuxAppNavArgv,
@@ -13,10 +17,6 @@ import {
 	type WorkmuxNavAction,
 	type WorkmuxNavScope,
 } from '@/lib/workmux-app-commands';
-import {
-	isMdevBridgeFailureClass,
-	type MdevBridgeFailureClass,
-} from '@/lib/mdev-bridge-client';
 
 // Action IDs emitted by runtime config are handled here at runtime.
 

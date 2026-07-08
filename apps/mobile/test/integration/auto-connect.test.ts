@@ -1,5 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { type AutoConnectAttemptSourceArgs } from '../../src/lib/auto-connect-attempt';
+import {
+	getAutoConnectLaunchActionForUrl,
+	shouldSkipInitialAutoConnectForUrl,
+} from '../../src/lib/auto-connect-launch';
 import {
 	attemptAutoConnectFromManager,
 	buildPendingReconnectContext,
@@ -8,18 +13,13 @@ import {
 	installResumeReconnectContext,
 	preserveShellReferencedConnections,
 } from '../../src/lib/auto-connect-manager-helpers';
+import { createAutoConnectReconnectController } from '../../src/lib/auto-connect-reconnect-controller';
 import {
 	handleAutoConnectReconnectTraceEvent,
 	useAutoConnectStore,
 } from '../../src/lib/auto-connect-store';
-import { type AutoConnectAttemptSourceArgs } from '../../src/lib/auto-connect-attempt';
-import { createAutoConnectReconnectController } from '../../src/lib/auto-connect-reconnect-controller';
-import { createConnectionRunContext } from '../../src/lib/connection-run-context';
 import { type ConnectionDiagnosticEvent } from '../../src/lib/connection-diagnostic-types';
-import {
-	getAutoConnectLaunchActionForUrl,
-	shouldSkipInitialAutoConnectForUrl,
-} from '../../src/lib/auto-connect-launch';
+import { createConnectionRunContext } from '../../src/lib/connection-run-context';
 import {
 	clearTailscaleRecoveryUiState,
 	useTailscaleRecoveryUiStore,
@@ -689,7 +689,7 @@ void test('app-resume-no-shell reconnect installs dropped context so stale activ
 	];
 	const loadedIds: string[] = [];
 	const startShellCalls: unknown[] = [];
-	const navigations: Array<{ connectionId: string; channelId: number }> = [];
+	const navigations: { connectionId: string; channelId: number }[] = [];
 	const runContext = createConnectionRunContext({
 		timeouts: {
 			operationTimeoutMs: 1_000,
@@ -836,15 +836,15 @@ void test('reconnect retry loop preserves dropped reconnect context for every pr
 		}),
 	];
 	let nowMs = 0;
-	const timers: Array<{
+	const timers: {
 		delayMs: number;
 		callback: () => void;
 		cleared: boolean;
-	}> = [];
-		const capturedAttempts: Array<{
+	}[] = [];
+		const capturedAttempts: {
 			reconnectContext: AutoConnectAttemptSourceArgs['reconnectContext'];
 			autoConnectHost: string | undefined;
-		}> = [];
+		}[] = [];
 	const controller = createAutoConnectReconnectController({
 		delaysMs: [10],
 		windowMs: 100,

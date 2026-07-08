@@ -1,3 +1,4 @@
+import { type ConnectionDiagnosticEvent } from './connection-diagnostics';
 import {
 	createMdevBridgeClient,
 	type MdevBridgeClient,
@@ -5,7 +6,6 @@ import {
 	type MdevBridgeFailureClass,
 	type MdevBridgeStreamConnection,
 } from './mdev-bridge-client';
-import { type ConnectionDiagnosticEvent } from './connection-diagnostics';
 import { type WorkmuxScrollDirection } from './workmux-app-commands';
 import {
 	type MdevBridgeOperationRequest,

@@ -194,11 +194,11 @@ import {
 	runShellScrollbackInactiveCleanup,
 	shouldTreatShellWorkmuxScrollbackFailureAsAlreadyInactive,
 } from './shell-scrollback-policy';
+import { resolveShellTouchScrollPolicy } from './shell-touch-scroll';
 import {
 	runShellWorkmuxKeyboardCommand,
 	showShellWorkmuxKeyboardFailure,
 } from './shell-workmux-keyboard-policy';
-import { resolveShellTouchScrollPolicy } from './shell-touch-scroll';
 
 const logger = rootLogger.extend('TabsShellDetail');
 
