@@ -97,10 +97,10 @@ export function createAutoConnectRunContext(callerSignal?: AbortSignal) {
 
 type LegacyAttemptSourceArgs = Omit<
 	AutoConnectAttemptSourceArgs,
-	'loadLatestSavedConnection' | 'loadSavedConnections' | 'runContext'
+	'loadLatestSavedConnection' | 'runContext'
 > & {
 	loadLatestSavedConnection?: AutoConnectAttemptSourceArgs['loadLatestSavedConnection'];
-	loadSavedConnections?: AutoConnectAttemptSourceArgs['loadSavedConnections'];
+	loadSavedConnections?: () => Promise<SavedConnectionEntry[] | null>;
 	loadLatestSavedAutoConnectConnection?: () => Promise<
 		SavedConnectionEntry | null
 	>;
@@ -150,12 +150,6 @@ export async function attemptAutoConnectSource(args: LegacyAttemptSourceArgs) {
 							loadLatestSavedAutoConnectConnection,
 						}),
 					)),
-			loadSavedConnections: async () =>
-				await loadSavedConnectionsForTest({
-					loadSavedConnections,
-					loadLatestSavedConnection,
-					loadLatestSavedAutoConnectConnection,
-				}),
 			runContext,
 		});
 	} finally {

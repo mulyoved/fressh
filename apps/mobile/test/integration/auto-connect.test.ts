@@ -5,8 +5,6 @@ import {
 	buildPendingReconnectContext,
 	createReconnectContextCycleState,
 	installPendingReconnectContext,
-	pickLatestSavedAutoConnectConnection,
-	pickLatestSavedReconnectConnection,
 	preserveShellReferencedConnections,
 } from '../../src/lib/auto-connect-manager-helpers';
 import { type AutoConnectAttemptSourceArgs } from '../../src/lib/auto-connect-attempt';
@@ -278,47 +276,7 @@ void test('manager reconnect preserves dropped stored id when native disconnect 
 	assert.deepEqual(openedHosts, ['100.64.0.10']);
 });
 
-void test('reconnect fallback can choose the latest saved entry even when auto-connect is disabled', () => {
-	const selected = pickLatestSavedReconnectConnection([
-		createSavedEntry({
-			metadata: {
-				createdAtMs: 1,
-				modifiedAtMs: 10,
-				priority: 0,
-			},
-			value: {
-				username: 'muly',
-				host: '100.64.0.11',
-				port: 22,
-				useTmux: true,
-				tmuxSessionName: 'main',
-				autoConnect: true,
-				security: { type: 'key', keyId: 'key-1' },
-			},
-		}),
-		createSavedEntry({
-			metadata: {
-				createdAtMs: 2,
-				modifiedAtMs: 20,
-				priority: 0,
-			},
-			value: {
-				username: 'muly',
-				host: '100.64.0.10',
-				port: 22,
-				useTmux: true,
-				tmuxSessionName: 'main',
-				autoConnect: false,
-				security: { type: 'key', keyId: 'key-2' },
-			},
-		}),
-	]);
-
-	assert.equal(selected?.value.autoConnect, false);
-	assert.equal(selected?.value.host, '100.64.0.10');
-});
-
-void test('manager reconnect wiring passes dropped identity and unfiltered reconnect fallback into attempt source', async () => {
+void test('manager reconnect wiring passes dropped identity and launch auto-connect selection into attempt source', async () => {
 	const reconnectContext = buildPendingReconnectContext({
 		pathname: '/shell/detail',
 		shells: [
@@ -429,7 +387,6 @@ void test('manager reconnect wiring passes dropped identity and unfiltered recon
 		throw new Error('manager args should be captured');
 	}
 	const receivedArgs: AutoConnectAttemptSourceArgs = capturedArgs;
-	const receivedSavedConnections = await receivedArgs.loadSavedConnections();
 	assert.deepEqual(receivedArgs.reconnectContext, {
 		trigger: 'reconnect',
 		pathname: '/shell/detail',
@@ -437,14 +394,7 @@ void test('manager reconnect wiring passes dropped identity and unfiltered recon
 		droppedChannelId: 7,
 		droppedStoredConnectionId: 'muly-100_64_0_10-22',
 	});
-	assert.equal(
-		pickLatestSavedReconnectConnection(receivedSavedConnections)?.value.host,
-		'100.64.0.10',
-	);
-	assert.equal(
-		pickLatestSavedAutoConnectConnection(receivedSavedConnections)?.value.host,
-		'100.64.0.11',
-	);
+	assert.equal((await receivedArgs.loadLatestSavedConnection())?.value.host, '100.64.0.11');
 });
 
 void test('app-resume-no-shell without a dropped shell keeps normal auto-connect filtering', async () => {
@@ -547,16 +497,8 @@ void test('app-resume-no-shell without a dropped shell keeps normal auto-connect
 		throw new Error('manager args should be captured');
 	}
 	const receivedArgs: AutoConnectAttemptSourceArgs = capturedArgs;
-	const receivedSavedConnections = await receivedArgs.loadSavedConnections();
 	assert.equal(receivedArgs.reconnectContext, undefined);
-	assert.equal(
-		pickLatestSavedReconnectConnection(receivedSavedConnections)?.value.host,
-		'100.64.0.10',
-	);
-	assert.equal(
-		pickLatestSavedAutoConnectConnection(receivedSavedConnections)?.value.host,
-		'100.64.0.11',
-	);
+	assert.equal((await receivedArgs.loadLatestSavedConnection())?.value.host, '100.64.0.11');
 });
 
 void test('app-resume-no-shell reconnect installs dropped context so stale active transport reconnects through tmux saved-entry fallback', async () => {
@@ -645,10 +587,13 @@ void test('app-resume-no-shell reconnect installs dropped context so stale activ
 				};
 			},
 			loadSavedConnections: async () => savedEntries,
-			loadSavedConnectionByStoredId: async (storedConnectionId) => {
-				loadedIds.push(storedConnectionId);
-				return null;
-			},
+				loadSavedConnectionByStoredId: async (storedConnectionId) => {
+					loadedIds.push(storedConnectionId);
+					return (
+						savedEntries.find((entry) => entry.id === storedConnectionId) ??
+						null
+					);
+				},
 			resolveKeySecurity: async () => ({
 				type: 'key',
 				privateKey: 'private-key',
@@ -753,11 +698,10 @@ void test('reconnect retry loop preserves dropped reconnect context for every pr
 		callback: () => void;
 		cleared: boolean;
 	}> = [];
-	const capturedAttempts: Array<{
-		reconnectContext: AutoConnectAttemptSourceArgs['reconnectContext'];
-		latestHost: string | undefined;
-		autoConnectHost: string | undefined;
-	}> = [];
+		const capturedAttempts: Array<{
+			reconnectContext: AutoConnectAttemptSourceArgs['reconnectContext'];
+			autoConnectHost: string | undefined;
+		}> = [];
 	const controller = createAutoConnectReconnectController({
 		delaysMs: [10],
 		windowMs: 100,
@@ -826,13 +770,11 @@ void test('reconnect retry loop preserves dropped reconnect context for every pr
 					},
 					runContext,
 					attemptAutoConnectSourceImpl: async (args) => {
-						const savedConnections = await args.loadSavedConnections();
 						capturedAttempts.push({
 							reconnectContext: args.reconnectContext,
-							latestHost:
-								pickLatestSavedReconnectConnection(savedConnections)?.value.host,
-							autoConnectHost:
-								pickLatestSavedAutoConnectConnection(savedConnections)?.value.host,
+							autoConnectHost: (
+								await args.loadLatestSavedConnection()
+							)?.value.host,
 						});
 						return capturedAttempts.length === 1
 							? { status: 'retry', message: 'retry-once' }
@@ -871,8 +813,7 @@ void test('reconnect retry loop preserves dropped reconnect context for every pr
 				droppedChannelId: 7,
 				droppedStoredConnectionId: 'muly-100_64_0_10-22',
 			},
-			latestHost: '100.64.0.10',
-			autoConnectHost: '100.64.0.11',
+				autoConnectHost: '100.64.0.11',
 		},
 		{
 			reconnectContext: {
@@ -882,8 +823,7 @@ void test('reconnect retry loop preserves dropped reconnect context for every pr
 				droppedChannelId: 7,
 				droppedStoredConnectionId: 'muly-100_64_0_10-22',
 			},
-			latestHost: '100.64.0.10',
-			autoConnectHost: '100.64.0.11',
+				autoConnectHost: '100.64.0.11',
 		},
 	]);
 	assert.equal(controller.isRunning(), false);

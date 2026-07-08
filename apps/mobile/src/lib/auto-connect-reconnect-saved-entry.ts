@@ -21,8 +21,10 @@ import {
 import { type AutoConnectReconnectAttemptResult } from './auto-connect-reconnect-controller';
 import {
 	getStoredConnectionId,
+	pickLatestConnection,
 	type SavedConnectionEntry,
 } from './connection-utils';
+import { queryClient } from './utils';
 // eslint-disable-next-line import/consistent-type-specifier-style -- keep secrets-manager fully type-only so Node integration tests do not load React Native at runtime
 import type { StoredConnectionDetails } from './secrets-manager';
 import { isNetworkLikeSshError } from './tailscale-recovery-core';
@@ -141,14 +143,12 @@ export async function resolveReconnectSavedEntry({
 	reconnectContext,
 	connections,
 	loadSavedConnectionByStoredId,
-	loadLatestSavedReconnectConnection,
 }: {
 	reconnectContext: AutoConnectReconnectContext;
 	connections: Record<string, ActiveConnectionSnapshot>;
 	loadSavedConnectionByStoredId?: (
 		storedConnectionId: string,
 	) => Promise<SavedConnectionEntry | null>;
-	loadLatestSavedReconnectConnection: () => Promise<SavedConnectionEntry | null>;
 }): Promise<SavedConnectionEntry | null> {
 	const droppedConnection =
 		reconnectContext.droppedConnectionId !== undefined
@@ -163,7 +163,14 @@ export async function resolveReconnectSavedEntry({
 		const entry = await loadSavedConnectionByStoredId(storedConnectionId);
 		if (entry) return entry;
 	}
-	return await loadLatestSavedReconnectConnection();
+	return await loadLatestStoredSavedConnection();
+}
+
+async function loadLatestStoredSavedConnection(): Promise<SavedConnectionEntry | null> {
+	const { secretsManager } = await import('./secrets-manager');
+	return pickLatestConnection(
+		await queryClient.fetchQuery(secretsManager.connections.query.list),
+	);
 }
 
 export function mapReconnectSavedEntryAttemptOutcome({
@@ -443,7 +450,6 @@ export async function attemptReconnectThroughSavedEntry({
 	reconnectContext,
 	connections,
 	loadSavedConnectionByStoredId,
-	loadLatestSavedReconnectConnection,
 	recovery,
 	traceEvent,
 	resolveKeySecurity,
@@ -460,7 +466,6 @@ export async function attemptReconnectThroughSavedEntry({
 	loadSavedConnectionByStoredId?: (
 		storedConnectionId: string,
 	) => Promise<SavedConnectionEntry | null>;
-	loadLatestSavedReconnectConnection: () => Promise<SavedConnectionEntry | null>;
 	recovery: SavedEntryTailscaleRecovery;
 	traceEvent: (event: ConnectionDiagnosticEvent) => void;
 	resolveKeySecurity: (
@@ -483,7 +488,6 @@ export async function attemptReconnectThroughSavedEntry({
 					reconnectContext,
 					connections,
 					loadSavedConnectionByStoredId,
-					loadLatestSavedReconnectConnection,
 				}),
 		);
 	} catch (error) {

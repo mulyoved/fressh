@@ -64,12 +64,6 @@ export function pickLatestSavedAutoConnectConnection(
 	);
 }
 
-export function pickLatestSavedReconnectConnection(
-	entries?: SavedConnectionEntry[] | null,
-): SavedConnectionEntry | null {
-	return pickLatestConnection(entries);
-}
-
 function reconnectAttemptIsTerminal(
 	result: AutoConnectReconnectAttemptResult | boolean,
 ) {
@@ -117,7 +111,6 @@ export async function attemptAutoConnectFromManager({
 	...args
 }: Omit<
 	AutoConnectAttemptSourceArgs,
-	| 'loadSavedConnections'
 	| 'loadLatestSavedConnection'
 	| 'loadSavedConnectionByStoredId'
 > & {
@@ -131,7 +124,6 @@ export async function attemptAutoConnectFromManager({
 		...args,
 		loadLatestSavedConnection: async () =>
 			pickLatestSavedAutoConnectConnection(await loadSavedConnections()),
-		loadSavedConnections,
 		loadSavedConnectionByStoredId,
 	});
 }

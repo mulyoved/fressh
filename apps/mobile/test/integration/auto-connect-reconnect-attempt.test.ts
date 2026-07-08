@@ -496,37 +496,23 @@ void test('tmux reconnect prefers the dropped stored connection when the dropped
 	);
 });
 
-void test('reconnect falls back to the dropped saved entry without a reconnect-specific loader', async () => {
+void test('reconnect uses the dropped saved entry when launch selection is filtered', async () => {
 	const events: unknown[] = [];
 	const navigations: { connectionId: string; channelId: number }[] = [];
-	const autoConnectLatestEntry = {
-		...createSavedEntryWithId('auto-connect-only', {
+	const autoConnectLatestEntry = createSavedEntryWithId('auto-connect-only', {
 		...baseDetails,
 		host: '203.0.113.20',
 		autoConnect: true,
 		useTmux: true,
 		tmuxSessionName: 'main',
-		}),
-		metadata: {
-			createdAtMs: 1,
-			modifiedAtMs: 10,
-			priority: 0,
-		},
-	};
-	const reconnectLatestEntry = {
-		...createSavedEntryWithId('muly-100_64_0_10-22', {
+	});
+	const reconnectEntry = createSavedEntryWithId('muly-100_64_0_10-22', {
 		...baseDetails,
 		host: '100.64.0.10',
 		autoConnect: false,
 		useTmux: true,
 		tmuxSessionName: 'main',
-		}),
-		metadata: {
-			createdAtMs: 2,
-			modifiedAtMs: 20,
-			priority: 0,
-		},
-	};
+	});
 	let openSavedEntryCalls = 0;
 
 	const result = await attemptAutoConnectSource({
@@ -538,14 +524,11 @@ void test('reconnect falls back to the dropped saved entry without a reconnect-s
 			trigger: 'reconnect',
 			droppedConnectionId: 'active-conn-1',
 			droppedChannelId: 4,
-			droppedStoredConnectionId: reconnectLatestEntry.id,
+			droppedStoredConnectionId: reconnectEntry.id,
 			pathname: '/shell/detail',
 		},
-		loadSavedConnections: async () => [
-			autoConnectLatestEntry,
-			reconnectLatestEntry,
-		],
-		loadSavedConnectionByStoredId: async () => null,
+		loadLatestSavedConnection: async () => autoConnectLatestEntry,
+		loadSavedConnectionByStoredId: async () => reconnectEntry,
 		openSavedEntryShell: async ({ connectionDetails }) => {
 			openSavedEntryCalls += 1;
 			assert.equal(connectionDetails.host, '100.64.0.10');
@@ -580,12 +563,12 @@ void test('reconnect falls back to the dropped saved entry without a reconnect-s
 				(event as { kind?: string }).kind === 'saved-entry.selected',
 		),
 		{
-			kind: 'saved-entry.selected',
-			source: 'saved-entry',
-			connection: {
-				savedConnectionId: reconnectLatestEntry.id,
-				username: 'muly',
-				host: '100.64.0.10',
+					kind: 'saved-entry.selected',
+					source: 'saved-entry',
+					connection: {
+					savedConnectionId: reconnectEntry.id,
+					username: 'muly',
+					host: '100.64.0.10',
 				port: 22,
 				keyId: 'key-1',
 				useTmux: true,
@@ -604,15 +587,16 @@ void test('android tmux reconnect traces Tailscale readiness before saved-entry 
 		pathname: '/shell/detail',
 		latestShell: null,
 		connections: {},
-		reconnectContext: {
-			trigger: 'reconnect',
-			droppedConnectionId: 'active-conn-1',
-			pathname: '/shell/detail',
-		},
-		loadLatestSavedConnection: async () =>
-			createSavedEntry({
-				...baseDetails,
-				autoConnect: false,
+			reconnectContext: {
+				trigger: 'reconnect',
+				droppedConnectionId: 'active-conn-1',
+				droppedStoredConnectionId: 'saved-1',
+				pathname: '/shell/detail',
+			},
+			loadSavedConnectionByStoredId: async () =>
+				createSavedEntry({
+					...baseDetails,
+					autoConnect: false,
 				useTmux: true,
 				tmuxSessionName: 'main',
 			}),
