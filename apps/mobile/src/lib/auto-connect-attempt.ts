@@ -13,6 +13,7 @@ import {
 	autoConnectEvents,
 	buildActiveConnectionIdentity,
 	buildSavedEntryIdentity,
+	reconnectEvents,
 	savedEntryEvents,
 	serializeConnectionDiagnosticError,
 } from './connection-diagnostics/events';
@@ -20,6 +21,7 @@ import {
 	createConnectionRunContext,
 	type ConnectionRunContext,
 } from './connection-run-context';
+import { type AutoConnectReconnectAttemptResult } from './auto-connect-reconnect-controller';
 import {
 	getStoredConnectionId,
 	type SavedConnectionEntry,
@@ -31,6 +33,7 @@ import type {
 	StoredConnectionDetails,
 } from './secrets-manager';
 import { extractTmuxAttachFailureReason } from './ssh-error-details';
+import { isNetworkLikeSshError } from './tailscale-recovery-core';
 import { AbortSignalTimeout, queryClient } from './utils';
 
 type LatestShellSnapshot = {
@@ -97,6 +100,9 @@ export type AutoConnectAttemptSourceArgs = {
 	connections: Record<string, ActiveConnectionSnapshot>;
 	openSavedEntryShell: OpenSavedEntryShell;
 	loadLatestSavedConnection: () => Promise<SavedConnectionEntry | null>;
+	loadSavedConnectionByStoredId?: (
+		storedConnectionId: string,
+	) => Promise<SavedConnectionEntry | null>;
 	resolveKeySecurity: (
 		details: StoredConnectionDetails,
 	) => Promise<ResolvedKeySecurity | null>;
@@ -108,9 +114,17 @@ export type AutoConnectAttemptSourceArgs = {
 	loadTmuxSettings?: (
 		storedConnectionId: string,
 	) => Promise<TmuxSettings | null>;
+	reconnectContext?: AutoConnectReconnectContext;
 	trace?: AutoConnectTrace;
 	runContext: ConnectionRunContext;
 	timeouts?: ConnectionAttemptTimeouts;
+};
+
+export type AutoConnectReconnectContext = {
+	trigger: 'reconnect';
+	droppedConnectionId?: string;
+	droppedChannelId?: number;
+	pathname: string;
 };
 
 const loadStoredTmuxSettings = async (
@@ -136,6 +150,59 @@ const pickLatestActiveConnection = (
 		current.connectedAtMs > latest.connectedAtMs ? current : latest,
 	);
 };
+
+async function loadStoredConnectionByStoredId(
+	storedConnectionId: string,
+): Promise<SavedConnectionEntry | null> {
+	const { secretsManager } = await import('./secrets-manager');
+	return await queryClient.fetchQuery(
+		secretsManager.connections.query.get(storedConnectionId),
+	);
+}
+
+function errorTag(error: unknown): string | null {
+	if (!error || typeof error !== 'object') return null;
+	const tag = (error as { tag?: unknown }).tag;
+	return typeof tag === 'string' ? tag : null;
+}
+
+function classifyReconnectFailure(error: unknown): Extract<
+	AutoConnectReconnectAttemptResult,
+	{
+		status:
+			| 'failedNetwork'
+			| 'failedAuth'
+			| 'failedTmuxAttach'
+			| 'needsAttention';
+	}
+>['status'] {
+	const tag = errorTag(error);
+	if (tag === 'TmuxAttachFailed') return 'failedTmuxAttach';
+	if (tag === 'Auth') return 'failedAuth';
+	if (isNetworkLikeSshError(error)) return 'failedNetwork';
+	return 'needsAttention';
+}
+
+async function resolveReconnectSavedEntry({
+	activeConnection,
+	loadSavedConnectionByStoredId,
+	loadLatestSavedConnection,
+}: {
+	activeConnection: ActiveConnectionSnapshot | null;
+	loadSavedConnectionByStoredId?: (
+		storedConnectionId: string,
+	) => Promise<SavedConnectionEntry | null>;
+	loadLatestSavedConnection: () => Promise<SavedConnectionEntry | null>;
+}): Promise<SavedConnectionEntry | null> {
+	const storedConnectionId = activeConnection
+		? getStoredConnectionId(activeConnection.connectionDetails)
+		: null;
+	if (storedConnectionId && loadSavedConnectionByStoredId) {
+		const entry = await loadSavedConnectionByStoredId(storedConnectionId);
+		if (entry) return entry;
+	}
+	return await loadLatestSavedConnection();
+}
 
 function emitTrace(
 	trace: AutoConnectTrace | undefined,
@@ -167,6 +234,269 @@ function traceLatestShell(
 	);
 }
 
+async function runSavedEntryReconnectAttempt({
+	platformOS,
+	runContext,
+	recovery,
+	traceEvent,
+	latestEntry,
+	resolveKeySecurity,
+	openSavedEntryShell,
+	navigateToShell,
+	markTailscaleAttention,
+	clearTailscaleAttention,
+	logger,
+}: {
+	platformOS: string;
+	runContext: ConnectionRunContext;
+	recovery: SavedEntryTailscaleRecovery;
+	traceEvent: (event: ConnectionDiagnosticEvent) => void;
+	latestEntry: SavedConnectionEntry;
+	resolveKeySecurity: (
+		details: StoredConnectionDetails,
+	) => Promise<ResolvedKeySecurity | null>;
+	openSavedEntryShell: OpenSavedEntryShell;
+	navigateToShell: (connectionId: string, channelId: number) => void;
+	markTailscaleAttention: (message: string) => void;
+	clearTailscaleAttention: () => void;
+	logger: Logger;
+}): Promise<AutoConnectReconnectAttemptResult | boolean> {
+	const details = latestEntry.value;
+	const latestEntryConnection = buildSavedEntryIdentity(
+		latestEntry.id,
+		latestEntry.value,
+	);
+	traceEvent(
+		savedEntryEvents.selected({
+			source: 'saved-entry',
+			connection: latestEntryConnection,
+		}),
+	);
+	if (
+		typeof details.useTmux !== 'boolean' ||
+		typeof details.tmuxSessionName !== 'string'
+	) {
+		traceEvent(
+			savedEntryEvents.invalidTmuxSettings({
+				source: 'saved-entry',
+				connection: latestEntryConnection,
+				useTmuxType: typeof details.useTmux,
+				tmuxSessionNameType: typeof details.tmuxSessionName,
+			}),
+		);
+		return false;
+	}
+
+	const normalizedDetails: InputConnectionDetails = {
+		...details,
+		useTmux: details.useTmux,
+		tmuxSessionName: details.tmuxSessionName,
+		autoConnect: details.autoConnect ?? false,
+	};
+	const resolvedSecurityResult = await runContext.runOperation(
+		'operation',
+		async () => await resolveKeySecurity(details),
+	);
+	if (resolvedSecurityResult.status === 'aborted') {
+		return { status: 'retry' };
+	}
+	const resolvedSecurity = resolvedSecurityResult.value;
+	if (runContext.signal.aborted) return { status: 'retry' };
+	if (!resolvedSecurity) {
+		traceEvent(
+			savedEntryEvents.keyMissing({
+				source: 'saved-entry',
+				connection: latestEntryConnection,
+			}),
+		);
+		return { status: 'failedAuth', message: 'key-missing' };
+	}
+	traceEvent(
+		savedEntryEvents.keyResolved({
+			source: 'saved-entry',
+			connection: latestEntryConnection,
+		}),
+	);
+
+	const connectSavedEntry = (signal?: AbortSignal) =>
+		openSavedEntryShell({
+			connectionDetails: normalizedDetails,
+			resolvedSecurity,
+			navigate: ({ connectionId, channelId }) => {
+				if (runContext.signal.aborted) return;
+				navigateToShell(connectionId, channelId);
+			},
+			abortSignal: signal,
+		});
+	const tracedConnectSavedEntry = async (
+		phase: SavedEntryConnectAttemptPhase,
+		signal?: AbortSignal,
+	) => {
+		const isRetry = phase === 'retry';
+		traceEvent(
+			isRetry
+				? autoConnectEvents.savedEntryRetryStarted({
+						source: 'saved-entry',
+						connection: latestEntryConnection,
+						trigger: 'reconnect',
+						tmuxSessionName: normalizedDetails.tmuxSessionName,
+					})
+				: autoConnectEvents.savedEntryConnectStarted({
+						source: 'saved-entry',
+						trigger: 'reconnect',
+						connection: latestEntryConnection,
+						tmuxSessionName: normalizedDetails.tmuxSessionName,
+					}),
+		);
+		try {
+			return await connectSavedEntry(signal);
+		} catch (error) {
+			traceEvent(
+				isRetry
+					? autoConnectEvents.savedEntryRetryThrew({
+							source: 'saved-entry',
+							connection: latestEntryConnection,
+							error,
+							trigger: 'reconnect',
+							tmuxSessionName: normalizedDetails.tmuxSessionName,
+							failureClass: classifyReconnectFailure(error),
+						})
+					: autoConnectEvents.savedEntryConnectThrew({
+							source: 'saved-entry',
+							connection: latestEntryConnection,
+							error,
+							trigger: 'reconnect',
+							tmuxSessionName: normalizedDetails.tmuxSessionName,
+							failureClass: classifyReconnectFailure(error),
+						}),
+			);
+			throw error;
+		}
+	};
+	const tracedRecovery = createSavedEntryTailscaleDiagnosticRecovery({
+		platformOS,
+		recovery,
+		emit: traceEvent,
+	});
+
+	const result = await runSavedEntryConnectionAttempt({
+		platformOS,
+		runContext,
+		recovery: tracedRecovery,
+		connectSavedEntry: async ({ phase, signal }) =>
+			await tracedConnectSavedEntry(phase, signal),
+		cleanupConnected: async (connected, signal) => {
+			await connected.cleanup?.({ signal });
+		},
+		onLateCleanupFailure: (error) => {
+			logger.warn('Auto-connect cleanup failed', error);
+		},
+	});
+	if (runContext.signal.aborted) return { status: 'retry' };
+
+	switch (result.status) {
+		case 'connected':
+			traceEvent(
+				autoConnectEvents.savedEntryConnectConnected({
+					source: 'saved-entry',
+					connection: {
+						...latestEntryConnection,
+						connectionId: result.connectionId,
+					},
+					connectionId: result.connectionId,
+					channelId: result.channelId,
+					trigger: 'reconnect',
+					storedConnectionId: latestEntry.id,
+					tmuxSessionName: normalizedDetails.tmuxSessionName,
+				}),
+			);
+			navigateToShell(result.connectionId, result.channelId);
+			clearTailscaleAttention();
+			return { status: 'connected' };
+		case 'tmuxAttachFailed':
+			traceEvent(
+				autoConnectEvents.savedEntryConnectTmuxAttachFailed({
+					source: 'saved-entry',
+					connection: {
+						...latestEntryConnection,
+						connectionId: result.connectionId,
+						tmuxSessionName: result.tmuxSessionName,
+					},
+					connectionId: result.connectionId,
+					tmuxAttachFailureReason: result.tmuxAttachFailureReason,
+					tmuxSessionName: result.tmuxSessionName,
+					storedConnectionId: result.storedConnectionId,
+					trigger: 'reconnect',
+					failureClass: 'failedTmuxAttach',
+				}),
+			);
+			traceEvent(
+				autoConnectEvents.savedEntryConnectFailed({
+					source: 'saved-entry',
+					connection: latestEntryConnection,
+					connectionId: result.connectionId,
+					storedConnectionId: result.storedConnectionId,
+					trigger: 'reconnect',
+					tmuxSessionName: result.tmuxSessionName,
+					failureClass: 'failedTmuxAttach',
+				}),
+			);
+			return { status: 'failedTmuxAttach' };
+		case 'blocked':
+			if (result.attentionMessage !== null) {
+				markTailscaleAttention(result.attentionMessage);
+			}
+			traceEvent(
+				autoConnectEvents.savedEntryConnectFailed({
+					source: 'saved-entry',
+					connection: latestEntryConnection,
+					trigger: 'reconnect',
+					tmuxSessionName: normalizedDetails.tmuxSessionName,
+					failureClass: 'needsAttention',
+				}),
+			);
+			return {
+				status: 'needsAttention',
+				message: result.attentionMessage ?? 'tailscale-attention-required',
+			};
+		case 'failed': {
+			if (result.attentionMessage !== null) {
+				markTailscaleAttention(result.attentionMessage);
+			}
+			if (result.recoverable) {
+				logger.warn(
+					'Auto-connect failed after Tailscale recovery retry',
+					result.error,
+				);
+			}
+			const failureClass = classifyReconnectFailure(result.error);
+			traceEvent(
+				autoConnectEvents.savedEntryConnectFailed({
+					source: 'saved-entry',
+					connection: latestEntryConnection,
+					trigger: 'reconnect',
+					tmuxSessionName: normalizedDetails.tmuxSessionName,
+					failureClass,
+				}),
+			);
+			return {
+				status: failureClass,
+				message:
+					result.attentionMessage ??
+					(result.error instanceof Error
+						? result.error.message
+						: undefined),
+			};
+		}
+		case 'aborted':
+		case 'timedOut':
+			return { status: 'retry' };
+		case 'cleanupFailed':
+			logger.warn('Auto-connect cleanup failed', result.error);
+			return { status: 'cleanupFailed' };
+	}
+}
+
 export async function attemptAutoConnectSource({
 	platformOS,
 	pathname,
@@ -174,6 +504,7 @@ export async function attemptAutoConnectSource({
 	connections,
 	openSavedEntryShell,
 	loadLatestSavedConnection,
+	loadSavedConnectionByStoredId = loadStoredConnectionByStoredId,
 	resolveKeySecurity,
 	navigateToShell,
 	recovery,
@@ -181,10 +512,13 @@ export async function attemptAutoConnectSource({
 	clearTailscaleAttention,
 	logger,
 	loadTmuxSettings = loadStoredTmuxSettings,
+	reconnectContext,
 	trace,
 	runContext,
 	timeouts = DEFAULT_AUTO_CONNECT_TIMEOUTS,
-}: AutoConnectAttemptSourceArgs): Promise<boolean> {
+}: AutoConnectAttemptSourceArgs): Promise<
+	AutoConnectReconnectAttemptResult | boolean
+> {
 	const isAborted = () => runContext.signal.aborted === true;
 	const traceEvent = (event: ConnectionDiagnosticEvent) => {
 		emitTrace(trace, logger, event);
@@ -211,6 +545,52 @@ export async function attemptAutoConnectSource({
 	);
 	const activeConnection = pickLatestActiveConnection(connections);
 	if (activeConnection) {
+		const reconnectingExistingSession = reconnectContext?.trigger === 'reconnect';
+		if (reconnectingExistingSession) {
+			traceEvent(
+				reconnectEvents.transportInvalidated({
+					source: 'reconnect',
+					connectionId: reconnectContext.droppedConnectionId,
+					channelId: reconnectContext.droppedChannelId,
+					hadShell: reconnectContext.droppedChannelId !== undefined,
+					bridgeDisposed: false,
+					bridgeRequestInFlight: false,
+					message: 'stale transport marked for replacement',
+				}),
+			);
+			const reconnectEntryResult = await runContext.runOperation(
+				'operation',
+				async () =>
+					await resolveReconnectSavedEntry({
+						activeConnection,
+						loadSavedConnectionByStoredId,
+						loadLatestSavedConnection,
+					}),
+			);
+			if (reconnectEntryResult.status === 'aborted') return { status: 'retry' };
+			const reconnectEntry = reconnectEntryResult.value;
+			if (!reconnectEntry) {
+				traceEvent(
+					savedEntryEvents.missing({
+						source: 'saved-entry',
+					}),
+				);
+				return { status: 'retry' };
+			}
+			return await runSavedEntryReconnectAttempt({
+				platformOS,
+				runContext,
+				recovery,
+				traceEvent,
+				latestEntry: reconnectEntry,
+				resolveKeySecurity,
+				openSavedEntryShell,
+				navigateToShell,
+				markTailscaleAttention,
+				clearTailscaleAttention,
+				logger,
+			});
+		}
 		const activeConnectionIdentity = buildActiveConnectionIdentity({
 			connectionId: activeConnection.connectionId,
 			connectionDetails: {
@@ -374,6 +754,41 @@ export async function attemptAutoConnectSource({
 				source: 'active-connection',
 			}),
 		);
+	}
+
+	if (reconnectContext?.trigger === 'reconnect') {
+		const reconnectEntryResult = await runContext.runOperation(
+			'operation',
+			async () =>
+				await resolveReconnectSavedEntry({
+					activeConnection: null,
+					loadSavedConnectionByStoredId,
+					loadLatestSavedConnection,
+				}),
+		);
+		if (reconnectEntryResult.status === 'aborted') return { status: 'retry' };
+		const reconnectEntry = reconnectEntryResult.value;
+		if (!reconnectEntry) {
+			traceEvent(
+				savedEntryEvents.missing({
+					source: 'saved-entry',
+				}),
+			);
+			return { status: 'retry' };
+		}
+		return await runSavedEntryReconnectAttempt({
+			platformOS,
+			runContext,
+			recovery,
+			traceEvent,
+			latestEntry: reconnectEntry,
+			resolveKeySecurity,
+			openSavedEntryShell,
+			navigateToShell,
+			markTailscaleAttention,
+			clearTailscaleAttention,
+			logger,
+		});
 	}
 
 	const latestEntryResult = await runContext.runOperation(

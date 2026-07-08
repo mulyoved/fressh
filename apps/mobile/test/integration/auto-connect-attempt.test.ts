@@ -57,6 +57,32 @@ function createSavedEntry(
 	};
 }
 
+function createSavedEntryWithId(
+	id: string,
+	value: SavedConnectionEntry['value'],
+): SavedConnectionEntry {
+	return {
+		...createSavedEntry(value),
+		id,
+	};
+}
+
+function activeConnectionFixture(overrides: {
+	connectionId: string;
+	host: string;
+	startShell: AutoConnectAttemptSourceArgs['connections'][string]['startShell'];
+}): AutoConnectAttemptSourceArgs['connections'][string] {
+	return {
+		connectionId: overrides.connectionId,
+		connectionDetails: {
+			...baseDetails,
+			host: overrides.host,
+		},
+		connectedAtMs: 10,
+		startShell: overrides.startShell,
+	};
+}
+
 function createAutoConnectRunContext(callerSignal?: AbortSignal) {
 	return createConnectionRunContext({
 		callerSignal,
@@ -1445,4 +1471,146 @@ void test('records saved-entry tmux attach failure and connect failure payloads'
 	});
 	assert.equal(failureEvent.connectionId, 'conn-tmux');
 	assert.equal(failureEvent.storedConnectionId, 'stored-tmux');
+});
+
+void test('tmux reconnect does not reopen stale active shell and reconnects saved entry for dropped connection', async () => {
+	const startShellCalls: unknown[] = [];
+	const events: unknown[] = [];
+	const navigations: { connectionId: string; channelId: number }[] = [];
+	const loadedIds: string[] = [];
+	const savedEntry = createSavedEntryWithId('muly-100_64_0_10-22', {
+		...baseDetails,
+		host: '100.64.0.10',
+		autoConnect: false,
+		useTmux: true,
+		tmuxSessionName: 'main',
+	});
+
+	const result = await attemptAutoConnectSource({
+		platformOS: 'android',
+		pathname: '/shell/detail',
+		latestShell: null,
+		connections: {
+			'active-conn-1': activeConnectionFixture({
+				connectionId: 'active-conn-1',
+				host: '100.64.0.10',
+				startShell: async () => {
+					startShellCalls.push({});
+					throw new Error('must not be called');
+				},
+			}),
+		},
+		reconnectContext: {
+			trigger: 'reconnect',
+			droppedConnectionId: 'active-conn-1',
+			droppedChannelId: 4,
+			pathname: '/shell/detail',
+		},
+		loadTmuxSettings: async () => ({
+			useTmux: true,
+			tmuxSessionName: 'main',
+		}),
+		loadSavedConnectionByStoredId: async (storedId) => {
+			loadedIds.push(storedId);
+			return savedEntry;
+		},
+		loadLatestSavedConnection: async () => {
+			throw new Error('latest fallback should not be used');
+		},
+		openSavedEntryShell: async () => ({
+			status: 'connected',
+			connectionId: 'fresh-conn-1',
+			channelId: 9,
+			cleanup: async () => undefined,
+		}),
+		trace: { event: (event) => events.push(event) },
+		navigateToShell: (connectionId, channelId) => {
+			navigations.push({ connectionId, channelId });
+		},
+		resolveKeySecurity: async () => ({
+			type: 'key',
+			privateKey: 'private-key',
+		}),
+		recovery: readyRecovery,
+		markTailscaleAttention: () => {},
+		clearTailscaleAttention: () => {},
+		logger: createLogger().logger,
+	});
+
+	assert.deepEqual(startShellCalls, []);
+	assert.deepEqual(loadedIds, ['muly-100_64_0_10-22']);
+	assert.deepEqual(navigations, [
+		{ connectionId: 'fresh-conn-1', channelId: 9 },
+	]);
+	assert.deepEqual(result, { status: 'connected' });
+	assert.equal(
+		events.some(
+			(event) =>
+				(event as { kind?: string }).kind ===
+				'auto-connect.active-connection.shell-started',
+		),
+		false,
+	);
+});
+
+void test('android tmux reconnect traces Tailscale readiness before saved-entry reconnect', async () => {
+	const events: unknown[] = [];
+	const callOrder: string[] = [];
+
+	const result = await attemptAutoConnectSource({
+		platformOS: 'android',
+		pathname: '/shell/detail',
+		latestShell: null,
+		connections: {},
+		reconnectContext: {
+			trigger: 'reconnect',
+			droppedConnectionId: 'active-conn-1',
+			pathname: '/shell/detail',
+		},
+		loadLatestSavedConnection: async () =>
+			createSavedEntry({
+				...baseDetails,
+				autoConnect: false,
+				useTmux: true,
+				tmuxSessionName: 'main',
+			}),
+		recovery: {
+			ensureReady: async () => {
+				callOrder.push('ensure-ready');
+				return { kind: 'ready', attempted: true, available: true };
+			},
+			recoverAfterFailure: async () => {
+				callOrder.push('recover-after-failure');
+				return {
+					kind: 'recovered',
+					attempted: true,
+					networkLikeFailure: true,
+					available: true,
+				};
+			},
+		},
+		openSavedEntryShell: async () => {
+			callOrder.push('connect');
+			return { status: 'connected', connectionId: 'fresh', channelId: 3 };
+		},
+		trace: { event: (event) => events.push(event) },
+		resolveKeySecurity: async () => ({
+			type: 'key',
+			privateKey: 'private-key',
+		}),
+		navigateToShell: () => {},
+		markTailscaleAttention: () => {},
+		clearTailscaleAttention: () => {},
+		logger: createLogger().logger,
+	});
+
+	assert.deepEqual(result, { status: 'connected' });
+	assert.deepEqual(callOrder, ['ensure-ready', 'connect']);
+	assert.equal(
+		events.some(
+			(event) =>
+				(event as { kind?: string }).kind === 'tailscale.ensure-ready.result',
+		),
+		true,
+	);
 });

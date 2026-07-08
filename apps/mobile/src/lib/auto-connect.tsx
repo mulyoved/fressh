@@ -5,10 +5,14 @@ import { AppState, Platform } from 'react-native';
 import { create } from 'zustand';
 import { useShallow } from 'zustand/react/shallow';
 import { AgentNotificationBridgeManager } from './AgentNotificationBridgeManager';
-import { attemptAutoConnectSource } from './auto-connect-attempt';
+import {
+	attemptAutoConnectSource,
+	type AutoConnectReconnectContext,
+} from './auto-connect-attempt';
 import { getAutoConnectLaunchActionForUrl } from './auto-connect-launch';
 import {
 	createAutoConnectReconnectController,
+	type AutoConnectReconnectAttemptResult,
 	type AutoConnectReconnectController,
 } from './auto-connect-reconnect-controller';
 import { toAutoConnectSavedEntryResult } from './auto-connect-saved-entry-cleanup';
@@ -146,13 +150,19 @@ export function AutoConnectManager() {
 	const [foregroundStartRetryNonce, setForegroundStartRetryNonce] =
 		React.useState(0);
 	const attemptAutoConnectRef = React.useRef<
-		((signal?: AbortSignal) => Promise<boolean>) | null
+		(
+			signal?: AbortSignal,
+			reconnectContext?: AutoConnectReconnectContext,
+		) => Promise<boolean | AutoConnectReconnectAttemptResult>
+		| null
 	>(null);
 	const reconnectControllerRef =
 		React.useRef<AutoConnectReconnectController | null>(null);
 	const activeDiagnosticTraceRef =
 		React.useRef<ConnectionDiagnosticTraceHandle | null>(null);
 	const prevShellCountRef = React.useRef(shells.length);
+	const pendingReconnectContextRef =
+		React.useRef<AutoConnectReconnectContext | null>(null);
 	const isActiveRef = React.useRef(isActiveState(AppState.currentState));
 	const foregroundKeyRef = React.useRef<string | null>(null);
 	const foregroundStartCoordinatorRef = React.useRef(
@@ -312,9 +322,20 @@ export function AutoConnectManager() {
 		return pickLatestConnection(eligible);
 	}, []);
 
+	const loadSavedConnectionByStoredId = React.useCallback(
+		async (storedConnectionId: string) =>
+			await queryClient.fetchQuery(
+				secretsManager.connections.query.get(storedConnectionId),
+			),
+		[],
+	);
+
 	// Single attempt: use an active shell if present; otherwise connect silently.
 	const attemptAutoConnect = React.useCallback(
-		async (signal?: AbortSignal) => {
+		async (
+			signal?: AbortSignal,
+			reconnectContext?: AutoConnectReconnectContext,
+		) => {
 			if (launchUrlSuppressAutoConnectRef.current) return false;
 			if (inFlightRef.current) {
 				if (!signal) return false;
@@ -349,11 +370,12 @@ export function AutoConnectManager() {
 			activeDiagnosticTraceRef.current = trace;
 
 			try {
-				const connected = await attemptAutoConnectSource({
+				const result = await attemptAutoConnectSource({
 					platformOS: Platform.OS,
 					pathname,
 					latestShell,
 					connections,
+					reconnectContext,
 					openSavedEntryShell: async ({
 						connectionDetails,
 						resolvedSecurity,
@@ -372,6 +394,7 @@ export function AutoConnectManager() {
 						return toAutoConnectSavedEntryResult(result);
 					},
 					loadLatestSavedConnection,
+					loadSavedConnectionByStoredId,
 					resolveKeySecurity,
 					navigateToShell,
 					recovery: tailscaleRecovery,
@@ -381,10 +404,14 @@ export function AutoConnectManager() {
 					trace,
 					runContext,
 				});
+				const connected =
+					typeof result === 'boolean'
+						? result
+						: result.status === 'connected';
 				if (ownsTrace) {
 					finishTrace(trace, connected ? 'connected' : 'failed');
 				}
-				return connected;
+				return result;
 			} catch (error) {
 				logger.warn('Auto-connect attempt failed', error);
 				if (ownsTrace) {
@@ -410,6 +437,7 @@ export function AutoConnectManager() {
 			clearTailscaleAttention,
 			latestShell,
 			loadLatestSavedConnection,
+			loadSavedConnectionByStoredId,
 			markTailscaleAttention,
 			navigateToShell,
 			pathname,
@@ -448,8 +476,16 @@ export function AutoConnectManager() {
 				};
 			},
 			setReconnecting,
-			attemptAutoConnect: async (signal) =>
-				(await attemptAutoConnectRef.current?.(signal)) ?? false,
+			attemptAutoConnect: async (signal) => {
+				const reconnectContext = pendingReconnectContextRef.current;
+				pendingReconnectContextRef.current = null;
+				return (
+					(await attemptAutoConnectRef.current?.(
+						signal,
+						reconnectContext ?? undefined,
+					)) ?? { status: 'retry' }
+				);
+			},
 			logger,
 			trace: {
 				event: (event) => {
@@ -710,6 +746,10 @@ export function AutoConnectManager() {
 			return;
 		}
 		if (prevShellCountRef.current > 0 && shells.length === 0) {
+			pendingReconnectContextRef.current = {
+				trigger: 'reconnect',
+				pathname: '/shell/detail',
+			};
 			scheduleReconnect('shell-drop');
 		}
 		prevShellCountRef.current = shells.length;
