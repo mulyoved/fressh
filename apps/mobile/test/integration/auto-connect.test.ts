@@ -6,6 +6,7 @@ import {
 	createReconnectContextCycleState,
 	installPendingReconnectContext,
 	pickLatestSavedReconnectConnection,
+	preserveShellReferencedConnections,
 } from '../../src/lib/auto-connect-manager-helpers';
 import { type AutoConnectAttemptSourceArgs } from '../../src/lib/auto-connect-attempt';
 import { createAutoConnectReconnectController } from '../../src/lib/auto-connect-reconnect-controller';
@@ -120,6 +121,160 @@ void test('shell-drop reconnect context preserves dropped shell identity for rec
 		droppedChannelId: 7,
 		droppedStoredConnectionId: 'muly-100_64_0_10-22',
 	});
+});
+
+void test('manager reconnect preserves dropped stored id when native disconnect removes a connection before shell close', async () => {
+	const shellSnapshot = {
+		connectionId: 'conn-dropped',
+		channelId: 7,
+		createdAtMs: 20,
+	};
+	const initialConnections = {
+		'conn-dropped': {
+			connectionDetails: {
+				username: 'muly',
+				host: '100.64.0.10',
+				port: 22,
+			},
+		},
+	};
+	const preservedConnections = preserveShellReferencedConnections({
+		shells: [shellSnapshot],
+		connections: {},
+		previousConnections: initialConnections,
+	});
+	assert.deepEqual(preservedConnections, initialConnections);
+	assert.deepEqual(
+		preserveShellReferencedConnections({
+			shells: [],
+			connections: {},
+			previousConnections: preservedConnections,
+		}),
+		{},
+	);
+	const reconnectContextState = createReconnectContextCycleState();
+	const savedEntries = [
+		createSavedEntry({
+			metadata: {
+				createdAtMs: 1,
+				modifiedAtMs: 10,
+				priority: 0,
+			},
+			value: {
+				username: 'muly',
+				host: '203.0.113.99',
+				port: 22,
+				useTmux: true,
+				tmuxSessionName: 'main',
+				autoConnect: true,
+				security: { type: 'key', keyId: 'key-other' },
+			},
+		}),
+		createSavedEntry({
+			metadata: {
+				createdAtMs: 2,
+				modifiedAtMs: 20,
+				priority: 0,
+			},
+			value: {
+				username: 'muly',
+				host: '100.64.0.10',
+				port: 22,
+				useTmux: true,
+				tmuxSessionName: 'main',
+				autoConnect: false,
+				security: { type: 'key', keyId: 'key-dropped' },
+			},
+		}),
+	];
+
+	installPendingReconnectContext({
+		reconnectContextState,
+		pathname: '/shell/detail',
+		shells: [shellSnapshot],
+		connections: preservedConnections,
+	});
+
+	const reconnectContext =
+		reconnectContextState.getReconnectContextForReconnectAttempt();
+	const loadedIds: string[] = [];
+	const openedHosts: string[] = [];
+	const runContext = createConnectionRunContext({
+		timeouts: {
+			operationTimeoutMs: 1_000,
+			recoveryTimeoutMs: 1_000,
+			cleanupTimeoutMs: 1_000,
+		},
+	});
+
+	try {
+		const result = await attemptAutoConnectFromManager({
+			platformOS: 'android',
+			pathname: '/shell/detail',
+			latestShell: null,
+			connections: {
+				'other-conn-1': {
+					connectionId: 'other-conn-1',
+					connectionDetails: {
+						username: 'muly',
+						host: '198.51.100.20',
+						port: 22,
+					},
+					connectedAtMs: 50,
+					startShell: async () => {
+						throw new Error('stale active shell must not reopen');
+					},
+				},
+			},
+			reconnectContext,
+			openSavedEntryShell: async ({ connectionDetails }) => {
+				openedHosts.push(connectionDetails.host);
+				return {
+					status: 'connected',
+					connectionId: 'fresh-conn-1',
+					channelId: 9,
+					cleanup: async () => undefined,
+				};
+			},
+			loadSavedConnections: async () => savedEntries,
+			loadSavedConnectionByStoredId: async (storedConnectionId) => {
+				loadedIds.push(storedConnectionId);
+				return savedEntries[1] ?? null;
+			},
+			resolveKeySecurity: async () => ({
+				type: 'key',
+				privateKey: 'private-key',
+			}),
+			navigateToShell: () => {},
+			recovery: {
+				ensureReady: async () => ({
+					kind: 'ready' as const,
+					attempted: true as const,
+					available: true as const,
+				}),
+				recoverAfterFailure: async () => ({
+					kind: 'nonNetworkFailure' as const,
+					attempted: false as const,
+					networkLikeFailure: false as const,
+					available: true as const,
+				}),
+			},
+			markTailscaleAttention: () => {},
+			clearTailscaleAttention: () => {},
+			logger: {
+				info: () => {},
+				warn: () => {},
+			},
+			runContext,
+		});
+
+		assert.deepEqual(result, { status: 'connected' });
+	} finally {
+		runContext.finish();
+	}
+
+	assert.deepEqual(loadedIds, ['muly-100_64_0_10-22']);
+	assert.deepEqual(openedHosts, ['100.64.0.10']);
 });
 
 void test('reconnect fallback can choose the latest saved entry even when auto-connect is disabled', () => {

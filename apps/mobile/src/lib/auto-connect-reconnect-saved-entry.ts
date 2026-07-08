@@ -1,4 +1,13 @@
 import { type SavedEntryTailscaleRecovery } from './auto-connect-saved-entry';
+import {
+	type Logger,
+	type OpenSavedEntryShell,
+	type PreparedSavedEntryAttempt,
+	type ResolvedKeySecurity,
+	prepareSavedEntryAttempt,
+	resolvePreparedSavedEntrySecurity,
+	runPreparedSavedEntryAttempt,
+} from './auto-connect-saved-entry-attempt';
 import { type SavedEntryConnectionAttemptOutcome } from './connection-attempt-lifecycle';
 import { type ConnectionDiagnosticEvent } from './connection-diagnostic-types';
 import {
@@ -20,10 +29,6 @@ import { isNetworkLikeSshError } from './tailscale-recovery-core';
 import type {
 	ActiveConnectionSnapshot,
 	AutoConnectReconnectContext,
-	Logger,
-	OpenSavedEntryShell,
-	PreparedSavedEntryAttempt,
-	ResolvedKeySecurity,
 } from './auto-connect-attempt';
 
 type ReconnectFailureStatus = Extract<
@@ -38,42 +43,6 @@ type ReconnectSetupFailureResult = {
 	>;
 	message: string;
 };
-
-type PrepareSavedEntryAttempt = (args: {
-	latestEntry: SavedConnectionEntry;
-	traceEvent: (event: ConnectionDiagnosticEvent) => void;
-}) => PreparedSavedEntryAttempt | null;
-
-type ResolvePreparedSavedEntrySecurity = (args: {
-	runContext: ConnectionRunContext;
-	prepared: PreparedSavedEntryAttempt;
-	resolveKeySecurity: (
-		details: StoredConnectionDetails,
-	) => Promise<ResolvedKeySecurity | null>;
-	traceEvent: (event: ConnectionDiagnosticEvent) => void;
-}) => Promise<ConnectionRunOperationResult<ResolvedKeySecurity | null>>;
-
-type RunPreparedSavedEntryAttempt = (args: {
-	platformOS: string;
-	runContext: ConnectionRunContext;
-	recovery: SavedEntryTailscaleRecovery;
-	traceEvent: (event: ConnectionDiagnosticEvent) => void;
-	prepared: PreparedSavedEntryAttempt;
-	resolvedSecurity: ResolvedKeySecurity;
-	openSavedEntryShell: OpenSavedEntryShell;
-	navigateToShell: (connectionId: string, channelId: number) => void;
-	logger: Logger;
-	isAborted: () => boolean;
-	traceConnectStart: (
-		phase: 'initial' | 'retry',
-		prepared: PreparedSavedEntryAttempt,
-	) => void;
-	traceConnectThrow: (
-		phase: 'initial' | 'retry',
-		prepared: PreparedSavedEntryAttempt,
-		error: unknown,
-	) => void;
-}) => Promise<SavedEntryConnectionAttemptOutcome>;
 
 function errorTag(error: unknown): string | null {
 	if (!error || typeof error !== 'object') return null;
@@ -285,9 +254,6 @@ async function runSavedEntryReconnectAttempt({
 	markTailscaleAttention,
 	clearTailscaleAttention,
 	logger,
-	prepareSavedEntryAttempt,
-	resolvePreparedSavedEntrySecurity,
-	runPreparedSavedEntryAttempt,
 }: {
 	platformOS: string;
 	runContext: ConnectionRunContext;
@@ -302,9 +268,6 @@ async function runSavedEntryReconnectAttempt({
 	markTailscaleAttention: (message: string) => void;
 	clearTailscaleAttention: () => void;
 	logger: Logger;
-	prepareSavedEntryAttempt: PrepareSavedEntryAttempt;
-	resolvePreparedSavedEntrySecurity: ResolvePreparedSavedEntrySecurity;
-	runPreparedSavedEntryAttempt: RunPreparedSavedEntryAttempt;
 }): Promise<AutoConnectReconnectAttemptResult | boolean> {
 	const prepared = prepareSavedEntryAttempt({
 		latestEntry,
@@ -426,9 +389,6 @@ export async function attemptReconnectThroughSavedEntry({
 	markTailscaleAttention,
 	clearTailscaleAttention,
 	logger,
-	prepareSavedEntryAttempt,
-	resolvePreparedSavedEntrySecurity,
-	runPreparedSavedEntryAttempt,
 }: {
 	platformOS: string;
 	runContext: ConnectionRunContext;
@@ -448,9 +408,6 @@ export async function attemptReconnectThroughSavedEntry({
 	markTailscaleAttention: (message: string) => void;
 	clearTailscaleAttention: () => void;
 	logger: Logger;
-	prepareSavedEntryAttempt: PrepareSavedEntryAttempt;
-	resolvePreparedSavedEntrySecurity: ResolvePreparedSavedEntrySecurity;
-	runPreparedSavedEntryAttempt: RunPreparedSavedEntryAttempt;
 }): Promise<AutoConnectReconnectAttemptResult | boolean> {
 	let reconnectEntryResult: ConnectionRunOperationResult<
 		SavedConnectionEntry | null
@@ -498,8 +455,5 @@ export async function attemptReconnectThroughSavedEntry({
 		markTailscaleAttention,
 		clearTailscaleAttention,
 		logger,
-		prepareSavedEntryAttempt,
-		resolvePreparedSavedEntrySecurity,
-		runPreparedSavedEntryAttempt,
 	});
 }

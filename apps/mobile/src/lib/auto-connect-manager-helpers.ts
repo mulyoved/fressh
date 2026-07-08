@@ -24,6 +24,29 @@ type ConnectionSnapshot = {
 	};
 };
 
+export function preserveShellReferencedConnections<
+	T extends ShellSnapshot,
+	C extends ConnectionSnapshot,
+>({
+	shells,
+	connections,
+	previousConnections,
+}: {
+	shells: T[];
+	connections: Record<string, C>;
+	previousConnections: Record<string, C>;
+}) {
+	const nextConnections = { ...connections };
+	for (const shell of shells) {
+		if (nextConnections[shell.connectionId] !== undefined) continue;
+		const previousConnection = previousConnections[shell.connectionId];
+		if (previousConnection !== undefined) {
+			nextConnections[shell.connectionId] = previousConnection;
+		}
+	}
+	return nextConnections;
+}
+
 export function pickLatestShellSnapshot<T extends ShellSnapshot>(
 	shells: T[],
 ): T | null {

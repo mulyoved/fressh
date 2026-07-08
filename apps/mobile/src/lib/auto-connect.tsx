@@ -12,6 +12,7 @@ import {
 	createReconnectContextCycleState,
 	installPendingReconnectContext,
 	pickLatestShellSnapshot,
+	preserveShellReferencedConnections,
 } from './auto-connect-manager-helpers';
 import {
 	createAutoConnectReconnectController,
@@ -751,6 +752,11 @@ export function AutoConnectManager() {
 
 	React.useEffect(() => {
 		// Detect a shell drop and kick off a reconnect cycle.
+		const nextPreviousConnections = preserveShellReferencedConnections({
+			shells,
+			connections,
+			previousConnections: previousConnectionsRef.current,
+		});
 		if (
 			!isActiveRef.current &&
 			!(Platform.OS === 'android' && allowBackgroundRef.current)
@@ -769,7 +775,7 @@ export function AutoConnectManager() {
 		}
 		prevShellCountRef.current = shells.length;
 		previousShellsRef.current = shells;
-		previousConnectionsRef.current = connections;
+		previousConnectionsRef.current = nextPreviousConnections;
 	}, [connections, scheduleReconnect, shells]);
 
 	const handleOpenTailscale = React.useCallback(() => {
