@@ -264,7 +264,7 @@ void test('hung reconnect attempt stops at the reconnect window', async () => {
 		kind: 'reconnect.completed',
 		source: 'reconnect-controller',
 		message: 'retry-timeout',
-		outcome: 'needsAttention',
+		outcome: 'timeout',
 		destination: 'hostPage',
 	});
 	assert.deepEqual(context.events.at(-3), {
@@ -320,7 +320,7 @@ void test('hung retry uses only the remaining reconnect window', async () => {
 		kind: 'reconnect.completed',
 		source: 'reconnect-controller',
 		message: 'retry-timeout',
-		outcome: 'needsAttention',
+		outcome: 'timeout',
 		destination: 'hostPage',
 	});
 });
@@ -626,7 +626,7 @@ void test('timeout stops the loop', async () => {
 		kind: 'reconnect.completed',
 		source: 'reconnect-controller',
 		message: 'retry-timeout',
-		outcome: 'needsAttention',
+		outcome: 'timeout',
 		destination: 'hostPage',
 	});
 	assert.deepEqual(context.events.at(-1), {
@@ -1075,7 +1075,7 @@ void test('records reconnect timeout and stopped trace events', async () => {
 		kind: 'reconnect.completed',
 		source: 'reconnect-controller',
 		message: 'retry-timeout',
-		outcome: 'needsAttention',
+		outcome: 'timeout',
 		destination: 'hostPage',
 	});
 	assert.deepEqual(events.at(-1), {

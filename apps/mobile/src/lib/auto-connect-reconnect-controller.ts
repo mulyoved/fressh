@@ -24,6 +24,7 @@ export type AutoConnectReconnectAttemptResult =
 	| { status: 'retry'; message?: string }
 	| {
 			status:
+				| 'timeout'
 				| 'needsAttention'
 				| 'failedNetwork'
 				| 'failedAuth'
@@ -80,7 +81,7 @@ function destinationForReconnectOutcome(
 
 function timeoutReconnectAttemptResult(): AutoConnectReconnectAttemptResult {
 	return {
-		status: 'needsAttention',
+		status: 'timeout',
 		message: 'retry-timeout',
 	};
 }
