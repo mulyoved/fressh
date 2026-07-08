@@ -50,6 +50,12 @@ function createRecordingBridgeClient(
 		dispose: async () => {
 			disposeCount += 1;
 		},
+		getSnapshot: () => ({
+			pendingRequestId: null,
+			pendingOperation: null,
+			helloComplete: true,
+			failedError: null,
+		}),
 	};
 	return { bridgeClient, calls, getDisposeCount: () => disposeCount };
 }
@@ -75,6 +81,12 @@ function createSequencedBridgeClient(results: WorkmuxControlCommandResult[]) {
 		dispose: async () => {
 			disposeCount += 1;
 		},
+		getSnapshot: () => ({
+			pendingRequestId: null,
+			pendingOperation: null,
+			helloComplete: true,
+			failedError: null,
+		}),
 	};
 	return { bridgeClient, calls, getDisposeCount: () => disposeCount };
 }
@@ -121,6 +133,40 @@ void test('WorkmuxControlChannel.command routes scoped nav argv through bridge o
 			timeoutMs: 1234,
 		},
 	]);
+});
+
+void test('workmux command exposes disposed-by-reconnect bridge classification', async () => {
+	const channel = createWorkmuxControlChannel({
+		connection: createFakeConnection(),
+		bridgeClient: {
+			runOperation: async () => ({
+				success: false,
+				output: '',
+				error: 'mdev bridge stream closed.',
+				failureClass: 'disposedByReconnect',
+			}),
+			dispose: async () => undefined,
+			getSnapshot: () => ({
+				pendingRequestId: null,
+				pendingOperation: null,
+				helloComplete: true,
+				failedError: 'mdev bridge stream closed.',
+			}),
+		},
+	});
+
+	const result = await channel.command([
+		'tmux',
+		'app',
+		'nav',
+		'next',
+		'--session',
+		'main',
+	]);
+
+	assert.equal(result.success, false);
+	assert.equal(result.error, 'mdev bridge stream closed.');
+	assert.equal(result.failureClass, 'disposedByReconnect');
 });
 
 void test('WorkmuxControlChannel.command retries scoped nav without scope for older bridges', async () => {

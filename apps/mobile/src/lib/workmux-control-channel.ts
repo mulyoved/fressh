@@ -1,6 +1,8 @@
 import {
 	createMdevBridgeClient,
 	type MdevBridgeClient,
+	type MdevBridgeDisposeOptions,
+	type MdevBridgeFailureClass,
 	type MdevBridgeStreamConnection,
 } from './mdev-bridge-client';
 import { type WorkmuxScrollDirection } from './workmux-app-commands';
@@ -25,6 +27,7 @@ export type WorkmuxControlCommandResult = {
 	success: boolean;
 	output: string;
 	error?: string;
+	failureClass?: MdevBridgeFailureClass;
 };
 
 export type WorkmuxControlCommandOptions = {
@@ -55,7 +58,7 @@ export type WorkmuxControlChannel = {
 		move: (input: WorkmuxScrollMove) => Promise<WorkmuxControlCommandResult>;
 		exit: (input: WorkmuxScrollTarget) => Promise<WorkmuxControlCommandResult>;
 	};
-	dispose: () => Promise<void>;
+	dispose: (opts?: MdevBridgeDisposeOptions) => Promise<void>;
 };
 
 export type WorkmuxControlChannelCleanupOptions = {
@@ -201,10 +204,10 @@ export function createWorkmuxControlChannel({
 			exit: (input) =>
 				runScroll(() => buildDirectTmuxScrollExitCommand(input.sessionName)),
 		},
-		dispose: async () => {
+		dispose: async (opts) => {
 			disposed = true;
 			await Promise.all([
-				resolvedBridgeClient?.dispose() ?? Promise.resolve(),
+				resolvedBridgeClient?.dispose(opts) ?? Promise.resolve(),
 				directTmuxTransport.dispose(),
 			]);
 		},

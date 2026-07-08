@@ -108,6 +108,11 @@ export type ActionId = KnownActionId | (string & {});
 export type WorkmuxKeyboardCommandRunResult =
 	| { status: 'handled' }
 	| { status: 'superseded' };
+export type WorkmuxCommandFailureClass = 'disposedByReconnect' | (string & {});
+export type ShowWorkmuxKeyboardFailure = (failure: {
+	message: string;
+	failureClass?: WorkmuxCommandFailureClass;
+}) => void;
 export const WORKMUX_KEYBOARD_COMMAND_DISABLED_MESSAGE =
 	'Workmux actions require a Workmux-enabled connection.';
 
@@ -146,7 +151,7 @@ export function createWorkmuxKeyboardCommandRunner({
 	getSessionName: () => string;
 	getNavScope?: () => WorkmuxNavScope;
 	runWorkmuxCommand: (argv: string[], timeoutMs: number) => Promise<unknown>;
-	showFailure: (message: string) => void;
+	showFailure: ShowWorkmuxKeyboardFailure;
 	getErrorMessage: (error: unknown) => string;
 }): WorkmuxKeyboardCommandRunner {
 	let running = false;
@@ -196,11 +201,14 @@ export function createWorkmuxKeyboardCommandRunner({
 				: { status: 'superseded' };
 		} catch (error) {
 			if (commandGeneration === generation) {
-				showFailure(
-					formatWorkmuxKeyboardCommandFailureMessage({
-						errorMessage: getErrorMessage(error),
-					}) || WORKMUX_APP_COMMAND_UPDATE_MESSAGE,
-				);
+				const failureClass = getWorkmuxCommandFailureClass(error);
+				showFailure({
+					message:
+						formatWorkmuxKeyboardCommandFailureMessage({
+							errorMessage: getErrorMessage(error),
+						}) || WORKMUX_APP_COMMAND_UPDATE_MESSAGE,
+					failureClass,
+				});
 				return { status: 'handled' };
 			}
 			return { status: 'superseded' };
@@ -247,6 +255,16 @@ export function createWorkmuxKeyboardCommandRunner({
 			supersedePending();
 		},
 	};
+}
+
+function getWorkmuxCommandFailureClass(
+	error: unknown,
+): WorkmuxCommandFailureClass | undefined {
+	if (!error || typeof error !== 'object') return undefined;
+	const failureClass = (error as { failureClass?: unknown }).failureClass;
+	return typeof failureClass === 'string' && failureClass.length > 0
+		? failureClass
+		: undefined;
 }
 
 function isWorkmuxKeyboardLocalPreconditionFailure(message: string): boolean {

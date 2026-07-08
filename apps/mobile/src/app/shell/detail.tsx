@@ -67,6 +67,7 @@ import {
 	type ActionContext,
 	type ActionId,
 	type RunActionOptions,
+	type WorkmuxCommandFailureClass,
 	type WorkmuxKeyboardCommand,
 } from '@/lib/keyboard-actions';
 import { runMacro } from '@/lib/keyboard-runtime';
@@ -306,6 +307,16 @@ type TmuxAttachErrorScreenProps = {
 	sessionName: string;
 	onEdit: () => void;
 };
+
+class WorkmuxCommandFailure extends Error {
+	readonly failureClass?: WorkmuxCommandFailureClass;
+
+	constructor(message: string, failureClass?: WorkmuxCommandFailureClass) {
+		super(message);
+		this.name = 'WorkmuxCommandFailure';
+		this.failureClass = failureClass;
+	}
+}
 
 function TmuxAttachErrorScreen({
 	failureReason,
@@ -984,7 +995,12 @@ function ShellDetail() {
 			});
 			disposeWorkmuxControlChannelAfterCleanup({
 				cleanup,
-				dispose: () => workmuxControlChannel.dispose(),
+				dispose: () =>
+					workmuxControlChannel.dispose({
+						reason: useAutoConnectStore.getState().isReconnecting
+							? 'reconnect'
+							: 'unmount',
+					}),
 				onCleanupError: (error) => {
 					logger.warn('Workmux scrollback dispose exit failed', error);
 				},
@@ -2419,13 +2435,17 @@ function ShellDetail() {
 						timeoutMs,
 					});
 					if (!result.success) {
-						throw new Error(
+						throw new WorkmuxCommandFailure(
 							result.error || result.output || 'Workmux command failed.',
+							result.failureClass,
 						);
 					}
 					return result.output;
 				},
-				showFailure: (message) => {
+				showFailure: ({ message, failureClass }) => {
+					if (failureClass === 'disposedByReconnect') {
+						return;
+					}
 					if (
 						!shouldShowFocusedActiveFeedback({
 							isFocused: isFocusedRef.current,

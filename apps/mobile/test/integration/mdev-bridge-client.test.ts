@@ -232,6 +232,48 @@ void test('starts bridge, sends hello before operation, validates capabilities, 
 	});
 });
 
+void test('dispose with reconnect classifies pending operation as disposedByReconnect and traces lifecycle', async () => {
+	const fixture = createBridgeFixture();
+	const events: unknown[] = [];
+	const client = createMdevBridgeClient({
+		connection: fixture.connection,
+		requiredOperations: ['op.one'],
+		requestTimeoutMs: 100,
+		trace: { event: (event) => events.push(event) },
+	});
+
+	const resultPromise = client.runOperation({
+		operation: 'op.one',
+		params: { target: 'pane' },
+		timeoutMs: 250,
+	});
+	await nextTick();
+	fixture.emitJson(helloResponse());
+	await nextTick();
+
+	assert.equal(client.getSnapshot().pendingOperation, 'op.one');
+	await client.dispose({ reason: 'reconnect' });
+	const result = await withTestTimeout(resultPromise);
+
+	assert.deepEqual(result, {
+		success: false,
+		output: '',
+		error: 'mdev bridge stream closed.',
+		failureClass: 'disposedByReconnect',
+	});
+	assert.equal(
+		events.some(
+			(event) =>
+				(event as { kind?: string; stage?: string; closeClass?: string })
+					.kind === 'mdev-bridge.lifecycle' &&
+				(event as { stage?: string }).stage === 'client-disposed' &&
+				(event as { closeClass?: string }).closeClass ===
+					'disposedByReconnect',
+		),
+		true,
+	);
+});
+
 void test('missing operation capability fails with update message and does not send operation', async () => {
 	const fixture = createBridgeFixture();
 	const client = createMdevBridgeClient({
@@ -251,6 +293,7 @@ void test('missing operation capability fails with update message and does not s
 		success: false,
 		output: '',
 		error: MDEV_BRIDGE_UPDATE_MESSAGE,
+		failureClass: 'startupFailed',
 	});
 	await nextTick();
 	assert.equal(fixture.closeOptions.length, 1);
@@ -277,6 +320,7 @@ void test('missing request type capability fails with update message and does no
 		success: false,
 		output: '',
 		error: MDEV_BRIDGE_UPDATE_MESSAGE,
+		failureClass: 'startupFailed',
 	});
 	await nextTick();
 	assert.equal(fixture.closeOptions.length, 1);
@@ -356,6 +400,7 @@ void test('stream closed fails pending and future requests', async () => {
 		success: false,
 		output: '',
 		error: 'mdev bridge stream closed.',
+		failureClass: 'remoteClosed',
 	});
 	assert.deepEqual(
 		await client.runOperation({ operation: 'op.one', params: {} }),
@@ -363,6 +408,7 @@ void test('stream closed fails pending and future requests', async () => {
 			success: false,
 			output: '',
 			error: 'mdev bridge stream closed.',
+			failureClass: 'remoteClosed',
 		},
 	);
 });
@@ -387,6 +433,7 @@ void test('stream closed immediately after valid hello is post-hello stream clos
 		success: false,
 		output: '',
 		error: 'mdev bridge stream closed.',
+		failureClass: 'remoteClosed',
 	});
 	assert.deepEqual(
 		await client.runOperation({ operation: 'op.one', params: {} }),
@@ -394,6 +441,7 @@ void test('stream closed immediately after valid hello is post-hello stream clos
 			success: false,
 			output: '',
 			error: 'mdev bridge stream closed.',
+			failureClass: 'remoteClosed',
 		},
 	);
 });
@@ -429,6 +477,7 @@ void test('hello write failure asks user to update mdev', async () => {
 		success: false,
 		output: '',
 		error: MDEV_BRIDGE_UPDATE_MESSAGE,
+		failureClass: 'startupFailed',
 	});
 	assert.deepEqual(
 		await client.runOperation({ operation: 'op.one', params: {} }),
@@ -436,6 +485,7 @@ void test('hello write failure asks user to update mdev', async () => {
 			success: false,
 			output: '',
 			error: MDEV_BRIDGE_UPDATE_MESSAGE,
+			failureClass: 'startupFailed',
 		},
 	);
 });
@@ -472,6 +522,7 @@ void test('synchronous hello write throw cleans up and preserves update failure'
 		success: false,
 		output: '',
 		error: MDEV_BRIDGE_UPDATE_MESSAGE,
+		failureClass: 'startupFailed',
 	});
 	await waitTimeout(20);
 	assert.equal(closeOptions.length, 1);
@@ -482,6 +533,7 @@ void test('synchronous hello write throw cleans up and preserves update failure'
 			success: false,
 			output: '',
 			error: MDEV_BRIDGE_UPDATE_MESSAGE,
+			failureClass: 'startupFailed',
 		},
 	);
 });
@@ -506,6 +558,7 @@ void test('synchronous startup throw fails sticky with update message', async ()
 			success: false,
 			output: '',
 			error: MDEV_BRIDGE_UPDATE_MESSAGE,
+			failureClass: 'startupFailed',
 		},
 	);
 	assert.deepEqual(
@@ -514,6 +567,7 @@ void test('synchronous startup throw fails sticky with update message', async ()
 			success: false,
 			output: '',
 			error: MDEV_BRIDGE_UPDATE_MESSAGE,
+			failureClass: 'startupFailed',
 		},
 	);
 	assert.equal(starts, 1);
@@ -572,6 +626,7 @@ void test('operation write failure after hello is stream closed', async () => {
 		success: false,
 		output: '',
 		error: 'mdev bridge stream closed.',
+		failureClass: 'sendFailed',
 	});
 	await nextTick();
 	assert.equal(closeOptions.length, 1);
@@ -582,6 +637,7 @@ void test('operation write failure after hello is stream closed', async () => {
 			success: false,
 			output: '',
 			error: 'mdev bridge stream closed.',
+			failureClass: 'sendFailed',
 		},
 	);
 });
@@ -605,6 +661,7 @@ void test('protocol error closes the started bridge stream', async () => {
 		success: false,
 		output: '',
 		error: 'mdev bridge protocol error.',
+		failureClass: 'protocolError',
 	});
 	await nextTick();
 	assert.equal(fixture.closeOptions.length, 1);
@@ -641,6 +698,7 @@ void test('post-start request timeout closes the bridge stream', async () => {
 		success: false,
 		output: '',
 		error: 'mdev bridge request timed out.',
+		failureClass: 'timeout',
 	});
 	await nextTick();
 	assert.equal(fixture.closeOptions.length, 1);
@@ -704,6 +762,7 @@ void test('operation serialization failure closes stream and preserves failed st
 		success: false,
 		output: '',
 		error: 'mdev bridge protocol error.',
+		failureClass: 'protocolError',
 	});
 	assert.equal(fixture.writes.length, 1);
 	await waitTimeout(20);
@@ -715,6 +774,7 @@ void test('operation serialization failure closes stream and preserves failed st
 			success: false,
 			output: '',
 			error: 'mdev bridge protocol error.',
+		failureClass: 'protocolError',
 		},
 	);
 });
@@ -743,11 +803,13 @@ void test('queued operation behind protocol failure settles without another writ
 		success: false,
 		output: '',
 		error: 'mdev bridge protocol error.',
+		failureClass: 'protocolError',
 	});
 	assert.deepEqual(await withTestTimeout(secondResultPromise), {
 		success: false,
 		output: '',
 		error: 'mdev bridge protocol error.',
+		failureClass: 'protocolError',
 	});
 	assert.equal(fixture.writes.length, 1);
 	await nextTick();
@@ -794,6 +856,7 @@ void test('synchronous close throw during terminal cleanup is swallowed', async 
 			success: false,
 			output: '',
 			error: 'mdev bridge protocol error.',
+		failureClass: 'protocolError',
 		});
 		await waitTimeout(20);
 		assert.equal(closeCalls, 1);
@@ -821,6 +884,7 @@ void test('malformed response and invalid hello fail with protocol error', async
 		success: false,
 		output: '',
 		error: 'mdev bridge protocol error.',
+		failureClass: 'protocolError',
 	});
 
 	const invalidHelloFixture = createBridgeFixture();
@@ -840,6 +904,7 @@ void test('malformed response and invalid hello fail with protocol error', async
 		success: false,
 		output: '',
 		error: 'mdev bridge protocol error.',
+		failureClass: 'protocolError',
 	});
 
 	const invalidRequestTypesFixture = createBridgeFixture();
@@ -862,6 +927,7 @@ void test('malformed response and invalid hello fail with protocol error', async
 		success: false,
 		output: '',
 		error: 'mdev bridge protocol error.',
+		failureClass: 'protocolError',
 	});
 
 	const invalidOperationsFixture = createBridgeFixture();
@@ -881,6 +947,7 @@ void test('malformed response and invalid hello fail with protocol error', async
 		success: false,
 		output: '',
 		error: 'mdev bridge protocol error.',
+		failureClass: 'protocolError',
 	});
 
 	const mismatchFixture = createBridgeFixture();
@@ -900,6 +967,7 @@ void test('malformed response and invalid hello fail with protocol error', async
 		success: false,
 		output: '',
 		error: 'mdev bridge protocol error.',
+		failureClass: 'protocolError',
 	});
 });
 
@@ -944,6 +1012,7 @@ void test('cold startup timeout settles exactly at the local deadline', async ()
 			success: false,
 			output: '',
 			error: 'mdev bridge request timed out.',
+		failureClass: 'timeout',
 		});
 	});
 });
@@ -981,6 +1050,7 @@ void test('hello timeout settles exactly at the local deadline', async () => {
 			success: false,
 			output: '',
 			error: 'mdev bridge request timed out.',
+		failureClass: 'timeout',
 		});
 	});
 });
@@ -1026,6 +1096,7 @@ void test('operation request timeout settles exactly at the local deadline', asy
 			success: false,
 			output: '',
 			error: 'mdev bridge request timed out.',
+		failureClass: 'timeout',
 		});
 	});
 });
@@ -1072,6 +1143,7 @@ void test('queued operation wait timeout settles at deadline without late write 
 			success: false,
 			output: '',
 			error: 'mdev bridge request timed out.',
+		failureClass: 'timeout',
 		});
 		assert.equal(fixture.writes.length, 2);
 
@@ -1126,6 +1198,7 @@ void test('unanswered request times out and future requests fail', async () => {
 		success: false,
 		output: '',
 		error: 'mdev bridge request timed out.',
+		failureClass: 'timeout',
 	});
 	assert.deepEqual(
 		await client.runOperation({ operation: 'op.one', params: {} }),
@@ -1133,6 +1206,7 @@ void test('unanswered request times out and future requests fail', async () => {
 			success: false,
 			output: '',
 			error: 'mdev bridge request timed out.',
+		failureClass: 'timeout',
 		},
 	);
 });
@@ -1179,6 +1253,7 @@ void test('unresolved startup times out, aborts startup, and fails future reques
 		success: false,
 		output: '',
 		error: 'mdev bridge request timed out.',
+		failureClass: 'timeout',
 	});
 	assert.equal(capturedStart?.abortSignal?.aborted, true);
 	assert.deepEqual(
@@ -1187,6 +1262,7 @@ void test('unresolved startup times out, aborts startup, and fails future reques
 			success: false,
 			output: '',
 			error: 'mdev bridge request timed out.',
+		failureClass: 'timeout',
 		},
 	);
 
@@ -1237,6 +1313,7 @@ void test('per-operation timeout override controls cold startup timeout', async 
 		success: false,
 		output: '',
 		error: 'mdev bridge request timed out.',
+		failureClass: 'timeout',
 	});
 	assert.equal(capturedStart?.abortSignal?.aborted, true);
 });
@@ -1264,6 +1341,7 @@ void test('per-operation timeout override controls initial hello timeout', async
 		success: false,
 		output: '',
 		error: 'mdev bridge request timed out.',
+		failureClass: 'timeout',
 	});
 	assert.equal(fixture.writes.length, 1);
 });
@@ -1314,6 +1392,7 @@ void test('per-operation timeout is a single deadline across cold startup and he
 				success: false,
 				output: '',
 				error: 'mdev bridge request timed out.',
+		failureClass: 'timeout',
 			});
 			await nextTick();
 			assert.equal(closeOptions.length, 1);
@@ -1353,6 +1432,7 @@ void test('per-operation timeout override controls the local watchdog', async ()
 		success: false,
 		output: '',
 		error: 'mdev bridge request timed out.',
+		failureClass: 'timeout',
 	});
 });
 
@@ -1443,6 +1523,7 @@ void test('queued operation timeout starts at public runOperation call', async (
 		success: false,
 		output: '',
 		error: 'mdev bridge request timed out.',
+		failureClass: 'timeout',
 	});
 	assert.equal(fixture.writes.length, 2);
 
@@ -1562,6 +1643,7 @@ void test('pre-hello stream exit asks user to update mdev', async () => {
 			success: false,
 			output: '',
 			error: MDEV_BRIDGE_UPDATE_MESSAGE,
+		failureClass: 'startupFailed',
 		});
 		assert.deepEqual(
 			await client.runOperation({ operation: 'op.one', params: {} }),
@@ -1569,6 +1651,7 @@ void test('pre-hello stream exit asks user to update mdev', async () => {
 				success: false,
 				output: '',
 				error: MDEV_BRIDGE_UPDATE_MESSAGE,
+		failureClass: 'startupFailed',
 			},
 		);
 	}
@@ -1637,6 +1720,7 @@ void test('dispose closes stream and future run returns disposed error', async (
 		success: false,
 		output: '',
 		error: 'mdev bridge client disposed.',
+		failureClass: 'clientDisposed',
 	});
 	assert.equal(fixture.closeOptions.length, 1);
 	assert.equal(fixture.closeOptions[0]?.signal instanceof AbortSignal, true);
@@ -1646,6 +1730,7 @@ void test('dispose closes stream and future run returns disposed error', async (
 			success: false,
 			output: '',
 			error: 'mdev bridge client disposed.',
+		failureClass: 'clientDisposed',
 		},
 	);
 });
@@ -1685,6 +1770,7 @@ void test('dispose with hanging stream close resolves and aborts close signal', 
 		success: false,
 		output: '',
 		error: 'mdev bridge client disposed.',
+		failureClass: 'clientDisposed',
 	});
 	assert.equal(typeof onEvent, 'function');
 });
@@ -1741,6 +1827,7 @@ void test('dispose during pending startup settles run and closes late stream', a
 			success: false,
 			output: '',
 			error: 'mdev bridge client disposed.',
+		failureClass: 'clientDisposed',
 		});
 		await withTestTimeout(disposePromise);
 
