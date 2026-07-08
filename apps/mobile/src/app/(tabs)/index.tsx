@@ -87,10 +87,11 @@ function Host() {
 		defaultValues,
 		validators: {
 			onChange: connectionDetailsSchema,
-			onSubmitAsync: async ({ value }) =>
-				sshConnMutation.mutateAsync(value).then(() => {
-					setLastConnectionProgressEvent(null);
-				}),
+		},
+		onSubmit: async ({ value }) => {
+			sshConnMutation.reset();
+			await sshConnMutation.mutateAsync(value);
+			setLastConnectionProgressEvent(null);
 		},
 	});
 
@@ -293,7 +294,11 @@ function Host() {
 									onPress={() => {
 										logger.info('Connect button pressed', { isSubmitting });
 										if (isSubmitting) return;
-										void connectionForm.handleSubmit();
+										sshConnMutation.reset();
+										setLastConnectionProgressEvent(null);
+										void connectionForm.handleSubmit().catch((error: unknown) => {
+											logger.warn('Host connect submit failed', error);
+										});
 									}}
 								/>
 							</View>
