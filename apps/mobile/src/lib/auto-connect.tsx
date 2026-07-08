@@ -2,7 +2,6 @@ import * as Linking from 'expo-linking';
 import { usePathname, useRouter } from 'expo-router';
 import React from 'react';
 import { AppState, Platform } from 'react-native';
-import { create } from 'zustand';
 import { useShallow } from 'zustand/react/shallow';
 import { AgentNotificationBridgeManager } from './AgentNotificationBridgeManager';
 import { type AutoConnectReconnectContext } from './auto-connect-attempt';
@@ -25,6 +24,10 @@ import { connectAndOpenShell } from './connect-and-open-shell';
 import { connectionDiagnosticRecorder } from './connection-diagnostic-recorder';
 import { type ConnectionDiagnosticTraceHandle } from './connection-diagnostic-types';
 import { createConnectionRunContext } from './connection-run-context';
+import {
+	handleAutoConnectReconnectTraceEvent,
+	useAutoConnectStore,
+} from './auto-connect-store';
 import {
 	startForegroundService,
 	stopForegroundService,
@@ -71,6 +74,11 @@ const AUTO_CONNECT_OPERATION_TIMEOUT_MS = 60_000;
 const AUTO_CONNECT_RECOVERY_TIMEOUT_MS = 60_000;
 const AUTO_CONNECT_CLEANUP_TIMEOUT_MS = 5_000;
 
+export {
+	handleAutoConnectReconnectTraceEvent,
+	useAutoConnectStore,
+} from './auto-connect-store';
+
 function finishTrace(
 	trace: ConnectionDiagnosticTraceHandle | null,
 	status: 'connected' | 'failed' | 'skipped',
@@ -82,26 +90,6 @@ function finishTrace(
 		logger.warn('Connection diagnostic trace finish failed', error);
 	}
 }
-
-type AutoConnectState = {
-	activeDiagnosticTrace: ConnectionDiagnosticTraceHandle | null;
-	isAutoConnecting: boolean;
-	isReconnecting: boolean;
-	setActiveDiagnosticTrace: (
-		trace: ConnectionDiagnosticTraceHandle | null,
-	) => void;
-	setAutoConnecting: (next: boolean) => void;
-	setReconnecting: (next: boolean) => void;
-};
-
-export const useAutoConnectStore = create<AutoConnectState>((set) => ({
-	activeDiagnosticTrace: null,
-	isAutoConnecting: false,
-	isReconnecting: false,
-	setActiveDiagnosticTrace: (trace) => set({ activeDiagnosticTrace: trace }),
-	setAutoConnecting: (next) => set({ isAutoConnecting: next }),
-	setReconnecting: (next) => set({ isReconnecting: next }),
-}));
 
 const isActiveState = (state: string) => state === 'active';
 
@@ -511,6 +499,7 @@ export function AutoConnectManager() {
 						activeDiagnosticTraceRef.current = trace;
 						useAutoConnectStore.getState().setActiveDiagnosticTrace(trace);
 					}
+					handleAutoConnectReconnectTraceEvent(event);
 					trace.event(event);
 					if (event.kind === 'reconnect.start.blocked') {
 						finishTrace(trace, 'skipped');

@@ -41,6 +41,18 @@ void test('AutoConnectManager does not render Tailscale recovery UI directly', (
 	assert.doesNotMatch(source, /<TailscaleRecoveryBanner/);
 });
 
+void test('shell detail routes host-page reconnect outcomes to the host page', () => {
+	const source = readFileSync(
+		require.resolve('../../src/app/shell/detail.tsx'),
+		'utf8',
+	);
+
+	assert.match(source, /lastReconnectOutcome/);
+	assert.match(source, /lastReconnectOutcome\.destination\s*===\s*'hostPage'/);
+	assert.match(source, /isReconnecting\s*===\s*false/);
+	assert.match(source, /router\.replace\(['"]\/shell['"]\)/);
+});
+
 void test('Inline Tailscale panel does not use overlay positioning', () => {
 	const source = readFileSync(
 		require.resolve('../../src/lib/TailscaleRecoveryPanel.tsx'),

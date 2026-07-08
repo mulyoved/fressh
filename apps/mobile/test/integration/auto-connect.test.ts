@@ -8,18 +8,92 @@ import {
 	installResumeReconnectContext,
 	preserveShellReferencedConnections,
 } from '../../src/lib/auto-connect-manager-helpers';
+import {
+	handleAutoConnectReconnectTraceEvent,
+	useAutoConnectStore,
+} from '../../src/lib/auto-connect-store';
 import { type AutoConnectAttemptSourceArgs } from '../../src/lib/auto-connect-attempt';
 import { createAutoConnectReconnectController } from '../../src/lib/auto-connect-reconnect-controller';
 import { createConnectionRunContext } from '../../src/lib/connection-run-context';
+import { type ConnectionDiagnosticEvent } from '../../src/lib/connection-diagnostic-types';
 import {
 	getAutoConnectLaunchActionForUrl,
 	shouldSkipInitialAutoConnectForUrl,
 } from '../../src/lib/auto-connect-launch';
+import {
+	clearTailscaleRecoveryUiState,
+	useTailscaleRecoveryUiStore,
+} from '../../src/lib/tailscale-recovery-ui-store';
 
 function flushPromises() {
 	return new Promise<void>((resolve) => {
 		setImmediate(resolve);
 	});
+}
+
+function createAutoConnectHarness({
+	attemptAutoConnect,
+	traceEvent,
+}: {
+	attemptAutoConnect: (
+		signal: AbortSignal,
+	) => Promise<{ status: 'connected' | 'needsAttention'; message?: string }>;
+	traceEvent: (event: ConnectionDiagnosticEvent) => void;
+}) {
+	useAutoConnectStore.setState({
+		activeDiagnosticTrace: null,
+		isAutoConnecting: false,
+		isReconnecting: false,
+		lastReconnectOutcome: null,
+		lastReconnectDestination: null,
+	});
+	clearTailscaleRecoveryUiState();
+
+	const controller = createAutoConnectReconnectController({
+		delaysMs: [10],
+		windowMs: 100,
+		now: () => 0,
+		setTimeout: (callback) => {
+			setImmediate(callback);
+			return callback;
+		},
+		clearTimeout: () => {},
+		getSnapshot: () => ({
+			isAutoConnecting: useAutoConnectStore.getState().isAutoConnecting,
+			isReconnecting: useAutoConnectStore.getState().isReconnecting,
+			resetInFlight: false,
+			platformOS: 'android',
+			appActive: true,
+			backgroundWorkAllowed: true,
+			foregroundServiceRequired: false,
+		}),
+		setReconnecting: (next) => {
+			useAutoConnectStore.getState().setReconnecting(next);
+		},
+		attemptAutoConnect,
+		logger: {
+			info: () => {},
+			warn: () => {},
+		},
+		trace: {
+			event: (event) => {
+				traceEvent(event);
+				handleAutoConnectReconnectTraceEvent(event);
+			},
+		},
+	});
+
+	return {
+		scheduleReconnect: (reason: string) => {
+			controller.start(reason);
+		},
+		flush: async () => {
+			await flushPromises();
+			await flushPromises();
+		},
+		readAutoConnectState: () => useAutoConnectStore.getState(),
+		readTailscaleRecoveryState: () => useTailscaleRecoveryUiStore.getState(),
+	};
 }
 
 function createSavedEntry({
@@ -500,6 +574,74 @@ void test('app-resume-no-shell without a dropped shell keeps normal auto-connect
 	const receivedArgs: AutoConnectAttemptSourceArgs = capturedArgs;
 	assert.equal(receivedArgs.reconnectContext, undefined);
 	assert.equal((await receivedArgs.loadLatestSavedConnection())?.value.host, '100.64.0.11');
+});
+
+void test('failed network reconnect marks Tailscale attention and records host-page destination', async () => {
+	const events: unknown[] = [];
+	const context = createAutoConnectHarness({
+		attemptAutoConnect: async () => ({
+			status: 'needsAttention',
+			message: 'Tailscale could not be restarted automatically.',
+		}),
+		traceEvent: (event) => events.push(event),
+	});
+
+	context.scheduleReconnect('shell-drop');
+	await context.flush();
+
+	const state = context.readAutoConnectState();
+	assert.equal(state.isReconnecting, false);
+	assert.deepEqual(state.lastReconnectOutcome, {
+		status: 'needsAttention',
+		message: 'Tailscale could not be restarted automatically.',
+		destination: 'hostPage',
+	});
+	assert.equal(
+		context.readTailscaleRecoveryState().recoveryState.phase,
+		'needsAttention',
+	);
+	assert.ok(
+		events.some(
+			(event) =>
+				(event as { kind?: string; destination?: string }).kind ===
+					'reconnect.completed' &&
+				(event as { kind?: string; destination?: string }).destination ===
+					'hostPage',
+		),
+	);
+});
+
+void test('successful reconnect clears stale host-page reconnect outcome', async () => {
+	const pendingAttempt: {
+		resolve?: (result: { status: 'connected'; message?: string }) => void;
+	} = {};
+	const context = createAutoConnectHarness({
+		attemptAutoConnect: async () =>
+			await new Promise<{ status: 'connected'; message?: string }>((resolve) => {
+				pendingAttempt.resolve = resolve;
+			}),
+		traceEvent: () => {},
+	});
+	useAutoConnectStore.getState().setLastReconnectOutcome({
+		status: 'needsAttention',
+		message: 'Previous reconnect failed.',
+		destination: 'hostPage',
+	});
+
+	context.scheduleReconnect('shell-drop');
+
+	assert.equal(context.readAutoConnectState().lastReconnectOutcome, null);
+	assert.equal(context.readAutoConnectState().lastReconnectDestination, null);
+
+	const resolveAttempt = pendingAttempt.resolve;
+	if (!resolveAttempt) {
+		throw new Error('reconnect attempt should be pending');
+	}
+	resolveAttempt({ status: 'connected' });
+	await context.flush();
+
+	assert.equal(context.readAutoConnectState().lastReconnectOutcome, null);
+	assert.equal(context.readAutoConnectState().lastReconnectDestination, null);
 });
 
 void test('app-resume-no-shell reconnect installs dropped context so stale active transport reconnects through tmux saved-entry fallback', async () => {

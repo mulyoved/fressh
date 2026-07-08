@@ -510,6 +510,9 @@ function ShellDetail() {
 		searchParams.storedConnectionId ?? connectionStoredConnectionId;
 	const isAutoConnecting = useAutoConnectStore((s) => s.isAutoConnecting);
 	const isReconnecting = useAutoConnectStore((s) => s.isReconnecting);
+	const lastReconnectOutcome = useAutoConnectStore(
+		(s) => s.lastReconnectOutcome,
+	);
 	const activeDiagnosticTrace = useAutoConnectStore(
 		(s) => s.activeDiagnosticTrace,
 	);
@@ -547,9 +550,19 @@ function ShellDetail() {
 	useEffect(() => {
 		if (hasTmuxAttachError) return;
 		if (shell && connection) return;
-		const autoState = useAutoConnectStore.getState();
-		if (autoState.isAutoConnecting || autoState.isReconnecting) return;
+		if (isAutoConnecting || isReconnecting) return;
 		if (connection && !shell) {
+			if (
+				isReconnecting === false &&
+				lastReconnectOutcome &&
+				lastReconnectOutcome.destination === 'hostPage'
+			) {
+				logger.info('reconnect failed, replacing route with /shell', {
+					outcome: lastReconnectOutcome.status,
+				});
+				router.replace('/shell');
+				return;
+			}
 			logger.info(
 				'shell missing on active connection, waiting for reconnect cycle',
 			);
@@ -562,6 +575,7 @@ function ShellDetail() {
 		hasTmuxAttachError,
 		isAutoConnecting,
 		isReconnecting,
+		lastReconnectOutcome,
 		router,
 		shell,
 	]);
