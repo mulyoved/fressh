@@ -187,11 +187,12 @@ export function installResumeReconnectContext({
 	shells: ShellSnapshot[];
 	connections: Record<string, ConnectionSnapshot | undefined>;
 }) {
-	if (reconnectRunning) return;
+	if (reconnectRunning) return false;
 	installPendingReconnectContext({
 		reconnectContextState,
 		pathname,
 		shells,
 		connections,
 	});
+	return true;
 }

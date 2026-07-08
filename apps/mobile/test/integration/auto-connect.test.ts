@@ -796,13 +796,22 @@ void test('reconnect retry loop preserves dropped reconnect context for every pr
 
 		assert.equal(controller.start('shell-drop'), true);
 		await flushPromises();
-		installResumeReconnectContext({
+		assert.equal(
+			installResumeReconnectContext({
 			reconnectContextState,
 			reconnectRunning: controller.isRunning(),
 			pathname: '/shell/detail',
 			shells: [],
 			connections: {},
-		});
+			}),
+			false,
+		);
+		assert.equal(capturedAttempts.length, 1);
+		assert.equal(
+			timers.filter((timer) => timer.delayMs === 10 && timer.cleared === false)
+				.length,
+			1,
+		);
 
 		const retryTimer = timers.find(
 		(timer) => timer.delayMs === 10 && timer.cleared === false,

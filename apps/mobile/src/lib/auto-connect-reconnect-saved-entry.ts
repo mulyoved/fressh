@@ -24,7 +24,6 @@ import {
 	pickLatestConnection,
 	type SavedConnectionEntry,
 } from './connection-utils';
-import { connectionQueryKey } from './connection-query-keys';
 import { queryClient } from './utils';
 // eslint-disable-next-line import/consistent-type-specifier-style -- keep secrets-manager fully type-only so Node integration tests do not load React Native at runtime
 import type { StoredConnectionDetails } from './secrets-manager';
@@ -138,12 +137,14 @@ export async function resolveReconnectSavedEntry({
 	reconnectContext,
 	connections,
 	loadSavedConnectionByStoredId,
+	loadLatestStoredSavedConnection = loadLatestStoredSavedConnectionFromStore,
 }: {
 	reconnectContext: AutoConnectReconnectContext;
 	connections: Record<string, ActiveConnectionSnapshot>;
 	loadSavedConnectionByStoredId?: (
 		storedConnectionId: string,
 	) => Promise<SavedConnectionEntry | null>;
+	loadLatestStoredSavedConnection?: () => Promise<SavedConnectionEntry | null>;
 }): Promise<SavedConnectionEntry | null> {
 	const droppedConnection =
 		reconnectContext.droppedConnectionId !== undefined
@@ -161,10 +162,7 @@ export async function resolveReconnectSavedEntry({
 	return await loadLatestStoredSavedConnection();
 }
 
-async function loadLatestStoredSavedConnection(): Promise<SavedConnectionEntry | null> {
-	const cachedEntries =
-		queryClient.getQueryData<SavedConnectionEntry[]>([connectionQueryKey]);
-	if (cachedEntries) return pickLatestConnection(cachedEntries);
+async function loadLatestStoredSavedConnectionFromStore(): Promise<SavedConnectionEntry | null> {
 	const { secretsManager } = await import('./secrets-manager');
 	return pickLatestConnection(
 		await queryClient.fetchQuery(secretsManager.connections.query.list),
@@ -448,6 +446,7 @@ export async function attemptReconnectThroughSavedEntry({
 	reconnectContext,
 	connections,
 	loadSavedConnectionByStoredId,
+	loadLatestStoredSavedConnectionForTest,
 	recovery,
 	traceEvent,
 	resolveKeySecurity,
@@ -464,6 +463,7 @@ export async function attemptReconnectThroughSavedEntry({
 	loadSavedConnectionByStoredId?: (
 		storedConnectionId: string,
 	) => Promise<SavedConnectionEntry | null>;
+	loadLatestStoredSavedConnectionForTest?: () => Promise<SavedConnectionEntry | null>;
 	recovery: SavedEntryTailscaleRecovery;
 	traceEvent: (event: ConnectionDiagnosticEvent) => void;
 	resolveKeySecurity: (
@@ -486,6 +486,8 @@ export async function attemptReconnectThroughSavedEntry({
 					reconnectContext,
 					connections,
 					loadSavedConnectionByStoredId,
+					loadLatestStoredSavedConnection:
+						loadLatestStoredSavedConnectionForTest,
 				}),
 		);
 	} catch (error) {

@@ -1,9 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { mapReconnectSavedEntryAttemptOutcome } from '../../src/lib/auto-connect-reconnect-saved-entry';
-import { connectionQueryKey } from '../../src/lib/connection-query-keys';
 import { createConnectionRunContext } from '../../src/lib/connection-run-context';
-import { queryClient } from '../../src/lib/utils';
 import {
 	activeConnectionFixture,
 	attemptAutoConnectSource,
@@ -604,87 +602,72 @@ void test('reconnect fallback uses unfiltered saved-entry store when dropped loo
 			priority: 0,
 		},
 	};
-	const olderAutoConnectEntry = {
-		...autoConnectLatestEntry,
-		metadata: {
-			createdAtMs: 1,
-			modifiedAtMs: 10,
-			priority: 0,
-		},
-	};
 	const loadedIds: string[] = [];
 
-	queryClient.setQueryData([connectionQueryKey], [
-		olderAutoConnectEntry,
-		reconnectLatestEntry,
-	]);
-	try {
-		const result = await attemptAutoConnectSource({
-			platformOS: 'android',
+	const result = await attemptAutoConnectSource({
+		platformOS: 'android',
+		pathname: '/shell/detail',
+		latestShell: null,
+		connections: {},
+		reconnectContext: {
+			trigger: 'reconnect',
+			droppedConnectionId: 'active-conn-1',
+			droppedChannelId: 4,
+			droppedStoredConnectionId: reconnectLatestEntry.id,
 			pathname: '/shell/detail',
-			latestShell: null,
-			connections: {},
-			reconnectContext: {
-				trigger: 'reconnect',
-				droppedConnectionId: 'active-conn-1',
-				droppedChannelId: 4,
-				droppedStoredConnectionId: reconnectLatestEntry.id,
-				pathname: '/shell/detail',
-			},
-			loadLatestSavedConnection: async () => autoConnectLatestEntry,
-			loadSavedConnectionByStoredId: async (storedConnectionId) => {
-				loadedIds.push(storedConnectionId);
-				return null;
-			},
-			openSavedEntryShell: async ({ connectionDetails }) => {
-				assert.equal(connectionDetails.host, '100.64.0.10');
-				return {
-					status: 'connected',
-					connectionId: 'fresh-conn-1',
-					channelId: 9,
-				};
-			},
-			trace: { event: (event) => events.push(event) },
-			navigateToShell: (connectionId, channelId) => {
-				navigations.push({ connectionId, channelId });
-			},
-			resolveKeySecurity: async () => ({
-				type: 'key',
-				privateKey: 'private-key',
-			}),
-			recovery: readyRecovery,
-			markTailscaleAttention: () => {},
-			clearTailscaleAttention: () => {},
-			logger: createLogger().logger,
-		});
+		},
+		loadLatestSavedConnection: async () => autoConnectLatestEntry,
+		loadSavedConnectionByStoredId: async (storedConnectionId) => {
+			loadedIds.push(storedConnectionId);
+			return null;
+		},
+		loadLatestStoredSavedConnectionForTest: async () => reconnectLatestEntry,
+		openSavedEntryShell: async ({ connectionDetails }) => {
+			assert.equal(connectionDetails.host, '100.64.0.10');
+			return {
+				status: 'connected',
+				connectionId: 'fresh-conn-1',
+				channelId: 9,
+			};
+		},
+		trace: { event: (event) => events.push(event) },
+		navigateToShell: (connectionId, channelId) => {
+			navigations.push({ connectionId, channelId });
+		},
+		resolveKeySecurity: async () => ({
+			type: 'key',
+			privateKey: 'private-key',
+		}),
+		recovery: readyRecovery,
+		markTailscaleAttention: () => {},
+		clearTailscaleAttention: () => {},
+		logger: createLogger().logger,
+	});
 
-		assert.deepEqual(result, { status: 'connected' });
-		assert.deepEqual(loadedIds, [reconnectLatestEntry.id]);
-		assert.deepEqual(navigations, [
-			{ connectionId: 'fresh-conn-1', channelId: 9 },
-		]);
-		assert.deepEqual(
-			events.find(
-				(event) =>
-					(event as { kind?: string }).kind === 'saved-entry.selected',
-			),
-			{
-				kind: 'saved-entry.selected',
-				source: 'saved-entry',
-				connection: {
-					savedConnectionId: reconnectLatestEntry.id,
-					username: 'muly',
-					host: '100.64.0.10',
-					port: 22,
-					keyId: 'key-1',
-					useTmux: true,
-					tmuxSessionName: 'main',
-				},
+	assert.deepEqual(result, { status: 'connected' });
+	assert.deepEqual(loadedIds, [reconnectLatestEntry.id]);
+	assert.deepEqual(navigations, [
+		{ connectionId: 'fresh-conn-1', channelId: 9 },
+	]);
+	assert.deepEqual(
+		events.find(
+			(event) =>
+				(event as { kind?: string }).kind === 'saved-entry.selected',
+		),
+		{
+			kind: 'saved-entry.selected',
+			source: 'saved-entry',
+			connection: {
+				savedConnectionId: reconnectLatestEntry.id,
+				username: 'muly',
+				host: '100.64.0.10',
+				port: 22,
+				keyId: 'key-1',
+				useTmux: true,
+				tmuxSessionName: 'main',
 			},
-		);
-	} finally {
-		queryClient.removeQueries({ queryKey: [connectionQueryKey] });
-	}
+		},
+	);
 });
 
 void test('android tmux reconnect traces Tailscale readiness before saved-entry reconnect', async () => {

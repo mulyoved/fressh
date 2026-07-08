@@ -728,7 +728,8 @@ export function AutoConnectManager() {
 				}
 				if (!wasActive && isActiveRef.current) {
 					if (shells.length === 0) {
-						installResumeReconnectContext({
+						const shouldScheduleResumeReconnect =
+							installResumeReconnectContext({
 							reconnectContextState: reconnectContextCycleRef.current,
 							reconnectRunning:
 								reconnectControllerRef.current?.isRunning() === true,
@@ -736,6 +737,7 @@ export function AutoConnectManager() {
 							shells: previousShellsRef.current,
 							connections: previousConnectionsRef.current,
 						});
+						if (!shouldScheduleResumeReconnect) return;
 						scheduleReconnect('app-resume-no-shell');
 					} else {
 					void runAutoConnectOnce();
