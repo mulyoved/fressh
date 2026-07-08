@@ -12,6 +12,7 @@ import {
 	type StoredConnectionEntry,
 	type StoredConnectionDetails,
 } from './connection-storage';
+import { connectionQueryKey } from './connection-query-keys';
 import {
 	createReplaceAllPrivateKeyEntriesHandler,
 	replaceAllPrivateKeys,
@@ -217,8 +218,6 @@ async function replaceAllConnections(entries: StoredConnectionEntry[]) {
 	await connectionStorage.replaceAllEntries(entries);
 	await queryClient.invalidateQueries({ queryKey: [connectionQueryKey] });
 }
-
-const connectionQueryKey = 'connections';
 
 const listConnectionsQueryOptions = queryOptions({
 	queryKey: [connectionQueryKey],

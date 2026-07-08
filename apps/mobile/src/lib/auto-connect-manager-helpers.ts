@@ -173,3 +173,25 @@ export function installPendingReconnectContext({
 	}
 	reconnectContextState.clearReconnectContext();
 }
+
+export function installResumeReconnectContext({
+	reconnectContextState,
+	reconnectRunning,
+	pathname,
+	shells,
+	connections,
+}: {
+	reconnectContextState: ReconnectContextCycleState;
+	reconnectRunning: boolean;
+	pathname: string;
+	shells: ShellSnapshot[];
+	connections: Record<string, ConnectionSnapshot | undefined>;
+}) {
+	if (reconnectRunning) return;
+	installPendingReconnectContext({
+		reconnectContextState,
+		pathname,
+		shells,
+		connections,
+	});
+}

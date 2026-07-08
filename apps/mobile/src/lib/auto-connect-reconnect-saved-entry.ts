@@ -24,6 +24,7 @@ import {
 	pickLatestConnection,
 	type SavedConnectionEntry,
 } from './connection-utils';
+import { connectionQueryKey } from './connection-query-keys';
 import { queryClient } from './utils';
 // eslint-disable-next-line import/consistent-type-specifier-style -- keep secrets-manager fully type-only so Node integration tests do not load React Native at runtime
 import type { StoredConnectionDetails } from './secrets-manager';
@@ -76,12 +77,6 @@ function reconnectCleanupFailureMessage(error: unknown): string {
 		: `cleanup-failed: ${detail}`;
 }
 
-function reconnectSetupFailureClass(
-	result: ReconnectSetupFailureResult,
-): string {
-	return result.status;
-}
-
 function emitReconnectSetupFailed({
 	traceEvent,
 	reconnectContext,
@@ -104,7 +99,7 @@ function emitReconnectSetupFailed({
 			host: entry?.latestEntryConnection.host,
 			port: entry?.latestEntryConnection.port,
 			tmuxSessionName: entry?.normalizedDetails.tmuxSessionName,
-			failureClass: reconnectSetupFailureClass(result),
+			failureClass: result.status,
 			message: result.message,
 		}),
 	);
@@ -167,6 +162,9 @@ export async function resolveReconnectSavedEntry({
 }
 
 async function loadLatestStoredSavedConnection(): Promise<SavedConnectionEntry | null> {
+	const cachedEntries =
+		queryClient.getQueryData<SavedConnectionEntry[]>([connectionQueryKey]);
+	if (cachedEntries) return pickLatestConnection(cachedEntries);
 	const { secretsManager } = await import('./secrets-manager');
 	return pickLatestConnection(
 		await queryClient.fetchQuery(secretsManager.connections.query.list),

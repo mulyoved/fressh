@@ -11,6 +11,7 @@ import {
 	attemptAutoConnectFromManager,
 	createReconnectContextCycleState,
 	installPendingReconnectContext,
+	installResumeReconnectContext,
 	pickLatestShellSnapshot,
 	preserveShellReferencedConnections,
 } from './auto-connect-manager-helpers';
@@ -724,17 +725,19 @@ export function AutoConnectManager() {
 					stopReconnectCycle('app-backgrounded');
 				}
 				return;
-			}
-			if (!wasActive && isActiveRef.current) {
-				if (shells.length === 0) {
-					installPendingReconnectContext({
-						reconnectContextState: reconnectContextCycleRef.current,
-						pathname: '/shell/detail',
-						shells: previousShellsRef.current,
-						connections: previousConnectionsRef.current,
-					});
-					scheduleReconnect('app-resume-no-shell');
-				} else {
+				}
+				if (!wasActive && isActiveRef.current) {
+					if (shells.length === 0) {
+						installResumeReconnectContext({
+							reconnectContextState: reconnectContextCycleRef.current,
+							reconnectRunning:
+								reconnectControllerRef.current?.isRunning() === true,
+							pathname: '/shell/detail',
+							shells: previousShellsRef.current,
+							connections: previousConnectionsRef.current,
+						});
+						scheduleReconnect('app-resume-no-shell');
+					} else {
 					void runAutoConnectOnce();
 				}
 			}

@@ -5,6 +5,7 @@ import {
 	buildPendingReconnectContext,
 	createReconnectContextCycleState,
 	installPendingReconnectContext,
+	installResumeReconnectContext,
 	preserveShellReferencedConnections,
 } from '../../src/lib/auto-connect-manager-helpers';
 import { type AutoConnectAttemptSourceArgs } from '../../src/lib/auto-connect-attempt';
@@ -793,10 +794,17 @@ void test('reconnect retry loop preserves dropped reconnect context for every pr
 		},
 	});
 
-	assert.equal(controller.start('shell-drop'), true);
-	await flushPromises();
+		assert.equal(controller.start('shell-drop'), true);
+		await flushPromises();
+		installResumeReconnectContext({
+			reconnectContextState,
+			reconnectRunning: controller.isRunning(),
+			pathname: '/shell/detail',
+			shells: [],
+			connections: {},
+		});
 
-	const retryTimer = timers.find(
+		const retryTimer = timers.find(
 		(timer) => timer.delayMs === 10 && timer.cleared === false,
 	);
 	assert.ok(retryTimer);

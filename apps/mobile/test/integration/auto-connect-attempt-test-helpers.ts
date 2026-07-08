@@ -101,9 +101,6 @@ type LegacyAttemptSourceArgs = Omit<
 > & {
 	loadLatestSavedConnection?: AutoConnectAttemptSourceArgs['loadLatestSavedConnection'];
 	loadSavedConnections?: () => Promise<SavedConnectionEntry[] | null>;
-	loadLatestSavedAutoConnectConnection?: () => Promise<
-		SavedConnectionEntry | null
-	>;
 	runContext?: AutoConnectAttemptSourceArgs['runContext'];
 	abortSignal?: AbortSignal;
 };
@@ -111,18 +108,14 @@ type LegacyAttemptSourceArgs = Omit<
 async function loadSavedConnectionsForTest({
 	loadSavedConnections,
 	loadLatestSavedConnection,
-	loadLatestSavedAutoConnectConnection,
 }: Pick<
 	LegacyAttemptSourceArgs,
-	| 'loadSavedConnections'
-	| 'loadLatestSavedConnection'
-	| 'loadLatestSavedAutoConnectConnection'
+	'loadSavedConnections' | 'loadLatestSavedConnection'
 >): Promise<SavedConnectionEntry[] | null> {
 	if (loadSavedConnections) return await loadSavedConnections();
-	const entries = [
-		(await loadLatestSavedConnection?.()) ?? null,
-		(await loadLatestSavedAutoConnectConnection?.()) ?? null,
-	].filter((entry): entry is SavedConnectionEntry => entry !== null);
+	const entries = [(await loadLatestSavedConnection?.()) ?? null].filter(
+		(entry): entry is SavedConnectionEntry => entry !== null,
+	);
 	if (entries.length === 0) return null;
 	return Array.from(new Map(entries.map((entry) => [entry.id, entry])).values());
 }
@@ -135,7 +128,6 @@ export async function attemptAutoConnectSource(args: LegacyAttemptSourceArgs) {
 			abortSignal: _abortSignal,
 			loadSavedConnections,
 			loadLatestSavedConnection,
-			loadLatestSavedAutoConnectConnection,
 			...sourceArgs
 		} = args;
 		return await attemptAutoConnectSourceBase({
@@ -147,7 +139,6 @@ export async function attemptAutoConnectSource(args: LegacyAttemptSourceArgs) {
 						await loadSavedConnectionsForTest({
 							loadSavedConnections,
 							loadLatestSavedConnection,
-							loadLatestSavedAutoConnectConnection,
 						}),
 					)),
 			runContext,
