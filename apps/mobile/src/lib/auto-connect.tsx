@@ -46,9 +46,11 @@ import {
 	type TailscaleRecoveryCoordinator,
 } from './tailscale-recovery-actions';
 import {
-	TailscaleRecoveryBanner,
-	type TailscaleRecoveryBannerState,
-} from './TailscaleRecoveryBanner';
+	clearTailscaleRecoveryUiState,
+	markTailscaleRecoveryUiNeedsAttention,
+	markTailscaleRecoveryUiRecovering,
+	registerTailscaleRecoveryUiActions,
+} from './tailscale-recovery-ui-store';
 import { queryClient } from './utils';
 
 const logger = rootLogger.extend('AutoConnect');
@@ -60,12 +62,6 @@ const TAILSCALE_RESET_WAIT_FOR_IDLE_MS = 5_000;
 const AUTO_CONNECT_OPERATION_TIMEOUT_MS = 60_000;
 const AUTO_CONNECT_RECOVERY_TIMEOUT_MS = 60_000;
 const AUTO_CONNECT_CLEANUP_TIMEOUT_MS = 5_000;
-
-type TailscaleRecoveryUiState = TailscaleRecoveryBannerState;
-
-const hiddenTailscaleRecoveryState: TailscaleRecoveryUiState = {
-	phase: 'hidden',
-};
 
 function finishTrace(
 	trace: ConnectionDiagnosticTraceHandle | null,
@@ -167,13 +163,11 @@ export function AutoConnectManager() {
 	const launchUrlSuppressAutoConnectRef = React.useRef(false);
 	const tailscaleRecoveryCoordinatorRef =
 		React.useRef<TailscaleRecoveryCoordinator | null>(null);
-	const [tailscaleRecoveryUiState, setTailscaleRecoveryUiState] =
-		React.useState<TailscaleRecoveryUiState>(hiddenTailscaleRecoveryState);
 	const clearTailscaleAttentionState = React.useCallback(() => {
-		setTailscaleRecoveryUiState(hiddenTailscaleRecoveryState);
+		clearTailscaleRecoveryUiState();
 	}, []);
 	const markTailscaleAttentionState = React.useCallback((message: string) => {
-		setTailscaleRecoveryUiState({ phase: 'needsAttention', message });
+		markTailscaleRecoveryUiNeedsAttention(message);
 	}, []);
 	const clearTailscaleAttention = React.useCallback(() => {
 		tailscaleRecoveryCoordinatorRef.current?.clearAutomaticAttention();
@@ -239,10 +233,7 @@ export function AutoConnectManager() {
 				clear: clearTailscaleAttentionState,
 				mark: markTailscaleAttentionState,
 				recovering: (message) => {
-					setTailscaleRecoveryUiState({
-						phase: 'recovering',
-						message,
-					});
+					markTailscaleRecoveryUiRecovering(message);
 				},
 			},
 			logger,
@@ -736,17 +727,21 @@ export function AutoConnectManager() {
 		void tailscaleRecoveryCoordinatorRef.current?.reset();
 	}, []);
 
+	React.useEffect(() => {
+		return registerTailscaleRecoveryUiActions({
+			openTailscale: handleOpenTailscale,
+			retry: handleRetryAfterTailscaleRecovery,
+			reset: handleResetTailscale,
+		});
+	}, [
+		handleOpenTailscale,
+		handleResetTailscale,
+		handleRetryAfterTailscaleRecovery,
+	]);
+
 	return (
-		<>
-			<AgentNotificationBridgeManager
-				preservePendingWithoutTarget={reconnectExpectedFromShellDrop}
-			/>
-			<TailscaleRecoveryBanner
-				state={tailscaleRecoveryUiState}
-				onOpenTailscale={handleOpenTailscale}
-				onRetry={handleRetryAfterTailscaleRecovery}
-				onReset={handleResetTailscale}
-			/>
-		</>
+		<AgentNotificationBridgeManager
+			preservePendingWithoutTarget={reconnectExpectedFromShellDrop}
+		/>
 	);
 }
