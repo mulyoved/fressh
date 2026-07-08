@@ -112,6 +112,7 @@ void test('shell-drop reconnect context preserves dropped shell identity for rec
 		},
 	});
 
+	assert.ok(context);
 	assert.deepEqual(context, {
 		trigger: 'reconnect',
 		pathname: '/shell/detail',
@@ -181,6 +182,7 @@ void test('manager reconnect wiring passes dropped identity and unfiltered recon
 			},
 		},
 	});
+	assert.ok(reconnectContext);
 	const savedEntries = [
 		createSavedEntry({
 			metadata: {
@@ -267,7 +269,11 @@ void test('manager reconnect wiring passes dropped identity and unfiltered recon
 		runContext.finish();
 	}
 
-	assert.deepEqual(capturedArgs?.reconnectContext, {
+	if (capturedArgs === null) {
+		throw new Error('manager args should be captured');
+	}
+	const receivedArgs: AutoConnectAttemptSourceArgs = capturedArgs;
+	assert.deepEqual(receivedArgs.reconnectContext, {
 		trigger: 'reconnect',
 		pathname: '/shell/detail',
 		droppedConnectionId: 'conn-dropped',
@@ -275,12 +281,119 @@ void test('manager reconnect wiring passes dropped identity and unfiltered recon
 		droppedStoredConnectionId: 'muly-100_64_0_10-22',
 	});
 	assert.equal(
-		(await capturedArgs?.loadLatestSavedConnection?.())?.value.host,
+		(await receivedArgs.loadLatestSavedConnection())?.value.host,
 		'100.64.0.11',
 	);
 	assert.equal(
-		(await capturedArgs?.loadLatestSavedReconnectConnection?.())?.value.host,
+		(await receivedArgs.loadLatestSavedReconnectConnection?.())?.value.host,
 		'100.64.0.10',
+	);
+});
+
+void test('app-resume-no-shell without a dropped shell keeps normal auto-connect filtering', async () => {
+	let capturedArgs: AutoConnectAttemptSourceArgs | null = null;
+	const reconnectContextState = createReconnectContextCycleState();
+	const runContext = createConnectionRunContext({
+		timeouts: {
+			operationTimeoutMs: 1_000,
+			recoveryTimeoutMs: 1_000,
+			cleanupTimeoutMs: 1_000,
+		},
+	});
+	const savedEntries = [
+		createSavedEntry({
+			metadata: {
+				createdAtMs: 1,
+				modifiedAtMs: 10,
+				priority: 0,
+			},
+			value: {
+				username: 'muly',
+				host: '100.64.0.11',
+				port: 22,
+				useTmux: true,
+				tmuxSessionName: 'main',
+				autoConnect: true,
+				security: { type: 'key', keyId: 'key-1' },
+			},
+		}),
+		createSavedEntry({
+			metadata: {
+				createdAtMs: 2,
+				modifiedAtMs: 20,
+				priority: 0,
+			},
+			value: {
+				username: 'muly',
+				host: '100.64.0.10',
+				port: 22,
+				useTmux: true,
+				tmuxSessionName: 'main',
+				autoConnect: false,
+				security: { type: 'key', keyId: 'key-2' },
+			},
+		}),
+	];
+
+	installPendingReconnectContext({
+		reconnectContextState,
+		pathname: '/shell/detail',
+		shells: [],
+		connections: {},
+	});
+
+	try {
+		await attemptAutoConnectFromManager({
+			platformOS: 'android',
+			pathname: '/shell/detail',
+			latestShell: null,
+			connections: {},
+			reconnectContext:
+				reconnectContextState.getReconnectContextForReconnectAttempt(),
+			openSavedEntryShell: async () => {
+				throw new Error('saved-entry connect should not run');
+			},
+			loadSavedConnections: async () => savedEntries,
+			loadSavedConnectionByStoredId: async () => null,
+			resolveKeySecurity: async () => null,
+			navigateToShell: () => {},
+			recovery: {
+				ensureReady: async () => ({
+					kind: 'ready' as const,
+					attempted: true as const,
+					available: true as const,
+				}),
+				recoverAfterFailure: async () => ({
+					kind: 'nonNetworkFailure' as const,
+					attempted: false as const,
+					networkLikeFailure: false as const,
+					available: true as const,
+				}),
+			},
+			markTailscaleAttention: () => {},
+			clearTailscaleAttention: () => {},
+			logger: {
+				info: () => {},
+				warn: () => {},
+			},
+			runContext,
+			attemptAutoConnectSourceImpl: async (args) => {
+				capturedArgs = args;
+				return false;
+			},
+		});
+	} finally {
+		runContext.finish();
+	}
+
+	if (capturedArgs === null) {
+		throw new Error('manager args should be captured');
+	}
+	const receivedArgs: AutoConnectAttemptSourceArgs = capturedArgs;
+	assert.equal(receivedArgs.reconnectContext, undefined);
+	assert.equal(
+		(await receivedArgs.loadLatestSavedConnection())?.value.host,
+		'100.64.0.11',
 	);
 });
 
@@ -417,27 +530,27 @@ void test('app-resume-no-shell reconnect installs dropped context so stale activ
 
 void test('reconnect retry loop preserves dropped reconnect context for every production adapter call', async () => {
 	const reconnectContextState = createReconnectContextCycleState();
-	reconnectContextState.replacePendingReconnectContext(
-		buildPendingReconnectContext({
-			pathname: '/shell/detail',
-			shells: [
-				{
-					connectionId: 'conn-dropped',
-					channelId: 7,
-					createdAtMs: 20,
-				},
-			],
-			connections: {
-				'conn-dropped': {
-					connectionDetails: {
-						username: 'muly',
-						host: '100.64.0.10',
-						port: 22,
-					},
+	const reconnectContext = buildPendingReconnectContext({
+		pathname: '/shell/detail',
+		shells: [
+			{
+				connectionId: 'conn-dropped',
+				channelId: 7,
+				createdAtMs: 20,
+			},
+		],
+		connections: {
+			'conn-dropped': {
+				connectionDetails: {
+					username: 'muly',
+					host: '100.64.0.10',
+					port: 22,
 				},
 			},
-		}),
-	);
+		},
+	});
+	assert.ok(reconnectContext);
+	reconnectContextState.replacePendingReconnectContext(reconnectContext);
 	const savedEntries = [
 		createSavedEntry({
 			metadata: {

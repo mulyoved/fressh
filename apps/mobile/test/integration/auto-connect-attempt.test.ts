@@ -4,6 +4,7 @@ import {
 	attemptAutoConnectSource as attemptAutoConnectSourceBase,
 	type AutoConnectAttemptSourceArgs,
 } from '../../src/lib/auto-connect-attempt';
+import { mapReconnectSavedEntryAttemptOutcome } from '../../src/lib/auto-connect-reconnect-saved-entry';
 import { createConnectionRunContext } from '../../src/lib/connection-run-context';
 import { type SavedConnectionEntry } from '../../src/lib/connection-utils';
 // eslint-disable-next-line import/consistent-type-specifier-style -- keep secrets-manager fully type-only so Node integration tests do not load React Native at runtime
@@ -1870,4 +1871,354 @@ void test('android tmux reconnect traces Tailscale readiness before saved-entry 
 		'auto-connect.saved-entry.connect.started',
 		'auto-connect.saved-entry.connect.connected',
 	]);
+});
+
+void test('reconnect successful saved-entry opener navigate callback only navigates once', async () => {
+	const navigations: Array<{ connectionId: string; channelId: number }> = [];
+	const savedEntry = createSavedEntryWithId('muly-100_64_0_10-22', {
+		...baseDetails,
+		host: '100.64.0.10',
+		autoConnect: false,
+		useTmux: true,
+		tmuxSessionName: 'main',
+	});
+
+	const result = await attemptAutoConnectSource({
+		platformOS: 'android',
+		pathname: '/shell/detail',
+		latestShell: null,
+		connections: {},
+		reconnectContext: {
+			trigger: 'reconnect',
+			droppedConnectionId: 'active-conn-1',
+			droppedChannelId: 4,
+			droppedStoredConnectionId: 'muly-100_64_0_10-22',
+			pathname: '/shell/detail',
+		},
+		loadSavedConnectionByStoredId: async () => savedEntry,
+		loadLatestSavedConnection: async () => {
+			throw new Error('latest fallback should not be used');
+		},
+		openSavedEntryShell: async ({ navigate }) => {
+			navigate({ connectionId: 'fresh-conn-1', channelId: 9 });
+			return {
+				status: 'connected',
+				connectionId: 'fresh-conn-1',
+				channelId: 9,
+			};
+		},
+		trace: { event: () => {} },
+		navigateToShell: (connectionId, channelId) => {
+			navigations.push({ connectionId, channelId });
+		},
+		resolveKeySecurity: async () => ({
+			type: 'key',
+			privateKey: 'private-key',
+		}),
+		recovery: readyRecovery,
+		markTailscaleAttention: () => {},
+		clearTailscaleAttention: () => {},
+		logger: createLogger().logger,
+	});
+
+	assert.deepEqual(result, { status: 'connected' });
+	assert.deepEqual(navigations, [
+		{ connectionId: 'fresh-conn-1', channelId: 9 },
+	]);
+});
+
+void test('reconnect derives dropped stored id from active connections before latest fallback', async () => {
+	const loadedIds: string[] = [];
+	const savedEntry = createSavedEntryWithId('muly-100_64_0_10-22', {
+		...baseDetails,
+		host: '100.64.0.10',
+		autoConnect: false,
+		useTmux: true,
+		tmuxSessionName: 'main',
+	});
+
+	const result = await attemptAutoConnectSource({
+		platformOS: 'android',
+		pathname: '/shell/detail',
+		latestShell: null,
+		connections: {
+			'active-conn-1': activeConnectionFixture({
+				connectionId: 'active-conn-1',
+				host: '100.64.0.10',
+				connectedAtMs: 50,
+				startShell: async () => {
+					throw new Error('stale active shell must not reopen');
+				},
+			}),
+		},
+		reconnectContext: {
+			trigger: 'reconnect',
+			droppedConnectionId: 'active-conn-1',
+			droppedChannelId: 4,
+			pathname: '/shell/detail',
+		},
+		loadSavedConnectionByStoredId: async (storedId) => {
+			loadedIds.push(storedId);
+			return savedEntry;
+		},
+		loadLatestSavedConnection: async () => {
+			throw new Error('latest fallback should not be used');
+		},
+		openSavedEntryShell: async () => ({
+			status: 'connected',
+			connectionId: 'fresh-conn-1',
+			channelId: 9,
+		}),
+		navigateToShell: () => {},
+		resolveKeySecurity: async () => ({
+			type: 'key',
+			privateKey: 'private-key',
+		}),
+		recovery: readyRecovery,
+		markTailscaleAttention: () => {},
+		clearTailscaleAttention: () => {},
+		logger: createLogger().logger,
+	});
+
+	assert.deepEqual(result, { status: 'connected' });
+	assert.deepEqual(loadedIds, ['muly-100_64_0_10-22']);
+});
+
+void test('reconnect maps saved-entry lifecycle outcomes into reconnect result statuses', async () => {
+	let sawTrace = false;
+	let sawAttention = false;
+	let sawClearAttention = false;
+	const { logger } = createLogger();
+	const prepared = {
+		latestEntryConnection: {
+			savedConnectionId: 'saved-1',
+			username: 'muly',
+			host: '100.64.0.10',
+			port: 22,
+			keyId: 'key-1',
+			useTmux: true,
+			tmuxSessionName: 'main',
+		},
+		normalizedDetails: {
+			...baseDetails,
+			host: '100.64.0.10',
+			autoConnect: false,
+		},
+		details: {
+			...baseDetails,
+			host: '100.64.0.10',
+			autoConnect: false,
+		},
+	};
+	const cases = [
+		{
+			name: 'tmux attach failure',
+			result: {
+				status: 'tmuxAttachFailed' as const,
+				connectionId: 'fresh-conn-1',
+				tmuxAttachFailureReason: 'missing session',
+				tmuxSessionName: 'main',
+				storedConnectionId: 'muly-100_64_0_10-22',
+			},
+			expected: { status: 'failedTmuxAttach' as const },
+		},
+		{
+			name: 'blocked readiness',
+			result: {
+				status: 'blocked' as const,
+				attentionMessage:
+					'Tailscale is required for this SSH connection. Open Tailscale, then retry Fressh.',
+			},
+			expected: {
+				status: 'needsAttention' as const,
+				message:
+					'Tailscale is required for this SSH connection. Open Tailscale, then retry Fressh.',
+			},
+		},
+		{
+			name: 'network failure',
+			result: {
+				status: 'failed' as const,
+				error: new Error('No route to host'),
+				recoverable: false,
+				attentionMessage: null,
+			},
+			expected: {
+				status: 'failedNetwork' as const,
+				message: 'No route to host',
+			},
+		},
+		{
+			name: 'auth failure',
+			result: {
+				status: 'failed' as const,
+				error: createTaggedError('auth failed', 'Auth'),
+				recoverable: false,
+				attentionMessage: null,
+			},
+			expected: {
+				status: 'failedAuth' as const,
+				message: 'auth failed',
+			},
+		},
+		{
+			name: 'unknown failure',
+			result: {
+				status: 'failed' as const,
+				error: new Error('boom'),
+				recoverable: false,
+				attentionMessage: null,
+			},
+			expected: {
+				status: 'needsAttention' as const,
+				message: 'boom',
+			},
+		},
+		{
+			name: 'cleanup failure',
+			result: {
+				status: 'cleanupFailed' as const,
+				error: new Error('cleanup failed'),
+				priorOutcome: {
+					status: 'connected' as const,
+					connectionId: 'fresh-conn-1',
+					channelId: 9,
+				},
+			},
+			expected: { status: 'cleanupFailed' as const },
+		},
+		{
+			name: 'timeout retry',
+			result: {
+				status: 'timedOut' as const,
+				timeoutKind: 'operation' as const,
+			},
+			expected: { status: 'retry' as const },
+		},
+		{
+			name: 'abort retry',
+			result: {
+				status: 'aborted' as const,
+				reason: 'caller-aborted' as const,
+			},
+			expected: { status: 'retry' as const },
+		},
+		{
+			name: 'connected',
+			result: {
+				status: 'connected' as const,
+				connectionId: 'fresh-conn-1',
+				channelId: 9,
+			},
+			expected: { status: 'connected' as const },
+		},
+	] satisfies Array<{
+		name: string;
+		result: Parameters<typeof mapReconnectSavedEntryAttemptOutcome>[0]['result'];
+		expected:
+			| { status: 'failedTmuxAttach' }
+			| { status: 'needsAttention'; message: string }
+			| { status: 'failedNetwork'; message: string }
+			| { status: 'failedAuth'; message: string }
+			| { status: 'cleanupFailed' }
+			| { status: 'retry' }
+			| { status: 'connected' };
+	}>;
+
+	for (const testCase of cases) {
+		const result = mapReconnectSavedEntryAttemptOutcome({
+			result: testCase.result,
+			prepared,
+			latestEntryId: 'muly-100_64_0_10-22',
+			traceEvent: () => {
+				sawTrace = true;
+			},
+			markTailscaleAttention: () => {
+				sawAttention = true;
+			},
+			clearTailscaleAttention: () => {
+				sawClearAttention = true;
+			},
+			logger,
+		});
+
+		assert.deepEqual(result, testCase.expected, testCase.name);
+	}
+
+	assert.equal(sawTrace, true);
+	assert.equal(sawAttention, true);
+	assert.equal(sawClearAttention, true);
+});
+
+void test('reconnect maps timeout and caller abort into retry', async () => {
+	const savedEntry = createSavedEntryWithId('muly-100_64_0_10-22', {
+		...baseDetails,
+		host: '100.64.0.10',
+		autoConnect: false,
+		useTmux: true,
+		tmuxSessionName: 'main',
+	});
+
+	for (const testCase of [{ name: 'timeout' }, { name: 'caller abort' }]) {
+		const controller =
+			testCase.name === 'caller abort' ? new AbortController() : null;
+		const runContext =
+			testCase.name === 'timeout'
+				? createConnectionRunContext({
+					timeouts: {
+						operationTimeoutMs: 5,
+						recoveryTimeoutMs: 60_000,
+						cleanupTimeoutMs: 5_000,
+					},
+				})
+				: undefined;
+
+		try {
+			const result = await attemptAutoConnectSource({
+				platformOS: 'android',
+				pathname: '/shell/detail',
+				latestShell: null,
+				connections: {},
+				reconnectContext: {
+					trigger: 'reconnect',
+					droppedConnectionId: 'active-conn-1',
+					droppedChannelId: 4,
+					droppedStoredConnectionId: 'muly-100_64_0_10-22',
+					pathname: '/shell/detail',
+				},
+				loadSavedConnectionByStoredId: async () => savedEntry,
+				loadLatestSavedConnection: async () => {
+					throw new Error('latest fallback should not be used');
+				},
+				openSavedEntryShell: async ({ abortSignal }) =>
+					await new Promise((_resolve, reject) => {
+						if (testCase.name === 'caller abort') {
+							controller?.abort();
+						}
+						abortSignal?.addEventListener(
+							'abort',
+							() => {
+								reject(new Error(`${testCase.name} aborted`));
+							},
+							{ once: true },
+						);
+					}),
+				navigateToShell: () => {},
+				resolveKeySecurity: async () => ({
+					type: 'key',
+					privateKey: 'private-key',
+				}),
+				recovery: readyRecovery,
+				markTailscaleAttention: () => {},
+				clearTailscaleAttention: () => {},
+				logger: createLogger().logger,
+				runContext,
+				abortSignal: controller?.signal,
+			});
+
+			assert.deepEqual(result, { status: 'retry' }, testCase.name);
+		} finally {
+			runContext?.finish();
+		}
+	}
 });

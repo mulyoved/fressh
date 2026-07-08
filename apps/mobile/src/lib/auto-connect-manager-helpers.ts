@@ -122,16 +122,15 @@ export function buildPendingReconnectContext({
 	pathname: string;
 	shells: ShellSnapshot[];
 	connections: Record<string, ConnectionSnapshot | undefined>;
-}): AutoConnectReconnectContext {
+}): AutoConnectReconnectContext | undefined {
 	const droppedShell = pickLatestShellSnapshot(shells);
-	const droppedConnection = droppedShell
-		? connections[droppedShell.connectionId]
-		: undefined;
+	if (!droppedShell) return undefined;
+	const droppedConnection = connections[droppedShell.connectionId];
 	return {
 		trigger: 'reconnect',
 		pathname,
-		droppedConnectionId: droppedShell?.connectionId,
-		droppedChannelId: droppedShell?.channelId,
+		droppedConnectionId: droppedShell.connectionId,
+		droppedChannelId: droppedShell.channelId,
 		droppedStoredConnectionId: droppedConnection
 			? getStoredConnectionId(droppedConnection.connectionDetails)
 			: undefined,
@@ -149,11 +148,14 @@ export function installPendingReconnectContext({
 	shells: ShellSnapshot[];
 	connections: Record<string, ConnectionSnapshot | undefined>;
 }) {
-	reconnectContextState.replacePendingReconnectContext(
-		buildPendingReconnectContext({
-			pathname,
-			shells,
-			connections,
-		}),
-	);
+	const reconnectContext = buildPendingReconnectContext({
+		pathname,
+		shells,
+		connections,
+	});
+	if (reconnectContext) {
+		reconnectContextState.replacePendingReconnectContext(reconnectContext);
+		return;
+	}
+	reconnectContextState.clearReconnectContext();
 }
