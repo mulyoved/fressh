@@ -729,6 +729,53 @@ void test('classified connected attempt records terminal completion and stops', 
 	});
 });
 
+void test('classified retry attempt remains running and schedules retry', async () => {
+	const context = harness({
+		attemptAutoConnect: async () => ({
+			status: 'retry',
+			message: 'still waiting',
+		}),
+	});
+
+	assert.equal(context.controller.start('shell-drop'), true);
+	await flushPromises();
+
+	assert.equal(context.controller.isRunning(), true);
+	assert.equal(context.timers.length, 1);
+	assert.equal(context.timers[0]?.delayMs, 10);
+	assert.deepEqual(eventKinds(context.events), [
+		'reconnect.started',
+		'reconnect.attempt.started',
+		'reconnect.attempt.failed',
+		'reconnect.retry.scheduled',
+	]);
+	assert.equal(
+		context.events.some(
+			(event) => (event as { kind: string }).kind === 'reconnect.completed',
+		),
+		false,
+	);
+	assert.equal(
+		context.events.some(
+			(event) => (event as { kind: string }).kind === 'reconnect.stopped',
+		),
+		false,
+	);
+	assert.deepEqual(context.events[2], {
+		kind: 'reconnect.attempt.failed',
+		source: 'reconnect-controller',
+		message: undefined,
+		reconnectElapsedMs: 0,
+	});
+	assert.deepEqual(context.events[3], {
+		kind: 'reconnect.retry.scheduled',
+		source: 'reconnect-controller',
+		message: undefined,
+		attemptIndex: 0,
+		delayMs: 10,
+	});
+});
+
 void test('reset-in-flight snapshot blocks start and retry', async () => {
 	const startBlocked = harness({ resetInFlight: true });
 	assert.equal(startBlocked.controller.start('tailscale-reset-action'), false);
