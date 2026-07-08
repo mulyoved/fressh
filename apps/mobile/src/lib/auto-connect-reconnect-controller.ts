@@ -78,6 +78,13 @@ function destinationForReconnectOutcome(
 	return status === 'connected' ? 'terminal' : 'hostPage';
 }
 
+function timeoutReconnectAttemptResult(): AutoConnectReconnectAttemptResult {
+	return {
+		status: 'needsAttention',
+		message: 'retry-timeout',
+	};
+}
+
 export function createAutoConnectReconnectController({
 	delaysMs,
 	windowMs,
@@ -159,6 +166,20 @@ export function createAutoConnectReconnectController({
 						reconnectElapsedMs: elapsedMs,
 					}),
 		);
+
+	const traceCompletedOutcome = (
+		result: AutoConnectReconnectAttemptResult,
+	) => {
+		if (result.status === 'retry') return;
+		traceEvent(
+			reconnectEvents.completed({
+				source: 'reconnect-controller',
+				message: result.message ?? result.status,
+				outcome: result.status,
+				destination: destinationForReconnectOutcome(result.status),
+			}),
+		);
+	};
 
 	const runAttemptWithDeadline = async (
 		timeoutMs: number,
@@ -275,6 +296,7 @@ export function createAutoConnectReconnectController({
 						windowMs,
 					}),
 				);
+				traceCompletedOutcome(timeoutReconnectAttemptResult());
 				stop('retry-timeout');
 				return;
 			}
@@ -332,6 +354,7 @@ export function createAutoConnectReconnectController({
 							windowMs,
 						}),
 					);
+					traceCompletedOutcome(timeoutReconnectAttemptResult());
 					stop('retry-timeout');
 					return;
 				}
@@ -354,19 +377,7 @@ export function createAutoConnectReconnectController({
 			if (!isCurrentLoop(loopGeneration)) return;
 			const success = attemptResultValue.status === 'connected';
 			traceAttemptResult(success, elapsedMs);
-			if (attemptResultValue.status !== 'retry') {
-				traceEvent(
-					reconnectEvents.completed({
-						source: 'reconnect-controller',
-						message:
-							attemptResultValue.message ?? attemptResultValue.status,
-						outcome: attemptResultValue.status,
-						destination: destinationForReconnectOutcome(
-							attemptResultValue.status,
-						),
-					}),
-				);
-			}
+			traceCompletedOutcome(attemptResultValue);
 			if (success) {
 				logger.info('Reconnected successfully', { elapsedMs });
 				stop('reconnected');
