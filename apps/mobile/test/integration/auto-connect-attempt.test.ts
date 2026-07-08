@@ -1140,6 +1140,88 @@ void test('reconnect saved-entry invalid legacy tmux fields return a classified 
 	}
 });
 
+void test('reconnect saved-entry loader exception returns a classified result', async () => {
+	const { logger } = createLogger();
+
+	const result = await attemptAutoConnectSource({
+		platformOS: 'android',
+		pathname: '/shell/detail',
+		latestShell: null,
+		connections: {},
+		reconnectContext: {
+			trigger: 'reconnect',
+			droppedConnectionId: 'dropped-1',
+			droppedChannelId: 9,
+			droppedStoredConnectionId: 'muly-host_example-22',
+			pathname: '/shell/detail',
+		},
+		openSavedEntryShell: async () => {
+			throw new Error('connect should not run');
+		},
+		loadSavedConnectionByStoredId: async () => {
+			throw new Error('saved entry lookup failed');
+		},
+		loadLatestSavedConnection: async () => {
+			throw new Error('latest reconnect fallback should not run');
+		},
+		resolveKeySecurity: async () => {
+			throw new Error('security should not resolve');
+		},
+		navigateToShell: () => {
+			throw new Error('navigation should not run');
+		},
+		recovery: readyRecovery,
+		markTailscaleAttention: () => {},
+		clearTailscaleAttention: () => {},
+		logger,
+	});
+
+	assert.deepEqual(result, {
+		status: 'cleanupFailed',
+		message: 'saved entry lookup failed',
+	});
+});
+
+void test('reconnect key resolver exception returns a classified result', async () => {
+	const { logger } = createLogger();
+
+	const result = await attemptAutoConnectSource({
+		platformOS: 'android',
+		pathname: '/shell/detail',
+		latestShell: null,
+		connections: {},
+		reconnectContext: {
+			trigger: 'reconnect',
+			droppedConnectionId: 'dropped-1',
+			droppedChannelId: 9,
+			droppedStoredConnectionId: 'muly-host_example-22',
+			pathname: '/shell/detail',
+		},
+		openSavedEntryShell: async () => {
+			throw new Error('connect should not run');
+		},
+		loadSavedConnectionByStoredId: async () => createSavedEntry(),
+		loadLatestSavedConnection: async () => {
+			throw new Error('latest reconnect fallback should not run');
+		},
+		resolveKeySecurity: async () => {
+			throw new Error('key resolver failed');
+		},
+		navigateToShell: () => {
+			throw new Error('navigation should not run');
+		},
+		recovery: readyRecovery,
+		markTailscaleAttention: () => {},
+		clearTailscaleAttention: () => {},
+		logger,
+	});
+
+	assert.deepEqual(result, {
+		status: 'failedAuth',
+		message: 'key resolver failed',
+	});
+});
+
 void test('saved-entry path skips when key security cannot resolve', async () => {
 	const { logger } = createLogger();
 

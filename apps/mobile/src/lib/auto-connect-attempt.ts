@@ -20,6 +20,7 @@ import {
 import {
 	createConnectionRunContext,
 	type ConnectionRunContext,
+	type ConnectionRunOperationResult,
 } from './connection-run-context';
 import { type AutoConnectReconnectAttemptResult } from './auto-connect-reconnect-controller';
 import {
@@ -185,6 +186,53 @@ function classifyReconnectFailure(error: unknown): Extract<
 	return 'needsAttention';
 }
 
+function reconnectFailureMessage(
+	error: unknown,
+	fallbackMessage: string,
+): string {
+	return error instanceof Error && error.message.trim().length > 0
+		? error.message
+		: fallbackMessage;
+}
+
+function classifyReconnectSetupFailure(
+	error: unknown,
+	stage: 'saved-entry-load' | 'key-resolution',
+): Extract<
+	AutoConnectReconnectAttemptResult,
+	{
+		status:
+			| 'cleanupFailed'
+			| 'failedNetwork'
+			| 'failedAuth'
+			| 'failedTmuxAttach';
+	}
+> {
+	const failureClass = classifyReconnectFailure(error);
+	if (failureClass === 'failedNetwork') {
+		return {
+			status: 'failedNetwork',
+			message: reconnectFailureMessage(error, `${stage}-failed`),
+		};
+	}
+	if (failureClass === 'failedTmuxAttach') {
+		return {
+			status: 'failedTmuxAttach',
+			message: reconnectFailureMessage(error, `${stage}-failed`),
+		};
+	}
+	if (failureClass === 'failedAuth' || stage === 'key-resolution') {
+		return {
+			status: 'failedAuth',
+			message: reconnectFailureMessage(error, `${stage}-failed`),
+		};
+	}
+	return {
+		status: 'cleanupFailed',
+		message: reconnectFailureMessage(error, `${stage}-failed`),
+	};
+}
+
 async function resolveReconnectSavedEntry({
 	reconnectContext,
 	connections,
@@ -306,10 +354,24 @@ async function runSavedEntryReconnectAttempt({
 		tmuxSessionName: details.tmuxSessionName,
 		autoConnect: details.autoConnect ?? false,
 	};
-	const resolvedSecurityResult = await runContext.runOperation(
-		'operation',
-		async () => await resolveKeySecurity(details),
-	);
+	let resolvedSecurityResult: ConnectionRunOperationResult<
+		ResolvedKeySecurity | null
+	>;
+	try {
+		resolvedSecurityResult = await runContext.runOperation(
+			'operation',
+			async () => await resolveKeySecurity(details),
+		);
+	} catch (error) {
+		if (
+			runContext.classifyError(error) === 'aborted' ||
+			runContext.signal.aborted
+		) {
+			return { status: 'retry' };
+		}
+		logger.warn('Reconnect key resolution failed', error);
+		return classifyReconnectSetupFailure(error, 'key-resolution');
+	}
 	if (resolvedSecurityResult.status === 'aborted') {
 		return { status: 'retry' };
 	}
@@ -572,16 +634,30 @@ export async function attemptAutoConnectSource({
 					message: 'stale transport marked for replacement',
 				}),
 			);
-			const reconnectEntryResult = await runContext.runOperation(
-				'operation',
-				async () =>
-					await resolveReconnectSavedEntry({
-						reconnectContext,
-						connections,
-						loadSavedConnectionByStoredId,
-						loadLatestSavedReconnectConnection,
-					}),
-			);
+			let reconnectEntryResult: ConnectionRunOperationResult<
+				SavedConnectionEntry | null
+			>;
+			try {
+				reconnectEntryResult = await runContext.runOperation(
+					'operation',
+					async () =>
+						await resolveReconnectSavedEntry({
+							reconnectContext,
+							connections,
+							loadSavedConnectionByStoredId,
+							loadLatestSavedReconnectConnection,
+						}),
+				);
+			} catch (error) {
+				if (
+					runContext.classifyError(error) === 'aborted' ||
+					runContext.signal.aborted
+				) {
+					return { status: 'retry' };
+				}
+				logger.warn('Reconnect saved-entry lookup failed', error);
+				return classifyReconnectSetupFailure(error, 'saved-entry-load');
+			}
 			if (reconnectEntryResult.status === 'aborted') return { status: 'retry' };
 			const reconnectEntry = reconnectEntryResult.value;
 			if (!reconnectEntry) {
@@ -772,16 +848,30 @@ export async function attemptAutoConnectSource({
 	}
 
 	if (reconnectContext?.trigger === 'reconnect') {
-		const reconnectEntryResult = await runContext.runOperation(
-			'operation',
-			async () =>
-				await resolveReconnectSavedEntry({
-					reconnectContext,
-					connections,
-					loadSavedConnectionByStoredId,
-					loadLatestSavedReconnectConnection,
-				}),
-		);
+		let reconnectEntryResult: ConnectionRunOperationResult<
+			SavedConnectionEntry | null
+		>;
+		try {
+			reconnectEntryResult = await runContext.runOperation(
+				'operation',
+				async () =>
+					await resolveReconnectSavedEntry({
+						reconnectContext,
+						connections,
+						loadSavedConnectionByStoredId,
+						loadLatestSavedReconnectConnection,
+					}),
+			);
+		} catch (error) {
+			if (
+				runContext.classifyError(error) === 'aborted' ||
+				runContext.signal.aborted
+			) {
+				return { status: 'retry' };
+			}
+			logger.warn('Reconnect saved-entry lookup failed', error);
+			return classifyReconnectSetupFailure(error, 'saved-entry-load');
+		}
 		if (reconnectEntryResult.status === 'aborted') return { status: 'retry' };
 		const reconnectEntry = reconnectEntryResult.value;
 		if (!reconnectEntry) {
