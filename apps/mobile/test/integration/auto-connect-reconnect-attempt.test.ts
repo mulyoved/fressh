@@ -457,6 +457,68 @@ void test('reconnect saved-entry lookup timeout returns retry without key resolu
 	}
 });
 
+void test('reconnect key-resolution timeout returns retry without shell open or failure diagnostic', async () => {
+	const runContext = createConnectionRunContext({
+		timeouts: {
+			operationTimeoutMs: 5,
+			recoveryTimeoutMs: 60_000,
+			cleanupTimeoutMs: 5_000,
+		},
+	});
+	let openerCalls = 0;
+	let navigationCalls = 0;
+	const events: unknown[] = [];
+	const { logger } = createLogger();
+
+	try {
+		const result = await attemptAutoConnectSource({
+			platformOS: 'android',
+			pathname: '/shell/detail',
+			latestShell: null,
+			connections: {},
+			reconnectContext: {
+				trigger: 'reconnect',
+				droppedConnectionId: 'dropped-1',
+				droppedChannelId: 9,
+				droppedStoredConnectionId: 'muly-host_example-22',
+				pathname: '/shell/detail',
+			},
+			openSavedEntryShell: async () => {
+				openerCalls += 1;
+				throw new Error('connect should not run');
+			},
+			loadSavedConnectionByStoredId: async () => createSavedEntry(),
+			loadLatestSavedConnection: async () => {
+				throw new Error('latest reconnect fallback should not run');
+			},
+			resolveKeySecurity: async () => await new Promise(() => {}),
+			trace: { event: (event) => events.push(event) },
+			navigateToShell: () => {
+				navigationCalls += 1;
+			},
+			recovery: readyRecovery,
+			markTailscaleAttention: () => {},
+			clearTailscaleAttention: () => {},
+			logger,
+			runContext,
+		});
+
+		assert.deepEqual(result, { status: 'retry' });
+		assert.equal(openerCalls, 0);
+		assert.equal(navigationCalls, 0);
+		assert.equal(
+			events.some(
+				(event) =>
+					(event as { kind?: string }).kind ===
+					'auto-connect.saved-entry.connect.failed',
+			),
+			false,
+		);
+	} finally {
+		runContext.finish();
+	}
+});
+
 void test('tmux reconnect prefers the dropped stored connection when the dropped session is already gone', async () => {
 	const startShellCalls: unknown[] = [];
 	const events: unknown[] = [];
@@ -675,6 +737,29 @@ void test('reconnect resolver falls back to unfiltered saved-entry store when dr
 	assert.equal(result?.id, reconnectLatestEntry.id);
 	assert.equal(result?.value.autoConnect, false);
 	assert.equal(result?.value.host, '100.64.0.10');
+});
+
+void test('reconnect resolver returns null when dropped lookup and store fallback both miss', async () => {
+	const loadedIds: string[] = [];
+
+	const result = await resolveReconnectSavedEntry({
+		connections: {},
+		reconnectContext: {
+			trigger: 'reconnect',
+			droppedConnectionId: 'active-conn-1',
+			droppedChannelId: 4,
+			droppedStoredConnectionId: 'muly-100_64_0_10-22',
+			pathname: '/shell/detail',
+		},
+		loadSavedConnectionByStoredId: async (storedConnectionId) => {
+			loadedIds.push(storedConnectionId);
+			return null;
+		},
+		loadLatestStoredSavedConnection: async () => null,
+	});
+
+	assert.deepEqual(loadedIds, ['muly-100_64_0_10-22']);
+	assert.equal(result, null);
 });
 
 void test('android tmux reconnect traces Tailscale readiness before saved-entry reconnect', async () => {
