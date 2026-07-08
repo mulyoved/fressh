@@ -85,7 +85,6 @@ export type AutoConnectAttemptSourceArgs = {
 	loadSavedConnectionByStoredId?: (
 		storedConnectionId: string,
 	) => Promise<SavedConnectionEntry | null>;
-	loadLatestStoredSavedConnectionForTest?: () => Promise<SavedConnectionEntry | null>;
 	resolveKeySecurity: (
 		details: StoredConnectionDetails,
 	) => Promise<ResolvedKeySecurity | null>;
@@ -182,7 +181,6 @@ export async function attemptAutoConnectSource({
 	openSavedEntryShell,
 	loadLatestSavedConnection,
 	loadSavedConnectionByStoredId = loadStoredConnectionByStoredId,
-	loadLatestStoredSavedConnectionForTest,
 	resolveKeySecurity,
 	navigateToShell,
 	recovery,
@@ -242,7 +240,6 @@ export async function attemptAutoConnectSource({
 					reconnectContext,
 					connections,
 					loadSavedConnectionByStoredId,
-					loadLatestStoredSavedConnectionForTest,
 					recovery,
 					traceEvent,
 					resolveKeySecurity,
@@ -425,7 +422,6 @@ export async function attemptAutoConnectSource({
 			reconnectContext,
 			connections,
 			loadSavedConnectionByStoredId,
-			loadLatestStoredSavedConnectionForTest,
 			recovery,
 			traceEvent,
 			resolveKeySecurity,
