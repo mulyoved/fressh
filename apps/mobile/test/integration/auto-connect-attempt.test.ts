@@ -1,122 +1,17 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import {
-	attemptAutoConnectSource as attemptAutoConnectSourceBase,
-	type AutoConnectAttemptSourceArgs,
-} from '../../src/lib/auto-connect-attempt';
 import { createConnectionRunContext } from '../../src/lib/connection-run-context';
-import { type SavedConnectionEntry } from '../../src/lib/connection-utils';
-// eslint-disable-next-line import/consistent-type-specifier-style -- keep secrets-manager fully type-only so Node integration tests do not load React Native at runtime
-import type { InputConnectionDetails } from '../../src/lib/secrets-manager';
-
-type OpenSavedEntryShellArgs = {
-	connectionDetails: InputConnectionDetails;
-	resolvedSecurity: {
-		type: 'key';
-		privateKey: string;
-	};
-	navigate: (params: { connectionId: string; channelId: number }) => void;
-};
-
-const baseDetails: InputConnectionDetails = {
-	username: 'muly',
-	host: 'host.example',
-	port: 22,
-	useTmux: true,
-	tmuxSessionName: 'main',
-	autoConnect: true,
-	security: { type: 'key', keyId: 'key-1' },
-};
-
-function createLogger() {
-	const calls: unknown[] = [];
-	return {
-		calls,
-		logger: {
-			info: (...args: unknown[]) => {
-				calls.push(['info', ...args]);
-			},
-			warn: (...args: unknown[]) => {
-				calls.push(['warn', ...args]);
-			},
-		},
-	};
-}
-
-function createSavedEntry(
-	value: SavedConnectionEntry['value'] = baseDetails,
-): SavedConnectionEntry {
-	return {
-		id: 'saved-1',
-		metadata: {
-			createdAtMs: 1,
-			modifiedAtMs: 2,
-			priority: 0,
-		},
-		value,
-	};
-}
-
-function createAutoConnectRunContext(callerSignal?: AbortSignal) {
-	return createConnectionRunContext({
-		callerSignal,
-		timeouts: {
-			operationTimeoutMs: 60_000,
-			recoveryTimeoutMs: 60_000,
-			cleanupTimeoutMs: 5_000,
-		},
-	});
-}
-
-async function attemptAutoConnectSource(
-	args: Omit<AutoConnectAttemptSourceArgs, 'runContext'> & {
-		runContext?: AutoConnectAttemptSourceArgs['runContext'];
-		abortSignal?: AbortSignal;
-	},
-) {
-	const runContext =
-		args.runContext ?? createAutoConnectRunContext(args.abortSignal);
-	try {
-		const { abortSignal: _abortSignal, ...sourceArgs } = args;
-		return await attemptAutoConnectSourceBase({ ...sourceArgs, runContext });
-	} finally {
-		if (!args.runContext) {
-			runContext.finish();
-		}
-	}
-}
-
-function eventKinds(events: unknown[]) {
-	return events.map((event) => (event as { kind: string }).kind);
-}
-
-const unsupportedRecovery = {
-	ensureReady: async () => ({
-		kind: 'unsupported' as const,
-		attempted: false as const,
-		available: false as const,
-	}),
-	recoverAfterFailure: async () => ({
-		kind: 'nonNetworkFailure' as const,
-		attempted: false as const,
-		networkLikeFailure: false as const,
-		available: true,
-	}),
-};
-
-const readyRecovery = {
-	ensureReady: async () => ({
-		kind: 'ready' as const,
-		attempted: true as const,
-		available: true as const,
-	}),
-	recoverAfterFailure: async () => ({
-		kind: 'nonNetworkFailure' as const,
-		attempted: false as const,
-		networkLikeFailure: false as const,
-		available: true,
-	}),
-};
+import {
+	type OpenSavedEntryShellArgs,
+	attemptAutoConnectSource,
+	baseDetails,
+	createAutoConnectRunContext,
+	createLogger,
+	createSavedEntry,
+	eventKinds,
+	readyRecovery,
+	unsupportedRecovery,
+} from './auto-connect-attempt-test-helpers';
 
 void test('active shell navigates outside shell detail', async () => {
 	const navigations: [string, number][] = [];
@@ -1047,7 +942,6 @@ void test('saved-entry path returns false for invalid legacy tmux fields', async
 		assert.equal(openerCalls, 0);
 	}
 });
-
 void test('saved-entry path skips when key security cannot resolve', async () => {
 	const { logger } = createLogger();
 

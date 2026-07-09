@@ -2,21 +2,32 @@ import * as Linking from 'expo-linking';
 import { usePathname, useRouter } from 'expo-router';
 import React from 'react';
 import { AppState, Platform } from 'react-native';
-import { create } from 'zustand';
 import { useShallow } from 'zustand/react/shallow';
 import { AgentNotificationBridgeManager } from './AgentNotificationBridgeManager';
-import { attemptAutoConnectSource } from './auto-connect-attempt';
+import { type AutoConnectReconnectContext } from './auto-connect-attempt';
 import { getAutoConnectLaunchActionForUrl } from './auto-connect-launch';
 import {
+	attemptAutoConnectFromManager,
+	createReconnectContextCycleState,
+	installPendingReconnectContext,
+	installResumeReconnectContext,
+	pickLatestShellSnapshot,
+	preserveShellReferencedConnections,
+} from './auto-connect-manager-helpers';
+import {
 	createAutoConnectReconnectController,
+	type AutoConnectReconnectAttemptResult,
 	type AutoConnectReconnectController,
 } from './auto-connect-reconnect-controller';
 import { toAutoConnectSavedEntryResult } from './auto-connect-saved-entry-cleanup';
+import {
+	handleAutoConnectReconnectTraceEvent,
+	useAutoConnectStore,
+} from './auto-connect-store';
 import { connectAndOpenShell } from './connect-and-open-shell';
 import { connectionDiagnosticRecorder } from './connection-diagnostic-recorder';
 import { type ConnectionDiagnosticTraceHandle } from './connection-diagnostic-types';
 import { createConnectionRunContext } from './connection-run-context';
-import { pickLatestConnection } from './connection-utils';
 import {
 	startForegroundService,
 	stopForegroundService,
@@ -63,6 +74,11 @@ const AUTO_CONNECT_OPERATION_TIMEOUT_MS = 60_000;
 const AUTO_CONNECT_RECOVERY_TIMEOUT_MS = 60_000;
 const AUTO_CONNECT_CLEANUP_TIMEOUT_MS = 5_000;
 
+export {
+	handleAutoConnectReconnectTraceEvent,
+	useAutoConnectStore,
+} from './auto-connect-store';
+
 function finishTrace(
 	trace: ConnectionDiagnosticTraceHandle | null,
 	status: 'connected' | 'failed' | 'skipped',
@@ -74,20 +90,6 @@ function finishTrace(
 		logger.warn('Connection diagnostic trace finish failed', error);
 	}
 }
-
-type AutoConnectState = {
-	isAutoConnecting: boolean;
-	isReconnecting: boolean;
-	setAutoConnecting: (next: boolean) => void;
-	setReconnecting: (next: boolean) => void;
-};
-
-export const useAutoConnectStore = create<AutoConnectState>((set) => ({
-	isAutoConnecting: false,
-	isReconnecting: false,
-	setAutoConnecting: (next) => set({ isAutoConnecting: next }),
-	setReconnecting: (next) => set({ isReconnecting: next }),
-}));
 
 const isActiveState = (state: string) => state === 'active';
 
@@ -116,12 +118,10 @@ export function AutoConnectManager() {
 	const foregroundServiceStarted = useForegroundServiceRuntimeStore(
 		(s) => s.started,
 	);
-	const latestShell = React.useMemo(() => {
-		if (shells.length === 0) return null;
-		return shells.reduce((latest, shell) =>
-			shell.createdAtMs > latest.createdAtMs ? shell : latest,
-		);
-	}, [shells]);
+	const latestShell = React.useMemo(
+		() => pickLatestShellSnapshot(shells),
+		[shells],
+	);
 
 	const {
 		isAutoConnecting,
@@ -146,13 +146,22 @@ export function AutoConnectManager() {
 	const [foregroundStartRetryNonce, setForegroundStartRetryNonce] =
 		React.useState(0);
 	const attemptAutoConnectRef = React.useRef<
-		((signal?: AbortSignal) => Promise<boolean>) | null
+		(
+			signal?: AbortSignal,
+			reconnectContext?: AutoConnectReconnectContext,
+		) => Promise<boolean | AutoConnectReconnectAttemptResult>
+		| null
 	>(null);
 	const reconnectControllerRef =
 		React.useRef<AutoConnectReconnectController | null>(null);
 	const activeDiagnosticTraceRef =
 		React.useRef<ConnectionDiagnosticTraceHandle | null>(null);
 	const prevShellCountRef = React.useRef(shells.length);
+	const previousShellsRef = React.useRef(shells);
+	const previousConnectionsRef = React.useRef(connections);
+	const reconnectContextCycleRef = React.useRef(
+		createReconnectContextCycleState(),
+	);
 	const isActiveRef = React.useRef(isActiveState(AppState.currentState));
 	const foregroundKeyRef = React.useRef<string | null>(null);
 	const foregroundStartCoordinatorRef = React.useRef(
@@ -201,6 +210,7 @@ export function AutoConnectManager() {
 	}, []);
 
 	const stopReconnectCycle = React.useCallback((reason: string) => {
+		reconnectContextCycleRef.current.clearReconnectContext();
 		reconnectControllerRef.current?.stop(reason);
 	}, []);
 
@@ -304,17 +314,26 @@ export function AutoConnectManager() {
 		[router, stopReconnectCycle],
 	);
 
-	const loadLatestSavedConnection = React.useCallback(async () => {
-		const entries = await queryClient.fetchQuery(
-			secretsManager.connections.query.list,
-		);
-		const eligible = entries?.filter((entry) => entry.value.autoConnect);
-		return pickLatestConnection(eligible);
-	}, []);
+	const loadSavedConnections = React.useCallback(
+		async () =>
+			await queryClient.fetchQuery(secretsManager.connections.query.list),
+		[],
+	);
+
+	const loadSavedConnectionByStoredId = React.useCallback(
+		async (storedConnectionId: string) =>
+			await queryClient.fetchQuery(
+				secretsManager.connections.query.get(storedConnectionId),
+			),
+		[],
+	);
 
 	// Single attempt: use an active shell if present; otherwise connect silently.
 	const attemptAutoConnect = React.useCallback(
-		async (signal?: AbortSignal) => {
+		async (
+			signal?: AbortSignal,
+			reconnectContext?: AutoConnectReconnectContext,
+		) => {
 			if (launchUrlSuppressAutoConnectRef.current) return false;
 			if (inFlightRef.current) {
 				if (!signal) return false;
@@ -347,13 +366,15 @@ export function AutoConnectManager() {
 					reason: 'auto-connect-attempt',
 				});
 			activeDiagnosticTraceRef.current = trace;
+			useAutoConnectStore.getState().setActiveDiagnosticTrace(trace);
 
 			try {
-				const connected = await attemptAutoConnectSource({
+				const result = await attemptAutoConnectFromManager({
 					platformOS: Platform.OS,
 					pathname,
 					latestShell,
 					connections,
+					reconnectContext,
 					openSavedEntryShell: async ({
 						connectionDetails,
 						resolvedSecurity,
@@ -371,7 +392,8 @@ export function AutoConnectManager() {
 						});
 						return toAutoConnectSavedEntryResult(result);
 					},
-					loadLatestSavedConnection,
+					loadSavedConnections,
+					loadSavedConnectionByStoredId,
 					resolveKeySecurity,
 					navigateToShell,
 					recovery: tailscaleRecovery,
@@ -381,10 +403,14 @@ export function AutoConnectManager() {
 					trace,
 					runContext,
 				});
+				const connected =
+					typeof result === 'boolean'
+						? result
+						: result.status === 'connected';
 				if (ownsTrace) {
 					finishTrace(trace, connected ? 'connected' : 'failed');
 				}
-				return connected;
+				return result;
 			} catch (error) {
 				logger.warn('Auto-connect attempt failed', error);
 				if (ownsTrace) {
@@ -401,6 +427,7 @@ export function AutoConnectManager() {
 				}
 				if (ownsTrace && activeDiagnosticTraceRef.current === trace) {
 					activeDiagnosticTraceRef.current = null;
+					useAutoConnectStore.getState().setActiveDiagnosticTrace(null);
 				}
 			}
 		},
@@ -409,7 +436,8 @@ export function AutoConnectManager() {
 			connections,
 			clearTailscaleAttention,
 			latestShell,
-			loadLatestSavedConnection,
+			loadSavedConnections,
+			loadSavedConnectionByStoredId,
 			markTailscaleAttention,
 			navigateToShell,
 			pathname,
@@ -448,8 +476,17 @@ export function AutoConnectManager() {
 				};
 			},
 			setReconnecting,
-			attemptAutoConnect: async (signal) =>
-				(await attemptAutoConnectRef.current?.(signal)) ?? false,
+			attemptAutoConnect: async (signal) => {
+				const reconnectContext =
+					reconnectContextCycleRef.current.getReconnectContextForReconnectAttempt();
+				const result =
+					(await attemptAutoConnectRef.current?.(
+						signal,
+						reconnectContext ?? undefined,
+					)) ?? { status: 'retry' };
+				reconnectContextCycleRef.current.settleReconnectAttempt(result);
+				return result;
+			},
 			logger,
 			trace: {
 				event: (event) => {
@@ -460,22 +497,29 @@ export function AutoConnectManager() {
 							reason: 'reconnect-controller',
 						});
 						activeDiagnosticTraceRef.current = trace;
+						useAutoConnectStore.getState().setActiveDiagnosticTrace(trace);
 					}
+					handleAutoConnectReconnectTraceEvent(event);
 					trace.event(event);
 					if (event.kind === 'reconnect.start.blocked') {
 						finishTrace(trace, 'skipped');
 						if (activeDiagnosticTraceRef.current === trace) {
 							activeDiagnosticTraceRef.current = null;
+							useAutoConnectStore.getState().setActiveDiagnosticTrace(null);
 						}
 						return;
 					}
 					if (event.kind === 'reconnect.stopped') {
+						if (!event.reason.endsWith('-restart')) {
+							reconnectContextCycleRef.current.clearReconnectContext();
+						}
 						finishTrace(
 							trace,
 							event.message === 'reconnected' ? 'connected' : 'failed',
 						);
 						if (activeDiagnosticTraceRef.current === trace) {
 							activeDiagnosticTraceRef.current = null;
+							useAutoConnectStore.getState().setActiveDiagnosticTrace(null);
 						}
 					}
 				},
@@ -492,6 +536,7 @@ export function AutoConnectManager() {
 			return;
 		const autoState = useAutoConnectStore.getState();
 		if (autoState.isAutoConnecting || autoState.isReconnecting) return;
+		reconnectContextCycleRef.current.clearReconnectContext();
 		await attemptAutoConnect();
 	}, [attemptAutoConnect]);
 
@@ -680,11 +725,21 @@ export function AutoConnectManager() {
 					stopReconnectCycle('app-backgrounded');
 				}
 				return;
-			}
-			if (!wasActive && isActiveRef.current) {
-				if (shells.length === 0) {
-					scheduleReconnect('app-resume-no-shell');
-				} else {
+				}
+				if (!wasActive && isActiveRef.current) {
+					if (shells.length === 0) {
+						const shouldScheduleResumeReconnect =
+							installResumeReconnectContext({
+							reconnectContextState: reconnectContextCycleRef.current,
+							reconnectRunning:
+								reconnectControllerRef.current?.isRunning() === true,
+							pathname: '/shell/detail',
+							shells: previousShellsRef.current,
+							connections: previousConnectionsRef.current,
+						});
+						if (!shouldScheduleResumeReconnect) return;
+						scheduleReconnect('app-resume-no-shell');
+					} else {
 					void runAutoConnectOnce();
 				}
 			}
@@ -702,6 +757,11 @@ export function AutoConnectManager() {
 
 	React.useEffect(() => {
 		// Detect a shell drop and kick off a reconnect cycle.
+		const nextPreviousConnections = preserveShellReferencedConnections({
+			shells,
+			connections,
+			previousConnections: previousConnectionsRef.current,
+		});
 		if (
 			!isActiveRef.current &&
 			!(Platform.OS === 'android' && allowBackgroundRef.current)
@@ -710,10 +770,18 @@ export function AutoConnectManager() {
 			return;
 		}
 		if (prevShellCountRef.current > 0 && shells.length === 0) {
+			installPendingReconnectContext({
+				reconnectContextState: reconnectContextCycleRef.current,
+				pathname: '/shell/detail',
+				shells: previousShellsRef.current,
+				connections: previousConnectionsRef.current,
+			});
 			scheduleReconnect('shell-drop');
 		}
 		prevShellCountRef.current = shells.length;
-	}, [scheduleReconnect, shells.length]);
+		previousShellsRef.current = shells;
+		previousConnectionsRef.current = nextPreviousConnections;
+	}, [connections, scheduleReconnect, shells]);
 
 	const handleOpenTailscale = React.useCallback(() => {
 		void tailscaleRecoveryCoordinatorRef.current?.open();

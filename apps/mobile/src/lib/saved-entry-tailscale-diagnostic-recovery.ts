@@ -1,8 +1,14 @@
 import { type SavedEntryTailscaleRecovery } from './auto-connect-saved-entry';
 import {
+	networkDiagnosticEvents,
 	tailscaleDiagnosticEvents,
 	type ConnectionDiagnosticEvent,
 } from './connection-diagnostics/events';
+import {
+	getNetworkPreflightAttentionMessage,
+	isNetworkPreflightUsable,
+	type NetworkPreflightSnapshot,
+} from './network-preflight-core';
 
 function safeEmit(
 	emit: (event: ConnectionDiagnosticEvent) => void,
@@ -15,6 +21,22 @@ function safeEmit(
 	}
 }
 
+function emitNetworkPreflight(
+	emit: (event: ConnectionDiagnosticEvent) => void,
+	network: NetworkPreflightSnapshot | undefined,
+) {
+	if (!network) return;
+	safeEmit(
+		emit,
+		networkDiagnosticEvents.preflightChecked({
+			source: 'network-preflight',
+			snapshot: network,
+			usable: isNetworkPreflightUsable(network),
+			message: getNetworkPreflightAttentionMessage(network) ?? undefined,
+		}),
+	);
+}
+
 export function createSavedEntryTailscaleDiagnosticRecovery({
 	platformOS,
 	recovery,
@@ -25,8 +47,17 @@ export function createSavedEntryTailscaleDiagnosticRecovery({
 	emit: (event: ConnectionDiagnosticEvent) => void;
 }): SavedEntryTailscaleRecovery {
 	return {
+		resetCooldown: recovery.resetCooldown
+			? () => {
+					recovery.resetCooldown?.();
+				}
+			: undefined,
 		ensureReady: async () => {
 			const readiness = await recovery.ensureReady();
+			emitNetworkPreflight(
+				emit,
+				'network' in readiness ? readiness.network : undefined,
+			);
 			safeEmit(
 				emit,
 				tailscaleDiagnosticEvents.ensureReadyResult({
@@ -39,6 +70,10 @@ export function createSavedEntryTailscaleDiagnosticRecovery({
 		},
 		recoverAfterFailure: async (error) => {
 			const recoveryResult = await recovery.recoverAfterFailure(error);
+			emitNetworkPreflight(
+				emit,
+				'network' in recoveryResult ? recoveryResult.network : undefined,
+			);
 			safeEmit(
 				emit,
 				tailscaleDiagnosticEvents.recoveryResult({

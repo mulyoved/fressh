@@ -1,3 +1,4 @@
+import { type NetworkPreflightSnapshot } from '../../network-preflight-core';
 import {
 	type TailscaleReadyResult,
 	type TailscaleRecoverAfterFailureResult,
@@ -32,6 +33,9 @@ export const tailscaleDiagnosticEventKinds = [
 function copyTailscaleReadyResult(
 	readiness: TailscaleReadyResult,
 ): TailscaleReadyResult {
+	const network = copyOptionalNetwork(
+		'network' in readiness ? readiness.network : undefined,
+	);
 	switch (readiness.kind) {
 		case 'unsupported':
 			return {
@@ -44,30 +48,42 @@ function copyTailscaleReadyResult(
 				kind: 'unavailable',
 				attempted: readiness.attempted,
 				available: readiness.available,
+				...(network ? { network } : {}),
+			};
+		case 'networkUnavailable':
+			return {
+				kind: 'networkUnavailable',
+				attempted: readiness.attempted,
+				available: readiness.available,
+				network: network ?? readiness.network,
 			};
 		case 'ready':
 			return {
 				kind: 'ready',
 				attempted: readiness.attempted,
 				available: readiness.available,
+				...(network ? { network } : {}),
 			};
 		case 'cooldown':
 			return {
 				kind: 'cooldown',
 				attempted: readiness.attempted,
 				available: readiness.available,
+				...(network ? { network } : {}),
 			};
 		case 'notStarted':
 			return {
 				kind: 'notStarted',
 				attempted: readiness.attempted,
 				available: readiness.available,
+				...(network ? { network } : {}),
 			};
 		case 'failed':
 			return {
 				kind: 'failed',
 				attempted: readiness.attempted,
 				available: readiness.available,
+				...(network ? { network } : {}),
 			};
 	}
 	const unreachable: never = readiness;
@@ -77,6 +93,9 @@ function copyTailscaleReadyResult(
 function copyTailscaleRecoverAfterFailureResult(
 	recoveryResult: TailscaleRecoverAfterFailureResult,
 ): TailscaleRecoverAfterFailureResult {
+	const network = copyOptionalNetwork(
+		'network' in recoveryResult ? recoveryResult.network : undefined,
+	);
 	switch (recoveryResult.kind) {
 		case 'nonNetworkFailure':
 			return {
@@ -98,6 +117,15 @@ function copyTailscaleRecoverAfterFailureResult(
 				attempted: recoveryResult.attempted,
 				networkLikeFailure: recoveryResult.networkLikeFailure,
 				available: recoveryResult.available,
+				...(network ? { network } : {}),
+			};
+		case 'networkUnavailable':
+			return {
+				kind: 'networkUnavailable',
+				attempted: recoveryResult.attempted,
+				networkLikeFailure: recoveryResult.networkLikeFailure,
+				available: recoveryResult.available,
+				network: network ?? recoveryResult.network,
 			};
 		case 'cooldown':
 			return {
@@ -105,6 +133,7 @@ function copyTailscaleRecoverAfterFailureResult(
 				attempted: recoveryResult.attempted,
 				networkLikeFailure: recoveryResult.networkLikeFailure,
 				available: recoveryResult.available,
+				...(network ? { network } : {}),
 			};
 		case 'notStarted':
 			return {
@@ -112,6 +141,7 @@ function copyTailscaleRecoverAfterFailureResult(
 				attempted: recoveryResult.attempted,
 				networkLikeFailure: recoveryResult.networkLikeFailure,
 				available: recoveryResult.available,
+				...(network ? { network } : {}),
 			};
 		case 'preflightReady':
 			return {
@@ -119,6 +149,7 @@ function copyTailscaleRecoverAfterFailureResult(
 				attempted: recoveryResult.attempted,
 				networkLikeFailure: recoveryResult.networkLikeFailure,
 				available: recoveryResult.available,
+				...(network ? { network } : {}),
 			};
 		case 'recovered':
 			return {
@@ -126,6 +157,7 @@ function copyTailscaleRecoverAfterFailureResult(
 				attempted: recoveryResult.attempted,
 				networkLikeFailure: recoveryResult.networkLikeFailure,
 				available: recoveryResult.available,
+				...(network ? { network } : {}),
 			};
 		case 'failed':
 			return {
@@ -133,10 +165,24 @@ function copyTailscaleRecoverAfterFailureResult(
 				attempted: recoveryResult.attempted,
 				networkLikeFailure: recoveryResult.networkLikeFailure,
 				available: recoveryResult.available,
+				...(network ? { network } : {}),
 			};
 	}
 	const unreachable: never = recoveryResult;
 	return unreachable;
+}
+
+function copyOptionalNetwork(
+	network: NetworkPreflightSnapshot | undefined,
+): NetworkPreflightSnapshot | undefined {
+	if (!network) return undefined;
+	return {
+		connected: network.connected,
+		internetCapable: network.internetCapable,
+		validated: network.validated,
+		wifiConnected: network.wifiConnected,
+		transports: [...network.transports],
+	};
 }
 
 export const tailscaleDiagnosticEvents = {

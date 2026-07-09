@@ -174,11 +174,25 @@ function isMissingWorkmuxAppCommandFailure(message: string): boolean {
 	].some((pattern) => pattern.test(message));
 }
 
+function formatNoScopedWorkmuxNavTargetFailure(
+	message: string,
+): string | null {
+	const match = /^No window to navigate to for scope "([^"]+)" in session (.+)$/.exec(
+		message,
+	);
+	if (!match) return null;
+	const [, scope, session] = match;
+	return `No Workmux window matched scope "${scope}" in session "${session}". Workmux navigation only moves between Workmux workspace windows; normal tmux windows are not included.`;
+}
+
 export function formatWorkmuxAppCommandFailureMessage(message: string): string {
 	const trimmed = message.trim();
 	if (!trimmed || isMissingWorkmuxAppCommandFailure(trimmed)) {
 		return WORKMUX_APP_COMMAND_UPDATE_MESSAGE;
 	}
+	const scopedNavTargetFailure =
+		formatNoScopedWorkmuxNavTargetFailure(trimmed);
+	if (scopedNavTargetFailure) return scopedNavTargetFailure;
 	return trimmed;
 }
 

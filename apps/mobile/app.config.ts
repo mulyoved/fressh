@@ -77,7 +77,7 @@ const config: ExpoConfig = {
 			'expo-channel-name': updateChannel,
 		},
 	},
-	runtimeVersion: `${packageJson.version}-native-tailscale-recovery-v1`,
+	runtimeVersion: `${packageJson.version}-native-network-preflight-v1`,
 	plugins: [
 		'expo-router',
 		[
@@ -97,6 +97,7 @@ const config: ExpoConfig = {
 		'expo-dev-client',
 		'./plugins/with-foreground-service',
 		'./plugins/with-tailscale',
+		'./plugins/with-connectivity',
 		'./plugins/with-wispr-automation',
 	],
 	experiments: { typedRoutes: true, reactCompiler: true },

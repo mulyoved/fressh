@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
 	createAutoConnectReconnectController,
+	type AutoConnectReconnectAttemptResult,
 	type AutoConnectReconnectSnapshot,
 } from '../../src/lib/auto-connect-reconnect-controller';
 
@@ -32,8 +33,10 @@ function harness(
 	opts: Partial<AutoConnectReconnectSnapshot> & {
 		delaysMs?: readonly number[];
 		windowMs?: number;
-		attemptResults?: boolean[];
-		attemptAutoConnect?: (signal: AbortSignal) => Promise<boolean>;
+		attemptResults?: (AutoConnectReconnectAttemptResult | boolean)[];
+		attemptAutoConnect?: (
+			signal: AbortSignal,
+		) => Promise<AutoConnectReconnectAttemptResult | boolean>;
 	} = {},
 ) {
 	let nowMs = 0;
@@ -254,9 +257,17 @@ void test('hung reconnect attempt stops at the reconnect window', async () => {
 		'reconnect.started',
 		'reconnect.attempt.started',
 		'reconnect.timeout',
+		'reconnect.completed',
 		'reconnect.stopped',
 	]);
 	assert.deepEqual(context.events.at(-2), {
+		kind: 'reconnect.completed',
+		source: 'reconnect-controller',
+		message: 'retry-timeout',
+		outcome: 'timeout',
+		destination: 'hostPage',
+	});
+	assert.deepEqual(context.events.at(-3), {
 		kind: 'reconnect.timeout',
 		source: 'reconnect-controller',
 		message: undefined,
@@ -300,10 +311,18 @@ void test('hung retry uses only the remaining reconnect window', async () => {
 	await context.runTimer(deadlineTimer);
 
 	assert.equal(context.controller.isRunning(), false);
-	assert.deepEqual(eventKinds(context.events).slice(-2), [
+	assert.deepEqual(eventKinds(context.events).slice(-3), [
 		'reconnect.timeout',
+		'reconnect.completed',
 		'reconnect.stopped',
 	]);
+	assert.deepEqual(context.events.at(-2), {
+		kind: 'reconnect.completed',
+		source: 'reconnect-controller',
+		message: 'retry-timeout',
+		outcome: 'timeout',
+		destination: 'hostPage',
+	});
 });
 
 void test('blocks duplicate starts', async () => {
@@ -591,16 +610,24 @@ void test('timeout stops the loop', async () => {
 	assert.equal(context.controller.isRunning(), false);
 	assert.deepEqual(context.attempts, [0]);
 	assert.deepEqual(context.setReconnectingCalls, [true, false]);
-	assert.deepEqual(eventKinds(context.events).slice(-2), [
+	assert.deepEqual(eventKinds(context.events).slice(-3), [
 		'reconnect.timeout',
+		'reconnect.completed',
 		'reconnect.stopped',
 	]);
-	assert.deepEqual(context.events.at(-2), {
+	assert.deepEqual(context.events.at(-3), {
 		kind: 'reconnect.timeout',
 		source: 'reconnect-controller',
 		message: undefined,
 		reconnectElapsedMs: 20,
 		windowMs: 15,
+	});
+	assert.deepEqual(context.events.at(-2), {
+		kind: 'reconnect.completed',
+		source: 'reconnect-controller',
+		message: 'retry-timeout',
+		outcome: 'timeout',
+		destination: 'hostPage',
 	});
 	assert.deepEqual(context.events.at(-1), {
 		kind: 'reconnect.stopped',
@@ -628,6 +655,7 @@ void test('successful reconnect stops the loop', async () => {
 		'reconnect.started',
 		'reconnect.attempt.started',
 		'reconnect.attempt.connected',
+		'reconnect.completed',
 		'reconnect.stopped',
 	]);
 	assert.deepEqual(context.events[2], {
@@ -637,6 +665,13 @@ void test('successful reconnect stops the loop', async () => {
 		reconnectElapsedMs: 0,
 	});
 	assert.deepEqual(context.events[3], {
+		kind: 'reconnect.completed',
+		source: 'reconnect-controller',
+		message: 'connected',
+		outcome: 'connected',
+		destination: 'terminal',
+	});
+	assert.deepEqual(context.events[4], {
 		kind: 'reconnect.stopped',
 		source: 'reconnect-controller',
 		message: 'reconnected',
@@ -646,6 +681,99 @@ void test('successful reconnect stops the loop', async () => {
 		context.logs.some((log) => log.message === 'Reconnected successfully'),
 		true,
 	);
+});
+
+void test('classified needs-attention attempt stops and records host-page completion', async () => {
+	const context = harness({
+		attemptAutoConnect: async () => ({
+			status: 'needsAttention',
+			message: 'Tailscale needs attention',
+		}),
+	});
+
+	assert.equal(context.controller.start('shell-drop'), true);
+	await flushPromises();
+
+	assert.equal(context.controller.isRunning(), false);
+	assert.deepEqual(eventKinds(context.events), [
+		'reconnect.started',
+		'reconnect.attempt.started',
+		'reconnect.attempt.failed',
+		'reconnect.completed',
+		'reconnect.stopped',
+	]);
+	assert.deepEqual(context.events.at(-2), {
+		kind: 'reconnect.completed',
+		source: 'reconnect-controller',
+		message: 'Tailscale needs attention',
+		outcome: 'needsAttention',
+		destination: 'hostPage',
+	});
+});
+
+void test('classified connected attempt records terminal completion and stops', async () => {
+	const context = harness({
+		attemptAutoConnect: async () => ({ status: 'connected' }),
+	});
+
+	assert.equal(context.controller.start('shell-drop'), true);
+	await flushPromises();
+
+	assert.equal(context.controller.isRunning(), false);
+	assert.deepEqual(context.events.at(-2), {
+		kind: 'reconnect.completed',
+		source: 'reconnect-controller',
+		message: 'connected',
+		outcome: 'connected',
+		destination: 'terminal',
+	});
+});
+
+void test('classified retry attempt remains running and schedules retry', async () => {
+	const context = harness({
+		attemptAutoConnect: async () => ({
+			status: 'retry',
+			message: 'still waiting',
+		}),
+	});
+
+	assert.equal(context.controller.start('shell-drop'), true);
+	await flushPromises();
+
+	assert.equal(context.controller.isRunning(), true);
+	assert.equal(context.timers.length, 1);
+	assert.equal(context.timers[0]?.delayMs, 10);
+	assert.deepEqual(eventKinds(context.events), [
+		'reconnect.started',
+		'reconnect.attempt.started',
+		'reconnect.attempt.failed',
+		'reconnect.retry.scheduled',
+	]);
+	assert.equal(
+		context.events.some(
+			(event) => (event as { kind: string }).kind === 'reconnect.completed',
+		),
+		false,
+	);
+	assert.equal(
+		context.events.some(
+			(event) => (event as { kind: string }).kind === 'reconnect.stopped',
+		),
+		false,
+	);
+	assert.deepEqual(context.events[2], {
+		kind: 'reconnect.attempt.failed',
+		source: 'reconnect-controller',
+		message: undefined,
+		reconnectElapsedMs: 0,
+	});
+	assert.deepEqual(context.events[3], {
+		kind: 'reconnect.retry.scheduled',
+		source: 'reconnect-controller',
+		message: undefined,
+		attemptIndex: 0,
+		delayMs: 10,
+	});
 });
 
 void test('reset-in-flight snapshot blocks start and retry', async () => {
@@ -986,9 +1114,17 @@ void test('records reconnect timeout and stopped trace events', async () => {
 			'reconnect.attempt.failed',
 			'reconnect.retry.scheduled',
 			'reconnect.timeout',
+			'reconnect.completed',
 			'reconnect.stopped',
 		],
 	);
+	assert.deepEqual(events.at(-2), {
+		kind: 'reconnect.completed',
+		source: 'reconnect-controller',
+		message: 'retry-timeout',
+		outcome: 'timeout',
+		destination: 'hostPage',
+	});
 	assert.deepEqual(events.at(-1), {
 		kind: 'reconnect.stopped',
 		source: 'reconnect-controller',
@@ -1037,9 +1173,17 @@ void test('records successful reconnect trace events', async () => {
 			'reconnect.started',
 			'reconnect.attempt.started',
 			'reconnect.attempt.connected',
+			'reconnect.completed',
 			'reconnect.stopped',
 		],
 	);
+	assert.deepEqual(events.at(-2), {
+		kind: 'reconnect.completed',
+		source: 'reconnect-controller',
+		message: 'connected',
+		outcome: 'connected',
+		destination: 'terminal',
+	});
 	assert.deepEqual(events.at(-1), {
 		kind: 'reconnect.stopped',
 		source: 'reconnect-controller',

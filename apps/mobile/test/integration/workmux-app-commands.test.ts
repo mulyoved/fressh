@@ -340,6 +340,15 @@ void test('workmux app failure formatting recognizes old nav-cycle mdev versions
 	}
 });
 
+void test('workmux app failure formatting explains scoped nav with no Workmux target', () => {
+	assert.equal(
+		formatWorkmuxAppCommandFailureMessage(
+			'No window to navigate to for scope "all" in session background',
+		),
+		'No Workmux window matched scope "all" in session "background". Workmux navigation only moves between Workmux workspace windows; normal tmux windows are not included.',
+	);
+});
+
 void test('workmux app builders normalize blank sessions to main', () => {
 	assert.equal(
 		buildWorkmuxAppContextCommand('   '),

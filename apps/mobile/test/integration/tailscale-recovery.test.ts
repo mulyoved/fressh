@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { type NetworkPreflightSnapshot } from '../../src/lib/network-preflight-core';
 import {
 	createTailscaleRecoveryController,
+	type NetworkPreflightChecker,
 	type TailscaleRecoveryNative,
 } from '../../src/lib/tailscale-recovery';
 
@@ -46,6 +48,25 @@ function nativeFixture(calls: string[]): TailscaleRecoveryNative {
 		},
 	};
 }
+
+const disconnectedNetworkPreflight: NetworkPreflightChecker = async () => ({
+	connected: false,
+	internetCapable: false,
+	validated: false,
+	wifiConnected: false,
+	transports: [],
+});
+
+const connectedCellularNetwork: NetworkPreflightSnapshot = {
+	connected: true,
+	internetCapable: true,
+	validated: true,
+	wifiConnected: false,
+	transports: ['cellular'],
+};
+
+const connectedCellularNetworkPreflight: NetworkPreflightChecker = async () =>
+	connectedCellularNetwork;
 
 function unavailableNativeFixture(calls: string[]): TailscaleRecoveryNative {
 	return {
@@ -225,6 +246,110 @@ void test('ensureReady skips unavailable native recovery without waiting', async
 	assert.deepEqual(waits, []);
 });
 
+void test('ensureReady blocks before native Tailscale checks when network is unavailable', async () => {
+	const calls: string[] = [];
+	const controller = createTailscaleRecoveryController({
+		getPlatformOS: () => 'android',
+		getNowMs: () => 1_000,
+		sleep: async () => {},
+		native: nativeFixture(calls),
+		networkPreflight: disconnectedNetworkPreflight,
+	});
+
+	assert.deepEqual(await controller.ensureReady(), {
+		kind: 'networkUnavailable',
+		attempted: false,
+		available: false,
+		network: {
+			connected: false,
+			internetCapable: false,
+			validated: false,
+			wifiConnected: false,
+			transports: [],
+		},
+	});
+	assert.deepEqual(calls, []);
+});
+
+void test('recoverAfterFailure reports network unavailable before restarting Tailscale', async () => {
+	const calls: string[] = [];
+	const controller = createTailscaleRecoveryController({
+		getPlatformOS: () => 'android',
+		getNowMs: () => 1_000,
+		sleep: async () => {},
+		native: nativeFixture(calls),
+		networkPreflight: disconnectedNetworkPreflight,
+	});
+
+	assert.deepEqual(
+		await controller.recoverAfterFailure(new Error('No route to host')),
+		{
+			kind: 'networkUnavailable',
+			attempted: false,
+			networkLikeFailure: true,
+			available: false,
+			network: {
+				connected: false,
+				internetCapable: false,
+				validated: false,
+				wifiConnected: false,
+				transports: [],
+			},
+		},
+	);
+	assert.deepEqual(calls, []);
+});
+
+void test('ensureReady continues through usable network preflight and records snapshot', async () => {
+	const calls: string[] = [];
+	const waits: number[] = [];
+	const controller = createTailscaleRecoveryController({
+		getPlatformOS: () => 'android',
+		getNowMs: () => 1_000,
+		sleep: async (ms) => {
+			waits.push(ms);
+		},
+		native: nativeFixture(calls),
+		networkPreflight: connectedCellularNetworkPreflight,
+	});
+
+	assert.deepEqual(await controller.ensureReady(), {
+		kind: 'ready',
+		attempted: true,
+		available: true,
+		network: connectedCellularNetwork,
+	});
+	assert.deepEqual(calls, ['isAvailable', 'connect']);
+	assert.deepEqual(waits, [3_000]);
+});
+
+void test('recoverAfterFailure continues through usable network preflight and records snapshot', async () => {
+	const calls: string[] = [];
+	const waits: number[] = [];
+	const controller = createTailscaleRecoveryController({
+		getPlatformOS: () => 'android',
+		getNowMs: () => 1_000,
+		sleep: async (ms) => {
+			waits.push(ms);
+		},
+		native: nativeFixture(calls),
+		networkPreflight: connectedCellularNetworkPreflight,
+	});
+
+	assert.deepEqual(
+		await controller.recoverAfterFailure(new Error('No route to host')),
+		{
+			kind: 'recovered',
+			attempted: true,
+			networkLikeFailure: true,
+			available: true,
+			network: connectedCellularNetwork,
+		},
+	);
+	assert.deepEqual(calls, ['isAvailable', 'connect']);
+	assert.deepEqual(waits, [3_000]);
+});
+
 void test('ensureReady normalizes rejected native availability as unavailable', async () => {
 	const calls: string[] = [];
 	const waits: number[] = [];
@@ -272,6 +397,68 @@ void test('ensureReady times out stuck native availability as unavailable', asyn
 	});
 	assert.deepEqual(calls, ['isAvailable']);
 	assert.deepEqual(waits, []);
+});
+
+void test('ensureReady continues when network preflight times out', async () => {
+	const calls: string[] = [];
+	const waits: number[] = [];
+	let preflightCalls = 0;
+	const controller = createTailscaleRecoveryController({
+		getPlatformOS: () => 'android',
+		getNowMs: () => 1_000,
+		sleep: async (ms) => {
+			waits.push(ms);
+		},
+		connectTimeoutMs: 1,
+		native: nativeFixture(calls),
+		networkPreflight: async () => {
+			preflightCalls += 1;
+			return await new Promise(() => {});
+		},
+	});
+
+	assert.deepEqual(await withSafetyTimeout(controller.ensureReady()), {
+		kind: 'ready',
+		attempted: true,
+		available: true,
+	});
+	assert.equal(preflightCalls, 1);
+	assert.deepEqual(calls, ['isAvailable', 'connect']);
+	assert.deepEqual(waits, [3_000]);
+});
+
+void test('recoverAfterFailure continues when network preflight times out', async () => {
+	const calls: string[] = [];
+	const waits: number[] = [];
+	let preflightCalls = 0;
+	const controller = createTailscaleRecoveryController({
+		getPlatformOS: () => 'android',
+		getNowMs: () => 1_000,
+		sleep: async (ms) => {
+			waits.push(ms);
+		},
+		connectTimeoutMs: 1,
+		native: nativeFixture(calls),
+		networkPreflight: async () => {
+			preflightCalls += 1;
+			return await new Promise(() => {});
+		},
+	});
+
+	assert.deepEqual(
+		await withSafetyTimeout(
+			controller.recoverAfterFailure(new Error('No route to host')),
+		),
+		{
+			kind: 'recovered',
+			attempted: true,
+			networkLikeFailure: true,
+			available: true,
+		},
+	);
+	assert.equal(preflightCalls, 1);
+	assert.deepEqual(calls, ['isAvailable', 'connect']);
+	assert.deepEqual(waits, [3_000]);
 });
 
 void test('ensureReady nudges Tailscale on Android and waits', async () => {

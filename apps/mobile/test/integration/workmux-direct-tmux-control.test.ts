@@ -159,14 +159,24 @@ void test('DirectMux transport reuses one hidden shell and closes it', async () 
 	await transport.dispose();
 
 	assert.equal(startCount, 1);
-	assert.deepEqual(startOptions, [
+	assert.equal(startOptions.length, 1);
+	assert.deepEqual(
+		{
+			...(startOptions[0] as Record<string, unknown>),
+			abortSignal: undefined,
+		},
 		{
 			term: 'Xterm',
 			useTmux: false,
 			tmuxSessionName: '',
 			registerInStore: false,
+			abortSignal: undefined,
 		},
-	]);
+	);
+	assert.equal(
+		(startOptions[0] as { abortSignal?: AbortSignal }).abortSignal?.aborted,
+		false,
+	);
 	assert.deepEqual(created.writes, [
 		'tmux display-message first\n',
 		'tmux display-message second\n',
@@ -236,7 +246,7 @@ void test('DirectMux transport returns false after dispose', async () => {
 	assert.deepEqual(created.writes, []);
 });
 
-void test('DirectMux transport serializes sends and dispose waits for queue', async () => {
+void test('DirectMux transport serializes sends before dispose', async () => {
 	const created = fakeShell();
 	const firstStarted = deferred();
 	const releaseFirst = deferred();
@@ -265,12 +275,11 @@ void test('DirectMux transport serializes sends and dispose waits for queue', as
 	const firstSend = transport.send('tmux display-message first');
 	await firstStarted.promise;
 	const secondSend = transport.send('tmux display-message second');
-	const dispose = transport.dispose();
 	releaseFirst.resolve();
 
 	assert.equal(await firstSend, true);
 	assert.equal(await secondSend, true);
-	await dispose;
+	await transport.dispose();
 
 	assert.equal(maxActiveWrites, 1);
 	assert.deepEqual(created.writes, [
@@ -280,6 +289,74 @@ void test('DirectMux transport serializes sends and dispose waits for queue', as
 		'finish:tmux display-message second\n',
 		'__closed__',
 	]);
+});
+
+void test('DirectMux transport dispose aborts active send and closes without waiting for queue', async () => {
+	const created = fakeShell();
+	const sendStarted = deferred();
+	let sendAbortSignal: AbortSignal | undefined;
+	let closeCount = 0;
+	created.shell.sendData = async (
+		bytes: ArrayBuffer,
+		opts?: { signal?: AbortSignal },
+	) => {
+		created.writes.push(new TextDecoder().decode(bytes));
+		sendAbortSignal = opts?.signal;
+		sendStarted.resolve();
+		await new Promise<void>((_, reject) => {
+			opts?.signal?.addEventListener('abort', () => {
+				reject(opts.signal?.reason ?? new Error('aborted'));
+			});
+		});
+	};
+	created.shell.close = async () => {
+		closeCount += 1;
+		created.writes.push('__closed__');
+	};
+	const transport = createDirectTmuxControlTransport({
+		connection: {
+			startShell: async () => created.shell,
+		},
+	});
+
+	const firstSend = transport.send('tmux display-message pending');
+	await sendStarted.promise;
+	const secondSend = transport.send('tmux display-message queued');
+	await transport.dispose();
+
+	assert.equal(sendAbortSignal?.aborted, true);
+	assert.equal(await firstSend, false);
+	assert.equal(await secondSend, false);
+	assert.equal(closeCount, 1);
+	assert.deepEqual(created.writes, [
+		'tmux display-message pending\n',
+		'__closed__',
+	]);
+});
+
+void test('DirectMux transport dispose aborts active shell startup', async () => {
+	let startAbortSignal: AbortSignal | undefined;
+	const transport = createDirectTmuxControlTransport({
+		connection: {
+			startShell: async (options) => {
+				startAbortSignal = options.abortSignal;
+				await new Promise<void>((_, reject) => {
+					options.abortSignal?.addEventListener('abort', () => {
+						reject(options.abortSignal?.reason ?? new Error('aborted'));
+					});
+				});
+				throw new Error('unreachable');
+			},
+		},
+	});
+
+	const send = transport.send('tmux display-message startup');
+	await Promise.resolve();
+	await transport.dispose();
+
+	assert.equal(startAbortSignal?.aborted, true);
+	assert.equal(await send, false);
+	assert.equal(await transport.send('tmux display-message after'), false);
 });
 
 void test('DirectMux transport overlapping dispose closes hidden shell once', async () => {

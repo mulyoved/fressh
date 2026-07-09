@@ -4,6 +4,7 @@ import {
 	connectionDiagnosticRecorder,
 	createConnectionDiagnosticRecorder,
 	formatConnectionDiagnosticPrompt,
+	mdevBridgeDiagnosticEvents,
 	savedEntryEvents,
 	type ConnectionDiagnosticRecorder,
 	type ConnectionDiagnosticTraceHandle,
@@ -22,5 +23,6 @@ void test('connection diagnostics barrel exports public diagnostic helpers', () 
 	assert.equal(typeof createConnectionDiagnosticRecorder, 'function');
 	assert.equal(typeof connectionDiagnosticRecorder.startTrace, 'function');
 	assert.equal(typeof savedEntryEvents.selected, 'function');
+	assert.equal(typeof mdevBridgeDiagnosticEvents.lifecycle, 'function');
 	assert.equal(typeof formatConnectionDiagnosticPrompt, 'function');
 });

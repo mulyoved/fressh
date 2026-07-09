@@ -30,6 +30,7 @@ void test('network-like SSH errors trigger Tailscale recovery', () => {
 		'Connection reset by peer',
 		'Broken pipe',
 		'Software caused connection abort',
+		'A Rust future was aborted',
 	]) {
 		assert.equal(isNetworkLikeSshError(new Error(message)), true, message);
 	}
@@ -45,6 +46,15 @@ void test('network-like SSH errors trigger Tailscale recovery', () => {
 			tag: 'Russh',
 			inner: [
 				'failed to lookup address information: Name or service not known',
+			],
+		}),
+		true,
+	);
+	assert.equal(
+		isNetworkLikeSshError({
+			tag: 'Russh',
+			inner: [
+				'failed to look up address information: No address associated with hostname',
 			],
 		}),
 		true,

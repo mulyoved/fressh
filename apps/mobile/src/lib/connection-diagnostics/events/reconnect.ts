@@ -50,6 +50,52 @@ export type ReconnectTimeoutEvent = ConnectionDiagnosticEventBase & {
 	windowMs: number;
 };
 
+export type ReconnectDestination = 'terminal' | 'hostPage';
+export type ReconnectCompletionOutcome =
+	| 'connected'
+	| 'needsAttention'
+	| 'failedNetwork'
+	| 'failedAuth'
+	| 'failedTmuxAttach'
+	| 'timeout'
+	| 'aborted'
+	| 'cleanupFailed';
+
+export type ReconnectShellDroppedEvent = ConnectionDiagnosticEventBase & {
+	kind: 'reconnect.shell-dropped';
+	connectionId?: string;
+	channelId?: number;
+	networkDisappeared?: boolean;
+};
+
+export type ReconnectTransportInvalidatedEvent =
+	ConnectionDiagnosticEventBase & {
+		kind: 'reconnect.transport.invalidated';
+		connectionId?: string;
+		channelId?: number;
+		hadShell: boolean;
+		bridgeDisposed: boolean;
+		bridgeRequestInFlight: boolean;
+	};
+
+export type ReconnectCompletedEvent = ConnectionDiagnosticEventBase & {
+	kind: 'reconnect.completed';
+	outcome: ReconnectCompletionOutcome;
+	destination: ReconnectDestination;
+};
+
+export type ReconnectStaleInputEvent = ConnectionDiagnosticEventBase & {
+	kind: 'reconnect.stale-input';
+	connectionId?: string;
+	channelId?: number;
+};
+
+export type ReconnectUiTransitionEvent = ConnectionDiagnosticEventBase & {
+	kind: 'reconnect.ui.transition';
+	from: 'terminalOverlay' | 'terminal' | 'hostPage' | 'hidden';
+	to: 'terminalOverlay' | 'terminal' | 'hostPage' | 'hidden';
+};
+
 export type ReconnectEvent =
 	| ReconnectStartedEvent
 	| ReconnectStoppedEvent
@@ -58,7 +104,12 @@ export type ReconnectEvent =
 	| ReconnectAttemptStartedEvent
 	| ReconnectAttemptConnectedEvent
 	| ReconnectAttemptFailedEvent
-	| ReconnectTimeoutEvent;
+	| ReconnectTimeoutEvent
+	| ReconnectShellDroppedEvent
+	| ReconnectTransportInvalidatedEvent
+	| ReconnectCompletedEvent
+	| ReconnectStaleInputEvent
+	| ReconnectUiTransitionEvent;
 
 export const reconnectEventKinds = [
 	'reconnect.started',
@@ -69,6 +120,11 @@ export const reconnectEventKinds = [
 	'reconnect.attempt.connected',
 	'reconnect.attempt.failed',
 	'reconnect.timeout',
+	'reconnect.shell-dropped',
+	'reconnect.transport.invalidated',
+	'reconnect.completed',
+	'reconnect.stale-input',
+	'reconnect.ui.transition',
 ] as const satisfies readonly ReconnectEvent['kind'][];
 
 export const reconnectEvents = {
@@ -172,6 +228,79 @@ export const reconnectEvents = {
 			reconnectElapsedMs: input.reconnectElapsedMs,
 			windowMs: input.windowMs,
 		}),
+	shellDropped: (input: {
+		source: ConnectionDiagnosticSource;
+		connectionId?: string;
+		channelId?: number;
+		networkDisappeared?: boolean;
+		message?: string;
+	}): ReconnectShellDroppedEvent =>
+		({
+			kind: 'reconnect.shell-dropped',
+			source: input.source,
+			message: input.message,
+			connectionId: input.connectionId,
+			channelId: input.channelId,
+			networkDisappeared: input.networkDisappeared,
+		}),
+	transportInvalidated: (input: {
+		source: ConnectionDiagnosticSource;
+		connectionId?: string;
+		channelId?: number;
+		hadShell: boolean;
+		bridgeDisposed: boolean;
+		bridgeRequestInFlight: boolean;
+		message?: string;
+	}): ReconnectTransportInvalidatedEvent =>
+		({
+			kind: 'reconnect.transport.invalidated',
+			source: input.source,
+			message: input.message,
+			connectionId: input.connectionId,
+			channelId: input.channelId,
+			hadShell: input.hadShell,
+			bridgeDisposed: input.bridgeDisposed,
+			bridgeRequestInFlight: input.bridgeRequestInFlight,
+		}),
+	completed: (input: {
+		source: ConnectionDiagnosticSource;
+		outcome: ReconnectCompletionOutcome;
+		destination: ReconnectDestination;
+		message?: string;
+	}): ReconnectCompletedEvent =>
+		({
+			kind: 'reconnect.completed',
+			source: input.source,
+			message: input.message,
+			outcome: input.outcome,
+			destination: input.destination,
+		}),
+	staleInput: (input: {
+		source: ConnectionDiagnosticSource;
+		connectionId?: string;
+		channelId?: number;
+		message?: string;
+	}): ReconnectStaleInputEvent =>
+		({
+			kind: 'reconnect.stale-input',
+			source: input.source,
+			message: input.message,
+			connectionId: input.connectionId,
+			channelId: input.channelId,
+		}),
+	uiTransition: (input: {
+		source: ConnectionDiagnosticSource;
+		from: ReconnectUiTransitionEvent['from'];
+		to: ReconnectUiTransitionEvent['to'];
+		message?: string;
+	}): ReconnectUiTransitionEvent =>
+		({
+			kind: 'reconnect.ui.transition',
+			source: input.source,
+			message: input.message,
+			from: input.from,
+			to: input.to,
+		}),
 } as const;
 
 export function formatReconnectEventFields(event: ReconnectEvent): string[] {
@@ -206,6 +335,49 @@ export function formatReconnectEventFields(event: ReconnectEvent): string[] {
 			return [
 				`reconnectElapsedMs=${event.reconnectElapsedMs}`,
 				`windowMs=${event.windowMs}`,
+			];
+		case 'reconnect.shell-dropped':
+			return [
+				...(event.connectionId
+					? [`connectionId=${safeDiagnosticString(event.connectionId)}`]
+					: []),
+				...(typeof event.channelId === 'number'
+					? [`channelId=${event.channelId}`]
+					: []),
+				...(typeof event.networkDisappeared === 'boolean'
+					? [`networkDisappeared=${String(event.networkDisappeared)}`]
+					: []),
+			];
+		case 'reconnect.transport.invalidated':
+			return [
+				...(event.connectionId
+					? [`connectionId=${safeDiagnosticString(event.connectionId)}`]
+					: []),
+				...(typeof event.channelId === 'number'
+					? [`channelId=${event.channelId}`]
+					: []),
+				`hadShell=${String(event.hadShell)}`,
+				`bridgeDisposed=${String(event.bridgeDisposed)}`,
+				`bridgeRequestInFlight=${String(event.bridgeRequestInFlight)}`,
+			];
+		case 'reconnect.completed':
+			return [
+				`outcome=${safeDiagnosticString(event.outcome)}`,
+				`destination=${safeDiagnosticString(event.destination)}`,
+			];
+		case 'reconnect.stale-input':
+			return [
+				...(event.connectionId
+					? [`connectionId=${safeDiagnosticString(event.connectionId)}`]
+					: []),
+				...(typeof event.channelId === 'number'
+					? [`channelId=${event.channelId}`]
+					: []),
+			];
+		case 'reconnect.ui.transition':
+			return [
+				`from=${safeDiagnosticString(event.from)}`,
+				`to=${safeDiagnosticString(event.to)}`,
 			];
 	}
 	const unreachable: never = event;
