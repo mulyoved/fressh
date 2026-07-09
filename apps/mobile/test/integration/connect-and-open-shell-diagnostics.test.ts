@@ -89,6 +89,53 @@ void test('connectAndOpenShell records connect and shell success events', async 
 	assert.doesNotMatch(JSON.stringify(events), /secret/);
 });
 
+void test('connectAndOpenShell default timeout allows slow high-latency connects past five seconds', async (t) => {
+	t.mock.timers.enable({ apis: ['setTimeout'], now: 0 });
+	let connectSignal: AbortSignal | undefined;
+	const navigations: unknown[] = [];
+
+	const resultPromise = connectAndOpenShell({
+		connectionDetails,
+		resolvedSecurity: { type: 'key', privateKey: 'secret' },
+		connect: async (params) => {
+			const signal = params.abortSignal;
+			assert.ok(signal);
+			connectSignal = signal;
+			return await new Promise((resolve, reject) => {
+				signal.addEventListener(
+					'abort',
+					() => {
+						reject(signal.reason ?? new Error('aborted'));
+					},
+					{ once: true },
+				);
+				setTimeout(() => {
+					resolve({
+						connectionId: 'conn-1',
+						startShell: async () => ({ channelId: 7 }),
+					} as never);
+				}, 6_000);
+			});
+		},
+		saveConnection: async () => {},
+		navigate: (params) => {
+			navigations.push(params);
+		},
+	});
+
+	await Promise.resolve();
+	assert.ok(connectSignal);
+	t.mock.timers.tick(5_001);
+	await Promise.resolve();
+	assert.equal(connectSignal.aborted, false);
+
+	t.mock.timers.tick(999);
+	const result = await resultPromise;
+
+	assert.equal(result.status, 'connected');
+	assert.deepEqual(navigations, [{ connectionId: 'conn-1', channelId: 7 }]);
+});
+
 void test('connectAndOpenShell propagates caller abort to connect and shell start', async () => {
 	const abortController = new AbortController();
 	let connectSignal: AbortSignal | undefined;

@@ -149,6 +149,32 @@ async function connectWithGeneratedConnection(generatedConnection: unknown) {
 	});
 }
 
+test('api trace logging is disabled by default', async () => {
+	const previousTraceFlag = process.env.FRESSH_RUSSH_TRACE;
+	delete process.env.FRESSH_RUSSH_TRACE;
+	const info = jest.spyOn(console, 'info').mockImplementation(() => {});
+	const runCommand = jest.fn(async () => ({
+		stdout: bytes('out'),
+		stderr: bytes(''),
+	}));
+
+	try {
+		const connection = await connectWithGeneratedConnection(
+			createGeneratedConnection({ runCommand }),
+		);
+		await connection.runCommand({ command: 'printf test' });
+
+		expect(info).not.toHaveBeenCalled();
+	} finally {
+		info.mockRestore();
+		if (previousTraceFlag === undefined) {
+			delete process.env.FRESSH_RUSSH_TRACE;
+		} else {
+			process.env.FRESSH_RUSSH_TRACE = previousTraceFlag;
+		}
+	}
+});
+
 test('runCommand wrapper maps options, abort signal, output, and limits', async () => {
 	const signal = new AbortController().signal;
 	const runCommand: jest.Mock<

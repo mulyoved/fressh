@@ -8,6 +8,43 @@ use thiserror::Error;
 
 pub(crate) const CLOSE_TIMEOUT: Duration = Duration::from_millis(500);
 
+pub(crate) fn trace_debug(message: impl AsRef<str>) {
+    #[cfg(target_os = "android")]
+    {
+        use std::ffi::CString;
+
+        let sanitized_message = message.as_ref().replace('\0', "\\0");
+        let Ok(tag) = CString::new("FresshRussh") else {
+            return;
+        };
+        let priority = android_log_sys::LogPriority::DEBUG as i32;
+        let is_loggable = unsafe {
+            android_log_sys::__android_log_is_loggable(
+                priority,
+                tag.as_ptr(),
+                android_log_sys::LogPriority::SILENT as i32,
+            )
+        } != 0;
+        if !is_loggable {
+            return;
+        }
+        let Ok(text) = CString::new(sanitized_message) else {
+            return;
+        };
+
+        unsafe {
+            android_log_sys::__android_log_write(priority, tag.as_ptr(), text.as_ptr());
+        }
+    }
+
+    #[cfg(not(target_os = "android"))]
+    {
+        if std::env::var_os("FRESSH_RUSSH_TRACE").is_some() {
+            eprintln!("[FresshRussh] {}", message.as_ref());
+        }
+    }
+}
+
 pub(crate) fn now_ms() -> f64 {
     let d = SystemTime::now()
         .duration_since(UNIX_EPOCH)

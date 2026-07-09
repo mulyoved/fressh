@@ -9,8 +9,8 @@ use tokio::sync::{Mutex as AsyncMutex, Notify};
 
 use crate::{
     ssh_channel::StartupChannelCloseGuard,
-    ssh_connection::SshConnection,
-    utils::{catch_foreign_callback_unwind, now_ms, SshError, CLOSE_TIMEOUT},
+    ssh_connection::{channel_msg_summary, SshConnection},
+    utils::{catch_foreign_callback_unwind, now_ms, trace_debug, SshError, CLOSE_TIMEOUT},
 };
 
 const DEFAULT_RUN_COMMAND_MAX_OUTPUT_BYTES: u64 = 1024 * 1024;
@@ -344,16 +344,42 @@ fn classify_exec_request_reply(message: &ChannelMsg) -> Option<ExecRequestReply>
 
 async fn open_command_session(
     connection: &SshConnection,
+    purpose: &str,
 ) -> Result<russh::Channel<client::Msg>, SshError> {
+    let started_at_ms = now_ms();
+    trace_debug(format!(
+        "command-session-open begin purpose={purpose} connection={}",
+        connection.info.connection_id
+    ));
     match tokio::time::timeout(EXEC_REQUEST_REPLY_TIMEOUT, async {
         let client_handle = connection.client_handle.lock().await;
         client_handle.channel_open_session().await
     })
     .await
     {
-        Ok(Ok(channel)) => Ok(channel),
-        Ok(Err(error)) => Err(error.into()),
+        Ok(Ok(channel)) => {
+            let channel_id: u32 = channel.id().into();
+            trace_debug(format!(
+                "command-session-open complete purpose={purpose} connection={} channel={channel_id} elapsed_ms={}",
+                connection.info.connection_id,
+                now_ms() - started_at_ms
+            ));
+            Ok(channel)
+        }
+        Ok(Err(error)) => {
+            trace_debug(format!(
+                "command-session-open error purpose={purpose} connection={} elapsed_ms={} error={error}",
+                connection.info.connection_id,
+                now_ms() - started_at_ms
+            ));
+            Err(error.into())
+        }
         Err(_) => {
+            trace_debug(format!(
+                "command-session-open timeout-disconnecting purpose={purpose} connection={} elapsed_ms={}",
+                connection.info.connection_id,
+                now_ms() - started_at_ms
+            ));
             connection.disconnect().await.ok();
             Err(SshError::Russh(
                 "SSH command channel open timed out".to_string(),
@@ -364,49 +390,118 @@ async fn open_command_session(
 
 async fn send_command_exec(
     channel: &russh::Channel<client::Msg>,
+    purpose: &str,
     command: String,
 ) -> Result<(), SshError> {
+    let started_at_ms = now_ms();
+    let channel_id: u32 = channel.id().into();
+    trace_debug(format!(
+        "command-exec-send begin purpose={purpose} channel={channel_id} command_len={}",
+        command.len()
+    ));
     match tokio::time::timeout(EXEC_REQUEST_REPLY_TIMEOUT, channel.exec(true, command)).await {
-        Ok(Ok(())) => Ok(()),
-        Ok(Err(error)) => Err(error.into()),
-        Err(_) => Err(SshError::Russh(
-            "SSH exec request send timed out".to_string(),
-        )),
+        Ok(Ok(())) => {
+            trace_debug(format!(
+                "command-exec-send complete purpose={purpose} channel={channel_id} elapsed_ms={}",
+                now_ms() - started_at_ms
+            ));
+            Ok(())
+        }
+        Ok(Err(error)) => {
+            trace_debug(format!(
+                "command-exec-send error purpose={purpose} channel={channel_id} elapsed_ms={} error={error}",
+                now_ms() - started_at_ms
+            ));
+            Err(error.into())
+        }
+        Err(_) => {
+            trace_debug(format!(
+                "command-exec-send timeout purpose={purpose} channel={channel_id} elapsed_ms={}",
+                now_ms() - started_at_ms
+            ));
+            Err(SshError::Russh(
+                "SSH exec request send timed out".to_string(),
+            ))
+        }
     }
 }
 
-async fn send_command_eof(channel: &russh::Channel<client::Msg>) -> Result<(), SshError> {
+async fn send_command_eof(
+    channel: &russh::Channel<client::Msg>,
+    purpose: &str,
+) -> Result<(), SshError> {
+    let started_at_ms = now_ms();
+    let channel_id: u32 = channel.id().into();
+    trace_debug(format!(
+        "command-eof-send begin purpose={purpose} channel={channel_id}"
+    ));
     match tokio::time::timeout(CLOSE_TIMEOUT, channel.eof()).await {
-        Ok(Ok(())) => Ok(()),
-        Ok(Err(error)) => Err(error.into()),
-        Err(_) => Err(SshError::Russh(
-            "SSH command EOF send timed out".to_string(),
-        )),
+        Ok(Ok(())) => {
+            trace_debug(format!(
+                "command-eof-send complete purpose={purpose} channel={channel_id} elapsed_ms={}",
+                now_ms() - started_at_ms
+            ));
+            Ok(())
+        }
+        Ok(Err(error)) => {
+            trace_debug(format!(
+                "command-eof-send error purpose={purpose} channel={channel_id} elapsed_ms={} error={error}",
+                now_ms() - started_at_ms
+            ));
+            Err(error.into())
+        }
+        Err(_) => {
+            trace_debug(format!(
+                "command-eof-send timeout purpose={purpose} channel={channel_id} elapsed_ms={}",
+                now_ms() - started_at_ms
+            ));
+            Err(SshError::Russh(
+                "SSH command EOF send timed out".to_string(),
+            ))
+        }
     }
 }
 
 async fn wait_for_exec_request_success(
     channel: &mut russh::Channel<client::Msg>,
+    purpose: &str,
     max_buffer_bytes: usize,
 ) -> Result<Vec<ChannelMsg>, SshError> {
     let mut buffered_messages = Vec::new();
     let mut buffered_output_bytes = 0usize;
     let deadline = tokio::time::Instant::now() + EXEC_REQUEST_REPLY_TIMEOUT;
+    let started_at_ms = now_ms();
+    let channel_id: u32 = channel.id().into();
+    trace_debug(format!(
+        "command-exec-reply-wait begin purpose={purpose} channel={channel_id}"
+    ));
 
     loop {
         let message = match tokio::time::timeout_at(deadline, channel.wait()).await {
             Ok(Some(message)) => message,
             Ok(None) => {
+                trace_debug(format!(
+                    "command-exec-reply-wait closed-before-success purpose={purpose} channel={channel_id} elapsed_ms={}",
+                    now_ms() - started_at_ms
+                ));
                 return Err(SshError::Russh(
                     "SSH exec request closed before success".to_string(),
                 ));
             }
             Err(_) => {
+                trace_debug(format!(
+                    "command-exec-reply-wait timeout purpose={purpose} channel={channel_id} elapsed_ms={}",
+                    now_ms() - started_at_ms
+                ));
                 return Err(SshError::Russh(
                     "SSH exec request timed out before success".to_string(),
                 ));
             }
         };
+        trace_debug(format!(
+            "command-exec-reply-wait message purpose={purpose} channel={channel_id} msg={}",
+            channel_msg_summary(&message)
+        ));
 
         match record_exec_request_message(
             &mut buffered_messages,
@@ -415,11 +510,26 @@ async fn wait_for_exec_request_success(
             max_buffer_bytes,
         )? {
             ExecRequestMessageDecision::Continue => {}
-            ExecRequestMessageDecision::Success => return Ok(buffered_messages),
+            ExecRequestMessageDecision::Success => {
+                trace_debug(format!(
+                    "command-exec-reply-wait success purpose={purpose} channel={channel_id} elapsed_ms={} buffered_messages={}",
+                    now_ms() - started_at_ms,
+                    buffered_messages.len()
+                ));
+                return Ok(buffered_messages);
+            }
             ExecRequestMessageDecision::Failure => {
+                trace_debug(format!(
+                    "command-exec-reply-wait failure purpose={purpose} channel={channel_id} elapsed_ms={}",
+                    now_ms() - started_at_ms
+                ));
                 return Err(SshError::Russh("SSH exec request failed".to_string()));
             }
             ExecRequestMessageDecision::ClosedBeforeSuccess => {
+                trace_debug(format!(
+                    "command-exec-reply-wait closed-message-before-success purpose={purpose} channel={channel_id} elapsed_ms={}",
+                    now_ms() - started_at_ms
+                ));
                 return Err(SshError::Russh(
                     "SSH exec request closed before success".to_string(),
                 ));
@@ -430,28 +540,34 @@ async fn wait_for_exec_request_success(
 
 async fn accept_exec_startup(
     channel_guard: &mut StartupChannelCloseGuard,
+    purpose: &str,
     max_buffer_bytes: usize,
 ) -> Result<AcceptedExecStartup, SshError> {
     Ok(AcceptedExecStartup::new(
-        wait_for_exec_request_success(channel_guard.channel_mut(), max_buffer_bytes).await?,
+        wait_for_exec_request_success(channel_guard.channel_mut(), purpose, max_buffer_bytes)
+            .await?,
     ))
 }
 
 async fn finish_run_command_exec_startup(
     channel_guard: &mut StartupChannelCloseGuard,
+    purpose: &str,
     max_buffer_bytes: usize,
 ) -> Result<CompletedExecStartup, SshError> {
-    let accepted = accept_exec_startup(channel_guard, max_buffer_bytes).await?;
-    accepted.complete_after_eof(send_command_eof(channel_guard.channel()).await)
+    let accepted = accept_exec_startup(channel_guard, purpose, max_buffer_bytes).await?;
+    accepted.complete_after_eof(send_command_eof(channel_guard.channel(), purpose).await)
 }
 
 async fn finish_command_stream_exec_startup(
     channel_guard: &mut StartupChannelCloseGuard,
+    purpose: &str,
     max_buffer_bytes: usize,
 ) -> Result<CompletedExecStartup, SshError> {
-    Ok(accept_exec_startup(channel_guard, max_buffer_bytes)
-        .await?
-        .complete_without_eof())
+    Ok(
+        accept_exec_startup(channel_guard, purpose, max_buffer_bytes)
+            .await?
+            .complete_without_eof(),
+    )
 }
 
 fn record_exec_request_message(
@@ -613,13 +729,23 @@ pub(crate) async fn run_command(
     connection: &SshConnection,
     options: RunCommandOptions,
 ) -> Result<CommandOutput, SshError> {
+    trace_debug(format!(
+        "run-command begin connection={} command_len={} max_output_bytes={:?}",
+        connection.info.connection_id,
+        options.command.len(),
+        options.max_output_bytes
+    ));
+    let started_at_ms = now_ms();
+    let purpose = "run-command";
     let max_output_bytes = max_output_bytes_for_options(&options)?;
-    let channel = open_command_session(connection).await?;
+    let channel = open_command_session(connection, purpose).await?;
     let mut channel_guard = StartupChannelCloseGuard::new(channel);
-    send_command_exec(channel_guard.channel(), options.command).await?;
-    let buffered_messages = finish_run_command_exec_startup(&mut channel_guard, max_output_bytes)
-        .await?
-        .into_buffered_messages();
+    let channel_id: u32 = channel_guard.channel().id().into();
+    send_command_exec(channel_guard.channel(), purpose, options.command).await?;
+    let buffered_messages =
+        finish_run_command_exec_startup(&mut channel_guard, purpose, max_output_bytes)
+            .await?
+            .into_buffered_messages();
 
     let mut collector = CommandOutputCollector::default();
     let mut is_closed = false;
@@ -641,6 +767,11 @@ pub(crate) async fn run_command(
     }
 
     channel_guard.close().await;
+    trace_debug(format!(
+        "run-command complete connection={} channel={channel_id} elapsed_ms={}",
+        connection.info.connection_id,
+        now_ms() - started_at_ms
+    ));
     Ok(collector.finish())
 }
 
@@ -649,12 +780,19 @@ pub(crate) async fn start_command_stream(
     options: StartCommandStreamOptions,
 ) -> Result<Arc<CommandStreamSession>, SshError> {
     let started_at_ms = now_ms();
-    let channel = open_command_session(connection).await?;
+    let purpose = "command-stream";
+    trace_debug(format!(
+        "command-stream-start begin connection={} command_len={}",
+        connection.info.connection_id,
+        options.command.len()
+    ));
+    let channel = open_command_session(connection, purpose).await?;
     let mut channel_guard = StartupChannelCloseGuard::new(channel);
     let channel_id: u32 = channel_guard.channel().id().into();
-    send_command_exec(channel_guard.channel(), options.command).await?;
+    send_command_exec(channel_guard.channel(), purpose, options.command).await?;
     let buffered_messages = finish_command_stream_exec_startup(
         &mut channel_guard,
+        purpose,
         DEFAULT_RUN_COMMAND_MAX_OUTPUT_BYTES as usize,
     )
     .await?
@@ -745,6 +883,11 @@ pub(crate) async fn start_command_stream(
     if reader_has_closed.load(Ordering::Acquire) {
         command_streams.remove(&channel_id);
     }
+    trace_debug(format!(
+        "command-stream-start complete connection={} channel={channel_id} elapsed_ms={}",
+        connection.info.connection_id,
+        now_ms() - started_at_ms
+    ));
 
     Ok(session)
 }

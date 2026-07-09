@@ -43,6 +43,7 @@ export type DirectTmuxControlTransport = {
 };
 
 const encoder = new TextEncoder();
+const DIRECT_TMUX_DISPOSE_TIMEOUT_MS = 5_000;
 
 function quoteTmuxTarget(target: string): string {
 	return /^[A-Za-z0-9_@.=-]+$/.test(target)
@@ -134,38 +135,89 @@ export function createDirectTmuxControlTransport({
 	let shellPromise: Promise<DirectTmuxShellLike> | null = null;
 	let queue: Promise<void> = Promise.resolve();
 	let disposePromise: Promise<void> | null = null;
+	let activeAbortController: AbortController | null = null;
 	let disposing = false;
 	let disposed = false;
 
 	const getShell = async () => {
 		if (!connection) throw new Error('No SSH connection available.');
 		if (disposed) throw new Error('DirectMux control transport disposed.');
-		shellPromise ??= connection.startShell({
-			term: 'Xterm',
-			useTmux: false,
-			tmuxSessionName: '',
-			registerInStore: false,
-		});
+		if (!shellPromise) {
+			const abortController = new AbortController();
+			activeAbortController = abortController;
+			shellPromise = connection
+				.startShell({
+					term: 'Xterm',
+					useTmux: false,
+					tmuxSessionName: '',
+					registerInStore: false,
+					abortSignal: abortController.signal,
+				})
+				.finally(() => {
+					if (activeAbortController === abortController) {
+						activeAbortController = null;
+					}
+				});
+		}
 		return shellPromise;
 	};
 
-	const closeCachedShell = async () => {
+	const withDisposeTimeout = async <T>(
+		promise: Promise<T>,
+		abortController: AbortController,
+	): Promise<T> => {
+		let timeoutId: ReturnType<typeof setTimeout> | null = null;
+		try {
+			return await Promise.race([
+				promise,
+				new Promise<T>((_, reject) => {
+					timeoutId = setTimeout(() => {
+						const error = new Error('DirectMux control dispose timed out.');
+						abortController.abort(error);
+						reject(error);
+					}, DIRECT_TMUX_DISPOSE_TIMEOUT_MS);
+					const maybeNodeTimer = timeoutId as ReturnType<typeof setTimeout> & {
+						unref?: () => void;
+					};
+					maybeNodeTimer.unref?.();
+				}),
+			]);
+		} finally {
+			if (timeoutId !== null) clearTimeout(timeoutId);
+		}
+	};
+
+	const closeCachedShell = async (opts?: { timeout?: boolean }) => {
 		const cachedShellPromise = shellPromise;
 		shellPromise = null;
-		const shell = await cachedShellPromise?.catch(() => null);
-		await shell?.close().catch(() => {});
+		const shell = await (opts?.timeout && cachedShellPromise
+			? withDisposeTimeout(cachedShellPromise, new AbortController())
+			: cachedShellPromise
+		)?.catch(() => null);
+		if (!shell) return;
+		const abortController = new AbortController();
+		const closePromise = shell.close({ signal: abortController.signal });
+		await (opts?.timeout
+			? withDisposeTimeout(closePromise, abortController)
+			: closePromise
+		).catch(() => {});
 	};
 
 	const sendNow = async (command: string) => {
 		try {
 			const shell = await getShell();
+			const abortController = new AbortController();
+			activeAbortController = abortController;
 			await shell.sendData(
 				encoder.encode(`${command}\n`).buffer as ArrayBuffer,
+				{ signal: abortController.signal },
 			);
 			return true;
 		} catch {
 			await closeCachedShell();
 			return false;
+		} finally {
+			activeAbortController = null;
 		}
 	};
 
@@ -182,9 +234,12 @@ export function createDirectTmuxControlTransport({
 		dispose: () => {
 			disposePromise ??= (async () => {
 				disposing = true;
-				await queue.catch(() => {});
+				activeAbortController?.abort(
+					new Error('DirectMux control transport disposed.'),
+				);
+				void queue.catch(() => {});
 				disposed = true;
-				await closeCachedShell();
+				await closeCachedShell({ timeout: true });
 			})();
 			return disposePromise;
 		},

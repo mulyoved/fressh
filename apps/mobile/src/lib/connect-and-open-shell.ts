@@ -16,7 +16,7 @@ import {
 import { AbortSignalTimeout } from './utils';
 
 const logger = rootLogger.extend('ConnectAndOpenShell');
-const DEFAULT_CONNECT_TIMEOUT_MS = 5_000;
+const DEFAULT_CONNECT_TIMEOUT_MS = 30_000;
 
 type ConnectedSshShellLifecycleResult = Extract<
 	SshShellLifecycleResult,

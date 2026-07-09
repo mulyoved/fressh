@@ -429,7 +429,7 @@ void test('Workmux status keyboard action runs mdev-backed status cycle', async 
 		runWorkmuxCommand: async (argv) => {
 			calls.push(argv);
 		},
-		showFailure: (message) => failures.push(message),
+		showFailure: ({ message }) => failures.push(message),
 		getErrorMessage: (error) =>
 			error instanceof Error ? error.message : String(error),
 	});
@@ -586,7 +586,7 @@ void test('Workmux status cycle normalizes old mdev argv failures', async () => 
 		runWorkmuxCommand: async () => {
 			throw new Error('Unknown tmux command: nav');
 		},
-		showFailure: (message) => failures.push(message),
+		showFailure: ({ message }) => failures.push(message),
 		getErrorMessage: (error) =>
 			error instanceof Error ? error.message : String(error),
 	});
@@ -595,6 +595,62 @@ void test('Workmux status cycle normalizes old mdev argv failures', async () => 
 		status: 'handled',
 	});
 	assert.deepEqual(failures, [WORKMUX_APP_COMMAND_UPDATE_MESSAGE]);
+});
+
+void test('workmux keyboard command returns disposed-by-reconnect failure class', async () => {
+	const failures: { message: string; failureClass?: string }[] = [];
+	const error = new Error('mdev bridge stream closed.') as Error & {
+		failureClass: string;
+	};
+	error.failureClass = 'disposedByReconnect';
+	const runner = createWorkmuxKeyboardCommandRunner({
+		isTmuxEnabled: () => true,
+		getSessionName: () => 'main',
+		runWorkmuxCommand: async () => {
+			throw error;
+		},
+		showFailure: (failure) => failures.push(failure),
+		getErrorMessage: (error) =>
+			error instanceof Error ? error.message : String(error),
+	});
+
+	assert.deepEqual(await runner.run({ type: 'focus', target: 'codex' }), {
+		status: 'handled',
+	});
+	assert.deepEqual(failures, [
+		{
+			message: 'mdev bridge stream closed.',
+			failureClass: 'disposedByReconnect',
+		},
+	]);
+});
+
+void test('workmux keyboard command drops unknown runtime failure classes', async () => {
+	const failures: { message: string; failureClass?: string }[] = [];
+	const error = new Error('unexpected failure') as Error & {
+		failureClass: string;
+	};
+	error.failureClass = 'bogus';
+	const runner = createWorkmuxKeyboardCommandRunner({
+		isTmuxEnabled: () => true,
+		getSessionName: () => 'main',
+		runWorkmuxCommand: async () => {
+			throw error;
+		},
+		showFailure: (failure) => failures.push(failure),
+		getErrorMessage: (error) =>
+			error instanceof Error ? error.message : String(error),
+	});
+
+	assert.deepEqual(await runner.run({ type: 'focus', target: 'codex' }), {
+		status: 'handled',
+	});
+	assert.deepEqual(failures, [
+		{
+			message: 'unexpected failure',
+			failureClass: undefined,
+		},
+	]);
 });
 
 void test('Workmux keyboard runner has no host command fallback', () => {
@@ -796,7 +852,7 @@ void test('Workmux keyboard command runner reads live enabled state for pending 
 			calls.push(argv.join(' '));
 			if (calls.length === 1) await firstBlock.promise;
 		},
-		showFailure: (message) => failures.push(message),
+		showFailure: ({ message }) => failures.push(message),
 		getErrorMessage: (error) =>
 			error instanceof Error ? error.message : String(error),
 	});
@@ -829,7 +885,7 @@ void test('Workmux keyboard command runner invalidates pending commands and stal
 				throw new Error('mdev: command not found');
 			}
 		},
-		showFailure: (message) => failures.push(message),
+		showFailure: ({ message }) => failures.push(message),
 		getErrorMessage: (error) =>
 			error instanceof Error ? error.message : String(error),
 	});
@@ -860,7 +916,7 @@ void test('Workmux status cycle suppresses stale failures after invalidation', a
 			await commandBlock.promise;
 			throw new Error('mdev: command not found');
 		},
-		showFailure: (message) => failures.push(message),
+		showFailure: ({ message }) => failures.push(message),
 		getErrorMessage: (error) =>
 			error instanceof Error ? error.message : String(error),
 	});
@@ -1011,7 +1067,7 @@ void test('Workmux keyboard command runner preserves local failures and maps rem
 		runWorkmuxCommand: async () => {
 			if (error) throw error;
 		},
-		showFailure: (message) => failures.push(message),
+		showFailure: ({ message }) => failures.push(message),
 		getErrorMessage: (error) =>
 			error instanceof Error ? error.message : String(error),
 	});

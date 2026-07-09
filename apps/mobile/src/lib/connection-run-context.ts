@@ -1,3 +1,5 @@
+import { rootLogger } from './logger';
+
 export type ConnectionRunAbortReason =
 	| 'timeout'
 	| 'caller-aborted'
@@ -102,6 +104,9 @@ const defaultTimeouts: ConnectionRunTimeouts = {
 	cleanupTimeoutMs: 5_000,
 };
 
+const logger = rootLogger.extend('ConnectionRunContext');
+let nextConnectionRunContextId = 0;
+
 export function createConnectionRunContext(
 	options: ConnectionRunContextOptions = {},
 ): ConnectionRunContext {
@@ -125,11 +130,20 @@ export function createConnectionRunContext(
 			);
 		});
 	const isCurrent = options.isCurrent ?? (() => true);
+	const contextId = ++nextConnectionRunContextId;
 	let abortReason: ConnectionRunAbortReason | null = null;
 	let timeoutKind: ConnectionRunTimeoutKind | null = null;
 	let cleanupStopAfterTimeout: OperationAbortMetadata | null = null;
 	let finished = false;
 	let abortFromCaller: (() => void) | null = null;
+
+	logger.debug('run context created', {
+		contextId,
+		timeouts,
+		hasCallerSignal: options.callerSignal !== undefined,
+		callerSignalAborted: options.callerSignal?.aborted === true,
+		isCurrent: isCurrent(),
+	});
 
 	function createAbortMetadata(
 		reason: 'timeout',
@@ -204,6 +218,14 @@ export function createConnectionRunContext(
 				return;
 			}
 			activeTimers.delete(timer);
+			logger.debug('operation timer fired', {
+				contextId,
+				kind,
+				timeoutMs: getTimeoutMs(kind),
+				finished,
+				abortReason,
+				timeoutKind,
+			});
 			onTimeout();
 		}, getTimeoutMs(kind));
 		activeTimers.set(timer, kind);
@@ -238,6 +260,13 @@ export function createConnectionRunContext(
 		}
 		abortReason = reason;
 		timeoutKind = nextTimeoutKind;
+		logger.debug('run context aborting', {
+			contextId,
+			reason,
+			timeoutKind: nextTimeoutKind,
+			activeTimers: activeTimers.size,
+			activeScopeFinalizers: activeScopeFinalizers.size,
+		});
 		const metadata =
 			reason === 'timeout'
 				? createAbortMetadata(
@@ -306,6 +335,14 @@ export function createConnectionRunContext(
 			if (controller.signal.aborted) {
 				return;
 			}
+			logger.debug('operation scope aborting', {
+				contextId,
+				kind,
+				reason,
+				timeoutKind: nextTimeoutKind,
+				runAbortReason: abortReason,
+				runTimeoutKind: timeoutKind,
+			});
 			abortMetadata =
 				reason === 'timeout'
 					? createAbortMetadata(
@@ -332,6 +369,10 @@ export function createConnectionRunContext(
 		}
 
 		if (kind !== 'cleanup' && !runController.signal.aborted && !isCurrent()) {
+			logger.debug('operation scope stale before start', {
+				contextId,
+				kind,
+			});
 			abortChild('stale-run', null);
 			return {
 				signal: controller.signal,
@@ -339,6 +380,14 @@ export function createConnectionRunContext(
 				getAbortMetadata: () => abortMetadata,
 			};
 		}
+
+		logger.debug('operation scope created', {
+			contextId,
+			kind,
+			timeoutMs: getTimeoutMs(kind),
+			runAborted: runController.signal.aborted,
+			isCurrent: isCurrent(),
+		});
 
 		timer = startTimer(kind, () => {
 			if (finishedScope) {
@@ -459,16 +508,35 @@ export function createConnectionRunContext(
 		operation: (signal: AbortSignal) => Promise<T>,
 	): Promise<ConnectionRunOperationResult<T>> {
 		if (kind !== 'cleanup' && !runController.signal.aborted && !isCurrent()) {
+			logger.debug('operation skipped stale before scope', {
+				contextId,
+				kind,
+			});
 			return {
 				status: 'aborted',
 				reason: 'stale-run',
 				timeoutKind: null,
 			};
 		}
+		const startedAtMs = Date.now();
+		logger.debug('operation started', {
+			contextId,
+			kind,
+			runAborted: runController.signal.aborted,
+			abortReason,
+			timeoutKind,
+		});
 		const scope = createOperationScope(kind);
 		const signal = scope.signal;
 		if (signal.aborted) {
-			return getScopeAbortResult(scope);
+			const result = getScopeAbortResult(scope);
+			logger.debug('operation aborted before execution', {
+				contextId,
+				kind,
+				elapsedMs: Date.now() - startedAtMs,
+				result,
+			});
+			return result;
 		}
 
 		let abortResultListener: (() => void) | null = null;
@@ -503,39 +571,105 @@ export function createConnectionRunContext(
 				abortResult,
 			]);
 			if (isAbortedResult(result)) {
+				logger.debug('operation resolved aborted', {
+					contextId,
+					kind,
+					elapsedMs: Date.now() - startedAtMs,
+					result,
+				});
 				return result;
 			}
 			if (signal.aborted) {
-				return getScopeAbortResult(scope);
+				const abortResult = getScopeAbortResult(scope);
+				logger.debug('operation signal aborted after result', {
+					contextId,
+					kind,
+					elapsedMs: Date.now() - startedAtMs,
+					result: abortResult,
+				});
+				return abortResult;
 			}
 			if (runController.signal.aborted && kind !== 'cleanup') {
-				return createAbortResult(getRunAbortMetadata());
+				const abortResult = createAbortResult(getRunAbortMetadata());
+				logger.debug('operation run aborted after result', {
+					contextId,
+					kind,
+					elapsedMs: Date.now() - startedAtMs,
+					result: abortResult,
+				});
+				return abortResult;
 			}
 			if (kind !== 'cleanup' && !isCurrent()) {
-				return {
+				const staleResult = {
 					status: 'aborted',
 					reason: 'stale-run',
 					timeoutKind: null,
-				};
+				} as const;
+				logger.debug('operation stale after result', {
+					contextId,
+					kind,
+					elapsedMs: Date.now() - startedAtMs,
+					result: staleResult,
+				});
+				return staleResult;
 			}
+			logger.debug('operation resolved ok', {
+				contextId,
+				kind,
+				elapsedMs: Date.now() - startedAtMs,
+			});
 			return result;
 		} catch (error) {
 			if (error instanceof ConnectionRunAbortedError) {
-				return getAbortErrorResult(error);
+				const result = getAbortErrorResult(error);
+				logger.debug('operation threw run abort', {
+					contextId,
+					kind,
+					elapsedMs: Date.now() - startedAtMs,
+					result,
+				});
+				return result;
 			}
 			if (signal.aborted) {
-				return getScopeAbortResult(scope);
+				const result = getScopeAbortResult(scope);
+				logger.debug('operation threw after signal abort', {
+					contextId,
+					kind,
+					elapsedMs: Date.now() - startedAtMs,
+					result,
+				});
+				return result;
 			}
 			if (runController.signal.aborted && kind !== 'cleanup') {
-				return createAbortResult(getRunAbortMetadata());
+				const result = createAbortResult(getRunAbortMetadata());
+				logger.debug('operation threw after run abort', {
+					contextId,
+					kind,
+					elapsedMs: Date.now() - startedAtMs,
+					result,
+				});
+				return result;
 			}
 			if (kind !== 'cleanup' && !isCurrent()) {
-				return {
+				const result = {
 					status: 'aborted',
 					reason: 'stale-run',
 					timeoutKind: null,
-				};
+				} as const;
+				logger.debug('operation threw after stale run', {
+					contextId,
+					kind,
+					elapsedMs: Date.now() - startedAtMs,
+					result,
+				});
+				return result;
 			}
+			logger.debug('operation threw failure', {
+				contextId,
+				kind,
+				elapsedMs: Date.now() - startedAtMs,
+				error,
+			});
 			throw error;
 		} finally {
 			detachAbortResultListener();
@@ -545,6 +679,13 @@ export function createConnectionRunContext(
 
 	function finish() {
 		finished = true;
+		logger.debug('run context finish', {
+			contextId,
+			abortReason,
+			timeoutKind,
+			activeTimers: activeTimers.size,
+			activeScopeFinalizers: activeScopeFinalizers.size,
+		});
 		detachCallerSignal();
 		for (const finalizeScope of [...activeScopeFinalizers]) {
 			finalizeScope();

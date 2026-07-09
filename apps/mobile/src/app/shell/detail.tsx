@@ -50,6 +50,10 @@ import {
 } from '@/lib/agent-notification-visibility';
 import { useAutoConnectStore } from '@/lib/auto-connect';
 import { restartCodexWithBridge } from '@/lib/codex-restart';
+import {
+	formatConnectionDiagnosticEventFields,
+	type ConnectionDiagnosticEvent,
+} from '@/lib/connection-diagnostics';
 import { getStoredConnectionId } from '@/lib/connection-utils';
 import {
 	planDetectedOpenShortcutPress,
@@ -194,6 +198,10 @@ import {
 	shouldTreatShellWorkmuxScrollbackFailureAsAlreadyInactive,
 } from './shell-scrollback-policy';
 import { resolveShellTouchScrollPolicy } from './shell-touch-scroll';
+import {
+	runShellWorkmuxKeyboardCommand,
+	showShellWorkmuxKeyboardFailure,
+} from './shell-workmux-keyboard-policy';
 
 const logger = rootLogger.extend('TabsShellDetail');
 
@@ -505,6 +513,37 @@ function ShellDetail() {
 		searchParams.storedConnectionId ?? connectionStoredConnectionId;
 	const isAutoConnecting = useAutoConnectStore((s) => s.isAutoConnecting);
 	const isReconnecting = useAutoConnectStore((s) => s.isReconnecting);
+	const lastReconnectOutcome = useAutoConnectStore(
+		(s) => s.lastReconnectOutcome,
+	);
+	const activeDiagnosticTrace = useAutoConnectStore(
+		(s) => s.activeDiagnosticTrace,
+	);
+	const activeDiagnosticTraceRef = useRef(activeDiagnosticTrace);
+	useLayoutEffect(() => {
+		activeDiagnosticTraceRef.current = activeDiagnosticTrace;
+	}, [activeDiagnosticTrace]);
+	const workmuxDiagnosticTrace = useMemo(
+		() => ({
+			event: (event: ConnectionDiagnosticEvent) => {
+				activeDiagnosticTraceRef.current?.event(event);
+				const state = useSshStore.getState();
+				const storeKey = `${connectionId}-${channelId}` as const;
+				logger.info('Workmux diagnostic event', {
+					connectionId,
+					channelId,
+					kind: event.kind,
+					fields: formatConnectionDiagnosticEventFields(event),
+					message: (event as { message?: unknown }).message,
+					hasConnection: Boolean(state.connections[connectionId]),
+					hasShell: Boolean(state.shells[storeKey]),
+					connectionCount: Object.keys(state.connections).length,
+					shellCount: Object.keys(state.shells).length,
+				});
+			},
+		}),
+		[channelId, connectionId],
+	);
 	const [tmuxTarget, setTmuxTarget] = useState(
 		tmuxSessionName?.trim().length ? tmuxSessionName.trim() : 'main',
 	);
@@ -516,8 +555,9 @@ function ShellDetail() {
 		void normalizedTmuxTarget;
 		return createWorkmuxControlChannel({
 			connection: connection ?? null,
+			trace: workmuxDiagnosticTrace,
 		});
-	}, [connection, normalizedTmuxTarget]);
+	}, [connection, normalizedTmuxTarget, workmuxDiagnosticTrace]);
 	const workmuxControlChannelRef = useRef(workmuxControlChannel);
 	useLayoutEffect(() => {
 		workmuxControlChannelRef.current = workmuxControlChannel;
@@ -526,9 +566,22 @@ function ShellDetail() {
 	useEffect(() => {
 		if (hasTmuxAttachError) return;
 		if (shell && connection) return;
-		const autoState = useAutoConnectStore.getState();
-		if (autoState.isAutoConnecting || autoState.isReconnecting) return;
+		if (isAutoConnecting || isReconnecting) return;
 		if (connection && !shell) {
+			if (
+				isReconnecting === false &&
+				lastReconnectOutcome &&
+				lastReconnectOutcome.destination === 'hostPage'
+			) {
+				logger.info('reconnect failed, replacing route with host page', {
+					outcome: lastReconnectOutcome.status,
+				});
+				router.replace({
+					pathname: '/',
+					params: { editConnectionId: storedConnectionId ?? connectionId },
+				});
+				return;
+			}
 			logger.info(
 				'shell missing on active connection, waiting for reconnect cycle',
 			);
@@ -541,6 +594,9 @@ function ShellDetail() {
 		hasTmuxAttachError,
 		isAutoConnecting,
 		isReconnecting,
+		lastReconnectOutcome,
+		storedConnectionId,
+		connectionId,
 		router,
 		shell,
 	]);
@@ -982,9 +1038,19 @@ function ShellDetail() {
 				cleanupGeneration: tmuxRemoteScrollbackCopyModeGenerationRef,
 				targetName: normalizedTmuxTarget,
 			});
+			const disposeReason = useAutoConnectStore.getState().isReconnecting
+				? 'reconnect'
+				: 'unmount';
 			disposeWorkmuxControlChannelAfterCleanup({
 				cleanup,
-				dispose: () => workmuxControlChannel.dispose(),
+				prepareDispose: () =>
+					workmuxControlChannel.prepareDispose({
+						reason: disposeReason,
+					}),
+				dispose: () =>
+					workmuxControlChannel.dispose({
+						reason: disposeReason,
+					}),
 				onCleanupError: (error) => {
 					logger.warn('Workmux scrollback dispose exit failed', error);
 				},
@@ -2414,31 +2480,106 @@ function ShellDetail() {
 				isTmuxEnabled: () => workmuxKeyboardTmuxEnabledRef.current,
 				getSessionName: () => workmuxKeyboardTmuxTargetRef.current,
 				getNavScope: () => preferences.workmuxNavScope.get(),
-				runWorkmuxCommand: async (argv, timeoutMs) => {
-					const result = await workmuxControlChannelRef.current.command(argv, {
+				runWorkmuxCommand: (argv, timeoutMs) => {
+					const startedAtMs = Date.now();
+					const stateAtStart = useSshStore.getState();
+					const storeKey = `${connectionId}-${channelId}` as const;
+					logger.info('Workmux keyboard command start', {
+						connectionId,
+						channelId,
+						argv,
+						timeoutMs,
+						hasConnection: Boolean(stateAtStart.connections[connectionId]),
+						hasShell: Boolean(stateAtStart.shells[storeKey]),
+						connectionCount: Object.keys(stateAtStart.connections).length,
+						shellCount: Object.keys(stateAtStart.shells).length,
+					});
+					return runShellWorkmuxKeyboardCommand({
+						argv,
+						runCommand: async (commandArgv, options) => {
+							try {
+								const result = await workmuxControlChannelRef.current.command(
+									commandArgv,
+									options,
+								);
+								const stateAtEnd = useSshStore.getState();
+								logger.info('Workmux keyboard command result', {
+									connectionId,
+									channelId,
+									argv: commandArgv,
+									timeoutMs: options.timeoutMs,
+									elapsedMs: Date.now() - startedAtMs,
+									success: result.success,
+									failureClass: result.failureClass,
+									error: result.error,
+									outputBytes: result.output.length,
+									hasConnection: Boolean(stateAtEnd.connections[connectionId]),
+									hasShell: Boolean(stateAtEnd.shells[storeKey]),
+									connectionCount: Object.keys(stateAtEnd.connections).length,
+									shellCount: Object.keys(stateAtEnd.shells).length,
+								});
+								return result;
+							} catch (error) {
+								const stateAtError = useSshStore.getState();
+								logger.warn('Workmux keyboard command threw', {
+									connectionId,
+									channelId,
+									argv: commandArgv,
+									timeoutMs: options.timeoutMs,
+									elapsedMs: Date.now() - startedAtMs,
+									error:
+										error instanceof Error
+											? { name: error.name, message: error.message }
+											: String(error),
+									hasConnection: Boolean(
+										stateAtError.connections[connectionId],
+									),
+									hasShell: Boolean(stateAtError.shells[storeKey]),
+									connectionCount: Object.keys(stateAtError.connections).length,
+									shellCount: Object.keys(stateAtError.shells).length,
+								});
+								throw error;
+							}
+						},
 						timeoutMs,
 					});
-					if (!result.success) {
-						throw new Error(
-							result.error || result.output || 'Workmux command failed.',
-						);
-					}
-					return result.output;
 				},
-				showFailure: (message) => {
-					if (
-						!shouldShowFocusedActiveFeedback({
-							isFocused: isFocusedRef.current,
-							isAppActive: isAppActiveRef.current,
-						})
-					) {
-						return;
-					}
-					Alert.alert('Workmux action failed', message);
+				showFailure: ({ message, failureClass }) => {
+					const state = useSshStore.getState();
+					const storeKey = `${connectionId}-${channelId}` as const;
+					logger.warn('Workmux keyboard command failure', {
+						connectionId,
+						channelId,
+						failureClass,
+						message,
+						hasConnection: Boolean(state.connections[connectionId]),
+						hasShell: Boolean(state.shells[storeKey]),
+						connectionCount: Object.keys(state.connections).length,
+						shellCount: Object.keys(state.shells).length,
+					});
+					showShellWorkmuxKeyboardFailure({
+						failureClass,
+						isFocused: isFocusedRef.current,
+						isAppActive: isAppActiveRef.current,
+						message,
+						onTransportUnhealthy: (failure) => {
+							logger.warn('Workmux transport unhealthy, triggering reconnect', {
+								connectionId,
+								channelId,
+								failureClass: failure.failureClass,
+								message: failure.message,
+							});
+							if (!isFocusedRef.current || !isAppActiveRef.current) return;
+							useSshStore
+								.getState()
+								.invalidateShellTransport(connectionId, channelId);
+						},
+						showAlert: Alert.alert,
+					});
 				},
 				getErrorMessage,
 			}),
-		[],
+		[channelId, connectionId],
 	);
 	const workmuxKeyboardSourceKeyRef = useRef(skillSelectorSourceKey);
 

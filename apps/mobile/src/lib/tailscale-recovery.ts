@@ -1,4 +1,8 @@
 import {
+	isNetworkPreflightUsable,
+	type NetworkPreflightSnapshot,
+} from './network-preflight-core';
+import {
 	DEFAULT_TAILSCALE_RESET_DELAY_MS,
 	DEFAULT_TAILSCALE_SETTLE_DELAY_MS,
 	createTailscaleRecoveryCooldown,
@@ -40,11 +44,15 @@ export type TailscaleRecoveryNative = {
 	openApp: () => Promise<TailscaleRecoveryAttemptResult>;
 };
 
+export type NetworkPreflightChecker =
+	() => Promise<NetworkPreflightSnapshot | null>;
+
 type TailscaleRecoveryControllerDeps = {
 	getPlatformOS: () => string;
 	getNowMs: () => number;
 	sleep: (ms: number) => Promise<void>;
 	native: TailscaleRecoveryNative;
+	networkPreflight?: NetworkPreflightChecker;
 	connectTimeoutMs?: number;
 };
 
@@ -54,6 +62,9 @@ type ReactNativeModule = {
 type TailscaleNativeModule = {
 	tailscaleNative: TailscaleRecoveryNative;
 };
+type NetworkPreflightNativeModule = {
+	getNetworkPreflightSnapshot: NetworkPreflightChecker;
+};
 
 declare const require: (id: string) => unknown;
 
@@ -62,6 +73,7 @@ export function createTailscaleRecoveryController({
 	getNowMs,
 	sleep,
 	native,
+	networkPreflight,
 	connectTimeoutMs = DEFAULT_TAILSCALE_CONNECT_TIMEOUT_MS,
 }: TailscaleRecoveryControllerDeps) {
 	const cooldown = createTailscaleRecoveryCooldown();
@@ -145,6 +157,43 @@ export function createTailscaleRecoveryController({
 
 	const checkAvailability = async () =>
 		await runBooleanWithTimeout(() => native.isAvailable(), false);
+
+	const checkNetworkPreflight =
+		(): Promise<NetworkPreflightSnapshot | null> | null => {
+			if (!networkPreflight) return null;
+
+			let timeoutId: ReturnType<typeof setTimeout> | null = null;
+			const timeoutResult = new Promise<null>((resolve) => {
+				timeoutId = setTimeout(() => {
+					timeoutId = null;
+					resolve(null);
+				}, connectTimeoutMs);
+			});
+
+			let preflightResult: Promise<NetworkPreflightSnapshot | null>;
+			try {
+				preflightResult = networkPreflight().catch(() => null);
+			} catch {
+				preflightResult = Promise.resolve(null);
+			}
+
+			return (async () => {
+				try {
+					return await Promise.race([preflightResult, timeoutResult]);
+				} finally {
+					if (timeoutId !== null) {
+						clearTimeout(timeoutId);
+					}
+				}
+			})();
+		};
+
+	const withNetworkPreflight = <Result extends object>(
+		result: Result,
+		network: NetworkPreflightSnapshot | null,
+	): Result & { network?: NetworkPreflightSnapshot } => {
+		return network === null ? result : { ...result, network };
+	};
 
 	const runNativeAttemptWithTimeout = async (
 		attempt: () => Promise<TailscaleRecoveryAttemptResult>,
@@ -257,51 +306,77 @@ export function createTailscaleRecoveryController({
 
 	const createReadyResult = (
 		result: TailscaleConnectCooldownResult,
+		network: NetworkPreflightSnapshot | null,
 	): TailscaleReadyResult => {
 		switch (result.kind) {
 			case 'failed':
-				return { kind: 'failed', attempted: result.attempted, available: true };
+				return withNetworkPreflight(
+					{ kind: 'failed', attempted: result.attempted, available: true },
+					network,
+				);
 			case 'attempted':
-				return { kind: 'ready', attempted: true, available: true };
+				return withNetworkPreflight(
+					{ kind: 'ready', attempted: true, available: true },
+					network,
+				);
 			case 'cooldown':
-				return { kind: 'cooldown', attempted: false, available: true };
+				return withNetworkPreflight(
+					{ kind: 'cooldown', attempted: false, available: true },
+					network,
+				);
 			case 'notStarted':
-				return { kind: 'notStarted', attempted: false, available: true };
+				return withNetworkPreflight(
+					{ kind: 'notStarted', attempted: false, available: true },
+					network,
+				);
 		}
 	};
 
 	const createRecoverAfterFailureResult = (
 		result: TailscaleConnectCooldownResult,
+		network: NetworkPreflightSnapshot | null,
 	): TailscaleRecoverAfterFailureResult => {
 		switch (result.kind) {
 			case 'failed':
-				return {
-					kind: 'failed',
-					attempted: result.attempted,
-					networkLikeFailure: true,
-					available: true,
-				};
+				return withNetworkPreflight(
+					{
+						kind: 'failed',
+						attempted: result.attempted,
+						networkLikeFailure: true,
+						available: true,
+					},
+					network,
+				);
 			case 'attempted':
-				return {
-					kind: 'recovered',
-					attempted: true,
-					networkLikeFailure: true,
-					available: true,
-				};
+				return withNetworkPreflight(
+					{
+						kind: 'recovered',
+						attempted: true,
+						networkLikeFailure: true,
+						available: true,
+					},
+					network,
+				);
 			case 'cooldown':
-				return {
-					kind: 'cooldown',
-					attempted: false,
-					networkLikeFailure: true,
-					available: true,
-				};
+				return withNetworkPreflight(
+					{
+						kind: 'cooldown',
+						attempted: false,
+						networkLikeFailure: true,
+						available: true,
+					},
+					network,
+				);
 			case 'notStarted':
-				return {
-					kind: 'notStarted',
-					attempted: false,
-					networkLikeFailure: true,
-					available: true,
-				};
+				return withNetworkPreflight(
+					{
+						kind: 'notStarted',
+						attempted: false,
+						networkLikeFailure: true,
+						available: true,
+					},
+					network,
+				);
 		}
 	};
 
@@ -311,13 +386,28 @@ export function createTailscaleRecoveryController({
 				return { kind: 'unsupported', attempted: false, available: false };
 			}
 
+			const readinessPreflight = checkNetworkPreflight();
+			const network =
+				readinessPreflight === null ? null : await readinessPreflight;
+			if (network !== null && !isNetworkPreflightUsable(network)) {
+				return {
+					kind: 'networkUnavailable',
+					attempted: false,
+					available: false,
+					network,
+				};
+			}
+
 			const available = await checkAvailability();
 			if (!available) {
-				return { kind: 'unavailable', attempted: false, available: false };
+				return withNetworkPreflight(
+					{ kind: 'unavailable', attempted: false, available: false },
+					network,
+				);
 			}
 
 			const result = await connectWithCooldown('readiness');
-			return createReadyResult(result);
+			return createReadyResult(result, network);
 		},
 
 		async recoverAfterFailure(
@@ -341,6 +431,21 @@ export function createTailscaleRecoveryController({
 				};
 			}
 
+			let network: NetworkPreflightSnapshot | null = null;
+			if (networkLikeFailure) {
+				const failurePreflight = checkNetworkPreflight();
+				network = failurePreflight === null ? null : await failurePreflight;
+				if (network !== null && !isNetworkPreflightUsable(network)) {
+					return {
+						kind: 'networkUnavailable',
+						attempted: false,
+						networkLikeFailure: true,
+						available: false,
+						network,
+					};
+				}
+			}
+
 			const available = await checkAvailability();
 
 			if (!networkLikeFailure) {
@@ -352,24 +457,30 @@ export function createTailscaleRecoveryController({
 				};
 			}
 			if (!available) {
-				return {
-					kind: 'unavailable',
-					attempted: false,
-					networkLikeFailure,
-					available,
-				};
+				return withNetworkPreflight(
+					{
+						kind: 'unavailable',
+						attempted: false,
+						networkLikeFailure,
+						available,
+					},
+					network,
+				);
 			}
 
 			const result = await connectWithCooldown('failure');
 			if (result.kind === 'cooldown' && consumePendingReadinessRetry()) {
-				return {
-					kind: 'preflightReady',
-					attempted: false,
-					networkLikeFailure: true,
-					available: true,
-				};
+				return withNetworkPreflight(
+					{
+						kind: 'preflightReady',
+						attempted: false,
+						networkLikeFailure: true,
+						available: true,
+					},
+					network,
+				);
 			}
-			return createRecoverAfterFailureResult(result);
+			return createRecoverAfterFailureResult(result, network);
 		},
 
 		async reset(): Promise<TailscaleManualResetResult> {
@@ -429,6 +540,8 @@ const defaultSleep = (ms: number) =>
 const getReactNative = () => require('react-native') as ReactNativeModule;
 const getTailscaleNative = async () =>
 	(await import('./tailscale-native')) as TailscaleNativeModule;
+const getNetworkPreflightNative = async () =>
+	(await import('./network-preflight-native')) as NetworkPreflightNativeModule;
 
 const defaultNative: TailscaleRecoveryNative = {
 	isAvailable: async () => {
@@ -449,9 +562,15 @@ const defaultNative: TailscaleRecoveryNative = {
 	},
 };
 
+const defaultNetworkPreflight: NetworkPreflightChecker = async () => {
+	const { getNetworkPreflightSnapshot } = await getNetworkPreflightNative();
+	return await getNetworkPreflightSnapshot();
+};
+
 export const tailscaleRecovery = createTailscaleRecoveryController({
 	getPlatformOS: () => getReactNative().Platform.OS,
 	getNowMs: () => Date.now(),
 	sleep: defaultSleep,
 	native: defaultNative,
+	networkPreflight: defaultNetworkPreflight,
 });
