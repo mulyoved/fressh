@@ -50,7 +50,11 @@ void test('shell detail routes host-page reconnect outcomes to the host page', (
 	assert.match(source, /lastReconnectOutcome/);
 	assert.match(source, /lastReconnectOutcome\.destination\s*===\s*'hostPage'/);
 	assert.match(source, /isReconnecting\s*===\s*false/);
-	assert.match(source, /router\.replace\(['"]\/shell['"]\)/);
+	assert.match(source, /pathname:\s*'\/'/);
+	assert.match(
+		source,
+		/editConnectionId:\s*storedConnectionId\s*\?\?\s*connectionId/,
+	);
 });
 
 void test('Inline Tailscale panel does not use overlay positioning', () => {

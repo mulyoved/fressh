@@ -557,10 +557,13 @@ function ShellDetail() {
 				lastReconnectOutcome &&
 				lastReconnectOutcome.destination === 'hostPage'
 			) {
-				logger.info('reconnect failed, replacing route with /shell', {
+				logger.info('reconnect failed, replacing route with host page', {
 					outcome: lastReconnectOutcome.status,
 				});
-				router.replace('/shell');
+				router.replace({
+					pathname: '/',
+					params: { editConnectionId: storedConnectionId ?? connectionId },
+				});
 				return;
 			}
 			logger.info(
@@ -576,6 +579,8 @@ function ShellDetail() {
 		isAutoConnecting,
 		isReconnecting,
 		lastReconnectOutcome,
+		storedConnectionId,
+		connectionId,
 		router,
 		shell,
 	]);
