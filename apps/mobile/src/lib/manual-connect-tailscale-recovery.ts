@@ -13,6 +13,10 @@ type ManualConnectRecoveryLogger = {
 	warn: (message: string, error: unknown) => void;
 };
 
+function attentionError(message: string) {
+	return new Error(message);
+}
+
 export async function connectWithTailscaleRecovery(args: {
 	platformOS: string;
 	recovery: SavedEntryTailscaleRecovery;
@@ -45,6 +49,7 @@ export async function connectWithTailscaleRecovery(args: {
 		case 'recoveryNotAttempted':
 			if (outcome.attentionMessage !== null) {
 				args.onAttention?.(outcome.attentionMessage);
+				throw attentionError(outcome.attentionMessage);
 			}
 			throw outcome.error;
 		case 'retryFailed':
@@ -55,6 +60,9 @@ export async function connectWithTailscaleRecovery(args: {
 				error: outcome.error,
 				recoveryResult: outcome.recoveryResult,
 			});
+			if (outcome.attentionMessage !== null) {
+				throw attentionError(outcome.attentionMessage);
+			}
 			throw outcome.error;
 		case 'threw':
 			throw outcome.error;

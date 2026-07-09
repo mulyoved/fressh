@@ -7,6 +7,7 @@ import {
 } from '../../src/lib/manual-connect-tailscale-recovery';
 import { createTailscaleRecoveryController } from '../../src/lib/tailscale-recovery';
 import {
+	TAILSCALE_REACHABILITY_MESSAGE,
 	TAILSCALE_RESTART_FAILED_MESSAGE,
 	type TailscaleReadyResult,
 	type TailscaleRecoverAfterFailureResult,
@@ -139,10 +140,9 @@ void test('manual connect clears Tailscale cooldown before explicit Host connect
 	]);
 });
 
-void test('manual connect marks Tailscale attention and throws retry error when recovery retry still cannot reach SSH', async () => {
+void test('manual connect marks and throws Tailscale attention when recovery retry still cannot reach SSH', async () => {
 	const attempts: ManualConnectAttemptPhase[] = [];
 	const attentions: string[] = [];
-	const retryError = networkError('No route to host');
 
 	await assert.rejects(
 		connectWithTailscaleRecovery({
@@ -158,14 +158,44 @@ void test('manual connect marks Tailscale attention and throws retry error when 
 			connect: async (phase) => {
 				attempts.push(phase);
 				throw phase === 'retry'
-					? retryError
+					? networkError('No route to host')
 					: networkError('network is unreachable');
 			},
 			onAttention: (message) => attentions.push(message),
 		}),
-		retryError,
+		(error: unknown) =>
+			error instanceof Error &&
+			error.message === TAILSCALE_RESTART_FAILED_MESSAGE,
 	);
 
 	assert.deepEqual(attempts, ['initial', 'retry']);
 	assert.deepEqual(attentions, [TAILSCALE_RESTART_FAILED_MESSAGE]);
+});
+
+void test('manual connect replaces native Rust abort with Tailscale attention when recovery cannot proceed', async () => {
+	const attentions: string[] = [];
+	const nativeAbort = new Error('A Rust future was aborted');
+
+	await assert.rejects(
+		connectWithTailscaleRecovery({
+			platformOS: 'android',
+			recovery: recoveryFixture({
+				afterFailure: {
+					kind: 'cooldown',
+					attempted: false,
+					networkLikeFailure: true,
+					available: true,
+				},
+			}),
+			connect: async () => {
+				throw nativeAbort;
+			},
+			onAttention: (message) => attentions.push(message),
+		}),
+		(error: unknown) =>
+			error instanceof Error &&
+			error.message === TAILSCALE_REACHABILITY_MESSAGE,
+	);
+
+	assert.deepEqual(attentions, [TAILSCALE_REACHABILITY_MESSAGE]);
 });

@@ -139,6 +139,7 @@ export function isNetworkLikeSshError(error: unknown) {
 		'connection reset',
 		'broken pipe',
 		'software caused connection abort',
+		'a rust future was aborted',
 	].some((needle) => text.includes(needle));
 }
 
