@@ -25,6 +25,11 @@ export function createSavedEntryTailscaleDiagnosticRecovery({
 	emit: (event: ConnectionDiagnosticEvent) => void;
 }): SavedEntryTailscaleRecovery {
 	return {
+		resetCooldown: recovery.resetCooldown
+			? () => {
+					recovery.resetCooldown?.();
+				}
+			: undefined,
 		ensureReady: async () => {
 			const readiness = await recovery.ensureReady();
 			safeEmit(

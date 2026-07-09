@@ -5,6 +5,7 @@ import {
 	type ManualConnectAttemptPhase,
 	type ManualConnectResult,
 } from '../../src/lib/manual-connect-tailscale-recovery';
+import { createTailscaleRecoveryController } from '../../src/lib/tailscale-recovery';
 import {
 	TAILSCALE_RESTART_FAILED_MESSAGE,
 	type TailscaleReadyResult,
@@ -82,6 +83,60 @@ void test('manual connect retries once after Tailscale recovers a network-like S
 	assert.deepEqual(attempts, ['initial', 'retry']);
 	assert.deepEqual(attentions, []);
 	assert.equal(cleared, 1);
+});
+
+void test('manual connect clears Tailscale cooldown before explicit Host connect', async () => {
+	const nativeCalls: string[] = [];
+	const attempts: ManualConnectAttemptPhase[] = [];
+	const recovery = createTailscaleRecoveryController({
+		getPlatformOS: () => 'android',
+		getNowMs: () => 1_000,
+		sleep: async () => {},
+		native: {
+			isAvailable: async () => {
+				nativeCalls.push('isAvailable');
+				return true;
+			},
+			connect: async () => {
+				nativeCalls.push('connect');
+				return { attempted: true };
+			},
+			disconnect: async () => {
+				nativeCalls.push('disconnect');
+				return { attempted: true };
+			},
+			openApp: async () => {
+				nativeCalls.push('openApp');
+				return { attempted: true };
+			},
+		},
+	});
+
+	await recovery.ensureReady();
+	assert.deepEqual(await recovery.ensureReady(), {
+		kind: 'cooldown',
+		attempted: false,
+		available: true,
+	});
+
+	const result = await connectWithTailscaleRecovery({
+		platformOS: 'android',
+		recovery,
+		connect: async (phase) => {
+			attempts.push(phase);
+			return connectedResult();
+		},
+	});
+
+	assert.equal(result.status, 'connected');
+	assert.deepEqual(attempts, ['initial']);
+	assert.deepEqual(nativeCalls, [
+		'isAvailable',
+		'connect',
+		'isAvailable',
+		'isAvailable',
+		'connect',
+	]);
 });
 
 void test('manual connect marks Tailscale attention and throws retry error when recovery retry still cannot reach SSH', async () => {

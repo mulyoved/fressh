@@ -21,6 +21,7 @@ export async function connectWithTailscaleRecovery(args: {
 	onClearAttention?: () => void;
 	logger?: ManualConnectRecoveryLogger;
 }): Promise<ManualConnectResult> {
+	args.recovery.resetCooldown?.();
 	const outcome = await attemptSavedEntryWithTailscaleRecovery({
 		platformOS: args.platformOS,
 		recovery: args.recovery,

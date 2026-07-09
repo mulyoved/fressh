@@ -39,6 +39,7 @@ export type AbortedSavedEntryConnectResult = Extract<
 export type SavedEntryConnectAttemptPhase = 'initial' | 'retry';
 
 export type SavedEntryTailscaleRecovery = {
+	resetCooldown?: () => void;
 	ensureReady: () => Promise<TailscaleReadyResult>;
 	recoverAfterFailure: (
 		error: unknown,
