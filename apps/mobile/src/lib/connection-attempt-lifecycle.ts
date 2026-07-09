@@ -11,8 +11,11 @@ import {
 	type ConnectionRunTimeoutKind,
 	type ConnectionRunTimeouts,
 } from './connection-run-context';
+import { rootLogger } from './logger';
 
 export type ConnectionAttemptTimeouts = ConnectionRunTimeouts;
+
+const logger = rootLogger.extend('ConnectionAttemptLifecycle');
 
 type ConnectedConnectionAttemptOutcome = {
 	status: 'connected';
@@ -227,6 +230,13 @@ async function cleanupConnectedOutcome({
 	) => Promise<void>;
 }): Promise<LateCleanupFailureOutcome | null> {
 	try {
+		logger.debug('cleanup connected outcome requested', {
+			connectionId: outcome.connectionId,
+			channelId: outcome.channelId,
+			runAbortReason: runContext.abortReason,
+			runTimeoutKind: runContext.timeoutKind,
+			hasCleanup: typeof outcome.cleanup === 'function',
+		});
 		const cleanupResult = await runContext.runOperation(
 			'cleanup',
 			async (signal) => {
@@ -234,10 +244,24 @@ async function cleanupConnectedOutcome({
 			},
 		);
 		if (cleanupResult.status === 'aborted') {
+			logger.debug('cleanup connected outcome aborted', {
+				connectionId: outcome.connectionId,
+				channelId: outcome.channelId,
+				cleanupResult,
+			});
 			return mapAborted(cleanupResult);
 		}
+		logger.debug('cleanup connected outcome completed', {
+			connectionId: outcome.connectionId,
+			channelId: outcome.channelId,
+		});
 		return null;
 	} catch (error) {
+		logger.debug('cleanup connected outcome failed', {
+			connectionId: outcome.connectionId,
+			channelId: outcome.channelId,
+			error,
+		});
 		return { status: 'cleanupFailed', error, priorOutcome: outcome };
 	}
 }
@@ -255,6 +279,13 @@ async function cleanupActiveShellResult({
 	) => Promise<void>;
 }): Promise<LateCleanupFailureOutcome | null> {
 	try {
+		logger.debug('cleanup active shell requested', {
+			connectionId: result.connectionId,
+			channelId: result.channelId,
+			runAbortReason: runContext.abortReason,
+			runTimeoutKind: runContext.timeoutKind,
+			hasClose: typeof result.close === 'function',
+		});
 		const cleanupResult = await runContext.runOperation(
 			'cleanup',
 			async (signal) => {
@@ -262,10 +293,24 @@ async function cleanupActiveShellResult({
 			},
 		);
 		if (cleanupResult.status === 'aborted') {
+			logger.debug('cleanup active shell aborted', {
+				connectionId: result.connectionId,
+				channelId: result.channelId,
+				cleanupResult,
+			});
 			return mapAborted(cleanupResult);
 		}
+		logger.debug('cleanup active shell completed', {
+			connectionId: result.connectionId,
+			channelId: result.channelId,
+		});
 		return null;
 	} catch (error) {
+		logger.debug('cleanup active shell failed', {
+			connectionId: result.connectionId,
+			channelId: result.channelId,
+			error,
+		});
 		return {
 			status: 'cleanupFailed',
 			error,
@@ -295,14 +340,29 @@ async function cleanupLateSavedEntryConnected({
 	onLateCleanupFailure?: (outcome: LateCleanupFailureOutcome) => void;
 }) {
 	if (lateConnected === null || cleanupStarted()) {
+		logger.debug('cleanup late saved entry skipped', {
+			hasLateConnected: lateConnected !== null,
+		});
 		return;
 	}
+	logger.debug('cleanup late saved entry starting', {
+		connectionId: lateConnected.connectionId,
+		channelId: lateConnected.channelId,
+		runAbortReason: runContext.abortReason,
+		runTimeoutKind: runContext.timeoutKind,
+		hasCleanup: typeof lateConnected.cleanup === 'function',
+	});
 	const cleanupOutcome = await cleanupConnectedOutcome({
 		runContext,
 		outcome: lateConnected,
 		cleanupConnected,
 	});
 	if (cleanupOutcome !== null) {
+		logger.debug('cleanup late saved entry reported failure', {
+			connectionId: lateConnected.connectionId,
+			channelId: lateConnected.channelId,
+			cleanupOutcome,
+		});
 		reportLateCleanupFailure(onLateCleanupFailure, cleanupOutcome);
 	}
 }
@@ -372,6 +432,13 @@ export async function runSavedEntryConnectionAttempt(
 								const outcome = mapSavedEntryResult(result);
 								if (outcome.status === 'connected') {
 									lateConnected = outcome;
+									logger.debug('saved entry connected promise settled', {
+										connectionId: outcome.connectionId,
+										channelId: outcome.channelId,
+										signalAborted: signal.aborted,
+										runAbortReason: args.runContext.abortReason,
+										runTimeoutKind: args.runContext.timeoutKind,
+									});
 									if (signal.aborted) {
 										void cleanupLateConnected();
 									}
@@ -383,6 +450,13 @@ export async function runSavedEntryConnectionAttempt(
 						const outcome = mapSavedEntryResult(result);
 						if (outcome.status === 'connected') {
 							lateConnected = outcome;
+							logger.debug('saved entry connected before operation returned', {
+								connectionId: outcome.connectionId,
+								channelId: outcome.channelId,
+								signalAborted: signal.aborted,
+								runAbortReason: args.runContext.abortReason,
+								runTimeoutKind: args.runContext.timeoutKind,
+							});
 						}
 						return result;
 					},

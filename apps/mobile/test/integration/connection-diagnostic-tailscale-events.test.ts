@@ -49,6 +49,18 @@ void test('tailscale ensure-ready copies every readiness variant explicitly', ()
 	const readinessVariants = [
 		{ kind: 'unsupported', attempted: false, available: false },
 		{ kind: 'unavailable', attempted: false, available: false },
+		{
+			kind: 'networkUnavailable',
+			attempted: false,
+			available: false,
+			network: {
+				connected: false,
+				internetCapable: false,
+				validated: false,
+				wifiConnected: false,
+				transports: [],
+			},
+		},
 		{ kind: 'ready', attempted: true, available: true },
 		{ kind: 'cooldown', attempted: false, available: true },
 		{ kind: 'notStarted', attempted: false, available: true },
@@ -86,6 +98,19 @@ void test('tailscale recovery copies every recovery variant explicitly', () => {
 			attempted: false,
 			networkLikeFailure: true,
 			available: false,
+		},
+		{
+			kind: 'networkUnavailable',
+			attempted: false,
+			networkLikeFailure: true,
+			available: false,
+			network: {
+				connected: false,
+				internetCapable: false,
+				validated: false,
+				wifiConnected: false,
+				transports: [],
+			},
 		},
 		{
 			kind: 'cooldown',

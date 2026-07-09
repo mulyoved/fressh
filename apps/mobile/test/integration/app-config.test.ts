@@ -10,10 +10,10 @@ const packageJson = require('../../package.json') as {
 	dependencies: { expo: string };
 };
 
-void test('runtimeVersion changes when native Tailscale recovery ABI changes', () => {
+void test('runtimeVersion changes when native network preflight ABI changes', () => {
 	assert.equal(
 		config.runtimeVersion,
-		`${packageJson.version}-native-tailscale-recovery-v1`,
+		`${packageJson.version}-native-network-preflight-v1`,
 	);
 	assert.notEqual(config.runtimeVersion, packageJson.dependencies.expo);
 });
@@ -38,6 +38,17 @@ void test('app config installs the Tailscale native plugin', () => {
 			Array.isArray(plugin)
 				? plugin[0] === './plugins/with-tailscale'
 				: plugin === './plugins/with-tailscale',
+		),
+		true,
+	);
+});
+
+void test('app config installs the connectivity native plugin', () => {
+	assert.equal(
+		config.plugins?.some((plugin) =>
+			Array.isArray(plugin)
+				? plugin[0] === './plugins/with-connectivity'
+				: plugin === './plugins/with-connectivity',
 		),
 		true,
 	);

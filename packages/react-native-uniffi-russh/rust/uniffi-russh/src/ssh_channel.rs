@@ -1,6 +1,6 @@
 use russh::{client, Channel};
 
-use crate::utils::CLOSE_TIMEOUT;
+use crate::utils::{trace_debug, CLOSE_TIMEOUT};
 
 pub(crate) struct StartupChannelCloseGuard {
     channel: Option<Channel<client::Msg>>,
@@ -33,6 +33,10 @@ impl StartupChannelCloseGuard {
 
     pub(crate) async fn close(mut self) {
         if let Some(channel) = self.channel.take() {
+            let channel_id: u32 = channel.id().into();
+            trace_debug(format!(
+                "startup-channel-close explicit channel={channel_id}"
+            ));
             tokio::time::timeout(CLOSE_TIMEOUT, channel.close())
                 .await
                 .ok();
@@ -43,6 +47,8 @@ impl StartupChannelCloseGuard {
 impl Drop for StartupChannelCloseGuard {
     fn drop(&mut self) {
         if let Some(channel) = self.channel.take() {
+            let channel_id: u32 = channel.id().into();
+            trace_debug(format!("startup-channel-close drop channel={channel_id}"));
             tokio::spawn(async move {
                 tokio::time::timeout(CLOSE_TIMEOUT, channel.close())
                     .await

@@ -11,7 +11,7 @@ use bytes::Bytes;
 
 use crate::{
     ssh_connection::SshConnection,
-    utils::{catch_foreign_callback_unwind, now_ms, SshError, CLOSE_TIMEOUT},
+    utils::{catch_foreign_callback_unwind, now_ms, trace_debug, SshError, CLOSE_TIMEOUT},
 };
 use russh::{self, client};
 use tokio::sync::{broadcast, Mutex as AsyncMutex};
@@ -524,6 +524,10 @@ impl ShellSession {
     }
 
     async fn close_internal(&self) -> Result<(), SshError> {
+        trace_debug(format!(
+            "shell-close explicit connection={} channel={}",
+            self.info.connection_id, self.info.channel_id
+        ));
         self.reader_task.abort();
         self.abort_listener_tasks();
         emit_shell_closed_once(
@@ -540,6 +544,10 @@ impl ShellSession {
         })
         .await
         .ok();
+        trace_debug(format!(
+            "shell-close complete connection={} channel={}",
+            self.info.connection_id, self.info.channel_id
+        ));
         Ok(())
     }
 
@@ -565,6 +573,10 @@ impl ShellSession {
 
 impl Drop for ShellSession {
     fn drop(&mut self) {
+        trace_debug(format!(
+            "shell-drop connection={} channel={}",
+            self.info.connection_id, self.info.channel_id
+        ));
         self.reader_task.abort();
         self.abort_listener_tasks();
     }

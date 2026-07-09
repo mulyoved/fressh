@@ -50,7 +50,10 @@ import {
 } from '@/lib/agent-notification-visibility';
 import { useAutoConnectStore } from '@/lib/auto-connect';
 import { restartCodexWithBridge } from '@/lib/codex-restart';
-import { type ConnectionDiagnosticEvent } from '@/lib/connection-diagnostics';
+import {
+	formatConnectionDiagnosticEventFields,
+	type ConnectionDiagnosticEvent,
+} from '@/lib/connection-diagnostics';
 import { getStoredConnectionId } from '@/lib/connection-utils';
 import {
 	planDetectedOpenShortcutPress,
@@ -524,9 +527,22 @@ function ShellDetail() {
 		() => ({
 			event: (event: ConnectionDiagnosticEvent) => {
 				activeDiagnosticTraceRef.current?.event(event);
+				const state = useSshStore.getState();
+				const storeKey = `${connectionId}-${channelId}` as const;
+				logger.info('Workmux diagnostic event', {
+					connectionId,
+					channelId,
+					kind: event.kind,
+					fields: formatConnectionDiagnosticEventFields(event),
+					message: (event as { message?: unknown }).message,
+					hasConnection: Boolean(state.connections[connectionId]),
+					hasShell: Boolean(state.shells[storeKey]),
+					connectionCount: Object.keys(state.connections).length,
+					shellCount: Object.keys(state.shells).length,
+				});
 			},
 		}),
-		[],
+		[channelId, connectionId],
 	);
 	const [tmuxTarget, setTmuxTarget] = useState(
 		tmuxSessionName?.trim().length ? tmuxSessionName.trim() : 'main',
@@ -2464,14 +2480,83 @@ function ShellDetail() {
 				isTmuxEnabled: () => workmuxKeyboardTmuxEnabledRef.current,
 				getSessionName: () => workmuxKeyboardTmuxTargetRef.current,
 				getNavScope: () => preferences.workmuxNavScope.get(),
-				runWorkmuxCommand: (argv, timeoutMs) =>
-					runShellWorkmuxKeyboardCommand({
+				runWorkmuxCommand: (argv, timeoutMs) => {
+					const startedAtMs = Date.now();
+					const stateAtStart = useSshStore.getState();
+					const storeKey = `${connectionId}-${channelId}` as const;
+					logger.info('Workmux keyboard command start', {
+						connectionId,
+						channelId,
 						argv,
-						runCommand: (commandArgv, options) =>
-							workmuxControlChannelRef.current.command(commandArgv, options),
 						timeoutMs,
-					}),
+						hasConnection: Boolean(stateAtStart.connections[connectionId]),
+						hasShell: Boolean(stateAtStart.shells[storeKey]),
+						connectionCount: Object.keys(stateAtStart.connections).length,
+						shellCount: Object.keys(stateAtStart.shells).length,
+					});
+					return runShellWorkmuxKeyboardCommand({
+						argv,
+						runCommand: async (commandArgv, options) => {
+							try {
+								const result = await workmuxControlChannelRef.current.command(
+									commandArgv,
+									options,
+								);
+								const stateAtEnd = useSshStore.getState();
+								logger.info('Workmux keyboard command result', {
+									connectionId,
+									channelId,
+									argv: commandArgv,
+									timeoutMs: options.timeoutMs,
+									elapsedMs: Date.now() - startedAtMs,
+									success: result.success,
+									failureClass: result.failureClass,
+									error: result.error,
+									outputBytes: result.output.length,
+									hasConnection: Boolean(stateAtEnd.connections[connectionId]),
+									hasShell: Boolean(stateAtEnd.shells[storeKey]),
+									connectionCount: Object.keys(stateAtEnd.connections).length,
+									shellCount: Object.keys(stateAtEnd.shells).length,
+								});
+								return result;
+							} catch (error) {
+								const stateAtError = useSshStore.getState();
+								logger.warn('Workmux keyboard command threw', {
+									connectionId,
+									channelId,
+									argv: commandArgv,
+									timeoutMs: options.timeoutMs,
+									elapsedMs: Date.now() - startedAtMs,
+									error:
+										error instanceof Error
+											? { name: error.name, message: error.message }
+											: String(error),
+									hasConnection: Boolean(
+										stateAtError.connections[connectionId],
+									),
+									hasShell: Boolean(stateAtError.shells[storeKey]),
+									connectionCount: Object.keys(stateAtError.connections).length,
+									shellCount: Object.keys(stateAtError.shells).length,
+								});
+								throw error;
+							}
+						},
+						timeoutMs,
+					});
+				},
 				showFailure: ({ message, failureClass }) => {
+					const state = useSshStore.getState();
+					const storeKey = `${connectionId}-${channelId}` as const;
+					logger.warn('Workmux keyboard command failure', {
+						connectionId,
+						channelId,
+						failureClass,
+						message,
+						hasConnection: Boolean(state.connections[connectionId]),
+						hasShell: Boolean(state.shells[storeKey]),
+						connectionCount: Object.keys(state.connections).length,
+						shellCount: Object.keys(state.shells).length,
+					});
 					showShellWorkmuxKeyboardFailure({
 						failureClass,
 						isFocused: isFocusedRef.current,

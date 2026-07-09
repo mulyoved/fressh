@@ -7,6 +7,7 @@ import {
 } from '../../src/lib/manual-connect-tailscale-recovery';
 import { createTailscaleRecoveryController } from '../../src/lib/tailscale-recovery';
 import {
+	NETWORK_UNAVAILABLE_MESSAGE,
 	TAILSCALE_REACHABILITY_MESSAGE,
 	TAILSCALE_RESTART_FAILED_MESSAGE,
 	type TailscaleReadyResult,
@@ -138,6 +139,42 @@ void test('manual connect clears Tailscale cooldown before explicit Host connect
 		'isAvailable',
 		'connect',
 	]);
+});
+
+void test('manual connect shows network attention before SSH when network is unavailable', async () => {
+	const attempts: ManualConnectAttemptPhase[] = [];
+	const attentions: string[] = [];
+
+	await assert.rejects(
+		connectWithTailscaleRecovery({
+			platformOS: 'android',
+			recovery: recoveryFixture({
+				ready: {
+					kind: 'networkUnavailable',
+					attempted: false,
+					available: false,
+					network: {
+						connected: false,
+						internetCapable: false,
+						validated: false,
+						wifiConnected: false,
+						transports: [],
+					},
+				},
+			}),
+			connect: async (phase) => {
+				attempts.push(phase);
+				return connectedResult();
+			},
+			onAttention: (message) => attentions.push(message),
+		}),
+		(error: unknown) =>
+			error instanceof Error &&
+			error.message === NETWORK_UNAVAILABLE_MESSAGE,
+	);
+
+	assert.deepEqual(attempts, []);
+	assert.deepEqual(attentions, [NETWORK_UNAVAILABLE_MESSAGE]);
 });
 
 void test('manual connect marks and throws Tailscale attention when recovery retry still cannot reach SSH', async () => {

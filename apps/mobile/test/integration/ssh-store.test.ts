@@ -12,10 +12,11 @@ type StartShellOptions = {
 
 void test('ssh registry keeps hidden shells out of store and native args', async () => {
 	const startShellOptions: StartShellOptions[] = [];
-	const hiddenShell = { channelId: 10 };
-	const visibleShell = { channelId: 11 };
+	const hiddenShell = { channelId: 10, close: async () => {} };
+	const visibleShell = { channelId: 11, close: async () => {} };
 	const connection = {
 		connectionId: 'conn-1',
+		disconnect: async () => {},
 		startShell: async (options: StartShellOptions) => {
 			startShellOptions.push(options);
 			return startShellOptions.length === 1 ? hiddenShell : visibleShell;
@@ -31,7 +32,8 @@ void test('ssh registry keeps hidden shells out of store and native args', async
 		registerInStore: false,
 	} as never);
 
-	assert.equal(hidden, hiddenShell);
+	assert.equal(hidden.channelId, hiddenShell.channelId);
+	assert.notEqual(hidden, hiddenShell);
 	assert.equal('registerInStore' in startShellOptions[0]!, false);
 	assert.deepEqual(store.getState().shells, {});
 
@@ -41,7 +43,8 @@ void test('ssh registry keeps hidden shells out of store and native args', async
 		tmuxSessionName: 'main',
 	} as never);
 
-	assert.equal(visible, visibleShell);
+	assert.equal(visible.channelId, visibleShell.channelId);
+	assert.notEqual(visible, visibleShell);
 	assert.equal('registerInStore' in startShellOptions[1]!, false);
 	assert.deepEqual(Object.keys(store.getState().shells), ['conn-1-11']);
 

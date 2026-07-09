@@ -8,6 +8,7 @@ export type MdevBridgeLifecycleStage =
 	| 'stream-starting'
 	| 'hello-complete'
 	| 'request-started'
+	| 'request-completed'
 	| 'request-failed'
 	| 'stream-closed'
 	| 'client-disposed';
@@ -41,6 +42,7 @@ export type MdevBridgeLifecycleEvent = ConnectionDiagnosticEventBase & {
 	helloComplete?: boolean;
 	bridgeRequestInFlight?: boolean;
 	closeClass?: MdevBridgeCloseClass;
+	success?: boolean;
 };
 
 export const mdevBridgeDiagnosticEventKinds = [
@@ -56,19 +58,20 @@ export const mdevBridgeDiagnosticEvents = {
 		helloComplete?: boolean;
 		bridgeRequestInFlight?: boolean;
 		closeClass?: MdevBridgeCloseClass;
+		success?: boolean;
 		message?: string;
-	}): MdevBridgeLifecycleEvent =>
-		({
-			kind: 'mdev-bridge.lifecycle',
-			source: input.source,
-			message: input.message,
-			stage: input.stage,
-			operation: input.operation,
-			requestId: input.requestId,
-			helloComplete: input.helloComplete,
-			bridgeRequestInFlight: input.bridgeRequestInFlight,
-			closeClass: input.closeClass,
-		}),
+	}): MdevBridgeLifecycleEvent => ({
+		kind: 'mdev-bridge.lifecycle',
+		source: input.source,
+		message: input.message,
+		stage: input.stage,
+		operation: input.operation,
+		requestId: input.requestId,
+		helloComplete: input.helloComplete,
+		bridgeRequestInFlight: input.bridgeRequestInFlight,
+		closeClass: input.closeClass,
+		...(typeof input.success === 'boolean' ? { success: input.success } : {}),
+	}),
 } as const;
 
 export function formatMdevBridgeEventFields(
@@ -90,6 +93,9 @@ export function formatMdevBridgeEventFields(
 			: []),
 		...(event.closeClass
 			? [`closeClass=${safeDiagnosticString(event.closeClass)}`]
+			: []),
+		...(typeof event.success === 'boolean'
+			? [`success=${String(event.success)}`]
 			: []),
 	];
 }

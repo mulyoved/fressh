@@ -1,3 +1,8 @@
+import {
+	getNetworkPreflightAttentionMessage,
+	type NetworkPreflightSnapshot,
+} from './network-preflight-core';
+
 export const DEFAULT_TAILSCALE_RECOVERY_COOLDOWN_MS = 20_000;
 export const DEFAULT_TAILSCALE_SETTLE_DELAY_MS = 3_000;
 export const DEFAULT_TAILSCALE_RESET_DELAY_MS = 1_500;
@@ -11,14 +16,45 @@ export const TAILSCALE_RESET_FAILED_MESSAGE =
 	'Tailscale reset failed. Open Tailscale, then retry Fressh.';
 export const TAILSCALE_RESET_NOT_STARTED_MESSAGE =
 	'Tailscale reset did not start. Open Tailscale, then retry Fressh.';
+export { NETWORK_UNAVAILABLE_MESSAGE } from './network-preflight-core';
+
+type NetworkPreflightMetadata = {
+	network?: NetworkPreflightSnapshot;
+};
 
 export type TailscaleReadyResult =
 	| { kind: 'unsupported'; attempted: false; available: false }
-	| { kind: 'unavailable'; attempted: false; available: false }
-	| { kind: 'ready'; attempted: true; available: true }
-	| { kind: 'cooldown'; attempted: false; available: true }
-	| { kind: 'notStarted'; attempted: false; available: true }
-	| { kind: 'failed'; attempted: boolean; available: true };
+	| ({
+			kind: 'unavailable';
+			attempted: false;
+			available: false;
+	  } & NetworkPreflightMetadata)
+	| {
+			kind: 'networkUnavailable';
+			attempted: false;
+			available: false;
+			network: NetworkPreflightSnapshot;
+	  }
+	| ({
+			kind: 'ready';
+			attempted: true;
+			available: true;
+	  } & NetworkPreflightMetadata)
+	| ({
+			kind: 'cooldown';
+			attempted: false;
+			available: true;
+	  } & NetworkPreflightMetadata)
+	| ({
+			kind: 'notStarted';
+			attempted: false;
+			available: true;
+	  } & NetworkPreflightMetadata)
+	| ({
+			kind: 'failed';
+			attempted: boolean;
+			available: true;
+	  } & NetworkPreflightMetadata);
 
 export type TailscaleRecoverAfterFailureResult =
 	| {
@@ -33,42 +69,49 @@ export type TailscaleRecoverAfterFailureResult =
 			networkLikeFailure: true;
 			available: false;
 	  }
-	| {
+	| ({
 			kind: 'unavailable';
 			attempted: false;
 			networkLikeFailure: true;
 			available: false;
-	  }
+	  } & NetworkPreflightMetadata)
 	| {
+			kind: 'networkUnavailable';
+			attempted: false;
+			networkLikeFailure: true;
+			available: false;
+			network: NetworkPreflightSnapshot;
+	  }
+	| ({
 			kind: 'cooldown';
 			attempted: false;
 			networkLikeFailure: true;
 			available: true;
-	  }
-	| {
+	  } & NetworkPreflightMetadata)
+	| ({
 			kind: 'notStarted';
 			attempted: false;
 			networkLikeFailure: true;
 			available: true;
-	  }
-	| {
+	  } & NetworkPreflightMetadata)
+	| ({
 			kind: 'preflightReady';
 			attempted: false;
 			networkLikeFailure: true;
 			available: true;
-	  }
-	| {
+	  } & NetworkPreflightMetadata)
+	| ({
 			kind: 'recovered';
 			attempted: true;
 			networkLikeFailure: true;
 			available: true;
-	  }
-	| {
+	  } & NetworkPreflightMetadata)
+	| ({
 			kind: 'failed';
 			attempted: boolean;
 			networkLikeFailure: true;
 			available: true;
-	  };
+	  } & NetworkPreflightMetadata);
 
 export type TailscaleManualResetResult =
 	| { kind: 'unsupported'; attempted: false }
@@ -170,6 +213,8 @@ export function getTailscaleRecoveryAttentionMessage(
 	result: TailscaleReadyResult | TailscaleRecoverAfterFailureResult,
 ) {
 	switch (result.kind) {
+		case 'networkUnavailable':
+			return getNetworkPreflightAttentionMessage(result.network);
 		case 'unavailable':
 			return TAILSCALE_UNAVAILABLE_MESSAGE;
 		case 'cooldown':

@@ -4,6 +4,7 @@ export const connectionDiagnosticSources = [
 	'saved-entry',
 	'reconnect',
 	'tailscale-recovery',
+	'network-preflight',
 	'reconnect-controller',
 	'mdev-bridge',
 	'manual-diagnostic',

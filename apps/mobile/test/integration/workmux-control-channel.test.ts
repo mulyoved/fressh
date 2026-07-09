@@ -577,7 +577,14 @@ void test('WorkmuxControlChannel forwards lifecycle trace to production bridge c
 		events
 			.filter((event) => event.kind === 'mdev-bridge.lifecycle')
 			.map((event) => event.stage),
-		['stream-starting', 'request-started', 'hello-complete', 'request-started'],
+		[
+			'stream-starting',
+			'request-started',
+			'hello-complete',
+			'request-completed',
+			'request-started',
+			'request-completed',
+		],
 	);
 });
 

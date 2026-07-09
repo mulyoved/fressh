@@ -20,6 +20,13 @@ Tailscale while a tmux-backed shell is open.
 4. Confirm switching tmux windows from the app controls works.
 5. Start screenshots or screen recording if available.
 
+Optional slow-network setup:
+
+- Use [Tailscale Latency Shaping](./tailscale-latency-shaping.md) to add about
+  one second of VM-to-tablet latency while keeping the delay scoped to the
+  tablet Tailscale IP.
+- Remove the shaping before ending the test session.
+
 ## Reconnect Validation
 
 1. Disconnect Tailscale on the tablet.

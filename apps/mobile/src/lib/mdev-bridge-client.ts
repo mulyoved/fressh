@@ -297,6 +297,7 @@ export function createMdevBridgeClient({
 			| 'stream-starting'
 			| 'hello-complete'
 			| 'request-started'
+			| 'request-completed'
 			| 'request-failed'
 			| 'stream-closed'
 			| 'client-disposed';
@@ -304,6 +305,7 @@ export function createMdevBridgeClient({
 		requestId?: string | null;
 		closeClass?: MdevBridgeFailureClass;
 		message?: string;
+		success?: boolean;
 	}) {
 		try {
 			trace?.event(
@@ -316,6 +318,7 @@ export function createMdevBridgeClient({
 					bridgeRequestInFlight: pending !== null,
 					closeClass: input.closeClass,
 					message: input.message,
+					success: input.success,
 				}),
 			);
 		} catch {
@@ -334,6 +337,14 @@ export function createMdevBridgeClient({
 		if (!request) return;
 		pending = null;
 		clearTimeout(request.timer);
+		emitLifecycle({
+			stage: 'request-completed',
+			operation: request.operation,
+			requestId: request.id,
+			closeClass: result.failureClass,
+			message: result.error,
+			success: result.success,
+		});
 		request.resolve(result);
 	}
 
