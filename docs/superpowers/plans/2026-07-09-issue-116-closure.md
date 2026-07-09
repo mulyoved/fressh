@@ -136,7 +136,7 @@ EOF
 )"
 ````
 
-Expected: exits `0` and prints a GitHub issue URL.
+Expected: exits `0` and prints successful close output.
 
 - [ ] **Step 2: Confirm issue 116 is closed**
 
