@@ -49,7 +49,26 @@ export function shouldShowShellWorkmuxKeyboardFailure({
 	if (isMdevBridgeDisposedByReconnectFailureClass(failureClass)) {
 		return false;
 	}
+	if (
+		shouldTreatShellWorkmuxKeyboardFailureAsTransportUnhealthy({
+			failureClass,
+		})
+	) {
+		return false;
+	}
 	return shouldShowFocusedActiveFeedback({ isFocused, isAppActive });
+}
+
+export function shouldTreatShellWorkmuxKeyboardFailureAsTransportUnhealthy({
+	failureClass,
+}: {
+	failureClass?: MdevBridgeFailureClass;
+}): boolean {
+	return (
+		failureClass === 'timeout' ||
+		failureClass === 'remoteClosed' ||
+		failureClass === 'sendFailed'
+	);
 }
 
 export function showShellWorkmuxKeyboardFailure({
@@ -57,14 +76,27 @@ export function showShellWorkmuxKeyboardFailure({
 	isAppActive,
 	isFocused,
 	message,
+	onTransportUnhealthy,
 	showAlert,
 }: {
 	failureClass?: MdevBridgeFailureClass;
 	isAppActive: boolean;
 	isFocused: boolean;
 	message: string;
+	onTransportUnhealthy?: (input: {
+		failureClass?: MdevBridgeFailureClass;
+		message: string;
+	}) => void;
 	showAlert: (title: string, message: string) => void;
 }): void {
+	if (
+		shouldTreatShellWorkmuxKeyboardFailureAsTransportUnhealthy({
+			failureClass,
+		})
+	) {
+		onTransportUnhealthy?.({ failureClass, message });
+		return;
+	}
 	if (
 		!shouldShowShellWorkmuxKeyboardFailure({
 			failureClass,

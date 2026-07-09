@@ -2473,16 +2473,28 @@ function ShellDetail() {
 					}),
 				showFailure: ({ message, failureClass }) => {
 					showShellWorkmuxKeyboardFailure({
-							failureClass,
-							isFocused: isFocusedRef.current,
-							isAppActive: isAppActiveRef.current,
+						failureClass,
+						isFocused: isFocusedRef.current,
+						isAppActive: isAppActiveRef.current,
 						message,
+						onTransportUnhealthy: (failure) => {
+							logger.warn('Workmux transport unhealthy, triggering reconnect', {
+								connectionId,
+								channelId,
+								failureClass: failure.failureClass,
+								message: failure.message,
+							});
+							if (!isFocusedRef.current || !isAppActiveRef.current) return;
+							useSshStore
+								.getState()
+								.invalidateShellTransport(connectionId, channelId);
+						},
 						showAlert: Alert.alert,
 					});
 				},
 				getErrorMessage,
 			}),
-		[],
+		[channelId, connectionId],
 	);
 	const workmuxKeyboardSourceKeyRef = useRef(skillSelectorSourceKey);
 

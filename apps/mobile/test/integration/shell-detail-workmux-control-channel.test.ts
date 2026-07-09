@@ -225,6 +225,24 @@ void describe('shell detail Workmux control channel wiring', () => {
 		);
 	});
 
+	void test('routes Workmux transport failures into shell transport invalidation', () => {
+		const source = readFileSync(detailSourcePath, 'utf8');
+
+		assert.match(
+			source,
+			/import \{ useSshStore \} from '@\/lib\/ssh-store'/,
+		);
+		assert.match(source, /onTransportUnhealthy:\s*\(failure\)\s*=>/);
+		assert.match(
+			source,
+			/Workmux transport unhealthy, triggering reconnect/,
+		);
+		assert.match(
+			source,
+			/useSshStore\s*\.\s*getState\(\)\s*\.\s*invalidateShellTransport\(connectionId,\s*channelId\)/,
+		);
+	});
+
 	void test('passes only the connection into WorkmuxControlChannel for Workmux control commands', () => {
 		const source = readFileSync(detailSourcePath, 'utf8');
 		const block = extractCreateWorkmuxControlChannelBlock(source);

@@ -4,6 +4,7 @@ import {
 	WorkmuxCommandFailure,
 	runShellWorkmuxKeyboardCommand,
 	shouldShowShellWorkmuxKeyboardFailure,
+	shouldTreatShellWorkmuxKeyboardFailureAsTransportUnhealthy,
 	showShellWorkmuxKeyboardFailure,
 } from '../../src/app/shell/shell-workmux-keyboard-policy';
 
@@ -21,11 +22,36 @@ void test('shell Workmux keyboard failure policy suppresses reconnect-owned brid
 void test('shell Workmux keyboard failure policy shows ordinary active failures', () => {
 	assert.equal(
 		shouldShowShellWorkmuxKeyboardFailure({
-			failureClass: 'remoteClosed',
+			failureClass: 'protocolError',
 			isFocused: true,
 			isAppActive: true,
 		}),
 		true,
+	);
+});
+
+void test('shell Workmux keyboard failure policy treats transport failures as reconnect signals', () => {
+	for (const failureClass of ['timeout', 'remoteClosed', 'sendFailed'] as const) {
+		assert.equal(
+			shouldTreatShellWorkmuxKeyboardFailureAsTransportUnhealthy({
+				failureClass,
+			}),
+			true,
+		);
+		assert.equal(
+			shouldShowShellWorkmuxKeyboardFailure({
+				failureClass,
+				isFocused: true,
+				isAppActive: true,
+			}),
+			false,
+		);
+	}
+	assert.equal(
+		shouldTreatShellWorkmuxKeyboardFailureAsTransportUnhealthy({
+			failureClass: 'protocolError',
+		}),
+		false,
 	);
 });
 
@@ -105,14 +131,14 @@ void test('shell Workmux keyboard failure alert suppresses reconnect disposal an
 		showAlert,
 	});
 	showShellWorkmuxKeyboardFailure({
-		failureClass: 'remoteClosed',
+		failureClass: 'protocolError',
 		isFocused: true,
 		isAppActive: true,
 		message: 'remote failed',
 		showAlert,
 	});
 	showShellWorkmuxKeyboardFailure({
-		failureClass: 'remoteClosed',
+		failureClass: 'protocolError',
 		isFocused: false,
 		isAppActive: true,
 		message: 'background failed',

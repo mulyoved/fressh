@@ -20,6 +20,10 @@ type SshRegistryStore = {
 	connect: (
 		args: Parameters<NativeRnRussh['connect']>[0],
 	) => Promise<RegisteredSshConnection>;
+	invalidateShellTransport: (
+		connectionId: string,
+		channelId: number,
+	) => boolean;
 };
 
 type SshRegistryLogger = {
@@ -34,7 +38,7 @@ export function createSshRegistryStore(
 	connect: NativeRnRussh['connect'],
 	logger: SshRegistryLogger = noopLogger,
 ) {
-	return create<SshRegistryStore>((set) => ({
+	return create<SshRegistryStore>((set, get) => ({
 		connections: {},
 		shells: {},
 		connect: async (args) => {
@@ -88,6 +92,27 @@ export function createSshRegistryStore(
 				},
 			}));
 			return registeredConnection;
+		},
+		invalidateShellTransport: (connectionId, channelId) => {
+			const storeKey = `${connectionId}-${channelId}` as const;
+			const current = get();
+			const shell = current.shells[storeKey];
+			const connection = current.connections[connectionId];
+			if (!shell && !connection) return false;
+			set((s) => {
+				const { [storeKey]: _omitShell, ...restShells } = s.shells;
+				return {
+					connections: s.connections,
+					shells: restShells,
+				};
+			});
+			void shell?.close?.().catch((error: unknown) => {
+				logger.debug('shell invalidation close failed', error);
+			});
+			void connection?.disconnect?.().catch((error: unknown) => {
+				logger.debug('connection invalidation disconnect failed', error);
+			});
+			return true;
 		},
 	}));
 }
