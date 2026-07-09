@@ -641,7 +641,7 @@ void test('rethrows non-network failure from recovery retry', async () => {
 	assert.deepEqual(context.warnings, []);
 });
 
-void test('marks restart-failed attention when preflight retry fails', async () => {
+void test('marks reachability attention when preflight retry fails without restarting Tailscale', async () => {
 	const retryError = new Error('No route to host');
 	const context = harness({
 		recovery: recoveryFixture({
@@ -658,7 +658,7 @@ void test('marks restart-failed attention when preflight retry fails', async () 
 	});
 
 	assert.deepEqual(await context.attempt(), { connected: false });
-	assert.deepEqual(context.attention, [TAILSCALE_RESTART_FAILED_MESSAGE]);
+	assert.deepEqual(context.attention, [TAILSCALE_REACHABILITY_MESSAGE]);
 	assert.equal(context.clearAttentionCount, 0);
 	assert.deepEqual(context.warnings, [retryError]);
 });

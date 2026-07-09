@@ -2,6 +2,7 @@ import {
 	getTailscaleRecoveryAttentionMessage,
 	isNetworkLikeSshError,
 	isTailscaleRecoverySupported,
+	TAILSCALE_REACHABILITY_MESSAGE,
 	TAILSCALE_RESTART_FAILED_MESSAGE,
 	type TailscaleReadyResult,
 	type TailscaleRecoverAfterFailureResult,
@@ -92,11 +93,13 @@ function getTailscaleRecoveryFailureAttentionMessage(input: {
 		return null;
 	}
 
+	if (input.result.kind === 'preflightReady') {
+		return TAILSCALE_REACHABILITY_MESSAGE;
+	}
+
 	return (
 		getTailscaleRecoveryAttentionMessage(input.result) ??
-		(input.result.attempted || input.result.kind === 'preflightReady'
-			? TAILSCALE_RESTART_FAILED_MESSAGE
-			: null)
+		(input.result.attempted ? TAILSCALE_RESTART_FAILED_MESSAGE : null)
 	);
 }
 
