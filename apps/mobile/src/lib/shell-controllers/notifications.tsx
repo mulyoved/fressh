@@ -17,6 +17,7 @@ import { type ControllerInvalidationReason } from './controller-core';
 import { createReplaySafeControllerLifecycle } from './controller-lifecycle';
 import {
 	createShellNotificationsControllerCore,
+	type ShellNotificationCommandPortKey,
 	type ShellNotificationContext,
 	type ShellNotificationRoute,
 } from './notifications-core';
@@ -40,6 +41,7 @@ export type UseShellNotificationsControllerInput = {
 	activity: ShellActivityControllerHandle;
 	context: ShellNotificationContext;
 	route: ShellNotificationRoute;
+	commandPortKey: ShellNotificationCommandPortKey;
 	runWorkmuxCommand(argv: string[], timeoutMs: number): Promise<string>;
 	logger: ShellNotificationsLogger;
 };
@@ -73,6 +75,7 @@ export function useShellNotificationsController(
 			},
 			context: input.context,
 			platformOS: Platform.OS,
+			commandPortKey: input.commandPortKey,
 			runWorkmuxCommand: input.runWorkmuxCommand,
 			consumeAuthorizedRouteToken: consumeAuthorizedAgentNotificationRouteToken,
 			restoreAuthorizedRouteToken: restoreAuthorizedAgentNotificationRouteToken,
@@ -139,7 +142,7 @@ export function useShellNotificationsController(
 	]);
 
 	const routeEffectKey = hookOrchestrator.createRouteEffectKey(input);
-	const runWorkmuxCommand = input.runWorkmuxCommand;
+	const commandPortKey = input.commandPortKey;
 	useEffect(() => {
 		void hookOrchestrator.dispatchRoutePassive(
 			core.handleRoute,
@@ -151,7 +154,7 @@ export function useShellNotificationsController(
 				);
 			},
 		);
-	}, [core, hookOrchestrator, routeEffectKey, runWorkmuxCommand]);
+	}, [core, hookOrchestrator, routeEffectKey, commandPortKey]);
 
 	useEffect(() => coreLifecycle.setup(), [coreLifecycle]);
 

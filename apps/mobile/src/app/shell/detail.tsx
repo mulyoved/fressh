@@ -2035,6 +2035,7 @@ function ShellDetail() {
 	);
 	useShellNotificationsController({
 		activity,
+		commandPortKey: workmuxControlChannel,
 		context: {
 			transportKey,
 			targetKey,

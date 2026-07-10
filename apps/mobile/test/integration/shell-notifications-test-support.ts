@@ -123,10 +123,12 @@ export function createNotificationsHarness(
 		windowCommands.push({ ...deferred, argv, timeoutMs });
 		return deferred.promise;
 	};
+	const defaultCommandPortKey = {};
 	const core = createShellNotificationsControllerCore({
 		activity,
 		context: context(),
 		platformOS: 'android',
+		commandPortKey: defaultCommandPortKey,
 		runWorkmuxCommand: defaultCommandPort,
 		consumeAuthorizedRouteToken: (
 			connectionId,
@@ -197,7 +199,8 @@ export function createNotificationsHarness(
 		},
 		replaceCommandPort: (
 			nextPort: (argv: string[], timeoutMs: number) => Promise<string>,
-		) => core.setCommandPort(nextPort),
+			nextKey: object = {},
+		) => core.setCommandPort(nextKey, nextPort),
 		restoredTokens,
 		routeCommands,
 		tick: () => new Promise((resolve) => setTimeout(resolve, 0)),

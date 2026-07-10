@@ -246,7 +246,7 @@ void describe('shell detail Workmux control channel wiring', () => {
 		);
 	});
 
-	void test('retries routed agent notifications when the Workmux command channel changes', () => {
+	void test('keys routed agent notifications by the Workmux control channel', () => {
 		const source = readFileSync(detailSourcePath, 'utf8');
 		const notificationSource = readFileSync(
 			join(process.cwd(), 'src/lib/shell-controllers/notifications.tsx'),
@@ -262,8 +262,9 @@ void describe('shell detail Workmux control channel wiring', () => {
 		);
 		assert.match(
 			notificationSource,
-			/\[core, hookOrchestrator, routeEffectKey, runWorkmuxCommand\]/,
+			/\[core, hookOrchestrator, routeEffectKey, commandPortKey\]/,
 		);
+		assert.match(source, /commandPortKey:\s*workmuxControlChannel/);
 	});
 
 	void test('keeps the focused browser controller on the shared Workmux command channel', () => {

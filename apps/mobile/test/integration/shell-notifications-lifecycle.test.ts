@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
 	createShellNotificationsControllerCore,
+	type ShellNotificationCommandPortKey,
 	type ShellNotificationContext,
 	type ShellNotificationRoute,
 } from '../../src/lib/shell-controllers/notifications-core';
@@ -42,6 +43,7 @@ function createCommandPortReplacementHarness() {
 	type Input = {
 		context: ShellNotificationContext;
 		route: ShellNotificationRoute;
+		commandPortKey: ShellNotificationCommandPortKey;
 		runWorkmuxCommand(argv: string[], timeoutMs: number): Promise<string>;
 	};
 	const oldCommands: Deferred<string>[] = [];
@@ -50,12 +52,12 @@ function createCommandPortReplacementHarness() {
 	const warnings: unknown[] = [];
 	let authorized = true;
 	let restores = 0;
-	const oldPort = () => {
+	const oldPort = (_argv: string[], _timeoutMs: number) => {
 		const command = createDeferred<string>();
 		oldCommands.push(command);
 		return command.promise;
 	};
-	const newPort = () => {
+	const newPort = (_argv: string[], _timeoutMs: number) => {
 		const command = createDeferred<string>();
 		newCommands.push(command);
 		return command.promise;
@@ -63,6 +65,7 @@ function createCommandPortReplacementHarness() {
 	const initial: Input = {
 		context: base.context(),
 		route: base.validRoute(),
+		commandPortKey: {},
 		runWorkmuxCommand: oldPort,
 	};
 	const orchestrator = createShellNotificationHookOrchestrator(initial);
@@ -70,6 +73,7 @@ function createCommandPortReplacementHarness() {
 		activity: base.activity,
 		context: initial.context,
 		platformOS: 'android',
+		commandPortKey: initial.commandPortKey,
 		runWorkmuxCommand: initial.runWorkmuxCommand,
 		consumeAuthorizedRouteToken: () => {
 			if (!authorized) return false;
@@ -87,10 +91,11 @@ function createCommandPortReplacementHarness() {
 		warn: (_message, error) => warnings.push(error),
 	});
 	const commit = (
+		commandPortKey: Input['commandPortKey'],
 		runWorkmuxCommand: Input['runWorkmuxCommand'],
 		afterCommit: () => void = () => {},
 	) => {
-		const next = { ...initial, runWorkmuxCommand };
+		const next = { ...initial, commandPortKey, runWorkmuxCommand };
 		orchestrator.commitLayout(
 			next,
 			core.setCommandPort,
@@ -106,8 +111,10 @@ function createCommandPortReplacementHarness() {
 		core,
 		initial,
 		newCommands,
+		newKey: {},
 		newPort,
 		oldCommands,
+		oldKey: initial.commandPortKey,
 		oldPort,
 		orchestrator,
 		get restores() {
@@ -137,6 +144,7 @@ void test('hook orchestration commits latest input before context and route effe
 		activity: { getSnapshot(): { marker: Observation } };
 		context: ShellNotificationContext;
 		route: ShellNotificationRoute;
+		commandPortKey: ShellNotificationCommandPortKey;
 		runWorkmuxCommand(argv: string[], timeoutMs: number): Promise<string>;
 		logger: { warn(message: string, error: unknown): void };
 	};
@@ -154,6 +162,7 @@ void test('hook orchestration commits latest input before context and route effe
 		},
 		context: initialContext,
 		route: { ...harness.validRoute(), agentConnectionId: null },
+		commandPortKey: {},
 		runWorkmuxCommand: async () => {
 			observations.push('initial');
 			return '';
@@ -174,6 +183,7 @@ void test('hook orchestration commits latest input before context and route effe
 		},
 		context: initialContext,
 		platformOS: 'android',
+		commandPortKey: initial.commandPortKey,
 		runWorkmuxCommand: initial.runWorkmuxCommand,
 		consumeAuthorizedRouteToken: (
 			connectionId,
@@ -203,6 +213,7 @@ void test('hook orchestration commits latest input before context and route effe
 		},
 		context: harness.context(),
 		route: { ...harness.validRoute(), agentConnectionId: null },
+		commandPortKey: {},
 		runWorkmuxCommand: async () => {
 			observations.push('latest');
 			return '';
@@ -236,7 +247,7 @@ void test('command port replacement retries a restored route through the latest 
 	const harness = createCommandPortReplacementHarness();
 	const first = harness.core.handleRoute(harness.initial.route);
 	assert.equal(harness.oldCommands.length, 1);
-	harness.commit(harness.newPort);
+	harness.commit(harness.newKey, harness.newPort);
 	const replacement = harness.core.handleRoute(harness.initial.route);
 	harness.oldCommands[0]?.reject(new Error('old port closed'));
 	await new Promise((resolve) => setTimeout(resolve, 0));
@@ -251,7 +262,7 @@ void test('command port replacement retries a restored route through the latest 
 void test('stale old-port success is not restored or replayed on the replacement', async () => {
 	const harness = createCommandPortReplacementHarness();
 	const first = harness.core.handleRoute(harness.initial.route);
-	harness.commit(harness.newPort);
+	harness.commit(harness.newKey, harness.newPort);
 	const replacement = harness.core.handleRoute(harness.initial.route);
 	harness.oldCommands[0]?.resolve('');
 
@@ -264,7 +275,7 @@ void test('stale old-port success is not restored or replayed on the replacement
 void test('identical command port commits coalesce without invalidation', async () => {
 	const harness = createCommandPortReplacementHarness();
 	const first = harness.core.handleRoute(harness.initial.route);
-	harness.commit(harness.oldPort);
+	harness.commit(harness.oldKey, harness.oldPort);
 	const adopted = harness.core.handleRoute(harness.initial.route);
 	assert.equal(harness.oldCommands.length, 1);
 	harness.oldCommands[0]?.resolve('');
@@ -272,6 +283,84 @@ void test('identical command port commits coalesce without invalidation', async 
 	assert.deepEqual(await Promise.all([first, adopted]), [true, true]);
 	assert.equal(harness.restores, 0);
 	assert.deepEqual(harness.acknowledgements, ['@12']);
+});
+
+void test('stable command port key accepts fresh delegates without semantic work', async () => {
+	const harness = createCommandPortReplacementHarness();
+	const automaticAcknowledger = createShellNotificationAutomaticAcknowledger();
+	const requests: Promise<void>[] = [];
+	const firstRoute = harness.core.handleRoute(harness.initial.route);
+	requestAutomaticVisible(harness, automaticAcknowledger, requests);
+	assert.equal(harness.oldCommands.length, 2);
+
+	let requestedAgain = true;
+	harness.commit(
+		harness.oldKey,
+		(argv, timeoutMs) => harness.oldPort(argv, timeoutMs),
+		() => {
+			requestedAgain = requestAutomaticVisible(
+				harness,
+				automaticAcknowledger,
+				requests,
+			);
+		},
+	);
+	const adoptedRoute = harness.core.handleRoute(harness.initial.route);
+	harness.commit(harness.oldKey, (argv, timeoutMs) =>
+		harness.oldPort(argv, timeoutMs),
+	);
+
+	assert.equal(harness.core.getSnapshot().commandPortRevision, 0);
+	assert.equal(requestedAgain, false);
+	assert.equal(harness.oldCommands.length, 2);
+	harness.oldCommands[0]?.resolve('');
+	harness.oldCommands[1]?.resolve(buildWorkmuxWindowOutput('@12'));
+	assert.deepEqual(await Promise.all([firstRoute, adoptedRoute]), [true, true]);
+	await Promise.all(requests);
+	assert.equal(harness.oldCommands.length, 2);
+});
+
+void test('changed command port key replaces a stable callable', async () => {
+	const harness = createCommandPortReplacementHarness();
+	const first = harness.core.handleRoute(harness.initial.route);
+	harness.commit(harness.newKey, harness.oldPort);
+	const replacement = harness.core.handleRoute(harness.initial.route);
+
+	assert.equal(harness.core.getSnapshot().commandPortRevision, 1);
+	harness.oldCommands[0]?.reject(new Error('old semantic port closed'));
+	await new Promise((resolve) => setTimeout(resolve, 0));
+	assert.equal(harness.oldCommands.length, 2);
+	harness.oldCommands[1]?.resolve('');
+	assert.deepEqual(await Promise.all([first, replacement]), [false, true]);
+	assert.equal(harness.restores, 1);
+});
+
+void test('changed key and callable promote pending visible and route work together', async () => {
+	const harness = createCommandPortReplacementHarness();
+	const automaticAcknowledger = createShellNotificationAutomaticAcknowledger();
+	const requests: Promise<void>[] = [];
+	const firstRoute = harness.core.handleRoute(harness.initial.route);
+	requestAutomaticVisible(harness, automaticAcknowledger, requests);
+	assert.equal(harness.oldCommands.length, 2);
+
+	harness.commit(harness.newKey, harness.newPort, () => {
+		requestAutomaticVisible(harness, automaticAcknowledger, requests);
+	});
+	const replacementRoute = harness.core.handleRoute(harness.initial.route);
+	harness.oldCommands[0]?.reject(new Error('old route port closed'));
+	harness.oldCommands[1]?.resolve(buildWorkmuxWindowOutput('@12'));
+	await new Promise((resolve) => setTimeout(resolve, 0));
+
+	assert.equal(harness.newCommands.length, 2);
+	for (const command of harness.newCommands) {
+		command.resolve(buildWorkmuxWindowOutput('@13'));
+	}
+	assert.deepEqual(await Promise.all([firstRoute, replacementRoute]), [
+		false,
+		true,
+	]);
+	await Promise.all(requests);
+	assert.deepEqual(harness.acknowledgements.sort(), ['@12', '@13']);
 });
 
 void test('layout commit automatically replaces a stale successful visible lookup', async () => {
@@ -282,7 +371,7 @@ void test('layout commit automatically replaces a stale successful visible looku
 		requestAutomaticVisible(harness, automaticAcknowledger, requests),
 		true,
 	);
-	harness.commit(harness.newPort, () => {
+	harness.commit(harness.newKey, harness.newPort, () => {
 		assert.equal(
 			requestAutomaticVisible(harness, automaticAcknowledger, requests),
 			true,
@@ -301,7 +390,7 @@ void test('layout commit automatically replaces a failed visible lookup', async 
 	const automaticAcknowledger = createShellNotificationAutomaticAcknowledger();
 	const requests: Promise<void>[] = [];
 	requestAutomaticVisible(harness, automaticAcknowledger, requests);
-	harness.commit(harness.newPort, () => {
+	harness.commit(harness.newKey, harness.newPort, () => {
 		requestAutomaticVisible(harness, automaticAcknowledger, requests);
 	});
 	harness.oldCommands[0]?.reject(new Error('old visible port failed'));
@@ -318,7 +407,7 @@ void test('same-port layout commit deduplicates automatic visible acknowledgemen
 	const requests: Promise<void>[] = [];
 	requestAutomaticVisible(harness, automaticAcknowledger, requests);
 	let requestedAgain = true;
-	harness.commit(harness.oldPort, () => {
+	harness.commit(harness.oldKey, harness.oldPort, () => {
 		requestedAgain = requestAutomaticVisible(
 			harness,
 			automaticAcknowledger,
@@ -342,11 +431,12 @@ void test('multiple layout commits retain only the latest automatic visible atte
 		latestCommands.push(command);
 		return command.promise;
 	};
+	const latestKey = {};
 	requestAutomaticVisible(harness, automaticAcknowledger, requests);
-	harness.commit(harness.newPort, () => {
+	harness.commit(harness.newKey, harness.newPort, () => {
 		requestAutomaticVisible(harness, automaticAcknowledger, requests);
 	});
-	harness.commit(latestPort, () => {
+	harness.commit(latestKey, latestPort, () => {
 		requestAutomaticVisible(harness, automaticAcknowledger, requests);
 	});
 	harness.oldCommands[0]?.resolve(buildWorkmuxWindowOutput('@12'));
@@ -517,7 +607,7 @@ void test('automatic acknowledgement keys requests by command port revision', ()
 		false,
 	);
 	const replacementPort = async () => '';
-	harness.core.setCommandPort(replacementPort);
+	harness.core.setCommandPort({}, replacementPort);
 	assert.equal(
 		automaticAcknowledger.request(
 			activity,

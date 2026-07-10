@@ -28,6 +28,8 @@ export type ShellNotificationRoute = {
 	agentTapToken: string | null;
 };
 
+export type ShellNotificationCommandPortKey = object;
+
 export type ShellNotificationsState = {
 	context: ShellNotificationContext;
 	contextRevision: number;
@@ -41,6 +43,7 @@ export type ShellNotificationsState = {
 export type ShellNotificationsControllerCore =
 	ControllerCore<ShellNotificationsState> & {
 		setCommandPort(
+			key: ShellNotificationCommandPortKey,
 			runWorkmuxCommand: CreateShellNotificationsControllerCoreInput['runWorkmuxCommand'],
 		): void;
 		setContext(context: ShellNotificationContext): void;
@@ -53,6 +56,7 @@ export type CreateShellNotificationsControllerCoreInput = {
 	activity: { getSnapshot(): ShellActivitySnapshot };
 	context: ShellNotificationContext;
 	platformOS: string;
+	commandPortKey: ShellNotificationCommandPortKey;
 	runWorkmuxCommand(argv: string[], timeoutMs: number): Promise<string>;
 	consumeAuthorizedRouteToken(
 		connectionId: string,
@@ -110,6 +114,7 @@ export function createShellNotificationsControllerCore({
 	activity,
 	context: initialContext,
 	platformOS,
+	commandPortKey: initialCommandPortKey,
 	runWorkmuxCommand: initialCommandPort,
 	consumeAuthorizedRouteToken,
 	restoreAuthorizedRouteToken,
@@ -127,6 +132,7 @@ export function createShellNotificationsControllerCore({
 	});
 	let generation = 0;
 	let commandPortRevision = 0;
+	let commandPortKey = initialCommandPortKey;
 	let commandPort = initialCommandPort;
 	let inFlight = false;
 	let queued = false;
@@ -297,9 +303,11 @@ export function createShellNotificationsControllerCore({
 	return {
 		getSnapshot: publisher.getSnapshot,
 		subscribe: publisher.subscribe,
-		setCommandPort: (nextCommandPort) => {
-			if (disposed || commandPort === nextCommandPort) return;
+		setCommandPort: (nextCommandPortKey, nextCommandPort) => {
+			if (disposed) return;
 			commandPort = nextCommandPort;
+			if (commandPortKey === nextCommandPortKey) return;
+			commandPortKey = nextCommandPortKey;
 			commandPortRevision += 1;
 			publisher.publish({
 				...publisher.getSnapshot(),

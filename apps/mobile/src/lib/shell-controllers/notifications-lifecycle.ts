@@ -2,6 +2,7 @@ import { type ShellActivitySnapshot } from './activity-core';
 import { type ControllerInvalidationReason } from './controller-core';
 import {
 	createShellNotificationContextIdentity,
+	type ShellNotificationCommandPortKey,
 	type ShellNotificationContext,
 	type ShellNotificationRoute,
 	type ShellNotificationsState,
@@ -50,6 +51,7 @@ export function createShellNotificationHookOrchestrator<
 	TInput extends {
 		context: ShellNotificationContext;
 		route: ShellNotificationRoute;
+		commandPortKey: ShellNotificationCommandPortKey;
 		runWorkmuxCommand(argv: string[], timeoutMs: number): Promise<string>;
 	},
 >(
@@ -59,7 +61,10 @@ export function createShellNotificationHookOrchestrator<
 	createRouteEffectKey(input: TInput): string;
 	commitLayout(
 		nextInput: TInput,
-		setCommandPort: (runWorkmuxCommand: TInput['runWorkmuxCommand']) => void,
+		setCommandPort: (
+			key: TInput['commandPortKey'],
+			runWorkmuxCommand: TInput['runWorkmuxCommand'],
+		) => void,
 		setContext: (context: ShellNotificationContext) => void,
 		afterContextCommit: () => void,
 	): void;
@@ -80,7 +85,7 @@ export function createShellNotificationHookOrchestrator<
 			afterContextCommit,
 		) => {
 			committedInput = nextInput;
-			setCommandPort(nextInput.runWorkmuxCommand);
+			setCommandPort(nextInput.commandPortKey, nextInput.runWorkmuxCommand);
 			setContext(nextInput.context);
 			afterContextCommit();
 		},
