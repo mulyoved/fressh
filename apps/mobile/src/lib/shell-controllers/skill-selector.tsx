@@ -19,6 +19,7 @@ import {
 	createSkillSelectorControllerCore,
 	type SkillSelectorControllerCore,
 } from './skill-selector-core';
+import { syncSkillSelectorControllerSource } from './skill-selector-lifecycle';
 
 export type SkillSelectorModalProps = {
 	open: boolean;
@@ -46,6 +47,10 @@ export function useSkillSelectorController<TConnection>(
 	deps: SkillSelectorControllerDependencies<TConnection>,
 ): SkillSelectorControllerHandle {
 	const committedDepsRef = useRef(deps);
+	const trackedSourceRef = useRef({
+		sourceKey: deps.sourceKey,
+		tmuxEnabled: deps.tmuxEnabled,
+	});
 	const [adapter] = useState(() =>
 		createSkillSelectorControllerAdapter({
 			getCommittedDependencies: () => committedDepsRef.current,
@@ -72,8 +77,12 @@ export function useSkillSelectorController<TConnection>(
 	);
 
 	useLayoutEffect(() => {
-		committedDepsRef.current = deps;
-		core.setSourceKey(deps.sourceKey);
+		syncSkillSelectorControllerSource({
+			committedDependencies: committedDepsRef,
+			trackedSource: trackedSourceRef,
+			dependencies: deps,
+			core,
+		});
 	}, [core, deps]);
 
 	useEffect(() => {

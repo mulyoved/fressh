@@ -2101,7 +2101,7 @@ function ShellDetail() {
 
 	useLayoutEffect(() => {
 		markFeatureRequestSourceStale();
-	}, [markFeatureRequestSourceStale, targetKey]);
+	}, [markFeatureRequestSourceStale, targetKey, tmuxEnabled]);
 
 	const handleOpenWisprTextEditor = useCallback(() => {
 		browserActions.invalidateHostUrlReads();
@@ -2554,7 +2554,10 @@ function ShellDetail() {
 			}),
 		[channelId, connectionId],
 	);
-	const workmuxKeyboardSourceKeyRef = useRef(targetKey);
+	const workmuxKeyboardSourceRef = useRef({
+		targetKey,
+		tmuxEnabled,
+	});
 
 	useLayoutEffect(() => {
 		if (isFocused) return;
@@ -2562,11 +2565,21 @@ function ShellDetail() {
 	}, [isFocused, workmuxKeyboardCommandRunner]);
 
 	useLayoutEffect(() => {
-		if (workmuxKeyboardSourceKeyRef.current === targetKey) return;
-		workmuxKeyboardSourceKeyRef.current = targetKey;
+		if (
+			workmuxKeyboardSourceRef.current.targetKey === targetKey &&
+			workmuxKeyboardSourceRef.current.tmuxEnabled === tmuxEnabled
+		) {
+			return;
+		}
+		workmuxKeyboardSourceRef.current = { targetKey, tmuxEnabled };
 		workmuxKeyboardCommandRunner.invalidate();
 		invalidateCodexRestartRequests();
-	}, [invalidateCodexRestartRequests, targetKey, workmuxKeyboardCommandRunner]);
+	}, [
+		invalidateCodexRestartRequests,
+		targetKey,
+		tmuxEnabled,
+		workmuxKeyboardCommandRunner,
+	]);
 
 	useLayoutEffect(() => {
 		return () => {
