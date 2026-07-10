@@ -5,6 +5,7 @@ import {
 	type DetectedOpenCandidate,
 } from '@/lib/detected-open-actions';
 import { useTheme } from '@/lib/theme';
+import { handleDetectedOpenPickerSelection } from './detected-open-picker-selection';
 
 export function DetectedOpenPickerModal({
 	open,
@@ -29,10 +30,9 @@ export function DetectedOpenPickerModal({
 	}, [onClose]);
 	const select = useCallback(
 		(candidate: DetectedOpenCandidate) => {
-			onClose();
-			onSelect(candidate);
+			handleDetectedOpenPickerSelection(candidate, { onSelect });
 		},
-		[onClose, onSelect],
+		[onSelect],
 	);
 
 	return (

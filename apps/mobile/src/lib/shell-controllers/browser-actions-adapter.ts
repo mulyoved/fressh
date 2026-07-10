@@ -33,6 +33,8 @@ export type BrowserActionsControllerAdapter = {
 	getErrorMessage(error: unknown): string;
 	requestOpen(onOpen: () => void): boolean;
 	registerClose(input: {
+		closeHostUrl(): boolean;
+		closeDetectedPicker(): void;
 		close(): void;
 		invalidateHostUrlReads(): void;
 	}): () => void;
@@ -102,13 +104,20 @@ export function createBrowserActionsControllerAdapter<TConnection>(input: {
 				conflicts: BROWSER_ACTIONS_CONFLICTS,
 				onOpen,
 			}),
-		registerClose: ({ close, invalidateHostUrlReads }) =>
+		registerClose: ({
+			closeHostUrl,
+			closeDetectedPicker,
+			close,
+			invalidateHostUrlReads,
+		}) =>
 			input
 				.getCommittedDependencies()
 				.arbiter.register('browser-actions', ({ opening }) => {
+					if (!closeHostUrl()) return false;
 					if (HOST_URL_READ_INVALIDATION_TARGETS.has(opening)) {
 						invalidateHostUrlReads();
 					}
+					closeDetectedPicker();
 					close();
 				}),
 	};

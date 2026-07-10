@@ -225,6 +225,8 @@ void test('browser adapter invalidates URL reads for matching modal transitions'
 	});
 	adapter.registerClose({
 		invalidateHostUrlReads: () => events.push('invalidate:url-read'),
+		closeHostUrl: () => true,
+		closeDetectedPicker: () => events.push('close:picker'),
 		close: () => events.push('close:browser-actions'),
 	});
 
@@ -241,10 +243,105 @@ void test('browser adapter invalidates URL reads for matching modal transitions'
 	}
 	assert.deepEqual(events, [
 		'invalidate:url-read',
+		'close:picker',
 		'close:browser-actions',
 		'invalidate:url-read',
+		'close:picker',
 		'close:browser-actions',
 		'invalidate:url-read',
+		'close:picker',
 		'close:browser-actions',
+	]);
+});
+
+void test('browser adapter vetoes modal arbitration while host URL submit is active', () => {
+	const arbiter = createShellModalArbiter();
+	const events: string[] = [];
+	const sourceKey = createShellTargetKey(
+		createShellTransportKey('conn', 7),
+		'main',
+	);
+	const adapter = createBrowserActionsControllerAdapter({
+		getCommittedDependencies: () => ({
+			connection: {},
+			tmuxEnabled: true,
+			tmuxTarget: 'main',
+			sourceKey,
+			executeSideChannelCommand: async () => ({
+				success: true,
+				output: '',
+			}),
+			runWorkmuxCommand: async () => '',
+			getErrorMessage: String,
+			arbiter,
+		}),
+		openAndroidUrl: async () => {},
+		showError: () => {},
+	});
+	adapter.registerClose({
+		invalidateHostUrlReads: () => events.push('invalidate:url-read'),
+		closeHostUrl: () => {
+			events.push('veto:host-url');
+			return false;
+		},
+		closeDetectedPicker: () => events.push('close:picker'),
+		close: () => events.push('close:browser-actions'),
+	});
+
+	const opened = arbiter.requestOpen({
+		target: 'feature-request',
+		conflicts: ['browser-actions'],
+		onOpen: () => events.push('open:feature-request'),
+	});
+
+	assert.equal(opened, false);
+	assert.deepEqual(events, ['veto:host-url']);
+});
+
+void test('browser adapter closes child and parent state after an accepted arbitration', () => {
+	const arbiter = createShellModalArbiter();
+	const events: string[] = [];
+	const sourceKey = createShellTargetKey(
+		createShellTransportKey('conn', 7),
+		'main',
+	);
+	const adapter = createBrowserActionsControllerAdapter({
+		getCommittedDependencies: () => ({
+			connection: {},
+			tmuxEnabled: true,
+			tmuxTarget: 'main',
+			sourceKey,
+			executeSideChannelCommand: async () => ({ success: true, output: '' }),
+			runWorkmuxCommand: async () => '',
+			getErrorMessage: String,
+			arbiter,
+		}),
+		openAndroidUrl: async () => {},
+		showError: () => {},
+	});
+	adapter.registerClose({
+		closeHostUrl: () => {
+			events.push('close:host-url');
+			return true;
+		},
+		invalidateHostUrlReads: () => events.push('invalidate:url-read'),
+		closeDetectedPicker: () => events.push('close:picker'),
+		close: () => events.push('close:browser-actions'),
+	});
+
+	assert.equal(
+		arbiter.requestOpen({
+			target: 'configure',
+			conflicts: ['browser-actions'],
+			onOpen: () => events.push('open:configure'),
+		}),
+		true,
+	);
+	assert.deepEqual(events, [
+		'close:host-url',
+		'invalidate:url-read',
+		'close:picker',
+		'close:browser-actions',
+		'open:configure',
 	]);
 });

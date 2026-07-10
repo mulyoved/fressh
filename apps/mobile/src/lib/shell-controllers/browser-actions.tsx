@@ -15,7 +15,6 @@ import { createBrowserActionErrorReport } from '../browser-action-error-report';
 import { type BrowserActionsWorkspace } from '../browser-actions-controller-actions';
 import { type DetectedOpenCandidate } from '../detected-open-actions';
 import {
-	getHostBrowserUrlSlotLabel,
 	type HostBrowserUrlSlot,
 	type TmuxPaneContext,
 } from '../host-browser-actions';
@@ -27,42 +26,25 @@ import {
 import {
 	createBrowserActionsControllerCore,
 	type BrowserActionsControllerCore,
-	type HostUrlModalMode,
 } from './browser-actions-core';
-import { createReplaySafeDisposer } from './controller-core';
+import {
+	createBrowserActionsControllerLifecycle,
+	syncBrowserActionsControllerSource,
+} from './browser-actions-lifecycle';
+import {
+	createBrowserActionsModalProps,
+	type BrowserActionsModalProps,
+	type DetectedOpenPickerModalProps,
+	type HostUrlModalProps,
+} from './browser-actions-modal-props';
 
 const logger = rootLogger.extend('BrowserActionsController');
 
-export type BrowserActionsModalProps = {
-	open: boolean;
-	onClose: () => void;
-	onOpenDiff: () => void;
-	onOpenGitHubIssues: () => void;
-	onOpenGitHubPulls: () => void;
-	onOpenDetectedAuto: () => boolean;
-	onOpenDetectedPick: () => boolean;
-	onOpenUrlSlot: (slot: HostBrowserUrlSlot) => void;
-	onEditUrlSlot: (slot: HostBrowserUrlSlot) => void;
-};
-
-export type HostUrlModalProps = {
-	open: boolean;
-	slot: HostBrowserUrlSlot | null;
-	slotLabel: string;
-	initialValue: string;
-	mode: HostUrlModalMode;
-	isSubmitting: boolean;
-	error: string | null;
-	onClose: () => void;
-	onSubmit: (value: string) => void;
-};
-
-export type DetectedOpenPickerModalProps = {
-	open: boolean;
-	candidates: readonly DetectedOpenCandidate[];
-	onClose: () => void;
-	onSelect: (candidate: DetectedOpenCandidate) => void;
-};
+export type {
+	BrowserActionsModalProps,
+	DetectedOpenPickerModalProps,
+	HostUrlModalProps,
+} from './browser-actions-modal-props';
 
 export type BrowserActionsControllerHandle = {
 	browserActionsProps: BrowserActionsModalProps;
@@ -89,6 +71,10 @@ export function useBrowserActionsController<TConnection>(
 	deps: BrowserActionsControllerDeps<TConnection>,
 ): BrowserActionsControllerHandle {
 	const committedDepsRef = useRef(deps);
+	const trackedSourceRef = useRef({
+		sourceKey: deps.sourceKey,
+		tmuxEnabled: deps.tmuxEnabled,
+	});
 	const [adapter] = useState(() =>
 		createBrowserActionsControllerAdapter({
 			getCommittedDependencies: () => committedDepsRef.current,
@@ -130,7 +116,7 @@ export function useBrowserActionsController<TConnection>(
 		}),
 	);
 	const [coreLifecycle] = useState(() =>
-		createReplaySafeDisposer(core.dispose),
+		createBrowserActionsControllerLifecycle(core),
 	);
 	const snapshot = useSyncExternalStore(
 		core.subscribe,
@@ -139,13 +125,19 @@ export function useBrowserActionsController<TConnection>(
 	);
 
 	useLayoutEffect(() => {
-		committedDepsRef.current = deps;
-		core.setSourceKey(deps.sourceKey);
+		syncBrowserActionsControllerSource({
+			committedDependencies: committedDepsRef,
+			trackedSource: trackedSourceRef,
+			dependencies: deps,
+			core,
+		});
 	}, [core, deps]);
 
 	useEffect(
 		() =>
 			adapter.registerClose({
+				closeHostUrl: core.closeHostUrl,
+				closeDetectedPicker: core.closeDetectedPicker,
 				close: core.close,
 				invalidateHostUrlReads: core.invalidateHostUrlReads,
 			}),
@@ -189,20 +181,26 @@ export function useBrowserActionsController<TConnection>(
 		[core],
 	);
 
-	const browserActionsProps = useMemo<BrowserActionsModalProps>(
-		() => ({
-			open: snapshot.open,
-			onClose: close,
-			onOpenDiff: openDiff,
-			onOpenGitHubIssues: openGitHubIssues,
-			onOpenGitHubPulls: openGitHubPulls,
-			onOpenDetectedAuto: openDetectedAuto,
-			onOpenDetectedPick: openDetectedPick,
-			onOpenUrlSlot: openUrlSlot,
-			onEditUrlSlot: editUrlSlot,
-		}),
+	const modalProps = useMemo(
+		() =>
+			createBrowserActionsModalProps(snapshot, {
+				close,
+				openDiff,
+				openGitHubIssues,
+				openGitHubPulls,
+				openDetectedAuto,
+				openDetectedPick,
+				openUrlSlot,
+				editUrlSlot,
+				closeHostUrl,
+				submitHostUrl,
+				closeDetectedPicker,
+				selectDetected,
+			}),
 		[
 			close,
+			closeDetectedPicker,
+			closeHostUrl,
 			editUrlSlot,
 			openDetectedAuto,
 			openDetectedPick,
@@ -210,33 +208,22 @@ export function useBrowserActionsController<TConnection>(
 			openGitHubIssues,
 			openGitHubPulls,
 			openUrlSlot,
-			snapshot.open,
+			selectDetected,
+			snapshot,
+			submitHostUrl,
 		],
 	);
+	const browserActionsProps = useMemo<BrowserActionsModalProps>(
+		() => modalProps.browserActionsProps,
+		[modalProps.browserActionsProps],
+	);
 	const hostUrlProps = useMemo<HostUrlModalProps>(
-		() => ({
-			open: snapshot.hostUrl !== null,
-			slot: snapshot.hostUrl?.slot ?? null,
-			slotLabel: snapshot.hostUrl
-				? getHostBrowserUrlSlotLabel(snapshot.hostUrl.slot)
-				: 'URL',
-			initialValue: snapshot.hostUrl?.initialValue ?? '',
-			mode: snapshot.hostUrl?.mode ?? 'edit',
-			isSubmitting: snapshot.hostUrlSubmitting,
-			error: snapshot.hostUrlError,
-			onClose: closeHostUrl,
-			onSubmit: submitHostUrl,
-		}),
-		[closeHostUrl, snapshot, submitHostUrl],
+		() => modalProps.hostUrlProps,
+		[modalProps.hostUrlProps],
 	);
 	const detectedOpenPickerProps = useMemo<DetectedOpenPickerModalProps>(
-		() => ({
-			open: snapshot.detectedOpenPicker !== null,
-			candidates: snapshot.detectedOpenPicker?.candidates ?? [],
-			onClose: closeDetectedPicker,
-			onSelect: selectDetected,
-		}),
-		[closeDetectedPicker, selectDetected, snapshot.detectedOpenPicker],
+		() => modalProps.detectedOpenPickerProps,
+		[modalProps.detectedOpenPickerProps],
 	);
 
 	return useMemo<BrowserActionsControllerHandle>(

@@ -115,10 +115,17 @@ type RequestCapture = {
 	sourceKey: ShellTargetKey;
 };
 
+type RequestCompletionToken = {
+	promise: Promise<void>;
+	resolve(): void;
+	requestId: number | null;
+};
+
 type ManagedRequestId = RequestIdHandle & {
-	beginCompletion(): Promise<void>;
-	completeCurrent(): void;
-	cancelQueuedCompletion(): void;
+	prepare(capture: RequestCapture): void;
+	beginCompletion(capture: RequestCapture): RequestCompletionToken;
+	complete(token: RequestCompletionToken): void;
+	cancelPrepared(token?: RequestCompletionToken): void;
 };
 
 function createManagedRequestId(input: {
@@ -127,29 +134,42 @@ function createManagedRequestId(input: {
 }): ManagedRequestId {
 	let currentId = 0;
 	let currentCapture: RequestCapture | null = null;
-	let queuedCompletion: (() => void) | null = null;
-	const completions = new Map<number, () => void>();
+	let currentCompletion: RequestCompletionToken | null = null;
+	let prepared: {
+		capture: RequestCapture;
+		completion: RequestCompletionToken | null;
+	} | null = null;
 
-	const complete = (id: number) => {
-		const resolve = completions.get(id);
-		if (!resolve) return;
-		completions.delete(id);
-		resolve();
-	};
-	const invalidate = () => {
-		complete(currentId);
+	const supersedeCurrent = () => {
+		currentCompletion?.resolve();
+		currentCompletion = null;
 		currentId += 1;
 		currentCapture = null;
+	};
+	const invalidate = () => {
+		supersedeCurrent();
+		prepared?.completion?.resolve();
+		prepared = null;
+	};
+	const prepare = (
+		requestCapture: RequestCapture,
+		completion: RequestCompletionToken | null,
+	) => {
+		prepared?.completion?.resolve();
+		prepared = { capture: requestCapture, completion };
 	};
 
 	return {
 		next: () => {
-			invalidate();
-			currentCapture = input.capture();
-			if (queuedCompletion) {
-				completions.set(currentId, queuedCompletion);
-				queuedCompletion = null;
-			}
+			supersedeCurrent();
+			const next = prepared ?? {
+				capture: input.capture(),
+				completion: null,
+			};
+			prepared = null;
+			currentCapture = next.capture;
+			currentCompletion = next.completion;
+			if (currentCompletion) currentCompletion.requestId = currentId;
 			return currentId;
 		},
 		isCurrent: (id) => {
@@ -157,21 +177,42 @@ function createManagedRequestId(input: {
 				id === currentId &&
 				currentCapture !== null &&
 				input.isCaptureCurrent(currentCapture);
-			if (!current) complete(id);
+			if (!current && currentCompletion?.requestId === id) {
+				currentCompletion.resolve();
+				currentCompletion = null;
+			}
 			return current;
 		},
 		invalidate,
-		beginCompletion: () =>
-			new Promise<void>((resolve) => {
-				if (queuedCompletion) queuedCompletion();
-				queuedCompletion = resolve;
-			}),
-		completeCurrent: () => complete(currentId),
-		cancelQueuedCompletion: () => {
-			if (!queuedCompletion) return;
-			const resolve = queuedCompletion;
-			queuedCompletion = null;
-			resolve();
+		prepare: (requestCapture) => prepare(requestCapture, null),
+		beginCompletion: (requestCapture) => {
+			let settled = false;
+			let resolvePromise!: () => void;
+			const token: RequestCompletionToken = {
+				promise: new Promise<void>((resolve) => {
+					resolvePromise = resolve;
+				}),
+				resolve: () => {
+					if (settled) return;
+					settled = true;
+					resolvePromise();
+				},
+				requestId: null,
+			};
+			prepare(requestCapture, token);
+			return token;
+		},
+		complete: (token) => {
+			token.resolve();
+			if (currentCompletion === token) currentCompletion = null;
+		},
+		cancelPrepared: (token) => {
+			if (prepared && (!token || prepared.completion === token)) {
+				prepared.completion?.resolve();
+				prepared = null;
+				return;
+			}
+			token?.resolve();
 		},
 	};
 }
@@ -194,8 +235,10 @@ export function createBrowserActionsControllerCore(
 			throw new SupersededBrowserActionError();
 		}
 	};
-	const guardedAwait = async <T>(work: () => Promise<T>): Promise<T> => {
-		const request = capture();
+	const guardedAwait = async <T>(
+		request: RequestCapture,
+		work: () => Promise<T>,
+	): Promise<T> => {
 		assertCurrent(request);
 		const value = await work();
 		assertCurrent(request);
@@ -222,30 +265,46 @@ export function createBrowserActionsControllerCore(
 	const hostDiffityInFlightRef = { current: false };
 	const hostDetectedOpenInFlightRef = { current: false };
 
-	const runHostBrowserCommand = (command: string, timeoutMs = 30_000) =>
-		guardedAwait(() => deps.runHostBrowserCommand(command, timeoutMs));
-	const runWorkmuxCommand = (argv: string[], timeoutMs: number) =>
-		guardedAwait(() => deps.runWorkmuxCommand(argv, timeoutMs));
-	const openAndroidUrl = (url: string) =>
-		guardedAwait(() => deps.openAndroidUrl(url));
-	const contextDependencies = () => ({
+	const runHostBrowserCommandFor = (
+		request: RequestCapture,
+		command: string,
+		timeoutMs = 30_000,
+	) =>
+		guardedAwait(request, () => deps.runHostBrowserCommand(command, timeoutMs));
+	const runWorkmuxCommandFor = (
+		request: RequestCapture,
+		argv: string[],
+		timeoutMs: number,
+	) => guardedAwait(request, () => deps.runWorkmuxCommand(argv, timeoutMs));
+	const openAndroidUrlFor = (request: RequestCapture, url: string) =>
+		guardedAwait(request, () => deps.openAndroidUrl(url));
+	const contextDependencies = (request: RequestCapture) => ({
 		tmuxEnabled: deps.getTmuxEnabled(),
 		tmuxTarget: deps.getTmuxTarget(),
-		runHostBrowserCommand,
-		runWorkmuxCommand,
+		runHostBrowserCommand: (command: string, timeoutMs: number) =>
+			runHostBrowserCommandFor(request, command, timeoutMs),
+		runWorkmuxCommand: (argv: string[], timeoutMs: number) =>
+			runWorkmuxCommandFor(request, argv, timeoutMs),
 		getErrorMessage: deps.getErrorMessage,
 	});
-	const resolvePanePath = () =>
-		guardedAwait(() => resolveBrowserActionsPanePath(contextDependencies()));
-	const resolvePaneContext = () =>
-		guardedAwait(() => resolveBrowserActionsPaneContext(contextDependencies()));
-	const resolveWorkspace = () =>
-		guardedAwait(() => resolveBrowserActionsWorkspace(contextDependencies()));
-	const resolveCurrentGitHubRepositoryContext = () =>
-		guardedAwait(() =>
+	const resolvePanePathFor = (request: RequestCapture) =>
+		guardedAwait(request, () =>
+			resolveBrowserActionsPanePath(contextDependencies(request)),
+		);
+	const resolvePaneContextFor = (request: RequestCapture) =>
+		guardedAwait(request, () =>
+			resolveBrowserActionsPaneContext(contextDependencies(request)),
+		);
+	const resolveWorkspaceFor = (request: RequestCapture) =>
+		guardedAwait(request, () =>
+			resolveBrowserActionsWorkspace(contextDependencies(request)),
+		);
+	const resolveCurrentGitHubRepositoryContextFor = (request: RequestCapture) =>
+		guardedAwait(request, () =>
 			resolveGitHubRepositoryContext({
-				resolvePanePath,
-				runHostBrowserCommand,
+				resolvePanePath: () => resolvePanePathFor(request),
+				runHostBrowserCommand: (command, timeoutMs) =>
+					runHostBrowserCommandFor(request, command, timeoutMs),
 				getErrorMessage: deps.getErrorMessage,
 			}),
 		);
@@ -290,21 +349,31 @@ export function createBrowserActionsControllerCore(
 		if (disposed) return;
 		deps.showError(input);
 	};
+	const showErrorFor = (
+		request: RequestCapture,
+		input: BrowserActionErrorInput,
+	) => {
+		if (!isCaptureCurrent(request)) return;
+		showError(input);
+	};
 	const readUrlSlot = (mode: 'open' | 'edit', slot: HostBrowserUrlSlot) => {
 		if (disposed) return;
 		resetDetectedOpen();
+		const request = capture();
+		hostUrlReadRequestId.prepare(request);
 		runHostUrlReadRequest({
 			mode,
 			slot,
 			requestId: hostUrlReadRequestId,
-			resolvePanePath,
-			runHostBrowserCommand,
-			openAndroidUrl,
+			resolvePanePath: () => resolvePanePathFor(request),
+			runHostBrowserCommand: (command, timeoutMs) =>
+				runHostBrowserCommandFor(request, command, timeoutMs),
+			openAndroidUrl: (url) => openAndroidUrlFor(request, url),
 			setOpen: (open) => patch({ open }),
 			setHostUrlModalState: (hostUrl: HostUrlReadModalState | null) =>
 				patch({ hostUrl }),
 			setHostUrlModalError: (hostUrlError) => patch({ hostUrlError }),
-			showError,
+			showError: (input) => showErrorFor(request, input),
 			getErrorMessage: deps.getErrorMessage,
 		});
 	};
@@ -330,84 +399,95 @@ export function createBrowserActionsControllerCore(
 		openGitHubTarget: (target) => {
 			if (disposed) return Promise.resolve();
 			resetDetectedOpen();
-			const completion = browserGitHubTargetRequestId.beginCompletion();
+			const request = capture();
+			const completion = browserGitHubTargetRequestId.beginCompletion(request);
 			runGitHubTargetOpenRequest({
 				target,
 				requestId: browserGitHubTargetRequestId,
-				resolveRepositoryContext: resolveCurrentGitHubRepositoryContext,
+				resolveRepositoryContext: () =>
+					resolveCurrentGitHubRepositoryContextFor(request),
 				openAndroidUrl: async (url) => {
-					await openAndroidUrl(url);
-					browserGitHubTargetRequestId.completeCurrent();
+					await openAndroidUrlFor(request, url);
+					browserGitHubTargetRequestId.complete(completion);
 				},
 				showError: (input) => {
-					showError(input);
-					browserGitHubTargetRequestId.completeCurrent();
+					showErrorFor(request, input);
+					browserGitHubTargetRequestId.complete(completion);
 				},
 				getErrorMessage: deps.getErrorMessage,
 			});
-			return completion;
+			return completion.promise;
 		},
 		openDiffity: () => {
 			if (disposed) return Promise.resolve();
 			resetDetectedOpen();
-			const completion = hostDiffityRequestId.beginCompletion();
+			const request = capture();
+			const completion = hostDiffityRequestId.beginCompletion(request);
 			const accepted = runHostDiffityOpenRequest({
 				hostDiffityInFlightRef,
 				hostDiffityRequestId,
 				runDiffityShare: () =>
-					guardedAwait(() =>
-						runBrowserActionsDiffityShareWithContext(contextDependencies()),
+					guardedAwait(request, () =>
+						runBrowserActionsDiffityShareWithContext(
+							contextDependencies(request),
+						),
 					),
 				openAndroidUrl: async (url) => {
-					await openAndroidUrl(url);
-					hostDiffityRequestId.completeCurrent();
+					await openAndroidUrlFor(request, url);
+					hostDiffityRequestId.complete(completion);
 				},
 				showError: (title, message) => {
-					showError({ action: 'Diff', title, message });
-					hostDiffityRequestId.completeCurrent();
+					showErrorFor(request, { action: 'Diff', title, message });
+					hostDiffityRequestId.complete(completion);
 				},
 				showErrorReport: (report) => {
-					showError(createDiffBrowserActionErrorInput(report));
-					hostDiffityRequestId.completeCurrent();
+					showErrorFor(request, createDiffBrowserActionErrorInput(report));
+					hostDiffityRequestId.complete(completion);
 				},
 				getErrorMessage: deps.getErrorMessage,
 			});
-			if (!accepted) hostDiffityRequestId.cancelQueuedCompletion();
-			return completion;
+			if (!accepted) hostDiffityRequestId.cancelPrepared(completion);
+			return completion.promise;
 		},
 		openDetected: (mode) => {
 			if (disposed) return false;
 			hostDetectedOpenPickerSelectionRequestId.invalidate();
 			patch({ detectedOpenPicker: null });
+			const request = capture();
+			hostDetectedOpenRequestId.prepare(request);
 			const result = runDetectedOpenControllerRequest({
 				mode,
 				inFlightRef: hostDetectedOpenInFlightRef,
 				requestId: hostDetectedOpenRequestId,
-				resolvePaneContext,
-				runHostBrowserCommand,
+				resolvePaneContext: () => resolvePaneContextFor(request),
+				runHostBrowserCommand: (command, timeoutMs) =>
+					runHostBrowserCommandFor(request, command, timeoutMs),
 				setOpen: (open) => patch({ open }),
-				openUrl: openAndroidUrl,
+				openUrl: (url) => openAndroidUrlFor(request, url),
 				setPickerCandidates: (candidates, context) =>
 					patch({ detectedOpenPicker: { candidates, context } }),
 				showError: (title, message) =>
-					showError({
+					showErrorFor(request, {
 						action: mode === 'pick' ? 'Pick' : 'Open',
 						title,
 						message,
 					}),
 				showErrorReport: (report) =>
-					showError({
+					showErrorFor(request, {
 						action: mode === 'pick' ? 'Pick' : 'Open',
 						...report,
 					}),
 				getErrorMessage: deps.getErrorMessage,
 			});
+			if (!result.accepted) hostDetectedOpenRequestId.cancelPrepared();
 			return result.accepted;
 		},
 		selectDetected: async (candidate) => {
 			if (disposed) return;
 			const state = publisher.getSnapshot().detectedOpenPicker;
 			if (!state) return;
+			const request = capture();
+			hostDetectedOpenPickerSelectionRequestId.prepare(request);
 			const id = hostDetectedOpenPickerSelectionRequestId.next();
 			patch({ detectedOpenPicker: null });
 			await runGuardedDetectedOpenPickerSelectionRequest({
@@ -415,13 +495,18 @@ export function createBrowserActionsControllerCore(
 				requestId: hostDetectedOpenPickerSelectionRequestId,
 				candidate,
 				context: state.context,
-				runHostBrowserCommand,
-				openUrl: openAndroidUrl,
+				runHostBrowserCommand: (command, timeoutMs) =>
+					runHostBrowserCommandFor(request, command, timeoutMs),
+				openUrl: (url) => openAndroidUrlFor(request, url),
 				getErrorMessage: deps.getErrorMessage,
-				showPickError: (error) => showError({ action: 'Pick', ...error }),
+				showPickError: (error) =>
+					showErrorFor(request, { action: 'Pick', ...error }),
 			});
 		},
-		closeDetectedPicker: () => patch({ detectedOpenPicker: null }),
+		closeDetectedPicker: () => {
+			hostDetectedOpenPickerSelectionRequestId.invalidate();
+			patch({ detectedOpenPicker: null });
+		},
 		openUrlSlot: (slot) => readUrlSlot('open', slot),
 		editUrlSlot: (slot) => readUrlSlot('edit', slot),
 		closeHostUrl: () => {
@@ -448,32 +533,48 @@ export function createBrowserActionsControllerCore(
 				patch({ hostUrlError: parsed.message });
 				return;
 			}
-			runHostUrlSubmitRequest({
+			const request = capture();
+			hostUrlSubmitRequestId.prepare(request);
+			const accepted = runHostUrlSubmitRequest({
 				state,
 				url: parsed.url,
 				hostUrlSubmitInFlightRef,
 				hostUrlSubmitRequestId,
-				runHostBrowserCommand,
-				openAndroidUrl,
+				runHostBrowserCommand: (command, timeoutMs) =>
+					runHostBrowserCommandFor(request, command, timeoutMs),
+				openAndroidUrl: (url) => openAndroidUrlFor(request, url),
 				setHostUrlModalState: (hostUrl) => patch({ hostUrl }),
 				setHostUrlModalSubmitting: (hostUrlSubmitting) =>
 					patch({ hostUrlSubmitting }),
 				setHostUrlModalError: (hostUrlError) => patch({ hostUrlError }),
-				showError,
+				showError: (input) => showErrorFor(request, input),
 				getErrorMessage: deps.getErrorMessage,
 			});
+			if (!accepted) hostUrlSubmitRequestId.cancelPrepared();
 		},
 		invalidateHostUrlReads: () => hostUrlReadRequestId.invalidate(),
-		resolvePaneContext,
-		resolvePanePath,
-		resolveWorkspace,
+		resolvePaneContext: () => {
+			const request = capture();
+			return resolvePaneContextFor(request);
+		},
+		resolvePanePath: () => {
+			const request = capture();
+			return resolvePanePathFor(request);
+		},
+		resolveWorkspace: () => {
+			const request = capture();
+			return resolveWorkspaceFor(request);
+		},
 		resolveCurrentGitHubRepository: async () => {
 			const request = capture();
-			const { repository } = await resolveCurrentGitHubRepositoryContext();
-			assertCurrent(request);
+			const { repository } =
+				await resolveCurrentGitHubRepositoryContextFor(request);
 			return repository;
 		},
-		runHostBrowserCommand,
+		runHostBrowserCommand: (command, timeoutMs) => {
+			const request = capture();
+			return runHostBrowserCommandFor(request, command, timeoutMs);
+		},
 		invalidate,
 		dispose: () => {
 			if (disposed) return;
