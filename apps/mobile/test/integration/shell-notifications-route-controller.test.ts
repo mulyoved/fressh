@@ -141,7 +141,7 @@ void test('identical route replay adopts the pending attempt after unmount inval
 	assert.deepEqual(harness.consumedTokens, ['token-1']);
 	assert.equal(harness.routeCommands.length, 1);
 	harness.routeCommands[0]?.resolve('');
-	assert.deepEqual(await Promise.all([first, replay]), [true, true]);
+	assert.deepEqual(await Promise.all([first, replay]), [false, true]);
 	assert.deepEqual(harness.restoredTokens, []);
 	assert.equal(handledPublications, 1);
 	assert.equal(harness.acknowledgements.length, 1);
@@ -149,6 +149,54 @@ void test('identical route replay adopts the pending attempt after unmount inval
 		harness.core.getSnapshot().handledRouteKey,
 		'["saved-host","main","@12","event-1"]',
 	);
+});
+
+void test('non-unmount invalidations never transfer a pending route operation', async (t) => {
+	const cases = [
+		{
+			reason: 'runtime-reset' as const,
+			sequence: ['unmount', 'runtime-reset'] as const,
+		},
+		{
+			reason: 'focus-lost' as const,
+			sequence: ['focus-lost', 'unmount'] as const,
+		},
+		{
+			reason: 'app-inactive' as const,
+			sequence: ['app-inactive', 'unmount'] as const,
+		},
+		{
+			reason: 'source-change' as const,
+			sequence: ['source-change', 'unmount'] as const,
+		},
+		{
+			reason: 'closed' as const,
+			sequence: ['closed', 'unmount'] as const,
+		},
+	];
+
+	for (const { reason, sequence } of cases) {
+		await t.test(reason, async () => {
+			const harness = createNotificationsHarness({ deferRouteCommands: true });
+			const route = harness.validRoute();
+			const original = harness.core.handleRoute(route);
+			for (const invalidation of sequence) {
+				harness.core.invalidate(invalidation);
+			}
+			const replacement = harness.core.handleRoute(route);
+
+			assert.deepEqual(harness.consumedTokens, ['token-1', 'token-1']);
+			assert.equal(harness.routeCommands.length, 1);
+			harness.routeCommands[0]?.resolve('');
+			assert.deepEqual(await Promise.all([original, replacement]), [
+				false,
+				false,
+			]);
+			assert.equal(harness.core.getSnapshot().handledRouteKey, null);
+			assert.deepEqual(harness.acknowledgements, []);
+			assert.deepEqual(harness.restoredTokens, []);
+		});
+	}
 });
 
 void test('route commitment survives subscriber invalidation during handled publication', async () => {
@@ -182,7 +230,9 @@ void test('route context revision prevents A-B-A resurrection', async () => {
 	};
 	harness.core.setContext(changed);
 	harness.core.setContext(initial.context);
-	assert.equal(harness.core.getSnapshot().generation, initial.generation);
+	const restored = harness.core.getSnapshot();
+	assert.equal(restored.generation, initial.generation);
+	assert.equal(restored.contextRevision, initial.contextRevision + 2);
 	harness.routeCommands[0]?.resolve('');
 
 	assert.equal(await pending, false);

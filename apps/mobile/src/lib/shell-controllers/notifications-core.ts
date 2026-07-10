@@ -30,6 +30,7 @@ export type ShellNotificationRoute = {
 
 export type ShellNotificationsState = {
 	context: ShellNotificationContext;
+	contextRevision: number;
 	handledRouteKey: string | null;
 	generation: number;
 	acknowledgeInFlight: boolean;
@@ -78,7 +79,7 @@ type AcknowledgementAttempt = Readonly<{
 }>;
 
 type ActiveRouteAttempt = {
-	identityKey: string;
+	routeIdentityKey: string;
 	contextRevision: number;
 	generation: number;
 	requestId: number;
@@ -86,36 +87,36 @@ type ActiveRouteAttempt = {
 	promise: Promise<boolean>;
 };
 
-function contextsEqual(
-	left: ShellNotificationContext,
-	right: ShellNotificationContext,
-): boolean {
-	return (
-		left.transportKey === right.transportKey &&
-		left.targetKey === right.targetKey &&
-		left.storedConnectionId === right.storedConnectionId &&
-		left.channelId === right.channelId &&
-		left.tmuxEnabled === right.tmuxEnabled &&
-		left.tmuxTarget === right.tmuxTarget
-	);
-}
-
-function createRouteAttemptIdentityKey(
-	route: ShellNotificationRoute,
+export function createShellNotificationContextIdentity(
 	context: ShellNotificationContext,
 ): string {
 	return JSON.stringify([
-		route.agentConnectionId,
-		route.agentSession,
-		route.agentWindowId,
-		route.agentEventId,
-		route.agentTapToken,
 		context.transportKey,
 		context.targetKey,
 		context.storedConnectionId,
 		context.channelId,
 		context.tmuxEnabled,
 		context.tmuxTarget,
+	]);
+}
+
+function contextsEqual(
+	left: ShellNotificationContext,
+	right: ShellNotificationContext,
+): boolean {
+	return (
+		createShellNotificationContextIdentity(left) ===
+		createShellNotificationContextIdentity(right)
+	);
+}
+
+function createRouteIdentityKey(route: ShellNotificationRoute): string {
+	return JSON.stringify([
+		route.agentConnectionId,
+		route.agentSession,
+		route.agentWindowId,
+		route.agentEventId,
+		route.agentTapToken,
 	]);
 }
 
@@ -131,6 +132,7 @@ export function createShellNotificationsControllerCore({
 }: CreateShellNotificationsControllerCoreInput): ShellNotificationsControllerCore {
 	const publisher = createControllerPublisher<ShellNotificationsState>({
 		context: initialContext,
+		contextRevision: 0,
 		handledRouteKey: null,
 		generation: 0,
 		acknowledgeInFlight: false,
@@ -145,8 +147,8 @@ export function createShellNotificationsControllerCore({
 	let epochInvalidated = false;
 	let disposed = false;
 	let routeRequestId = 0;
-	let routeContextRevision = 0;
 	let activeRouteAttempt: ActiveRouteAttempt | null = null;
+	let effectiveInvalidationReason: ControllerInvalidationReason | null = null;
 
 	const publish = (): void => {
 		const current = publisher.getSnapshot();
@@ -233,6 +235,7 @@ export function createShellNotificationsControllerCore({
 	const acknowledgeVisible = async (): Promise<void> => {
 		if (disposed) return;
 		epochInvalidated = false;
+		effectiveInvalidationReason = null;
 		if (inFlight) {
 			queuedAttempt = captureAttempt();
 			const promise = new Promise<void>((resolve) => {
@@ -274,9 +277,14 @@ export function createShellNotificationsControllerCore({
 		}
 	};
 
-	const invalidate = (_reason: ControllerInvalidationReason): void => {
-		if (disposed || epochInvalidated) return;
+	const invalidate = (reason: ControllerInvalidationReason): void => {
+		if (disposed) return;
+		if (epochInvalidated) {
+			if (reason !== 'unmount') effectiveInvalidationReason = reason;
+			return;
+		}
 		epochInvalidated = true;
+		effectiveInvalidationReason = reason;
 		generation += 1;
 		settleObsolete();
 		publish();
@@ -286,7 +294,7 @@ export function createShellNotificationsControllerCore({
 		!disposed &&
 		attempt.requestId === routeRequestId &&
 		attempt.generation === generation &&
-		attempt.contextRevision === routeContextRevision;
+		attempt.contextRevision === publisher.getSnapshot().contextRevision;
 
 	const runRouteAttempt = async (
 		attempt: ActiveRouteAttempt,
@@ -337,7 +345,6 @@ export function createShellNotificationsControllerCore({
 			if (disposed) return;
 			const current = publisher.getSnapshot();
 			if (contextsEqual(current.context, context)) return;
-			routeContextRevision += 1;
 			const semanticContextChanged =
 				current.context.transportKey !== context.transportKey ||
 				current.context.targetKey !== context.targetKey ||
@@ -346,10 +353,12 @@ export function createShellNotificationsControllerCore({
 				generation += 1;
 				settleObsolete();
 				epochInvalidated = false;
+				effectiveInvalidationReason = null;
 			}
 			publisher.publish({
 				...current,
 				context,
+				contextRevision: current.contextRevision + 1,
 				generation,
 				acknowledgeInFlight: inFlight,
 				acknowledgeQueued: queued,
@@ -369,19 +378,30 @@ export function createShellNotificationsControllerCore({
 		handleRoute: (route) => {
 			if (disposed) return Promise.resolve(false);
 			const context = { ...publisher.getSnapshot().context };
-			const identityKey = createRouteAttemptIdentityKey(route, context);
+			const contextRevision = publisher.getSnapshot().contextRevision;
+			const routeIdentityKey = createRouteIdentityKey(route);
 			if (
 				activeRouteAttempt &&
 				!activeRouteAttempt.committed &&
-				activeRouteAttempt.identityKey === identityKey &&
-				activeRouteAttempt.contextRevision === routeContextRevision
+				activeRouteAttempt.routeIdentityKey === routeIdentityKey &&
+				activeRouteAttempt.contextRevision === contextRevision &&
+				(activeRouteAttempt.generation === generation ||
+					effectiveInvalidationReason === 'unmount')
 			) {
+				const attempt = activeRouteAttempt;
 				epochInvalidated = false;
-				activeRouteAttempt.generation = generation;
-				activeRouteAttempt.contextRevision = routeContextRevision;
-				return activeRouteAttempt.promise;
+				effectiveInvalidationReason = null;
+				attempt.generation = generation;
+				const callerGeneration = generation;
+				return attempt.promise.then(
+					(handled) =>
+						handled &&
+						attempt.generation === callerGeneration &&
+						attempt.contextRevision === contextRevision,
+				);
 			}
 			epochInvalidated = false;
+			effectiveInvalidationReason = null;
 			const requestId = ++routeRequestId;
 			let resolveAttempt!: (handled: boolean) => void;
 			let rejectAttempt!: (error: unknown) => void;
@@ -390,8 +410,8 @@ export function createShellNotificationsControllerCore({
 				rejectAttempt = reject;
 			});
 			const attempt: ActiveRouteAttempt = {
-				identityKey,
-				contextRevision: routeContextRevision,
+				routeIdentityKey,
+				contextRevision,
 				generation,
 				requestId,
 				committed: false,
@@ -407,7 +427,13 @@ export function createShellNotificationsControllerCore({
 					if (activeRouteAttempt === attempt) activeRouteAttempt = null;
 				}
 			})();
-			return promise;
+			const callerGeneration = generation;
+			return promise.then(
+				(handled) =>
+					handled &&
+					attempt.generation === callerGeneration &&
+					attempt.contextRevision === contextRevision,
+			);
 		},
 		invalidate,
 		dispose: () => {

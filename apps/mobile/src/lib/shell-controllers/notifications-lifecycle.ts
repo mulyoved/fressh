@@ -1,6 +1,7 @@
 import { type ShellActivitySnapshot } from './activity-core';
 import { type ControllerInvalidationReason } from './controller-core';
 import {
+	createShellNotificationContextIdentity,
 	type ShellNotificationContext,
 	type ShellNotificationRoute,
 	type ShellNotificationsState,
@@ -17,16 +18,10 @@ export function createShellNotificationAutomaticAcknowledger(): {
 	return {
 		request: (activity, notifications, onRequest) => {
 			if (!activity.interactive) return false;
-			const { context } = notifications;
 			const requestKey = JSON.stringify([
 				activity.generation,
 				notifications.generation,
-				context.transportKey,
-				context.targetKey,
-				context.storedConnectionId,
-				context.channelId,
-				context.tmuxEnabled,
-				context.tmuxTarget,
+				notifications.contextRevision,
 			]);
 			if (lastRequestKey === requestKey) return false;
 			lastRequestKey = requestKey;
@@ -46,9 +41,7 @@ export function createShellNotificationRouteEffectKey(
 		route.agentWindowId,
 		route.agentEventId,
 		route.agentTapToken,
-		context.transportKey,
-		context.targetKey,
-		context.storedConnectionId,
+		createShellNotificationContextIdentity(context),
 	]);
 }
 
