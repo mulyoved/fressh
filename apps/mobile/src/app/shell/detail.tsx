@@ -93,6 +93,7 @@ import {
 import { useShellActivityController } from '@/lib/shell-controllers/activity';
 import {
 	createShellActivityRetainedDomainBridge,
+	createShellKeyboardResumeDismissScheduler,
 	type ShellActivityRetainedDomainActions,
 } from '@/lib/shell-controllers/activity-retained-domain-bridge';
 import { useBrowserActionsController } from '@/lib/shell-controllers/browser-actions';
@@ -2730,9 +2731,6 @@ function ShellDetail() {
 	const terminalFitSizeWaitersRef = useRef(
 		new Set<(size: TerminalFitSize) => void>(),
 	);
-	const resumeDismissTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
-		null,
-	);
 
 	const waitForTerminalSizeAfterFit = useCallback(() => {
 		return new Promise<TerminalFitSize | null>((resolve) => {
@@ -2801,9 +2799,6 @@ function ShellDetail() {
 			if (resizeTimeoutRef.current) {
 				clearTimeout(resizeTimeoutRef.current);
 			}
-			if (resumeDismissTimeoutRef.current) {
-				clearTimeout(resumeDismissTimeoutRef.current);
-			}
 		};
 	}, []);
 
@@ -2821,6 +2816,12 @@ function ShellDetail() {
 		};
 	}, []);
 
+	const [keyboardResumeDismissScheduler] = useState(() =>
+		createShellKeyboardResumeDismissScheduler({
+			schedule: (task, delayMs) => setTimeout(task, delayMs),
+			cancel: (timer) => clearTimeout(timer),
+		}),
+	);
 	const retainedDomainActions: ShellActivityRetainedDomainActions = {
 		resume: () => {
 			const isAndroid = Platform.OS === 'android';
@@ -2833,12 +2834,9 @@ function ShellDetail() {
 					!lastKeyboardVisibleRef.current
 				) {
 					Keyboard.dismiss();
-					if (resumeDismissTimeoutRef.current) {
-						clearTimeout(resumeDismissTimeoutRef.current);
-					}
-					resumeDismissTimeoutRef.current = setTimeout(() => {
+					keyboardResumeDismissScheduler.schedule(() => {
 						Keyboard.dismiss();
-					}, 150);
+					});
 					systemKeyboardVisibleRef.current = false;
 				}
 			}
@@ -2871,6 +2869,7 @@ function ShellDetail() {
 				lastKeyboardVisibleRef.current = systemKeyboardVisibleRef.current;
 			}
 		},
+		cancelPendingResumeDismiss: keyboardResumeDismissScheduler.cancel,
 	};
 	const retainedDomainActionsRef = useRef(retainedDomainActions);
 	retainedDomainActionsRef.current = retainedDomainActions;
@@ -2890,7 +2889,7 @@ function ShellDetail() {
 		getActivitySnapshot,
 		retainedDomainBridge,
 	]);
-	useEffect(() => retainedDomainBridge.setup(), [retainedDomainBridge]);
+	useLayoutEffect(() => retainedDomainBridge.setup(), [retainedDomainBridge]);
 
 	const enableSystemKeyboard = useCallback(() => {
 		if (Platform.OS !== 'android') return;

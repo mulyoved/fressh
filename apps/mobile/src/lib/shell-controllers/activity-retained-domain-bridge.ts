@@ -16,21 +16,50 @@ export type ShellActivityRetainedDomainActions = {
 		snapshot: ShellActivitySnapshot,
 	): void | Promise<unknown>;
 	rememberKeyboardVisibility(): void;
+	cancelPendingResumeDismiss(): void;
 };
 
 export type ShellActivityRetainedDomainBridge = ReplaySafeDisposer & {
 	reconcile(snapshot: ShellActivitySnapshot): void;
 };
 
+export type ShellKeyboardResumeDismissScheduler = {
+	schedule(dismiss: () => void): void;
+	cancel(): void;
+};
+
+export function createShellKeyboardResumeDismissScheduler<TTimer>(input: {
+	schedule(task: () => void, delayMs: number): TTimer;
+	cancel(timer: TTimer): void;
+}): ShellKeyboardResumeDismissScheduler {
+	let pending: TTimer | null = null;
+	return {
+		schedule: (dismiss) => {
+			if (pending !== null) input.cancel(pending);
+			pending = input.schedule(() => {
+				pending = null;
+				dismiss();
+			}, 150);
+		},
+		cancel: () => {
+			if (pending === null) return;
+			const timer = pending;
+			pending = null;
+			input.cancel(timer);
+		},
+	};
+}
+
 export function createShellActivityRetainedDomainBridge(
 	getActions: () => ShellActivityRetainedDomainActions,
 	defer: (task: () => void) => void = queueMicrotask,
 ): ShellActivityRetainedDomainBridge {
 	let committedSnapshot: ShellActivitySnapshot | null = null;
-	const lifecycle = createReplaySafeDisposer(
-		() => getActions().invalidateRetainedDomains(),
-		defer,
-	);
+	const lifecycle = createReplaySafeDisposer(() => {
+		const actions = getActions();
+		actions.cancelPendingResumeDismiss();
+		actions.invalidateRetainedDomains();
+	}, defer);
 
 	return {
 		setup: lifecycle.setup,
@@ -55,17 +84,20 @@ export function createShellActivityRetainedDomainBridge(
 			const appBecameInactive = initialReconciliation
 				? !snapshot.appActive
 				: previous.appActive && !snapshot.appActive;
-			const becameInteractive =
-				snapshot.interactive &&
-				(initialReconciliation || !previous.interactive);
+			const shouldRestoreKeyboard =
+				(initialReconciliation && snapshot.interactive) ||
+				(!initialReconciliation && !previous.appActive && snapshot.appActive);
 			const actions = getActions();
+			if (focusLost || appBecameInactive) {
+				actions.cancelPendingResumeDismiss();
+			}
 			if (
 				generationChanged &&
 				(!initialReconciliation || !snapshot.interactive)
 			) {
 				actions.invalidateRetainedDomains();
 			}
-			if (becameInteractive) {
+			if (shouldRestoreKeyboard) {
 				actions.resume(snapshot);
 			}
 			if (!focusLost && !appBecameInactive) return;

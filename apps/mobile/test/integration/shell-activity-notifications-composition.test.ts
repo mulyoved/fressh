@@ -11,6 +11,26 @@ function extractBlock(source: string, start: string, end: string): string {
 	return source.slice(startIndex, endIndex);
 }
 
+function extractObjectBlock(source: string, propertyStart: string): string {
+	const propertyIndex = source.indexOf(propertyStart);
+	assert.notEqual(
+		propertyIndex,
+		-1,
+		`missing object property: ${propertyStart}`,
+	);
+	const openingBrace = source.indexOf('{', propertyIndex);
+	assert.notEqual(openingBrace, -1, `missing opening brace: ${propertyStart}`);
+	let depth = 0;
+	for (let index = openingBrace; index < source.length; index++) {
+		if (source[index] === '{') depth++;
+		if (source[index] === '}') {
+			depth--;
+			if (depth === 0) return source.slice(propertyIndex, index + 1);
+		}
+	}
+	assert.fail(`missing closing brace: ${propertyStart}`);
+}
+
 void test('shell detail delegates activity and notification lifecycle', () => {
 	const source = readFileSync(
 		join(process.cwd(), 'src/app/shell/detail.tsx'),
@@ -25,6 +45,7 @@ void test('shell detail delegates activity and notification lifecycle', () => {
 		'acknowledgeVisibleAgentNotificationRef',
 		'isFocusedRef',
 		'isAppActiveRef',
+		'appStateRef',
 		'visibleConnectionIdRef',
 		'visibleChannelIdRef',
 		'visibleTmuxTargetRef',
@@ -44,30 +65,36 @@ void test('shell detail delegates activity and notification lifecycle', () => {
 		'useShellNotificationsController({',
 		'const browserActions = useBrowserActionsController',
 	);
-	assert.match(notificationComposition, /activity,/);
-	for (const contextValue of [
-		'transportKey',
-		'targetKey',
-		'storedConnectionId',
-		'channelId',
-		'tmuxEnabled',
-		'tmuxTarget',
-		'agentConnectionId',
-		'agentSession',
-		'agentWindowId',
-		'agentEventId',
-		'agentTapToken',
-		'runNotificationWorkmuxCommand',
-		'logger',
-	]) {
-		assert.match(notificationComposition, new RegExp(`\\b${contextValue}\\b`));
-	}
-	assert.match(
+	const notificationContext = extractObjectBlock(
 		notificationComposition,
+		'context: {',
+	);
+	const notificationRoute = extractObjectBlock(
+		notificationComposition,
+		'route: {',
+	);
+	assert.match(notificationComposition, /^\s*activity,\s*$/m);
+	assert.match(notificationContext, /^\s*transportKey,\s*$/m);
+	assert.match(notificationContext, /^\s*targetKey,\s*$/m);
+	assert.match(
+		notificationContext,
 		/storedConnectionId:\s*connectionStoredConnectionId\s*\?\?\s*null/,
 	);
-	assert.doesNotMatch(
+	assert.match(notificationContext, /^\s*channelId,\s*$/m);
+	assert.match(notificationContext, /^\s*tmuxEnabled,\s*$/m);
+	assert.match(notificationContext, /^\s*tmuxTarget,\s*$/m);
+	assert.match(notificationRoute, /^\s*agentConnectionId,\s*$/m);
+	assert.match(notificationRoute, /^\s*agentSession,\s*$/m);
+	assert.match(notificationRoute, /^\s*agentWindowId,\s*$/m);
+	assert.match(notificationRoute, /^\s*agentEventId,\s*$/m);
+	assert.match(notificationRoute, /^\s*agentTapToken,\s*$/m);
+	assert.match(
 		notificationComposition,
+		/^\s*runWorkmuxCommand:\s*runNotificationWorkmuxCommand,\s*$/m,
+	);
+	assert.match(notificationComposition, /^\s*logger,\s*$/m);
+	assert.doesNotMatch(
+		notificationContext,
 		/storedConnectionId:\s*(?:searchParams\.)?storedConnectionId\b/,
 	);
 

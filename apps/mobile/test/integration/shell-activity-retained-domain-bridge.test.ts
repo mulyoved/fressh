@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+	createShellKeyboardResumeDismissScheduler,
 	createShellActivityRetainedDomainBridge,
 	type ShellActivityRetainedDomainActions,
 } from '../../src/lib/shell-controllers/activity-retained-domain-bridge';
@@ -16,13 +17,28 @@ function createHarness() {
 		directScrollbackClear: 0,
 		inactiveScrollbackCleanup: 0,
 		rememberKeyboardVisibility: 0,
+		cancelPendingResumeDismiss: 0,
 	};
 	const deferred: (() => void)[] = [];
 	const events: string[] = [];
+	const timers = new Map<number, () => void>();
+	let nextTimerId = 0;
+	let lateDismisses = 0;
+	let dismissSchedules = 0;
+	const dismissScheduler = createShellKeyboardResumeDismissScheduler({
+		schedule: (task) => {
+			nextTimerId++;
+			timers.set(nextTimerId, task);
+			return nextTimerId;
+		},
+		cancel: (timerId) => timers.delete(timerId),
+	});
 	const actions: ShellActivityRetainedDomainActions = {
 		resume: () => {
 			calls.resume++;
 			events.push('resume');
+			dismissSchedules++;
+			dismissScheduler.schedule(() => lateDismisses++);
 		},
 		invalidateRetainedDomains: () => {
 			calls.retainedInvalidation++;
@@ -56,6 +72,11 @@ function createHarness() {
 			calls.rememberKeyboardVisibility++;
 			events.push('remember-keyboard');
 		},
+		cancelPendingResumeDismiss: () => {
+			calls.cancelPendingResumeDismiss++;
+			events.push('cancel-resume-dismiss');
+			dismissScheduler.cancel();
+		},
 	};
 	const bridge = createShellActivityRetainedDomainBridge(
 		() => actions,
@@ -65,6 +86,20 @@ function createHarness() {
 		bridge,
 		calls,
 		events,
+		get dismissSchedules() {
+			return dismissSchedules;
+		},
+		get lateDismisses() {
+			return lateDismisses;
+		},
+		get pendingDismisses() {
+			return timers.size;
+		},
+		flushTimers: () => {
+			const pending = [...timers.values()];
+			timers.clear();
+			for (const task of pending) task();
+		},
 		flush: () => {
 			while (deferred.length) deferred.shift()?.();
 		},
@@ -108,15 +143,20 @@ void test('focus loss invalidates and clears retained domains exactly once', () 
 		directScrollbackClear: 1,
 		inactiveScrollbackCleanup: 0,
 		rememberKeyboardVisibility: 0,
+		cancelPendingResumeDismiss: 1,
 	});
 	assert.deepEqual(harness.events, [
 		'resume',
+		'cancel-resume-dismiss',
 		'invalidate-retained',
 		'invalidate-browser',
 		'close-browser',
 		'invalidate-scrollback-request',
 		'clear-scrollback-directly',
 	]);
+	assert.equal(harness.pendingDismisses, 0);
+	harness.flushTimers();
+	assert.equal(harness.lateDismisses, 0);
 });
 
 void test('app inactivity uses only the inactive scrollback policy', () => {
@@ -146,7 +186,11 @@ void test('app inactivity uses only the inactive scrollback policy', () => {
 		directScrollbackClear: 0,
 		inactiveScrollbackCleanup: 1,
 		rememberKeyboardVisibility: 1,
+		cancelPendingResumeDismiss: 1,
 	});
+	assert.equal(harness.pendingDismisses, 0);
+	harness.flushTimers();
+	assert.equal(harness.lateDismisses, 0);
 });
 
 void test('combined focus loss and app inactivity use one inactive scrollback path', () => {
@@ -176,8 +220,10 @@ void test('combined focus loss and app inactivity use one inactive scrollback pa
 		directScrollbackClear: 0,
 		inactiveScrollbackCleanup: 1,
 		rememberKeyboardVisibility: 1,
+		cancelPendingResumeDismiss: 1,
 	});
 	assert.deepEqual(harness.events.slice(1), [
+		'cancel-resume-dismiss',
 		'invalidate-retained',
 		'invalidate-browser',
 		'close-browser',
@@ -222,6 +268,45 @@ void test('focus loss then backgrounding applies both policies without common re
 		directScrollbackClear: 1,
 		inactiveScrollbackCleanup: 1,
 		rememberKeyboardVisibility: 1,
+		cancelPendingResumeDismiss: 2,
+	});
+});
+
+void test('app inactivity then focus loss applies only the missing focus policy', () => {
+	const harness = createHarness();
+	harness.bridge.reconcile({
+		focused: true,
+		appState: 'active',
+		appActive: true,
+		interactive: true,
+		generation: 0,
+	});
+	harness.bridge.reconcile({
+		focused: true,
+		appState: 'background',
+		appActive: false,
+		interactive: false,
+		generation: 1,
+	});
+	harness.bridge.reconcile({
+		focused: false,
+		appState: 'background',
+		appActive: false,
+		interactive: false,
+		generation: 1,
+	});
+
+	assert.deepEqual(harness.calls, {
+		resume: 1,
+		retainedInvalidation: 1,
+		browserInvalidation: 2,
+		browserClose: 1,
+		keyboardInvalidation: 1,
+		scrollbackRequestInvalidation: 1,
+		directScrollbackClear: 1,
+		inactiveScrollbackCleanup: 1,
+		rememberKeyboardVisibility: 1,
+		cancelPendingResumeDismiss: 2,
 	});
 });
 
@@ -244,6 +329,7 @@ void test('initial noninteractive causes and inverse resume follow the action ma
 		directScrollbackClear: 1,
 		inactiveScrollbackCleanup: 0,
 		rememberKeyboardVisibility: 0,
+		cancelPendingResumeDismiss: 1,
 	});
 
 	const background = createHarness();
@@ -264,6 +350,7 @@ void test('initial noninteractive causes and inverse resume follow the action ma
 		directScrollbackClear: 0,
 		inactiveScrollbackCleanup: 1,
 		rememberKeyboardVisibility: 1,
+		cancelPendingResumeDismiss: 1,
 	});
 
 	const inverse = createHarness();
@@ -282,7 +369,11 @@ void test('initial noninteractive causes and inverse resume follow the action ma
 		interactive: false,
 		generation: 0,
 	});
-	assert.deepEqual(inverse.calls, initialCalls);
+	assert.deepEqual(inverse.calls, {
+		...initialCalls,
+		resume: initialCalls.resume + 1,
+	});
+	assert.equal(inverse.dismissSchedules, 1);
 	inverse.bridge.reconcile({
 		focused: true,
 		appState: 'active',
@@ -292,11 +383,44 @@ void test('initial noninteractive causes and inverse resume follow the action ma
 	});
 	assert.equal(inverse.calls.retainedInvalidation, 2);
 	assert.equal(inverse.calls.resume, 1);
+	assert.equal(inverse.dismissSchedules, 1);
 	assert.equal(inverse.calls.browserInvalidation, 1);
 	assert.equal(inverse.calls.inactiveScrollbackCleanup, 1);
 });
 
-void test('resume generation invalidates retained work once without inactive cleanup', () => {
+void test('pure focus regain does not repeat AppState keyboard restoration', () => {
+	const harness = createHarness();
+	harness.bridge.reconcile({
+		focused: true,
+		appState: 'active',
+		appActive: true,
+		interactive: true,
+		generation: 0,
+	});
+	const initialSchedules = harness.dismissSchedules;
+	harness.bridge.reconcile({
+		focused: false,
+		appState: 'active',
+		appActive: true,
+		interactive: false,
+		generation: 1,
+	});
+	harness.bridge.reconcile({
+		focused: true,
+		appState: 'active',
+		appActive: true,
+		interactive: true,
+		generation: 2,
+	});
+
+	assert.equal(harness.calls.resume, 1);
+	assert.equal(harness.dismissSchedules, initialSchedules);
+	assert.equal(harness.pendingDismisses, 0);
+	harness.flushTimers();
+	assert.equal(harness.lateDismisses, 0);
+});
+
+void test('focus-gain generation invalidates retained work without keyboard restoration', () => {
 	const harness = createHarness();
 	harness.bridge.reconcile({
 		focused: false,
@@ -328,7 +452,7 @@ void test('resume generation invalidates retained work once without inactive cle
 		harness.calls.retainedInvalidation,
 		beforeResume.retainedInvalidation + 1,
 	);
-	assert.equal(harness.calls.resume, beforeResume.resume + 1);
+	assert.equal(harness.calls.resume, beforeResume.resume);
 	assert.equal(
 		harness.calls.directScrollbackClear,
 		beforeResume.directScrollbackClear,
@@ -349,14 +473,55 @@ void test('resume generation invalidates retained work once without inactive cle
 
 void test('Strict Mode replay defers cleanup and real unmount invalidates once', () => {
 	const harness = createHarness();
+	harness.bridge.reconcile({
+		focused: true,
+		appState: 'active',
+		appActive: true,
+		interactive: true,
+		generation: 0,
+	});
 	const firstCleanup = harness.bridge.setup();
 	firstCleanup();
 	const secondCleanup = harness.bridge.setup();
 	harness.flush();
 	assert.equal(harness.calls.retainedInvalidation, 0);
+	assert.equal(harness.calls.cancelPendingResumeDismiss, 0);
+	assert.equal(harness.pendingDismisses, 1);
 
 	secondCleanup();
 	harness.flush();
 	harness.flush();
 	assert.equal(harness.calls.retainedInvalidation, 1);
+	assert.equal(harness.calls.cancelPendingResumeDismiss, 1);
+	assert.equal(harness.pendingDismisses, 0);
+	harness.flushTimers();
+	assert.equal(harness.lateDismisses, 0);
+});
+
+void test('app inactivity followed by unmount cannot leave a late dismiss', () => {
+	const harness = createHarness();
+	harness.bridge.reconcile({
+		focused: true,
+		appState: 'active',
+		appActive: true,
+		interactive: true,
+		generation: 0,
+	});
+	const cleanup = harness.bridge.setup();
+	harness.bridge.reconcile({
+		focused: true,
+		appState: 'background',
+		appActive: false,
+		interactive: false,
+		generation: 1,
+	});
+	assert.equal(harness.calls.cancelPendingResumeDismiss, 1);
+	assert.equal(harness.pendingDismisses, 0);
+
+	cleanup();
+	harness.flush();
+	assert.equal(harness.calls.cancelPendingResumeDismiss, 2);
+	assert.equal(harness.calls.retainedInvalidation, 2);
+	harness.flushTimers();
+	assert.equal(harness.lateDismisses, 0);
 });
