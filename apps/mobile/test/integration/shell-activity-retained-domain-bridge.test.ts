@@ -55,6 +55,8 @@ void test('focus loss invalidates and clears retained domains exactly once', () 
 		interactive: true,
 		generation: 0,
 	});
+	assert.equal(harness.calls.retainedInvalidation, 0);
+	assert.equal(harness.calls.resume, 1);
 	harness.bridge.reconcile({
 		focused: false,
 		appState: 'active',
@@ -105,6 +107,57 @@ void test('app inactivity uses only the inactive scrollback policy', () => {
 	assert.equal(harness.calls.directScrollbackClear, 0);
 	assert.equal(harness.calls.inactiveScrollbackCleanup, 1);
 	assert.equal(harness.calls.rememberKeyboardVisibility, 1);
+});
+
+void test('resume generation invalidates retained work once without inactive cleanup', () => {
+	const harness = createHarness();
+	harness.bridge.reconcile({
+		focused: false,
+		appState: 'active',
+		appActive: true,
+		interactive: false,
+		generation: 0,
+	});
+	const beforeResume = { ...harness.calls };
+	assert.equal(beforeResume.retainedInvalidation, 1);
+	assert.equal(beforeResume.resume, 0);
+
+	harness.bridge.reconcile({
+		focused: true,
+		appState: 'active',
+		appActive: true,
+		interactive: true,
+		generation: 1,
+	});
+	harness.bridge.reconcile({
+		focused: true,
+		appState: 'active',
+		appActive: true,
+		interactive: true,
+		generation: 1,
+	});
+
+	assert.equal(
+		harness.calls.retainedInvalidation,
+		beforeResume.retainedInvalidation + 1,
+	);
+	assert.equal(harness.calls.resume, beforeResume.resume + 1);
+	assert.equal(
+		harness.calls.directScrollbackClear,
+		beforeResume.directScrollbackClear,
+	);
+	assert.equal(
+		harness.calls.inactiveScrollbackCleanup,
+		beforeResume.inactiveScrollbackCleanup,
+	);
+	assert.equal(
+		harness.calls.browserInvalidation,
+		beforeResume.browserInvalidation,
+	);
+	assert.equal(
+		harness.calls.keyboardInvalidation,
+		beforeResume.keyboardInvalidation,
+	);
 });
 
 void test('Strict Mode replay defers cleanup and real unmount invalidates once', () => {

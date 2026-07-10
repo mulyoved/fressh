@@ -36,14 +36,17 @@ export function createShellActivityRetainedDomainBridge(
 		setup: lifecycle.setup,
 		reconcile: (snapshot) => {
 			if (reconciledGeneration === snapshot.generation) return;
+			const initialReconciliation = reconciledGeneration === null;
 			reconciledGeneration = snapshot.generation;
 			const actions = getActions();
+			if (!initialReconciliation || !snapshot.interactive) {
+				actions.invalidateRetainedDomains();
+			}
 			if (snapshot.interactive) {
 				actions.resume(snapshot);
 				return;
 			}
 
-			actions.invalidateRetainedDomains();
 			actions.invalidateBrowserActions();
 			actions.closeBrowserActions();
 			actions.invalidateKeyboardRunner();
