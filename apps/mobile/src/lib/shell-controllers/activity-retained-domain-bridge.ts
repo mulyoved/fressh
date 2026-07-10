@@ -56,6 +56,7 @@ export function createShellActivityRetainedDomainBridge(
 	defer: (task: () => void) => void = queueMicrotask,
 ): ShellActivityRetainedDomainBridge {
 	let committedSnapshot: ShellActivitySnapshot | null = null;
+	let keyboardInitialized = false;
 	const lifecycle = createReplaySafeDisposer(() => {
 		const actions = getActions();
 		actions.cancelPendingResumeDismiss();
@@ -86,7 +87,7 @@ export function createShellActivityRetainedDomainBridge(
 				? !snapshot.appActive
 				: previous.appActive && !snapshot.appActive;
 			const shouldSetupInitialKeyboard =
-				initialReconciliation && snapshot.interactive;
+				!keyboardInitialized && snapshot.interactive;
 			const appBecameActive =
 				!initialReconciliation && !previous.appActive && snapshot.appActive;
 			const actions = getActions();
@@ -100,6 +101,7 @@ export function createShellActivityRetainedDomainBridge(
 				actions.invalidateRetainedDomains();
 			}
 			if (shouldSetupInitialKeyboard) {
+				keyboardInitialized = true;
 				actions.setupInitialKeyboard(snapshot);
 			} else if (appBecameActive) {
 				actions.resumeFromAppState(snapshot);

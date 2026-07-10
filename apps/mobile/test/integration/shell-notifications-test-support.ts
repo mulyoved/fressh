@@ -70,7 +70,6 @@ export function createNotificationsHarness(
 	const consumedRouteIdentities: string[] = [];
 	const restoredTokens: string[] = [];
 	const routeCommands: WindowCommand[] = [];
-	let commandPortRevision = 0;
 	const authorizedRouteIdentity = JSON.stringify([
 		'saved-host',
 		'main',
@@ -124,13 +123,11 @@ export function createNotificationsHarness(
 		windowCommands.push({ ...deferred, argv, timeoutMs });
 		return deferred.promise;
 	};
-	let commandPort = defaultCommandPort;
 	const core = createShellNotificationsControllerCore({
 		activity,
 		context: context(),
 		platformOS: 'android',
-		getCommandPortRevision: () => commandPortRevision,
-		runWorkmuxCommand: (argv, timeoutMs) => commandPort(argv, timeoutMs),
+		runWorkmuxCommand: defaultCommandPort,
 		consumeAuthorizedRouteToken: (
 			connectionId,
 			session,
@@ -196,15 +193,11 @@ export function createNotificationsHarness(
 		context,
 		core,
 		get commandPortRevision() {
-			return commandPortRevision;
+			return core.getSnapshot().commandPortRevision;
 		},
 		replaceCommandPort: (
 			nextPort: (argv: string[], timeoutMs: number) => Promise<string>,
-		) => {
-			if (commandPort === nextPort) return;
-			commandPort = nextPort;
-			commandPortRevision++;
-		},
+		) => core.setCommandPort(nextPort),
 		restoredTokens,
 		routeCommands,
 		tick: () => new Promise((resolve) => setTimeout(resolve, 0)),

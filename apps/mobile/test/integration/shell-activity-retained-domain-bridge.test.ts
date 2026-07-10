@@ -390,7 +390,7 @@ void test('initial noninteractive causes and inverse resume follow the action ma
 		generation: 1,
 	});
 	assert.equal(inverse.calls.retainedInvalidation, 2);
-	assert.equal(inverse.calls.resume, 1);
+	assert.equal(inverse.calls.resume, 2);
 	assert.equal(inverse.dismissSchedules, 1);
 	assert.deepEqual(inverse.scheduledDelays, [150]);
 	assert.equal(inverse.calls.browserInvalidation, 1);
@@ -412,6 +412,50 @@ void test('initial keyboard setup has no delayed dismiss that can close later in
 	assert.equal(harness.pendingDismisses, 0);
 	harness.flushTimers();
 	assert.equal(harness.lateDismisses, 0);
+});
+
+void test('first interactive focus gain performs initial keyboard setup once', () => {
+	const harness = createHarness();
+	harness.bridge.reconcile({
+		focused: false,
+		appState: 'active',
+		appActive: true,
+		interactive: false,
+		generation: 0,
+	});
+	assert.equal(harness.calls.resume, 0);
+	harness.bridge.reconcile({
+		focused: true,
+		appState: 'active',
+		appActive: true,
+		interactive: true,
+		generation: 1,
+	});
+	harness.bridge.reconcile({
+		focused: true,
+		appState: 'active',
+		appActive: true,
+		interactive: true,
+		generation: 1,
+	});
+	assert.equal(harness.calls.resume, 1);
+	assert.equal(harness.dismissSchedules, 0);
+
+	harness.bridge.reconcile({
+		focused: false,
+		appState: 'active',
+		appActive: true,
+		interactive: false,
+		generation: 2,
+	});
+	harness.bridge.reconcile({
+		focused: true,
+		appState: 'active',
+		appActive: true,
+		interactive: true,
+		generation: 3,
+	});
+	assert.equal(harness.calls.resume, 1);
 });
 
 void test('pure focus regain does not repeat AppState keyboard restoration', () => {
@@ -446,7 +490,7 @@ void test('pure focus regain does not repeat AppState keyboard restoration', () 
 	assert.equal(harness.lateDismisses, 0);
 });
 
-void test('focus-gain generation invalidates retained work without keyboard restoration', () => {
+void test('first focus-gain generation invalidates retained work and initializes keyboard', () => {
 	const harness = createHarness();
 	harness.bridge.reconcile({
 		focused: false,
@@ -478,7 +522,8 @@ void test('focus-gain generation invalidates retained work without keyboard rest
 		harness.calls.retainedInvalidation,
 		beforeResume.retainedInvalidation + 1,
 	);
-	assert.equal(harness.calls.resume, beforeResume.resume);
+	assert.equal(harness.calls.resume, beforeResume.resume + 1);
+	assert.equal(harness.dismissSchedules, 0);
 	assert.equal(
 		harness.calls.directScrollbackClear,
 		beforeResume.directScrollbackClear,
@@ -501,17 +546,24 @@ void test('focus loss cancels a real AppState resume dismiss', () => {
 	const harness = createHarness();
 	harness.bridge.reconcile({
 		focused: true,
+		appState: 'active',
+		appActive: true,
+		interactive: true,
+		generation: 0,
+	});
+	harness.bridge.reconcile({
+		focused: true,
 		appState: 'background',
 		appActive: false,
 		interactive: false,
-		generation: 0,
+		generation: 1,
 	});
 	harness.bridge.reconcile({
 		focused: true,
 		appState: 'active',
 		appActive: true,
 		interactive: true,
-		generation: 1,
+		generation: 2,
 	});
 	assert.equal(harness.pendingDismisses, 1);
 	assert.deepEqual(harness.scheduledDelays, [150]);
@@ -520,7 +572,7 @@ void test('focus loss cancels a real AppState resume dismiss', () => {
 		appState: 'active',
 		appActive: true,
 		interactive: false,
-		generation: 2,
+		generation: 3,
 	});
 
 	assert.equal(harness.pendingDismisses, 0);
@@ -532,17 +584,24 @@ void test('Strict Mode replay defers cleanup and real unmount invalidates once',
 	const harness = createHarness();
 	harness.bridge.reconcile({
 		focused: true,
+		appState: 'active',
+		appActive: true,
+		interactive: true,
+		generation: 0,
+	});
+	harness.bridge.reconcile({
+		focused: true,
 		appState: 'background',
 		appActive: false,
 		interactive: false,
-		generation: 0,
+		generation: 1,
 	});
 	harness.bridge.reconcile({
 		focused: true,
 		appState: 'active',
 		appActive: true,
 		interactive: true,
-		generation: 1,
+		generation: 2,
 	});
 	const invalidationsBeforeReplay = harness.calls.retainedInvalidation;
 	const cancellationsBeforeReplay = harness.calls.cancelPendingResumeDismiss;
@@ -577,17 +636,24 @@ void test('app inactivity followed by unmount cannot leave a late dismiss', () =
 	const harness = createHarness();
 	harness.bridge.reconcile({
 		focused: true,
+		appState: 'active',
+		appActive: true,
+		interactive: true,
+		generation: 0,
+	});
+	harness.bridge.reconcile({
+		focused: true,
 		appState: 'background',
 		appActive: false,
 		interactive: false,
-		generation: 0,
+		generation: 1,
 	});
 	harness.bridge.reconcile({
 		focused: true,
 		appState: 'active',
 		appActive: true,
 		interactive: true,
-		generation: 1,
+		generation: 2,
 	});
 	assert.equal(harness.pendingDismisses, 1);
 	const cleanup = harness.bridge.setup();
@@ -596,7 +662,7 @@ void test('app inactivity followed by unmount cannot leave a late dismiss', () =
 		appState: 'background',
 		appActive: false,
 		interactive: false,
-		generation: 2,
+		generation: 3,
 	});
 	assert.equal(harness.calls.cancelPendingResumeDismiss, 2);
 	assert.equal(harness.pendingDismisses, 0);

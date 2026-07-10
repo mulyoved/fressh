@@ -70,9 +70,7 @@ function createCommandPortReplacementHarness() {
 		activity: base.activity,
 		context: initial.context,
 		platformOS: 'android',
-		getCommandPortRevision: orchestrator.getCommandPortRevision,
-		runWorkmuxCommand: (argv, timeoutMs) =>
-			orchestrator.getCommittedInput().runWorkmuxCommand(argv, timeoutMs),
+		runWorkmuxCommand: initial.runWorkmuxCommand,
 		consumeAuthorizedRouteToken: () => {
 			if (!authorized) return false;
 			authorized = false;
@@ -88,13 +86,22 @@ function createCommandPortReplacementHarness() {
 		},
 		warn: (_message, error) => warnings.push(error),
 	});
-	const commit = (runWorkmuxCommand: Input['runWorkmuxCommand']) => {
+	const commit = (
+		runWorkmuxCommand: Input['runWorkmuxCommand'],
+		afterCommit: () => void = () => {},
+	) => {
 		const next = { ...initial, runWorkmuxCommand };
-		orchestrator.commitLayout(next, core.setContext, () => {});
+		orchestrator.commitLayout(
+			next,
+			core.setCommandPort,
+			core.setContext,
+			afterCommit,
+		);
 		return next;
 	};
 	return {
 		acknowledgements,
+		activity: base.activity,
 		commit,
 		core,
 		initial,
@@ -108,6 +115,20 @@ function createCommandPortReplacementHarness() {
 		},
 		warnings,
 	};
+}
+
+function requestAutomaticVisible(
+	harness: ReturnType<typeof createCommandPortReplacementHarness>,
+	automaticAcknowledger: ReturnType<
+		typeof createShellNotificationAutomaticAcknowledger
+	>,
+	requests: Promise<void>[],
+): boolean {
+	return automaticAcknowledger.request(
+		harness.activity.getSnapshot(),
+		harness.core.getSnapshot(),
+		() => requests.push(harness.core.acknowledgeVisible()),
+	);
 }
 
 void test('hook orchestration commits latest input before context and route effects', async () => {
@@ -153,9 +174,7 @@ void test('hook orchestration commits latest input before context and route effe
 		},
 		context: initialContext,
 		platformOS: 'android',
-		getCommandPortRevision: orchestrator.getCommandPortRevision,
-		runWorkmuxCommand: (argv, timeoutMs) =>
-			orchestrator.getCommittedInput().runWorkmuxCommand(argv, timeoutMs),
+		runWorkmuxCommand: initial.runWorkmuxCommand,
 		consumeAuthorizedRouteToken: (
 			connectionId,
 			session,
@@ -193,9 +212,14 @@ void test('hook orchestration commits latest input before context and route effe
 	const latestRouteEffectKey = orchestrator.createRouteEffectKey(latest);
 	assert.notEqual(latestRouteEffectKey, initialRouteEffectKey);
 
-	orchestrator.commitLayout(latest, core.setContext, () => {
-		orchestrator.getCommittedInput().activity.getSnapshot();
-	});
+	orchestrator.commitLayout(
+		latest,
+		core.setCommandPort,
+		core.setContext,
+		() => {
+			orchestrator.getCommittedInput().activity.getSnapshot();
+		},
+	);
 	await orchestrator.dispatchRoutePassive(core.handleRoute, (input) => {
 		input.logger.warn('route failed', new Error('route failed'));
 	});
@@ -248,6 +272,90 @@ void test('identical command port commits coalesce without invalidation', async 
 	assert.deepEqual(await Promise.all([first, adopted]), [true, true]);
 	assert.equal(harness.restores, 0);
 	assert.deepEqual(harness.acknowledgements, ['@12']);
+});
+
+void test('layout commit automatically replaces a stale successful visible lookup', async () => {
+	const harness = createCommandPortReplacementHarness();
+	const automaticAcknowledger = createShellNotificationAutomaticAcknowledger();
+	const requests: Promise<void>[] = [];
+	assert.equal(
+		requestAutomaticVisible(harness, automaticAcknowledger, requests),
+		true,
+	);
+	harness.commit(harness.newPort, () => {
+		assert.equal(
+			requestAutomaticVisible(harness, automaticAcknowledger, requests),
+			true,
+		);
+	});
+	harness.oldCommands[0]?.resolve(buildWorkmuxWindowOutput('@12'));
+	await new Promise((resolve) => setTimeout(resolve, 0));
+	assert.equal(harness.newCommands.length, 1);
+	harness.newCommands[0]?.resolve(buildWorkmuxWindowOutput('@13'));
+	await Promise.all(requests);
+	assert.deepEqual(harness.acknowledgements, ['@13']);
+});
+
+void test('layout commit automatically replaces a failed visible lookup', async () => {
+	const harness = createCommandPortReplacementHarness();
+	const automaticAcknowledger = createShellNotificationAutomaticAcknowledger();
+	const requests: Promise<void>[] = [];
+	requestAutomaticVisible(harness, automaticAcknowledger, requests);
+	harness.commit(harness.newPort, () => {
+		requestAutomaticVisible(harness, automaticAcknowledger, requests);
+	});
+	harness.oldCommands[0]?.reject(new Error('old visible port failed'));
+	await new Promise((resolve) => setTimeout(resolve, 0));
+	assert.equal(harness.newCommands.length, 1);
+	harness.newCommands[0]?.resolve(buildWorkmuxWindowOutput('@13'));
+	await Promise.all(requests);
+	assert.deepEqual(harness.acknowledgements, ['@13']);
+});
+
+void test('same-port layout commit deduplicates automatic visible acknowledgement', async () => {
+	const harness = createCommandPortReplacementHarness();
+	const automaticAcknowledger = createShellNotificationAutomaticAcknowledger();
+	const requests: Promise<void>[] = [];
+	requestAutomaticVisible(harness, automaticAcknowledger, requests);
+	let requestedAgain = true;
+	harness.commit(harness.oldPort, () => {
+		requestedAgain = requestAutomaticVisible(
+			harness,
+			automaticAcknowledger,
+			requests,
+		);
+	});
+	assert.equal(requestedAgain, false);
+	assert.equal(harness.oldCommands.length, 1);
+	harness.oldCommands[0]?.resolve(buildWorkmuxWindowOutput('@12'));
+	await Promise.all(requests);
+	assert.deepEqual(harness.acknowledgements, ['@12']);
+});
+
+void test('multiple layout commits retain only the latest automatic visible attempt', async () => {
+	const harness = createCommandPortReplacementHarness();
+	const automaticAcknowledger = createShellNotificationAutomaticAcknowledger();
+	const requests: Promise<void>[] = [];
+	const latestCommands: Deferred<string>[] = [];
+	const latestPort = () => {
+		const command = createDeferred<string>();
+		latestCommands.push(command);
+		return command.promise;
+	};
+	requestAutomaticVisible(harness, automaticAcknowledger, requests);
+	harness.commit(harness.newPort, () => {
+		requestAutomaticVisible(harness, automaticAcknowledger, requests);
+	});
+	harness.commit(latestPort, () => {
+		requestAutomaticVisible(harness, automaticAcknowledger, requests);
+	});
+	harness.oldCommands[0]?.resolve(buildWorkmuxWindowOutput('@12'));
+	await new Promise((resolve) => setTimeout(resolve, 0));
+	assert.equal(harness.newCommands.length, 0);
+	assert.equal(latestCommands.length, 1);
+	latestCommands[0]?.resolve(buildWorkmuxWindowOutput('@14'));
+	await Promise.all(requests);
+	assert.deepEqual(harness.acknowledgements, ['@14']);
 });
 
 void test('notification route effect identity changes for every context field', async (t) => {
@@ -317,12 +425,7 @@ void test('automatic acknowledgement retries interactive stored connection hydra
 	};
 
 	assert.equal(
-		automaticAcknowledger.request(
-			activity,
-			unavailable,
-			harness.commandPortRevision,
-			request,
-		),
+		automaticAcknowledger.request(activity, unavailable, request),
 		true,
 	);
 	await requests[0];
@@ -336,12 +439,7 @@ void test('automatic acknowledgement retries interactive stored connection hydra
 	assert.equal(hydrated.generation, unavailable.generation);
 	assert.equal(hydrated.contextRevision, unavailable.contextRevision + 1);
 	assert.equal(
-		automaticAcknowledger.request(
-			activity,
-			hydrated,
-			harness.commandPortRevision,
-			request,
-		),
+		automaticAcknowledger.request(activity, hydrated, request),
 		true,
 	);
 	assert.equal(harness.windowCommands.length, 1);
@@ -351,12 +449,7 @@ void test('automatic acknowledgement retries interactive stored connection hydra
 		hydrated.contextRevision,
 	);
 	assert.equal(
-		automaticAcknowledger.request(
-			activity,
-			hydrated,
-			harness.commandPortRevision,
-			request,
-		),
+		automaticAcknowledger.request(activity, hydrated, request),
 		false,
 	);
 	assert.equal(harness.windowCommands.length, 1);
@@ -379,7 +472,6 @@ void test('automatic acknowledgement waits for interactive reconciliation after 
 		automaticAcknowledger.request(
 			inactive,
 			harness.core.getSnapshot(),
-			harness.commandPortRevision,
 			request,
 		),
 		false,
@@ -389,7 +481,6 @@ void test('automatic acknowledgement waits for interactive reconciliation after 
 		automaticAcknowledger.request(
 			inactive,
 			harness.core.getSnapshot(),
-			harness.commandPortRevision,
 			request,
 		),
 		false,
@@ -400,7 +491,6 @@ void test('automatic acknowledgement waits for interactive reconciliation after 
 		automaticAcknowledger.request(
 			harness.activity.getSnapshot(),
 			harness.core.getSnapshot(),
-			harness.commandPortRevision,
 			request,
 		),
 		true,
@@ -419,15 +509,21 @@ void test('automatic acknowledgement keys requests by command port revision', ()
 	const notifications = harness.core.getSnapshot();
 
 	assert.equal(
-		automaticAcknowledger.request(activity, notifications, 0, request),
+		automaticAcknowledger.request(activity, notifications, request),
 		true,
 	);
 	assert.equal(
-		automaticAcknowledger.request(activity, notifications, 0, request),
+		automaticAcknowledger.request(activity, notifications, request),
 		false,
 	);
+	const replacementPort = async () => '';
+	harness.core.setCommandPort(replacementPort);
 	assert.equal(
-		automaticAcknowledger.request(activity, notifications, 1, request),
+		automaticAcknowledger.request(
+			activity,
+			harness.core.getSnapshot(),
+			request,
+		),
 		true,
 	);
 	assert.equal(requests, 2);

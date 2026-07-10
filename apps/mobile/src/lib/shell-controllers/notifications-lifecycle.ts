@@ -11,19 +11,18 @@ export function createShellNotificationAutomaticAcknowledger(): {
 	request(
 		activity: ShellActivitySnapshot,
 		notifications: ShellNotificationsState,
-		commandPortRevision: number,
 		onRequest: () => void,
 	): boolean;
 } {
 	let lastRequestKey: string | null = null;
 	return {
-		request: (activity, notifications, commandPortRevision, onRequest) => {
+		request: (activity, notifications, onRequest) => {
 			if (!activity.interactive) return false;
 			const requestKey = JSON.stringify([
 				activity.generation,
 				notifications.generation,
 				notifications.contextRevision,
-				commandPortRevision,
+				notifications.commandPortRevision,
 			]);
 			if (lastRequestKey === requestKey) return false;
 			lastRequestKey = requestKey;
@@ -51,16 +50,16 @@ export function createShellNotificationHookOrchestrator<
 	TInput extends {
 		context: ShellNotificationContext;
 		route: ShellNotificationRoute;
-		runWorkmuxCommand: unknown;
+		runWorkmuxCommand(argv: string[], timeoutMs: number): Promise<string>;
 	},
 >(
 	initialInput: TInput,
 ): {
 	getCommittedInput(): TInput;
-	getCommandPortRevision(): number;
 	createRouteEffectKey(input: TInput): string;
 	commitLayout(
 		nextInput: TInput,
+		setCommandPort: (runWorkmuxCommand: TInput['runWorkmuxCommand']) => void,
 		setContext: (context: ShellNotificationContext) => void,
 		afterContextCommit: () => void,
 	): void;
@@ -70,17 +69,18 @@ export function createShellNotificationHookOrchestrator<
 	): Promise<void>;
 } {
 	let committedInput = initialInput;
-	let commandPortRevision = 0;
 	return {
 		getCommittedInput: () => committedInput,
-		getCommandPortRevision: () => commandPortRevision,
 		createRouteEffectKey: (input) =>
 			createShellNotificationRouteEffectKey(input.route, input.context),
-		commitLayout: (nextInput, setContext, afterContextCommit) => {
-			if (committedInput.runWorkmuxCommand !== nextInput.runWorkmuxCommand) {
-				commandPortRevision += 1;
-			}
+		commitLayout: (
+			nextInput,
+			setCommandPort,
+			setContext,
+			afterContextCommit,
+		) => {
 			committedInput = nextInput;
+			setCommandPort(nextInput.runWorkmuxCommand);
 			setContext(nextInput.context);
 			afterContextCommit();
 		},

@@ -31,6 +31,7 @@ export type ShellNotificationRoute = {
 export type ShellNotificationsState = {
 	context: ShellNotificationContext;
 	contextRevision: number;
+	commandPortRevision: number;
 	handledRouteKey: string | null;
 	generation: number;
 	acknowledgeInFlight: boolean;
@@ -39,6 +40,9 @@ export type ShellNotificationsState = {
 
 export type ShellNotificationsControllerCore =
 	ControllerCore<ShellNotificationsState> & {
+		setCommandPort(
+			runWorkmuxCommand: CreateShellNotificationsControllerCoreInput['runWorkmuxCommand'],
+		): void;
 		setContext(context: ShellNotificationContext): void;
 		acknowledgeVisible(): Promise<void>;
 		notifyPending(): void;
@@ -49,7 +53,6 @@ export type CreateShellNotificationsControllerCoreInput = {
 	activity: { getSnapshot(): ShellActivitySnapshot };
 	context: ShellNotificationContext;
 	platformOS: string;
-	getCommandPortRevision(): number;
 	runWorkmuxCommand(argv: string[], timeoutMs: number): Promise<string>;
 	consumeAuthorizedRouteToken(
 		connectionId: string,
@@ -107,8 +110,7 @@ export function createShellNotificationsControllerCore({
 	activity,
 	context: initialContext,
 	platformOS,
-	getCommandPortRevision,
-	runWorkmuxCommand,
+	runWorkmuxCommand: initialCommandPort,
 	consumeAuthorizedRouteToken,
 	restoreAuthorizedRouteToken,
 	acknowledge,
@@ -117,12 +119,15 @@ export function createShellNotificationsControllerCore({
 	const publisher = createControllerPublisher<ShellNotificationsState>({
 		context: initialContext,
 		contextRevision: 0,
+		commandPortRevision: 0,
 		handledRouteKey: null,
 		generation: 0,
 		acknowledgeInFlight: false,
 		acknowledgeQueued: false,
 	});
 	let generation = 0;
+	let commandPortRevision = 0;
+	let commandPort = initialCommandPort;
 	let inFlight = false;
 	let queued = false;
 	let queuedWaiters: QueuedWaiter[] = [];
@@ -179,14 +184,14 @@ export function createShellNotificationsControllerCore({
 	const captureAttempt = (): AcknowledgementAttempt => ({
 		generation,
 		activityGeneration: activity.getSnapshot().generation,
-		commandPortRevision: getCommandPortRevision(),
+		commandPortRevision,
 		context: { ...publisher.getSnapshot().context },
 	});
 
 	const isAttemptCurrent = (attempt: AcknowledgementAttempt): boolean =>
 		!disposed &&
 		attempt.generation === generation &&
-		attempt.commandPortRevision === getCommandPortRevision() &&
+		attempt.commandPortRevision === commandPortRevision &&
 		activity.getSnapshot().generation === attempt.activityGeneration;
 
 	const runAttempt = async (attempt: AcknowledgementAttempt): Promise<void> => {
@@ -201,7 +206,7 @@ export function createShellNotificationsControllerCore({
 			nextRequestId: () => attempt.generation,
 			isCurrentRequest: (requestId) =>
 				requestId === attempt.generation && isAttemptCurrent(attempt),
-			runWorkmuxCommand,
+			runWorkmuxCommand: commandPort,
 			acknowledge,
 			warn,
 		});
@@ -265,8 +270,8 @@ export function createShellNotificationsControllerCore({
 		beginRouteEpoch: () => {
 			epochInvalidated = false;
 		},
-		getCommandPortRevision,
-		runWorkmuxCommand,
+		getCommandPortRevision: () => commandPortRevision,
+		runWorkmuxCommand: (argv, timeoutMs) => commandPort(argv, timeoutMs),
 		consumeAuthorizedRouteToken,
 		restoreAuthorizedRouteToken,
 		acknowledge,
@@ -292,6 +297,15 @@ export function createShellNotificationsControllerCore({
 	return {
 		getSnapshot: publisher.getSnapshot,
 		subscribe: publisher.subscribe,
+		setCommandPort: (nextCommandPort) => {
+			if (disposed || commandPort === nextCommandPort) return;
+			commandPort = nextCommandPort;
+			commandPortRevision += 1;
+			publisher.publish({
+				...publisher.getSnapshot(),
+				commandPortRevision,
+			});
+		},
 		setContext: (context) => {
 			if (disposed) return;
 			const current = publisher.getSnapshot();

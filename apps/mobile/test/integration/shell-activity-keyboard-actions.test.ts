@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createShellActivityKeyboardActions } from '../../src/lib/shell-controllers/activity-keyboard-actions';
+import { createShellKeyboardResumeDismissScheduler } from '../../src/lib/shell-controllers/activity-retained-domain-bridge';
 
 function createHarness(
 	input: {
@@ -98,4 +99,47 @@ void test('resume dismisses when the keyboard was not previously visible', () =>
 	assert.equal(harness.dismisses, 1);
 	assert.equal(harness.schedules, 1);
 	assert.equal(harness.visible, false);
+});
+
+void test('production keyboard actions compose with exact scheduler replacement', () => {
+	const timers = new Map<number, { delayMs: number; task: () => void }>();
+	const canceled: number[] = [];
+	let nextTimer = 0;
+	let dismisses = 0;
+	const scheduler = createShellKeyboardResumeDismissScheduler({
+		schedule: (task, delayMs) => {
+			nextTimer++;
+			timers.set(nextTimer, { delayMs, task });
+			return nextTimer;
+		},
+		cancel: (timer) => {
+			canceled.push(timer);
+			timers.delete(timer);
+		},
+	});
+	const actions = createShellActivityKeyboardActions({
+		platformOS: 'android',
+		getSystemKeyboardEnabled: () => false,
+		getWasKeyboardVisible: () => true,
+		setKeyboardVisible: () => {},
+		setXtermSystemKeyboardEnabled: () => {},
+		dismissKeyboard: () => dismisses++,
+		scheduleDelayedDismiss: scheduler.schedule,
+	});
+
+	actions.resumeFromAppState();
+	actions.resumeFromAppState();
+	assert.deepEqual(canceled, [1]);
+	assert.equal(timers.size, 1);
+	assert.equal(timers.get(2)?.delayMs, 150);
+	timers.get(2)?.task();
+	timers.delete(2);
+	assert.equal(dismisses, 3);
+
+	actions.resumeFromAppState();
+	scheduler.cancel();
+	scheduler.cancel();
+	assert.deepEqual(canceled, [1, 3]);
+	assert.equal(timers.size, 0);
+	assert.equal(dismisses, 4);
 });

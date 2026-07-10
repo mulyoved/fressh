@@ -73,9 +73,7 @@ export function useShellNotificationsController(
 			},
 			context: input.context,
 			platformOS: Platform.OS,
-			getCommandPortRevision: hookOrchestrator.getCommandPortRevision,
-			runWorkmuxCommand: (argv, timeoutMs) =>
-				hookOrchestrator.getCommittedInput().runWorkmuxCommand(argv, timeoutMs),
+			runWorkmuxCommand: input.runWorkmuxCommand,
 			consumeAuthorizedRouteToken: consumeAuthorizedAgentNotificationRouteToken,
 			restoreAuthorizedRouteToken: restoreAuthorizedAgentNotificationRouteToken,
 			acknowledge: acknowledgeRoutedAgentNotification,
@@ -96,25 +94,21 @@ export function useShellNotificationsController(
 		const activitySnapshot = hookOrchestrator
 			.getCommittedInput()
 			.activity.getSnapshot();
-		automaticAcknowledger.request(
-			activitySnapshot,
-			core.getSnapshot(),
-			hookOrchestrator.getCommandPortRevision(),
-			() => {
-				void core.acknowledgeVisible().catch((error: unknown) => {
-					warnBestEffort(
-						hookOrchestrator.getCommittedInput().logger,
-						'agent notification visible acknowledge failed',
-						error,
-					);
-				});
-			},
-		);
+		automaticAcknowledger.request(activitySnapshot, core.getSnapshot(), () => {
+			void core.acknowledgeVisible().catch((error: unknown) => {
+				warnBestEffort(
+					hookOrchestrator.getCommittedInput().logger,
+					'agent notification visible acknowledge failed',
+					error,
+				);
+			});
+		});
 	}, [automaticAcknowledger, core, hookOrchestrator]);
 
 	useLayoutEffect(() => {
 		hookOrchestrator.commitLayout(
 			input,
+			core.setCommandPort,
 			core.setContext,
 			requestVisibleAcknowledgement,
 		);
