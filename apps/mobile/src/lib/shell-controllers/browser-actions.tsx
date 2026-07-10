@@ -68,7 +68,7 @@ export type BrowserActionsControllerHandle = {
 	browserActionsProps: BrowserActionsModalProps;
 	hostUrlProps: HostUrlModalProps;
 	detectedOpenPickerProps: DetectedOpenPickerModalProps;
-	open: () => boolean;
+	open: () => void;
 	close: () => void;
 	resolveHostBrowserPaneContext: () => Promise<TmuxPaneContext>;
 	resolveHostBrowserPanePath: () => Promise<string>;
@@ -154,7 +154,7 @@ export function useBrowserActionsController<TConnection>(
 
 	useEffect(() => coreLifecycle.setup(), [coreLifecycle]);
 
-	const open = useCallback(() => core.open(), [core]);
+	const open = useCallback(() => void core.open(), [core]);
 	const close = useCallback(() => core.close(), [core]);
 	const openDiff = useCallback(() => void core.openDiffity(), [core]);
 	const openGitHubIssues = useCallback(

@@ -75,6 +75,19 @@ void test('browser actions controller exposes detected open picker modal props',
 	assert.ok(pickerClearIndex < controllerRequestIndex);
 });
 
+void test('browser actions hook keeps its public open command void-returning', () => {
+	const source = readFileSync(browserActionsHookSourcePath, 'utf8');
+
+	assert.match(
+		source,
+		/export type BrowserActionsControllerHandle = \{[\s\S]*?open: \(\) => void;/,
+	);
+	assert.match(
+		source,
+		/const open = useCallback\(\(\) => void core\.open\(\), \[core\]\);/,
+	);
+});
+
 void test('browser actions controller cancels detected open work before other browser actions', () => {
 	const source = readFileSync(browserActionsCoreSourcePath, 'utf8');
 
