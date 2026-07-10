@@ -2882,7 +2882,14 @@ function ShellDetail() {
 
 	useLayoutEffect(() => {
 		retainedDomainBridge.reconcile(getActivitySnapshot());
-	}, [activity.snapshot.generation, getActivitySnapshot, retainedDomainBridge]);
+	}, [
+		activity.snapshot.appActive,
+		activity.snapshot.appState,
+		activity.snapshot.focused,
+		activity.snapshot.generation,
+		getActivitySnapshot,
+		retainedDomainBridge,
+	]);
 	useEffect(() => retainedDomainBridge.setup(), [retainedDomainBridge]);
 
 	const enableSystemKeyboard = useCallback(() => {

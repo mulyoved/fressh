@@ -62,6 +62,14 @@ void test('shell detail delegates activity and notification lifecycle', () => {
 	]) {
 		assert.match(notificationComposition, new RegExp(`\\b${contextValue}\\b`));
 	}
+	assert.match(
+		notificationComposition,
+		/storedConnectionId:\s*connectionStoredConnectionId\s*\?\?\s*null/,
+	);
+	assert.doesNotMatch(
+		notificationComposition,
+		/storedConnectionId:\s*(?:searchParams\.)?storedConnectionId\b/,
+	);
 
 	const activityBridge = extractBlock(
 		source,
@@ -70,6 +78,9 @@ void test('shell detail delegates activity and notification lifecycle', () => {
 	);
 	assert.match(source, /createShellActivityRetainedDomainBridge/);
 	assert.match(activityBridge, /activity\.snapshot\.generation/);
+	assert.match(activityBridge, /activity\.snapshot\.focused/);
+	assert.match(activityBridge, /activity\.snapshot\.appState/);
+	assert.match(activityBridge, /activity\.snapshot\.appActive/);
 	assert.match(source, /const getActivitySnapshot = activity\.getSnapshot/);
 	assert.match(
 		activityBridge,

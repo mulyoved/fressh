@@ -49,11 +49,13 @@ export function createShellNotificationHookOrchestrator<
 	TInput extends {
 		context: ShellNotificationContext;
 		route: ShellNotificationRoute;
+		runWorkmuxCommand: unknown;
 	},
 >(
 	initialInput: TInput,
 ): {
 	getCommittedInput(): TInput;
+	getCommandPortRevision(): number;
 	createRouteEffectKey(input: TInput): string;
 	commitLayout(
 		nextInput: TInput,
@@ -66,11 +68,16 @@ export function createShellNotificationHookOrchestrator<
 	): Promise<void>;
 } {
 	let committedInput = initialInput;
+	let commandPortRevision = 0;
 	return {
 		getCommittedInput: () => committedInput,
+		getCommandPortRevision: () => commandPortRevision,
 		createRouteEffectKey: (input) =>
 			createShellNotificationRouteEffectKey(input.route, input.context),
 		commitLayout: (nextInput, setContext, afterContextCommit) => {
+			if (committedInput.runWorkmuxCommand !== nextInput.runWorkmuxCommand) {
+				commandPortRevision += 1;
+			}
 			committedInput = nextInput;
 			setContext(nextInput.context);
 			afterContextCommit();

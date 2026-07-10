@@ -26,7 +26,7 @@ export function createShellActivityRetainedDomainBridge(
 	getActions: () => ShellActivityRetainedDomainActions,
 	defer: (task: () => void) => void = queueMicrotask,
 ): ShellActivityRetainedDomainBridge {
-	let reconciledGeneration: number | null = null;
+	let committedSnapshot: ShellActivitySnapshot | null = null;
 	const lifecycle = createReplaySafeDisposer(
 		() => getActions().invalidateRetainedDomains(),
 		defer,
@@ -35,27 +35,52 @@ export function createShellActivityRetainedDomainBridge(
 	return {
 		setup: lifecycle.setup,
 		reconcile: (snapshot) => {
-			if (reconciledGeneration === snapshot.generation) return;
-			const initialReconciliation = reconciledGeneration === null;
-			reconciledGeneration = snapshot.generation;
-			const actions = getActions();
-			if (!initialReconciliation || !snapshot.interactive) {
-				actions.invalidateRetainedDomains();
-			}
-			if (snapshot.interactive) {
-				actions.resume(snapshot);
+			const previous = committedSnapshot;
+			if (
+				previous?.focused === snapshot.focused &&
+				previous.appState === snapshot.appState &&
+				previous.appActive === snapshot.appActive &&
+				previous.interactive === snapshot.interactive &&
+				previous.generation === snapshot.generation
+			) {
 				return;
 			}
+			committedSnapshot = { ...snapshot };
+			const initialReconciliation = previous === null;
+			const generationChanged =
+				initialReconciliation || previous.generation !== snapshot.generation;
+			const focusLost = initialReconciliation
+				? !snapshot.focused
+				: previous.focused && !snapshot.focused;
+			const appBecameInactive = initialReconciliation
+				? !snapshot.appActive
+				: previous.appActive && !snapshot.appActive;
+			const becameInteractive =
+				snapshot.interactive &&
+				(initialReconciliation || !previous.interactive);
+			const actions = getActions();
+			if (
+				generationChanged &&
+				(!initialReconciliation || !snapshot.interactive)
+			) {
+				actions.invalidateRetainedDomains();
+			}
+			if (becameInteractive) {
+				actions.resume(snapshot);
+			}
+			if (!focusLost && !appBecameInactive) return;
 
 			actions.invalidateBrowserActions();
-			actions.closeBrowserActions();
-			actions.invalidateKeyboardRunner();
-			actions.invalidateScrollbackRequests();
-			if (snapshot.appActive) {
-				void actions.clearScrollbackDirectly();
-			} else {
+			if (focusLost) {
+				actions.closeBrowserActions();
+				actions.invalidateScrollbackRequests();
+			}
+			if (appBecameInactive) {
+				actions.invalidateKeyboardRunner();
 				void actions.runInactiveScrollbackCleanup(snapshot);
 				actions.rememberKeyboardVisibility();
+			} else {
+				void actions.clearScrollbackDirectly();
 			}
 		},
 	};

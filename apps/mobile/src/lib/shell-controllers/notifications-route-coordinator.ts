@@ -13,6 +13,7 @@ import {
 type RetryBudget = 'restoration-available' | 'none';
 
 type RouteRequest = {
+	commandPortRevision: number;
 	contextRevision: number;
 	generation: number;
 	sequence: number;
@@ -63,6 +64,7 @@ export function createShellNotificationRouteCoordinator(input: {
 	getSnapshot(): ShellNotificationsState;
 	isDisposed(): boolean;
 	beginRouteEpoch(): void;
+	getCommandPortRevision(): number;
 	runWorkmuxCommand(argv: string[], timeoutMs: number): Promise<string>;
 	consumeAuthorizedRouteToken(
 		connectionId: string,
@@ -136,6 +138,7 @@ export function createShellNotificationRouteCoordinator(input: {
 			agentTapToken: route.agentTapToken,
 		};
 		return {
+			commandPortRevision: input.getCommandPortRevision(),
 			contextRevision: snapshot.contextRevision,
 			generation: snapshot.generation,
 			sequence: 0,
@@ -157,6 +160,7 @@ export function createShellNotificationRouteCoordinator(input: {
 			!disposed &&
 			!input.isDisposed() &&
 			request.sequence === latestSequence &&
+			request.commandPortRevision === input.getCommandPortRevision() &&
 			request.generation === snapshot.generation &&
 			request.contextRevision === snapshot.contextRevision
 		);
@@ -170,12 +174,14 @@ export function createShellNotificationRouteCoordinator(input: {
 
 	const callerPromise = (
 		attempt: ActiveAttempt,
+		commandPortRevision: number,
 		generation: number,
 		contextRevision: number,
 	): Promise<boolean> =>
 		attempt.promise.then(
 			(handled) =>
 				handled &&
+				attempt.request.commandPortRevision === commandPortRevision &&
 				attempt.request.generation === generation &&
 				attempt.request.contextRevision === contextRevision,
 		);
@@ -295,12 +301,18 @@ export function createShellNotificationRouteCoordinator(input: {
 				promoteAfter(attempt, outcome);
 			}
 		})();
-		return callerPromise(attempt, request.generation, request.contextRevision);
+		return callerPromise(
+			attempt,
+			request.commandPortRevision,
+			request.generation,
+			request.contextRevision,
+		);
 	}
 
 	const queueRequest = (request: RouteRequest): Promise<boolean> => {
 		if (
 			queued &&
+			queued.commandPortRevision === request.commandPortRevision &&
 			queued.contextRevision === request.contextRevision &&
 			queued.generation === request.generation &&
 			equivalentIdentity(queued, request)
@@ -325,10 +337,13 @@ export function createShellNotificationRouteCoordinator(input: {
 			if (active) {
 				const sameContext =
 					active.request.contextRevision === request.contextRevision;
+				const sameCommandPort =
+					active.request.commandPortRevision === request.commandPortRevision;
 				if (
 					active.phase.kind !== 'committed' &&
 					active.phase.kind !== 'settled' &&
 					sameContext &&
+					sameCommandPort &&
 					equivalentIdentity(active.request, request) &&
 					(active.request.generation === request.generation ||
 						invalidationReason === 'unmount')
@@ -339,6 +354,7 @@ export function createShellNotificationRouteCoordinator(input: {
 					active.request.generation = request.generation;
 					return callerPromise(
 						active,
+						request.commandPortRevision,
 						request.generation,
 						request.contextRevision,
 					);

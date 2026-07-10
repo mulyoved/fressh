@@ -73,6 +73,7 @@ export function useShellNotificationsController(
 			},
 			context: input.context,
 			platformOS: Platform.OS,
+			getCommandPortRevision: hookOrchestrator.getCommandPortRevision,
 			runWorkmuxCommand: (argv, timeoutMs) =>
 				hookOrchestrator.getCommittedInput().runWorkmuxCommand(argv, timeoutMs),
 			consumeAuthorizedRouteToken: consumeAuthorizedAgentNotificationRouteToken,

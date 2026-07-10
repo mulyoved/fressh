@@ -49,6 +49,7 @@ export type CreateShellNotificationsControllerCoreInput = {
 	activity: { getSnapshot(): ShellActivitySnapshot };
 	context: ShellNotificationContext;
 	platformOS: string;
+	getCommandPortRevision?(): number;
 	runWorkmuxCommand(argv: string[], timeoutMs: number): Promise<string>;
 	consumeAuthorizedRouteToken(
 		connectionId: string,
@@ -105,6 +106,7 @@ export function createShellNotificationsControllerCore({
 	activity,
 	context: initialContext,
 	platformOS,
+	getCommandPortRevision = () => 0,
 	runWorkmuxCommand,
 	consumeAuthorizedRouteToken,
 	restoreAuthorizedRouteToken,
@@ -260,6 +262,7 @@ export function createShellNotificationsControllerCore({
 		beginRouteEpoch: () => {
 			epochInvalidated = false;
 		},
+		getCommandPortRevision,
 		runWorkmuxCommand,
 		consumeAuthorizedRouteToken,
 		restoreAuthorizedRouteToken,

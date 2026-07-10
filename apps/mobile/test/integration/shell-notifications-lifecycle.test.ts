@@ -21,6 +21,95 @@ import {
 	createNotificationsHarness,
 } from './shell-notifications-test-support';
 
+type Deferred<T> = {
+	promise: Promise<T>;
+	resolve(value: T): void;
+	reject(error: unknown): void;
+};
+
+function createDeferred<T>(): Deferred<T> {
+	let resolve!: (value: T) => void;
+	let reject!: (error: unknown) => void;
+	const promise = new Promise<T>((innerResolve, innerReject) => {
+		resolve = innerResolve;
+		reject = innerReject;
+	});
+	return { promise, resolve, reject };
+}
+
+function createCommandPortReplacementHarness() {
+	const base = createNotificationsHarness();
+	type Input = {
+		context: ShellNotificationContext;
+		route: ShellNotificationRoute;
+		runWorkmuxCommand(argv: string[], timeoutMs: number): Promise<string>;
+	};
+	const oldCommands: Deferred<string>[] = [];
+	const newCommands: Deferred<string>[] = [];
+	const acknowledgements: string[] = [];
+	const warnings: unknown[] = [];
+	let authorized = true;
+	let restores = 0;
+	const oldPort = () => {
+		const command = createDeferred<string>();
+		oldCommands.push(command);
+		return command.promise;
+	};
+	const newPort = () => {
+		const command = createDeferred<string>();
+		newCommands.push(command);
+		return command.promise;
+	};
+	const initial: Input = {
+		context: base.context(),
+		route: base.validRoute(),
+		runWorkmuxCommand: oldPort,
+	};
+	const orchestrator = createShellNotificationHookOrchestrator(initial);
+	const core = createShellNotificationsControllerCore({
+		activity: base.activity,
+		context: initial.context,
+		platformOS: 'android',
+		getCommandPortRevision: orchestrator.getCommandPortRevision,
+		runWorkmuxCommand: (argv, timeoutMs) =>
+			orchestrator.getCommittedInput().runWorkmuxCommand(argv, timeoutMs),
+		consumeAuthorizedRouteToken: () => {
+			if (!authorized) return false;
+			authorized = false;
+			return true;
+		},
+		restoreAuthorizedRouteToken: () => {
+			restores++;
+			authorized = true;
+			return true;
+		},
+		acknowledge: (_connectionId, _session, windowId) => {
+			acknowledgements.push(windowId);
+		},
+		warn: (_message, error) => warnings.push(error),
+	});
+	const commit = (runWorkmuxCommand: Input['runWorkmuxCommand']) => {
+		const next = { ...initial, runWorkmuxCommand };
+		orchestrator.commitLayout(next, core.setContext, () => {});
+		return next;
+	};
+	return {
+		acknowledgements,
+		commit,
+		core,
+		initial,
+		newCommands,
+		newPort,
+		oldCommands,
+		oldPort,
+		orchestrator,
+		get restores() {
+			return restores;
+		},
+		warnings,
+	};
+}
+
 void test('hook orchestration commits latest input before context and route effects', async () => {
 	type Observation = 'initial' | 'latest';
 	type HookInput = {
@@ -116,6 +205,48 @@ void test('hook orchestration commits latest input before context and route effe
 	]);
 	assert.deepEqual(observations, ['latest', 'latest']);
 	assert.deepEqual(warnings, ['latest']);
+});
+
+void test('command port replacement retries a restored route through the latest port', async () => {
+	const harness = createCommandPortReplacementHarness();
+	const first = harness.core.handleRoute(harness.initial.route);
+	assert.equal(harness.oldCommands.length, 1);
+	harness.commit(harness.newPort);
+	const replacement = harness.core.handleRoute(harness.initial.route);
+	harness.oldCommands[0]?.reject(new Error('old port closed'));
+	await new Promise((resolve) => setTimeout(resolve, 0));
+	assert.equal(harness.newCommands.length, 1);
+	harness.newCommands[0]?.resolve('');
+
+	assert.deepEqual(await Promise.all([first, replacement]), [false, true]);
+	assert.equal(harness.restores, 1);
+	assert.deepEqual(harness.acknowledgements, ['@12']);
+});
+
+void test('stale old-port success is not restored or replayed on the replacement', async () => {
+	const harness = createCommandPortReplacementHarness();
+	const first = harness.core.handleRoute(harness.initial.route);
+	harness.commit(harness.newPort);
+	const replacement = harness.core.handleRoute(harness.initial.route);
+	harness.oldCommands[0]?.resolve('');
+
+	assert.deepEqual(await Promise.all([first, replacement]), [false, false]);
+	assert.equal(harness.restores, 0);
+	assert.equal(harness.newCommands.length, 0);
+	assert.deepEqual(harness.acknowledgements, []);
+});
+
+void test('identical command port commits coalesce without invalidation', async () => {
+	const harness = createCommandPortReplacementHarness();
+	const first = harness.core.handleRoute(harness.initial.route);
+	harness.commit(harness.oldPort);
+	const adopted = harness.core.handleRoute(harness.initial.route);
+	assert.equal(harness.oldCommands.length, 1);
+	harness.oldCommands[0]?.resolve('');
+
+	assert.deepEqual(await Promise.all([first, adopted]), [true, true]);
+	assert.equal(harness.restores, 0);
+	assert.deepEqual(harness.acknowledgements, ['@12']);
 });
 
 void test('notification route effect identity changes for every context field', async (t) => {
