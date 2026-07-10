@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { buildCreateGitHubIssueCommand } from '../../src/lib/repo-feature-request';
 import { createFeatureRequestControllerAdapter } from '../../src/lib/shell-controllers/feature-request-adapter';
 import {
 	createFeatureRequestControllerCore,
@@ -114,6 +115,21 @@ void test('feature request suppresses stale repository resolution', async () => 
 	});
 });
 
+void test('feature request publishes current repository resolution errors', async () => {
+	const harness = createFeatureRequestHarness();
+	harness.core.open();
+	harness.resolves[0]?.reject(new Error('repository unavailable'));
+	await harness.settled();
+
+	assert.deepEqual(harness.core.getSnapshot(), {
+		open: true,
+		isSubmitting: false,
+		targetRepository: null,
+		isResolvingTarget: false,
+		error: 'repository unavailable',
+	});
+});
+
 void test('feature request close vetoes while submission is active', async () => {
 	const harness = createFeatureRequestHarness();
 	harness.core.open();
@@ -135,7 +151,9 @@ void test('feature request current success closes and alerts once', async () => 
 	const harness = createFeatureRequestHarness();
 	harness.core.open();
 	await harness.resolveCurrent();
-	const pending = harness.core.submit('description', 'mulyoved/fressh');
+	const description = 'Add deterministic controller ownership';
+	const repository = 'mulyoved/fressh';
+	const pending = harness.core.submit(description, repository);
 	harness.submissions[0]?.resolve({
 		success: true,
 		output: '',
@@ -143,14 +161,14 @@ void test('feature request current success closes and alerts once', async () => 
 	});
 	await pending;
 	assert.equal(harness.core.getSnapshot().open, false);
+	assert.equal(harness.core.getSnapshot().isSubmitting, false);
 	assert.equal(harness.alerts.length, 1);
 	assert.deepEqual(harness.commands, [
 		{
-			command: harness.commands[0]?.command,
+			command: buildCreateGitHubIssueCommand({ description, repository }),
 			timeoutMs: 60_000,
 		},
 	]);
-	assert.match(harness.commands[0]?.command ?? '', /mulyoved\/fressh/);
 	assert.equal(
 		harness.infoLogs[0]?.message,
 		'Feature request submitted successfully',
@@ -180,6 +198,106 @@ void test('feature request preserves submission fallback messages', async () => 
 		failed.core.getSnapshot().error,
 		'Failed to create issue. Make sure gh and claude CLIs are installed and authenticated on the remote host.',
 	);
+	assert.equal(failed.core.getSnapshot().isSubmitting, false);
+});
+
+void test('feature request submission rejection logs and clears submitting', async () => {
+	const harness = createFeatureRequestHarness();
+	const pending = harness.core.submit('description', 'mulyoved/fressh');
+	harness.submissions[0]?.reject(new Error('submission transport failed'));
+	await pending;
+
+	assert.equal(harness.core.getSnapshot().error, 'submission transport failed');
+	assert.equal(harness.core.getSnapshot().isSubmitting, false);
+	assert.equal(harness.errorLogs.length, 1);
+	assert.equal(harness.errorLogs[0]?.message, 'Feature request error');
+});
+
+void test('feature request resolver success preserves a newer submission error', async () => {
+	const harness = createFeatureRequestHarness();
+	harness.core.open();
+	const pending = harness.core.submit('description', 'pinned/repository');
+	harness.submissions[0]?.resolve({
+		success: false,
+		output: '',
+		error: 'pinned submission failed',
+	});
+	await pending;
+	harness.resolves[0]?.resolve('resolved/current');
+	await harness.settled();
+
+	assert.equal(harness.core.getSnapshot().targetRepository, 'resolved/current');
+	assert.equal(harness.core.getSnapshot().isResolvingTarget, false);
+	assert.equal(harness.core.getSnapshot().error, 'pinned submission failed');
+});
+
+void test('feature request resolver rejection preserves a newer submission error', async () => {
+	const harness = createFeatureRequestHarness();
+	harness.core.open();
+	const pending = harness.core.submit('description', 'pinned/repository');
+	harness.submissions[0]?.resolve({
+		success: false,
+		output: '',
+		error: 'pinned submission failed',
+	});
+	await pending;
+	harness.resolves[0]?.reject(new Error('older resolution failed'));
+	await harness.settled();
+
+	assert.equal(harness.core.getSnapshot().targetRepository, null);
+	assert.equal(harness.core.getSnapshot().isResolvingTarget, false);
+	assert.equal(harness.core.getSnapshot().error, 'pinned submission failed');
+});
+
+void test('feature request suppresses a stale rejected submission', async () => {
+	const harness = createFeatureRequestHarness();
+	harness.core.open();
+	const pending = harness.core.submit('description', 'mulyoved/fressh');
+	harness.core.markSourceStale();
+	harness.submissions[0]?.reject(new Error('stale submission failed'));
+	await pending;
+
+	assert.deepEqual(harness.core.getSnapshot(), {
+		open: false,
+		isSubmitting: false,
+		targetRepository: null,
+		isResolvingTarget: false,
+		error: undefined,
+	});
+	assert.equal(harness.alerts.length, 0);
+	assert.equal(harness.errorLogs.length, 1);
+});
+
+void test('feature request ignores repeated submission while one is active', async () => {
+	const harness = createFeatureRequestHarness();
+	const first = harness.core.submit('first', 'mulyoved/fressh');
+	await harness.core.submit('second', 'other/repository');
+
+	assert.equal(harness.commands.length, 1);
+	assert.equal(harness.submissions.length, 1);
+	harness.submissions[0]?.resolve({
+		success: false,
+		output: '',
+		error: 'failed',
+	});
+	await first;
+});
+
+void test('feature request disposal suppresses an active submission', async () => {
+	const harness = createFeatureRequestHarness();
+	harness.core.open();
+	const pending = harness.core.submit('description', 'mulyoved/fressh');
+	harness.core.dispose();
+	harness.submissions[0]?.resolve({
+		success: true,
+		output: '',
+		issueUrl: 'https://github.com/mulyoved/fressh/issues/83',
+	});
+	await pending;
+
+	assert.equal(harness.core.getSnapshot().open, false);
+	assert.equal(harness.core.getSnapshot().isSubmitting, false);
+	assert.equal(harness.alerts.length, 0);
 });
 
 void test('feature request suppresses older resolution and respects an open veto', async () => {

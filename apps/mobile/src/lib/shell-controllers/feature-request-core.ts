@@ -60,7 +60,6 @@ export function createFeatureRequestControllerCore(
 	const publisher = createControllerPublisher(CLOSED_STATE);
 	let resolveGeneration = 0;
 	let submitGeneration = 0;
-	let submitInFlight = false;
 	let sourceStale = false;
 	let disposed = false;
 
@@ -76,7 +75,7 @@ export function createFeatureRequestControllerCore(
 
 	const close = (): boolean => {
 		if (disposed) return true;
-		if (submitInFlight || publisher.getSnapshot().isSubmitting) return false;
+		if (publisher.getSnapshot().isSubmitting) return false;
 		cancelRequests();
 		sourceStale = false;
 		reset();
@@ -86,7 +85,7 @@ export function createFeatureRequestControllerCore(
 	const beginOpen = () => {
 		if (disposed) return;
 		const generation = ++resolveGeneration;
-		submitGeneration += 1;
+		const resolutionSubmitGeneration = ++submitGeneration;
 		sourceStale = false;
 		publisher.publish({
 			...CLOSED_STATE,
@@ -98,19 +97,25 @@ export function createFeatureRequestControllerCore(
 			try {
 				const repository = await deps.resolveCurrentGitHubRepository();
 				if (!isCurrentResolve(generation)) return;
+				const current = publisher.getSnapshot();
 				publisher.publish({
-					...publisher.getSnapshot(),
+					...current,
 					targetRepository: repository,
 					isResolvingTarget: false,
-					error: undefined,
+					...(submitGeneration === resolutionSubmitGeneration
+						? { error: undefined }
+						: {}),
 				});
 			} catch (error) {
 				if (!isCurrentResolve(generation)) return;
+				const current = publisher.getSnapshot();
 				publisher.publish({
-					...publisher.getSnapshot(),
+					...current,
 					targetRepository: null,
 					isResolvingTarget: false,
-					error: deps.getErrorMessage(error),
+					...(submitGeneration === resolutionSubmitGeneration
+						? { error: deps.getErrorMessage(error) }
+						: {}),
 				});
 			}
 		})();
@@ -119,7 +124,7 @@ export function createFeatureRequestControllerCore(
 	const markSourceStale = () => {
 		if (disposed) return;
 		resolveGeneration += 1;
-		if (submitInFlight) {
+		if (publisher.getSnapshot().isSubmitting) {
 			sourceStale = true;
 			return;
 		}
@@ -130,7 +135,7 @@ export function createFeatureRequestControllerCore(
 		getSnapshot: publisher.getSnapshot,
 		subscribe: publisher.subscribe,
 		open: () => {
-			if (disposed || submitInFlight || publisher.getSnapshot().isSubmitting) {
+			if (disposed || publisher.getSnapshot().isSubmitting) {
 				return;
 			}
 			deps.requestOpen(beginOpen);
@@ -138,7 +143,7 @@ export function createFeatureRequestControllerCore(
 		close,
 		markSourceStale,
 		submit: async (description, repository) => {
-			if (disposed || submitInFlight) return;
+			if (disposed || publisher.getSnapshot().isSubmitting) return;
 			const generation = ++submitGeneration;
 			if (!deps.isSubmissionAvailable()) {
 				publisher.publish({
@@ -155,7 +160,6 @@ export function createFeatureRequestControllerCore(
 				return;
 			}
 
-			submitInFlight = true;
 			sourceStale = false;
 			publisher.publish({
 				...publisher.getSnapshot(),
@@ -214,7 +218,6 @@ export function createFeatureRequestControllerCore(
 				});
 			} finally {
 				if (isCurrentSubmit(generation)) {
-					submitInFlight = false;
 					publisher.publish({
 						...publisher.getSnapshot(),
 						isSubmitting: false,
@@ -226,7 +229,6 @@ export function createFeatureRequestControllerCore(
 		dispose: () => {
 			if (disposed) return;
 			cancelRequests();
-			submitInFlight = false;
 			sourceStale = false;
 			reset();
 			disposed = true;

@@ -12,6 +12,10 @@ const featureRequestControllerPath = join(
 	process.cwd(),
 	'src/lib/shell-controllers/feature-request.tsx',
 );
+const featureRequestCorePath = join(
+	process.cwd(),
+	'src/lib/shell-controllers/feature-request-core.ts',
+);
 
 void test('FeatureRequestModal imports Picker from @react-native-picker/picker', () => {
 	const source = readFileSync(modalPath, 'utf8');
@@ -124,4 +128,9 @@ void test('useFeatureRequestController binds the submitted alert and replay-safe
 		/Alert\.alert\(alert\.title, alert\.message, \[\{ text: 'OK' \}\]\)/,
 	);
 	assert.match(source, /createReplaySafeDisposer\(core\.dispose\)/);
+});
+
+void test('feature request core has one owner for submission state', () => {
+	const source = readFileSync(featureRequestCorePath, 'utf8');
+	assert.doesNotMatch(source, /submitInFlight/);
 });
