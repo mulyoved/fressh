@@ -47,6 +47,8 @@ export function createNotificationsHarness(
 	options: {
 		acknowledgeError?: Error;
 		deferRouteCommands?: boolean;
+		restoreTokenError?: Error;
+		restoreTokenResult?: boolean;
 		routeCommandError?: Error;
 		warnError?: Error;
 	} = {},
@@ -133,6 +135,8 @@ export function createNotificationsHarness(
 			tapToken,
 		) => {
 			restoredTokens.push(tapToken);
+			if (options.restoreTokenError) throw options.restoreTokenError;
+			if (options.restoreTokenResult === false) return false;
 			routeTokenAvailable = true;
 			return true;
 		},

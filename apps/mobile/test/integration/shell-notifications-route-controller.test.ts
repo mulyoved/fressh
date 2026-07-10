@@ -277,3 +277,149 @@ void test('route context revision prevents A-B-A resurrection', async () => {
 	assert.deepEqual(harness.consumedTokens, ['token-1']);
 	assert.deepEqual(harness.restoredTokens, []);
 });
+
+function routeWithContextSession(
+	harness: ReturnType<typeof createNotificationsHarness>,
+) {
+	return { ...harness.validRoute(), agentSession: null };
+}
+
+void test('restored stale route token retries once under the latest context', async () => {
+	const harness = createNotificationsHarness({ deferRouteCommands: true });
+	const route = routeWithContextSession(harness);
+	const original = harness.core.handleRoute(route);
+	harness.core.setContext(harness.context({ tmuxTarget: 'other' }));
+	const replacement = harness.core.handleRoute(route);
+	const duplicateReplacement = harness.core.handleRoute(route);
+
+	assert.equal(duplicateReplacement, replacement);
+	assert.deepEqual(harness.consumedTokens, ['token-1']);
+	assert.equal(harness.routeCommands.length, 1);
+	harness.routeCommands[0]?.reject(new Error('old context failed'));
+	await harness.tick();
+	assert.equal(harness.routeCommands.length, 2);
+	assert.deepEqual(harness.routeCommands[1]?.argv, [
+		'tmux',
+		'app',
+		'notification',
+		'open',
+		'--session',
+		'other',
+		'--window-id',
+		'@12',
+	]);
+	harness.routeCommands[1]?.resolve('');
+
+	assert.deepEqual(
+		await Promise.all([original, replacement, duplicateReplacement]),
+		[false, true, true],
+	);
+	assert.deepEqual(harness.consumedTokens, ['token-1', 'token-1']);
+	assert.deepEqual(harness.restoredTokens, ['token-1']);
+	assert.equal(harness.acknowledgements.length, 1);
+	assert.equal(
+		harness.core.getSnapshot().handledRouteKey,
+		'["saved-host","other","@12","event-1"]',
+	);
+});
+
+void test('failed token restoration settles queued route without retrying', async (t) => {
+	for (const options of [
+		{ name: 'false', restoreTokenResult: false },
+		{
+			name: 'throw',
+			restoreTokenError: new Error('restore failed'),
+			warnError: new Error('warning failed'),
+		},
+	]) {
+		await t.test(options.name, async () => {
+			const harness = createNotificationsHarness({
+				deferRouteCommands: true,
+				...options,
+			});
+			const route = routeWithContextSession(harness);
+			const original = harness.core.handleRoute(route);
+			harness.core.setContext(harness.context({ tmuxTarget: 'other' }));
+			const replacement = harness.core.handleRoute(route);
+			harness.routeCommands[0]?.reject(new Error('old context failed'));
+
+			assert.deepEqual(await Promise.all([original, replacement]), [
+				false,
+				false,
+			]);
+			assert.equal(harness.routeCommands.length, 1);
+			assert.deepEqual(harness.consumedTokens, ['token-1']);
+			assert.deepEqual(harness.restoredTokens, ['token-1']);
+			assert.equal(harness.core.getSnapshot().handledRouteKey, null);
+			assert.deepEqual(harness.acknowledgements, []);
+		});
+	}
+});
+
+void test('stale successful route leaves queued replacement unauthorized', async () => {
+	const harness = createNotificationsHarness({ deferRouteCommands: true });
+	const route = routeWithContextSession(harness);
+	const original = harness.core.handleRoute(route);
+	harness.core.setContext(harness.context({ tmuxTarget: 'other' }));
+	const replacement = harness.core.handleRoute(route);
+	harness.routeCommands[0]?.resolve('');
+
+	assert.deepEqual(await Promise.all([original, replacement]), [false, false]);
+	assert.equal(harness.routeCommands.length, 1);
+	assert.deepEqual(harness.consumedTokens, ['token-1']);
+	assert.deepEqual(harness.restoredTokens, []);
+	assert.equal(harness.core.getSnapshot().handledRouteKey, null);
+	assert.deepEqual(harness.acknowledgements, []);
+});
+
+void test('only the newest queued context retries after token restoration', async () => {
+	const harness = createNotificationsHarness({ deferRouteCommands: true });
+	const route = routeWithContextSession(harness);
+	const original = harness.core.handleRoute(route);
+	harness.core.setContext(harness.context({ tmuxTarget: 'intermediate' }));
+	const intermediate = harness.core.handleRoute(route);
+	harness.core.setContext(harness.context({ tmuxTarget: 'latest' }));
+	const latest = harness.core.handleRoute(route);
+	harness.routeCommands[0]?.reject(new Error('old context failed'));
+	await harness.tick();
+
+	assert.equal(harness.routeCommands.length, 2);
+	assert.equal(harness.routeCommands[1]?.argv[5], 'latest');
+	harness.routeCommands[1]?.resolve('');
+	assert.deepEqual(await Promise.all([original, intermediate, latest]), [
+		false,
+		false,
+		true,
+	]);
+	assert.deepEqual(harness.consumedTokens, ['token-1', 'token-1']);
+	assert.deepEqual(harness.restoredTokens, ['token-1']);
+	assert.equal(harness.acknowledgements.length, 1);
+});
+
+void test('invalidation or disposal prevents a queued restoration retry', async (t) => {
+	for (const action of ['invalidate', 'dispose'] as const) {
+		await t.test(action, async () => {
+			const harness = createNotificationsHarness({ deferRouteCommands: true });
+			const route = routeWithContextSession(harness);
+			const original = harness.core.handleRoute(route);
+			harness.core.setContext(harness.context({ tmuxTarget: 'other' }));
+			const replacement = harness.core.handleRoute(route);
+			if (action === 'invalidate') {
+				harness.core.invalidate('runtime-reset');
+			} else {
+				harness.core.dispose();
+			}
+			harness.routeCommands[0]?.reject(new Error('old context failed'));
+
+			assert.deepEqual(await Promise.all([original, replacement]), [
+				false,
+				false,
+			]);
+			assert.equal(harness.routeCommands.length, 1);
+			assert.deepEqual(harness.consumedTokens, ['token-1']);
+			assert.deepEqual(harness.restoredTokens, ['token-1']);
+			assert.equal(harness.core.getSnapshot().handledRouteKey, null);
+			assert.deepEqual(harness.acknowledgements, []);
+		});
+	}
+});
