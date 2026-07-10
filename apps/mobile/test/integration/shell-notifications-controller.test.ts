@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { createShellActivityControllerCore } from '../../src/lib/shell-controllers/activity-core';
 import {
@@ -46,7 +47,7 @@ function buildWorkmuxWindowOutput(windowId = '@12'): string {
 }
 
 function createNotificationsHarness(
-	options: { acknowledgeError?: Error } = {},
+	options: { acknowledgeError?: Error; warnError?: Error } = {},
 ) {
 	const activity = createShellActivityControllerCore({
 		focused: true,
@@ -99,6 +100,7 @@ function createNotificationsHarness(
 		},
 		warn: (_message, error) => {
 			warnings.push(error);
+			if (options.warnError) throw options.warnError;
 		},
 	});
 
@@ -631,4 +633,68 @@ void test('notification pending failure settles without an unhandled rejection',
 	} finally {
 		process.off('unhandledRejection', onUnhandled);
 	}
+});
+
+void test('notification pending subscriber failure is reported without an unhandled rejection and recovers', async () => {
+	const warnFailure = new Error('warning callback failed');
+	const harness = createNotificationsHarness({ warnError: warnFailure });
+	const subscriberFailure = new Error('pending subscriber failed');
+	const unhandled: unknown[] = [];
+	let shouldThrow = true;
+	harness.core.subscribe(() => {
+		if (shouldThrow && harness.core.getSnapshot().acknowledgeInFlight) {
+			shouldThrow = false;
+			throw subscriberFailure;
+		}
+	});
+	const onUnhandled = (error: unknown) => {
+		unhandled.push(error);
+	};
+	process.on('unhandledRejection', onUnhandled);
+	try {
+		harness.core.notifyPending();
+		await harness.tick();
+		await harness.tick();
+		assert.deepEqual(unhandled, []);
+		assert.deepEqual(harness.warnings, [subscriberFailure]);
+		assert.equal(harness.core.getSnapshot().acknowledgeInFlight, false);
+
+		const recovered = harness.core.acknowledgeVisible();
+		harness.windowCommands[0]?.resolve(buildWorkmuxWindowOutput('@12'));
+		await recovered;
+		assert.deepEqual(harness.acknowledgedWindowIds, ['@12']);
+	} finally {
+		process.off('unhandledRejection', onUnhandled);
+	}
+});
+
+void test('notification disposal tears down its publisher when final publication throws', () => {
+	const source = readFileSync(
+		'src/lib/shell-controllers/notifications-core.ts',
+		'utf8',
+	);
+	assert.match(
+		source,
+		/dispose: \(\) => \{[\s\S]*?try \{[\s\S]*?publish\(\);[\s\S]*?\} finally \{[\s\S]*?publisher\.disposePublisher\(\);[\s\S]*?\}/,
+	);
+
+	const harness = createNotificationsHarness();
+	const failure = new Error('dispose subscriber failed');
+	let subscriberCalls = 0;
+	harness.core.subscribe(() => {
+		subscriberCalls += 1;
+		throw failure;
+	});
+
+	assert.throws(() => harness.core.dispose(), failure);
+	let laterCalls = 0;
+	harness.core.subscribe(() => {
+		laterCalls += 1;
+	});
+	harness.core.invalidate('source-change');
+	harness.core.setContext(harness.context({ tmuxTarget: 'other' }));
+	harness.core.notifyPending();
+
+	assert.equal(subscriberCalls, 1);
+	assert.equal(laterCalls, 0);
 });

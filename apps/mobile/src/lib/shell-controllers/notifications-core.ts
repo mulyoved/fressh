@@ -174,6 +174,14 @@ export function createShellNotificationsControllerCore({
 		});
 	};
 
+	const warnBestEffort = (message: string, error: unknown): void => {
+		try {
+			warn(message, error);
+		} catch {
+			// Notification acknowledgement must remain best effort.
+		}
+	};
+
 	const acknowledgeVisible = async (): Promise<void> => {
 		if (disposed) return;
 		epochInvalidated = false;
@@ -253,7 +261,12 @@ export function createShellNotificationsControllerCore({
 		acknowledgeVisible,
 		notifyPending: () => {
 			if (!disposed && activity.getSnapshot().interactive) {
-				void acknowledgeVisible();
+				void acknowledgeVisible().catch((error: unknown) => {
+					warnBestEffort(
+						'agent notification pending acknowledge failed',
+						error,
+					);
+				});
 			}
 		},
 		handleRoute: async (_route) => false,
@@ -264,8 +277,11 @@ export function createShellNotificationsControllerCore({
 			disposed = true;
 			settleObsolete();
 			inFlight = false;
-			publish();
-			publisher.disposePublisher();
+			try {
+				publish();
+			} finally {
+				publisher.disposePublisher();
+			}
 		},
 	};
 }
