@@ -411,6 +411,43 @@ void test('host URL save failure reports command context and clears in-flight st
 	]);
 });
 
+void test('host URL same-source supersession stops before the stale read command', async () => {
+	const firstContext = deferred<string>();
+	const readCommands: string[] = [];
+	let contextCalls = 0;
+	const core = createBrowserActionsControllerCore({
+		initialSourceKey: sourceKey,
+		requestOpen: (onOpen) => {
+			onOpen();
+			return true;
+		},
+		getTmuxEnabled: () => true,
+		getTmuxTarget: () => 'main',
+		runHostBrowserCommand: async (command) => {
+			readCommands.push(command);
+			return 'https://current.test';
+		},
+		runWorkmuxCommand: async () => {
+			contextCalls += 1;
+			return contextCalls === 1 ? firstContext.promise : workmuxContext;
+		},
+		openAndroidUrl: async () => {},
+		showError: () => {},
+		getErrorMessage: String,
+	});
+
+	core.editUrlSlot('window-url');
+	await settled();
+	core.editUrlSlot('app-url');
+	await settled();
+	assert.equal(readCommands.length, 1);
+	assert.equal(core.getSnapshot().hostUrl?.slot, 'app-url');
+	firstContext.resolve(workmuxContext);
+	await settled();
+	assert.equal(readCommands.length, 1);
+	assert.equal(core.getSnapshot().hostUrl?.slot, 'app-url');
+});
+
 void test('public resolvers use the real adapter and current committed dependencies', async () => {
 	type Connection = { id: string };
 	const arbiter = createShellModalArbiter();

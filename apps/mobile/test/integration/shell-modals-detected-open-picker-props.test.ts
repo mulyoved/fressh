@@ -15,6 +15,10 @@ const browserActionsCoreSourcePath = join(
 	process.cwd(),
 	'src/lib/shell-controllers/browser-actions-core.ts',
 );
+const browserActionsFacadeSourcePath = join(
+	process.cwd(),
+	'src/lib/shell-controllers/browser-actions-facade.ts',
+);
 const shellDetailSourcePath = join(process.cwd(), 'src/app/shell/detail.tsx');
 
 function assertCallBefore(
@@ -35,13 +39,14 @@ function assertCallBefore(
 void test('browser actions controller exposes detected open picker modal props', () => {
 	const hookSource = readFileSync(browserActionsHookSourcePath, 'utf8');
 	const coreSource = readFileSync(browserActionsCoreSourcePath, 'utf8');
+	const facadeSource = readFileSync(browserActionsFacadeSourcePath, 'utf8');
 
 	assert.match(
 		hookSource,
 		/export type \{[\s\S]*DetectedOpenPickerModalProps,[\s\S]*\} from '\.\/browser-actions-modal-props';/,
 	);
 	assert.match(
-		hookSource,
+		facadeSource,
 		/detectedOpenPickerProps: DetectedOpenPickerModalProps;/,
 	);
 	assert.match(
@@ -79,16 +84,18 @@ void test('browser actions controller exposes detected open picker modal props',
 });
 
 void test('browser actions hook keeps its public open command void-returning', () => {
-	const source = readFileSync(browserActionsHookSourcePath, 'utf8');
+	const hookSource = readFileSync(browserActionsHookSourcePath, 'utf8');
+	const facadeSource = readFileSync(browserActionsFacadeSourcePath, 'utf8');
 
 	assert.match(
-		source,
-		/export type BrowserActionsControllerHandle = \{[\s\S]*?open: \(\) => void;/,
+		hookSource,
+		/export type \{ BrowserActionsControllerHandle \} from '\.\/browser-actions-facade';/,
 	);
 	assert.match(
-		source,
-		/const open = useCallback\(\(\) => void core\.open\(\), \[core\]\);/,
+		facadeSource,
+		/export type BrowserActionsControllerHandle = \{[\s\S]*?open: \(\) => void;/,
 	);
+	assert.match(facadeSource, /open: \(\) => void core\.open\(\)/);
 });
 
 void test('browser actions controller cancels detected open work before other browser actions', () => {

@@ -1,7 +1,6 @@
 import * as Clipboard from 'expo-clipboard';
 import * as Linking from 'expo-linking';
 import {
-	useCallback,
 	useEffect,
 	useLayoutEffect,
 	useMemo,
@@ -12,12 +11,6 @@ import {
 import { Alert } from 'react-native';
 import { showBrowserActionErrorReport } from '../browser-action-error-alert';
 import { createBrowserActionErrorReport } from '../browser-action-error-report';
-import { type BrowserActionsWorkspace } from '../browser-actions-controller-actions';
-import { type DetectedOpenCandidate } from '../detected-open-actions';
-import {
-	type HostBrowserUrlSlot,
-	type TmuxPaneContext,
-} from '../host-browser-actions';
 import { rootLogger } from '../logger';
 import {
 	createBrowserActionsControllerAdapter,
@@ -27,6 +20,10 @@ import {
 	createBrowserActionsControllerCore,
 	type BrowserActionsControllerCore,
 } from './browser-actions-core';
+import {
+	createBrowserActionsControllerFacade,
+	type BrowserActionsControllerHandle,
+} from './browser-actions-facade';
 import {
 	createBrowserActionsControllerLifecycle,
 	syncBrowserActionsControllerSource,
@@ -45,24 +42,7 @@ export type {
 	DetectedOpenPickerModalProps,
 	HostUrlModalProps,
 } from './browser-actions-modal-props';
-
-export type BrowserActionsControllerHandle = {
-	browserActionsProps: BrowserActionsModalProps;
-	hostUrlProps: HostUrlModalProps;
-	detectedOpenPickerProps: DetectedOpenPickerModalProps;
-	open: () => void;
-	close: () => void;
-	resolveHostBrowserPaneContext: () => Promise<TmuxPaneContext>;
-	resolveHostBrowserPanePath: () => Promise<string>;
-	resolveHostBrowserWorkspace: () => Promise<BrowserActionsWorkspace>;
-	resolveCurrentGitHubRepository: () => Promise<string>;
-	runHostBrowserCommand: (
-		command: string,
-		timeoutMs?: number,
-	) => Promise<string>;
-	invalidateHostUrlReads: () => void;
-	invalidateAll: () => void;
-};
+export type { BrowserActionsControllerHandle } from './browser-actions-facade';
 
 export type BrowserActionsControllerDeps<TConnection> =
 	BrowserActionsControllerDependencies<TConnection>;
@@ -118,6 +98,7 @@ export function useBrowserActionsController<TConnection>(
 	const [coreLifecycle] = useState(() =>
 		createBrowserActionsControllerLifecycle(core),
 	);
+	const [facade] = useState(() => createBrowserActionsControllerFacade(core));
 	const snapshot = useSyncExternalStore(
 		core.subscribe,
 		core.getSnapshot,
@@ -146,72 +127,9 @@ export function useBrowserActionsController<TConnection>(
 
 	useEffect(() => coreLifecycle.setup(), [coreLifecycle]);
 
-	const open = useCallback(() => void core.open(), [core]);
-	const close = useCallback(() => core.close(), [core]);
-	const openDiff = useCallback(() => void core.openDiffity(), [core]);
-	const openGitHubIssues = useCallback(
-		() => void core.openGitHubTarget('issues'),
-		[core],
-	);
-	const openGitHubPulls = useCallback(
-		() => void core.openGitHubTarget('pulls'),
-		[core],
-	);
-	const openDetectedAuto = useCallback(() => core.openDetected('auto'), [core]);
-	const openDetectedPick = useCallback(() => core.openDetected('pick'), [core]);
-	const openUrlSlot = useCallback(
-		(slot: HostBrowserUrlSlot) => core.openUrlSlot(slot),
-		[core],
-	);
-	const editUrlSlot = useCallback(
-		(slot: HostBrowserUrlSlot) => core.editUrlSlot(slot),
-		[core],
-	);
-	const closeHostUrl = useCallback(() => void core.closeHostUrl(), [core]);
-	const submitHostUrl = useCallback(
-		(value: string) => core.submitHostUrl(value),
-		[core],
-	);
-	const closeDetectedPicker = useCallback(
-		() => core.closeDetectedPicker(),
-		[core],
-	);
-	const selectDetected = useCallback(
-		(candidate: DetectedOpenCandidate) => void core.selectDetected(candidate),
-		[core],
-	);
-
 	const modalProps = useMemo(
-		() =>
-			createBrowserActionsModalProps(snapshot, {
-				close,
-				openDiff,
-				openGitHubIssues,
-				openGitHubPulls,
-				openDetectedAuto,
-				openDetectedPick,
-				openUrlSlot,
-				editUrlSlot,
-				closeHostUrl,
-				submitHostUrl,
-				closeDetectedPicker,
-				selectDetected,
-			}),
-		[
-			close,
-			closeDetectedPicker,
-			closeHostUrl,
-			editUrlSlot,
-			openDetectedAuto,
-			openDetectedPick,
-			openDiff,
-			openGitHubIssues,
-			openGitHubPulls,
-			openUrlSlot,
-			selectDetected,
-			snapshot,
-			submitHostUrl,
-		],
+		() => createBrowserActionsModalProps(snapshot, facade.modalCallbacks),
+		[facade.modalCallbacks, snapshot],
 	);
 	const browserActionsProps = useMemo<BrowserActionsModalProps>(
 		() => modalProps.browserActionsProps,
@@ -227,27 +145,12 @@ export function useBrowserActionsController<TConnection>(
 	);
 
 	return useMemo<BrowserActionsControllerHandle>(
-		() => ({
-			browserActionsProps,
-			hostUrlProps,
-			detectedOpenPickerProps,
-			open,
-			close,
-			resolveHostBrowserPaneContext: core.resolvePaneContext,
-			resolveHostBrowserPanePath: core.resolvePanePath,
-			resolveHostBrowserWorkspace: core.resolveWorkspace,
-			resolveCurrentGitHubRepository: core.resolveCurrentGitHubRepository,
-			runHostBrowserCommand: core.runHostBrowserCommand,
-			invalidateHostUrlReads: core.invalidateHostUrlReads,
-			invalidateAll: () => core.invalidate('runtime-reset'),
-		}),
-		[
-			browserActionsProps,
-			close,
-			core,
-			detectedOpenPickerProps,
-			hostUrlProps,
-			open,
-		],
+		() =>
+			facade.createHandle({
+				browserActionsProps,
+				hostUrlProps,
+				detectedOpenPickerProps,
+			}),
+		[browserActionsProps, detectedOpenPickerProps, facade, hostUrlProps],
 	);
 }
