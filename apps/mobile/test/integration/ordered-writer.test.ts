@@ -32,3 +32,24 @@ void test('ordered writer checks freshness before first batch segment', async ()
 
 	assert.deepEqual(writes, []);
 });
+
+void test('ordered writer interrupts an inter-segment delay without cancelling an active write', async () => {
+	const writes: number[][] = [];
+	const controller = new AbortController();
+	const writer = new OrderedWriter(async (segment) => {
+		writes.push(Array.from(segment));
+		controller.abort();
+	});
+
+	await Promise.race([
+		writer.sendBatch([bytes([1]), bytes([2])], {
+			interSegmentDelayMs: 10_000,
+			signal: controller.signal,
+		}),
+		new Promise<never>((_, reject) => {
+			setTimeout(() => reject(new Error('delay was not interrupted')), 200);
+		}),
+	]);
+
+	assert.deepEqual(writes, [[1]]);
+});
