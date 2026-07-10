@@ -321,24 +321,24 @@ void describe('shell detail Workmux control channel wiring', () => {
 			source,
 			/const invalidateCodexRestartRequests\s*=\s*useCallback/,
 		);
-		assert.match(source, /codexRestartGenerationRef\.current \+= 1/);
-		assert.match(block, /if \(codexRestartInFlightRef\.current\) return/);
-		assert.match(block, /codexRestartInFlightRef\.current = true/);
+		assert.match(source, /createGenerationRequestGate\(\)/);
+		assert.match(source, /codexRestartGate\.invalidate\(\)/);
+		assert.match(block, /const restartToken = codexRestartGate\.begin\(\)/);
+		assert.match(block, /if \(restartToken === null\) return/);
 		assert.match(
 			block,
-			/finally\s*\{\s*codexRestartInFlightRef\.current = false;\s*\}/,
+			/finally\s*\{\s*codexRestartGate\.finish\(restartToken\);\s*\}/,
 		);
-		assert.match(block, /const isCurrentRestart\s*=\s*\(\) =>/);
+		assert.match(
+			block,
+			/const isCurrentRestart\s*=\s*\(\) =>\s*codexRestartGate\.isCurrent\(restartToken\)/,
+		);
 		assert.match(block, /Codex restart superseded/);
 		assert.match(block, /Codex restart failed after becoming stale/);
 		assert.match(source, /invalidateCodexRestartRequests\(\);/);
-		const invalidationBlock = source.slice(
-			source.indexOf('const invalidateCodexRestartRequests = useCallback'),
-			source.indexOf('const exitSelectionMode = useCallback'),
-		);
 		assert.doesNotMatch(
-			invalidationBlock,
-			/codexRestartInFlightRef\.current = false/,
+			source,
+			/codexRestartGenerationRef|codexRestartInFlightRef/,
 		);
 	});
 

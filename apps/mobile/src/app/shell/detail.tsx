@@ -105,6 +105,7 @@ import {
 } from '@/lib/shell-config-store-native';
 import { useBrowserActionsController } from '@/lib/shell-controllers/browser-actions';
 import { useFeatureRequestController } from '@/lib/shell-controllers/feature-request';
+import { createGenerationRequestGate } from '@/lib/shell-controllers/generation-request-gate';
 import { createShellModalArbiter } from '@/lib/shell-controllers/modal-arbiter';
 import { syncShellCommandLifecycle } from '@/lib/shell-controllers/shell-command-lifecycle';
 import { useShellSimpleModals } from '@/lib/shell-controllers/simple-modals';
@@ -803,8 +804,7 @@ function ShellDetail() {
 	const currentInstanceIdRef = useRef<string | null>(null);
 	const writerRef = useRef<OrderedWriter | null>(null);
 	const liveInputGenerationRef = useRef(0);
-	const codexRestartGenerationRef = useRef(0);
-	const codexRestartInFlightRef = useRef(false);
+	const codexRestartGate = useMemo(() => createGenerationRequestGate(), []);
 	const commandTimeoutsRef = useRef<ReturnType<typeof setTimeout>[]>([]);
 	const wisprAutomationStateRef = useRef<WisprAutomationState>({
 		phase: 'idle',
@@ -863,8 +863,8 @@ function ShellDetail() {
 		[hasConnection, height, scrollTraceEnabled, tmuxEnabled, width],
 	);
 	const invalidateCodexRestartRequests = useCallback(() => {
-		codexRestartGenerationRef.current += 1;
-	}, []);
+		codexRestartGate.invalidate();
+	}, [codexRestartGate]);
 	const exitSelectionMode = useCallback(() => {
 		setSelectionModeEnabled(false);
 		xtermRef.current?.setSelectionModeEnabled(false);
@@ -2609,14 +2609,10 @@ function ShellDetail() {
 	const handleRestartCodex = useCallback(
 		async (options?: { timeoutMs?: number }) => {
 			commandMenuModal.onClose();
-			if (codexRestartInFlightRef.current) return;
-
-			const restartGeneration = codexRestartGenerationRef.current + 1;
-			codexRestartGenerationRef.current = restartGeneration;
-			codexRestartInFlightRef.current = true;
+			const restartToken = codexRestartGate.begin();
+			if (restartToken === null) return;
 			const workmuxControlChannelSnapshot = workmuxControlChannelRef.current;
-			const isCurrentRestart = () =>
-				codexRestartGenerationRef.current === restartGeneration;
+			const isCurrentRestart = () => codexRestartGate.isCurrent(restartToken);
 
 			try {
 				await restartCodexWithBridge({
@@ -2660,10 +2656,10 @@ function ShellDetail() {
 						: { timeoutMs: options.timeoutMs }),
 				});
 			} finally {
-				codexRestartInFlightRef.current = false;
+				codexRestartGate.finish(restartToken);
 			}
 		},
-		[activeTmuxSessionName, commandMenuModal, tmuxEnabled],
+		[activeTmuxSessionName, codexRestartGate, commandMenuModal, tmuxEnabled],
 	);
 
 	const actionContext = useMemo<ActionContext>(
