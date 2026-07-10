@@ -30,6 +30,10 @@ export type ShellSimpleModalsCore = ControllerCore<ShellSimpleModalsState> & {
 	close(id: ShellSimpleModalId): void;
 };
 
+export type ReplaySafeDisposer = {
+	setup(): () => void;
+};
+
 export type SimpleModalHandle = {
 	open: boolean;
 	onOpen: () => void;
@@ -67,6 +71,27 @@ function getStateKey(id: ShellSimpleModalId): keyof ShellSimpleModalsState {
 	}
 }
 
+export function createReplaySafeDisposer(
+	dispose: () => void,
+	defer: (task: () => void) => void = queueMicrotask,
+): ReplaySafeDisposer {
+	let generation = 0;
+	let disposed = false;
+
+	return {
+		setup: () => {
+			const setupGeneration = ++generation;
+			return () => {
+				defer(() => {
+					if (disposed || generation !== setupGeneration) return;
+					disposed = true;
+					dispose();
+				});
+			};
+		},
+	};
+}
+
 export function createShellSimpleModalsCore(): ShellSimpleModalsCore {
 	const publisher = createControllerPublisher(CLOSED_STATE);
 	let disposed = false;
@@ -101,6 +126,9 @@ export function useShellSimpleModals(
 	arbiter: ShellModalArbiter,
 ): ShellSimpleModalsHandle {
 	const [core] = useState(createShellSimpleModalsCore);
+	const [coreLifecycle] = useState(() =>
+		createReplaySafeDisposer(core.dispose),
+	);
 	const snapshot = useSyncExternalStore(
 		core.subscribe,
 		core.getSnapshot,
@@ -126,7 +154,7 @@ export function useShellSimpleModals(
 		};
 	}, [arbiter, core]);
 
-	useEffect(() => () => core.dispose(), [core]);
+	useEffect(() => coreLifecycle.setup(), [coreLifecycle]);
 
 	const openCommandMenu = useCallback(() => core.open('command-menu'), [core]);
 	const closeCommandMenu = useCallback(
