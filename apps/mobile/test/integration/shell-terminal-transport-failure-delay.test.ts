@@ -410,31 +410,80 @@ for (const factoryTransition of [
 		name: 'invalidation',
 		run: (transport: ReturnType<typeof createShellTerminalTransport>) =>
 			transport.invalidate('runtime-reset'),
+		canContinue: true,
 	},
 	{
 		name: 'runtime replacement',
 		run: (transport: ReturnType<typeof createShellTerminalTransport>) =>
 			transport.setRuntimeInstance('replacement'),
+		canContinue: true,
+	},
+	{
+		name: 'shell replacement',
+		run: (
+			transport: ReturnType<typeof createShellTerminalTransport>,
+			send: (segment: Uint8Array<ArrayBufferLike>) => Promise<void>,
+		) => transport.setShell(createShellTransportKey('conn', 8), send),
+		canContinue: true,
+	},
+	{
+		name: 'shell clear and restore',
+		run: (
+			transport: ReturnType<typeof createShellTerminalTransport>,
+			send: (segment: Uint8Array<ArrayBufferLike>) => Promise<void>,
+		) => {
+			transport.clearShell();
+			transport.setShell(createShellTransportKey('conn', 7), send);
+		},
+		canContinue: true,
+	},
+	{
+		name: 'runtime clear and restore',
+		run: (transport: ReturnType<typeof createShellTerminalTransport>) => {
+			transport.clearRuntime();
+			transport.setRuntimeInstance('replacement');
+		},
+		canContinue: true,
+	},
+	{
+		name: 'disposal',
+		run: (transport: ReturnType<typeof createShellTerminalTransport>) =>
+			transport.dispose(),
+		canContinue: false,
 	},
 ]) {
 	void test(`terminal abort factory tolerates reentrant enqueue and ${factoryTransition.name}`, async () => {
 		const writes: number[] = [];
 		const failures: unknown[] = [];
+		let aborts = 0;
+		let abortListenerActive = true;
+		let returnedController: AbortController | null = null;
 		let nested: Promise<void> | null = null;
 		let lease: TerminalInputLease | null = null;
 		let transport!: ReturnType<typeof createShellTerminalTransport>;
+		const send = async (segment: Uint8Array<ArrayBufferLike>) => {
+			writes.push(segment[0] ?? -1);
+		};
 		transport = createShellTerminalTransport({
 			onSendFailure: (error) => failures.push(error),
 			createAbortController: () => {
 				assert.ok(lease);
 				nested = transport.sendBatch(lease, [bytes(2)]);
-				factoryTransition.run(transport);
-				return new AbortController();
+				factoryTransition.run(transport, send);
+				const controller = new AbortController();
+				controller.signal.addEventListener(
+					'abort',
+					() => {
+						aborts += 1;
+						abortListenerActive = false;
+					},
+					{ once: true },
+				);
+				returnedController = controller;
+				return controller;
 			},
 		});
-		transport.setShell(createShellTransportKey('conn', 7), async (segment) => {
-			writes.push(segment[0] ?? -1);
-		});
+		transport.setShell(createShellTransportKey('conn', 7), send);
 		transport.setRuntimeInstance('instance');
 		lease = transport.captureLease();
 		assert.ok(lease);
@@ -444,13 +493,55 @@ for (const factoryTransition of [
 		await stale;
 		assert.ok(nested);
 		await nested;
-		const freshLease = transport.captureLease();
-		assert.ok(freshLease);
-		await transport.sendBatch(freshLease, [bytes(3)]);
-		assert.deepEqual(writes, [3]);
+		const controllerToInspect = returnedController as AbortController | null;
+		assert.ok(controllerToInspect);
+		assert.equal(aborts, 1);
+		assert.equal(abortListenerActive, false);
+		controllerToInspect.abort();
+		assert.equal(aborts, 1);
+		returnedController = null;
+		if (factoryTransition.canContinue) {
+			const freshLease = transport.captureLease();
+			assert.ok(freshLease);
+			await transport.sendBatch(freshLease, [bytes(3)]);
+		}
+		assert.deepEqual(writes, factoryTransition.canContinue ? [3] : []);
 		assert.deepEqual(failures, []);
 	});
 }
+
+void test('terminal abort factory can enqueue work and throw without wedging FIFO', async () => {
+	const factoryError = new Error('factory failed');
+	const writes: number[] = [];
+	const failures: unknown[] = [];
+	let nested: Promise<void> | null = null;
+	let lease: TerminalInputLease | null = null;
+	let transport!: ReturnType<typeof createShellTerminalTransport>;
+	transport = createShellTerminalTransport({
+		onSendFailure: (error) => failures.push(error),
+		createAbortController: () => {
+			assert.ok(lease);
+			nested = transport.sendBatch(lease, [bytes(2)]);
+			throw factoryError;
+		},
+	});
+	transport.setShell(createShellTransportKey('conn', 7), async (segment) => {
+		writes.push(segment[0] ?? -1);
+	});
+	transport.setRuntimeInstance('instance');
+	lease = transport.captureLease();
+	assert.ok(lease);
+	const failed = transport.sendBatch(lease, [bytes(1), bytes(9)], {
+		interSegmentDelayMs: 10,
+	});
+	const successor = transport.sendBatch(lease, [bytes(3)]);
+
+	await assert.rejects(failed, (error) => error === factoryError);
+	assert.ok(nested);
+	await Promise.all([nested, successor]);
+	assert.deepEqual(writes, [2, 3]);
+	assert.deepEqual(failures, []);
+});
 
 void test('terminal queue skips delayed entry with already-aborted factory result', async () => {
 	const writes: number[] = [];
