@@ -878,7 +878,11 @@ void test('automatic acknowledgement retries interactive stored connection hydra
 	const harness = createNotificationsHarness();
 	const automaticAcknowledger = createShellNotificationAutomaticAcknowledger();
 	const activity = harness.activity.getSnapshot();
-	harness.core.setContext(harness.context({ storedConnectionId: null }));
+	const initialContext = harness.core.getSnapshot().context;
+	harness.core.setContext({
+		...initialContext,
+		storedConnectionId: null,
+	});
 	const unavailable = harness.core.getSnapshot();
 	const requests: Promise<void>[] = [];
 	const request = () => {
@@ -892,8 +896,12 @@ void test('automatic acknowledgement retries interactive stored connection hydra
 	await requests[0];
 	assert.equal(harness.windowCommands.length, 0);
 
-	harness.core.setContext(harness.context());
+	harness.core.setContext({
+		...unavailable.context,
+		storedConnectionId: 'saved-host',
+	});
 	const hydrated = harness.core.getSnapshot();
+	assert.equal(hydrated.generation, unavailable.generation);
 	assert.equal(
 		automaticAcknowledger.request(activity, hydrated, request),
 		true,
