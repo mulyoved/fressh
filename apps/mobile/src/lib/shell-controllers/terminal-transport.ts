@@ -35,6 +35,7 @@ export type ShellTerminalTransportController = ShellTerminalTransportPort & {
 
 export function createShellTerminalTransport(input: {
 	onSendFailure(error: unknown): void;
+	createAbortController?(): AbortController;
 }): ShellTerminalTransportController {
 	type BatchEntry = {
 		writer: OrderedWriter;
@@ -42,7 +43,7 @@ export function createShellTerminalTransport(input: {
 		segments: Uint8Array<ArrayBufferLike>[];
 		interSegmentDelayMs?: number;
 		callerIsCurrent?: () => boolean;
-		abortController: AbortController;
+		abortController: AbortController | null;
 		resolve(): void;
 		reject(error: unknown): void;
 		settled: boolean;
@@ -60,6 +61,8 @@ export function createShellTerminalTransport(input: {
 	let pendingEntries: (BatchEntry | undefined)[] = [];
 	let pendingHead = 0;
 	const ownedLeases = new WeakSet<TerminalInputLease>();
+	const createAbortController =
+		input.createAbortController ?? (() => new AbortController());
 
 	const refreshRuntimeKey = () => {
 		runtimeKey =
@@ -94,6 +97,7 @@ export function createShellTerminalTransport(input: {
 	const releaseEntry = (entry: BatchEntry) => {
 		entry.segments = [];
 		entry.callerIsCurrent = undefined;
+		entry.abortController = null;
 	};
 
 	const resolveEntry = (entry: BatchEntry) => {
@@ -142,34 +146,41 @@ export function createShellTerminalTransport(input: {
 
 	const startNextEntry = () => {
 		if (activeEntry !== null) return;
-		let entry = dequeuePendingEntry();
-		while (entry !== undefined && !isEntryCurrent(entry)) {
-			resolveEntry(entry);
-			entry = dequeuePendingEntry();
-		}
-		if (entry === undefined) return;
-
-		activeEntry = entry;
-		void (async () => {
-			try {
-				await entry.writer.sendBatch(entry.segments, {
-					interSegmentDelayMs: entry.interSegmentDelayMs,
-					isCurrent: () => isEntryCurrent(entry),
-					signal: entry.abortController.signal,
-				});
+		while (activeEntry === null) {
+			const entry = dequeuePendingEntry();
+			if (entry === undefined) return;
+			activeEntry = entry;
+			if (!isEntryCurrent(entry)) {
 				resolveEntry(entry);
-			} catch (error) {
-				if (isEntryCurrent(entry)) reportFailure(error);
-				rejectEntry(entry, error);
-			} finally {
-				activeEntry = null;
-				startNextEntry();
+				if (activeEntry === entry) activeEntry = null;
+				continue;
 			}
-		})();
+
+			if ((entry.interSegmentDelayMs ?? 0) > 0) {
+				entry.abortController = createAbortController();
+			}
+			void (async () => {
+				try {
+					await entry.writer.sendBatch(entry.segments, {
+						interSegmentDelayMs: entry.interSegmentDelayMs,
+						isCurrent: () => isEntryCurrent(entry),
+						signal: entry.abortController?.signal,
+					});
+					resolveEntry(entry);
+				} catch (error) {
+					if (isEntryCurrent(entry)) reportFailure(error);
+					rejectEntry(entry, error);
+				} finally {
+					if (activeEntry === entry) activeEntry = null;
+					startNextEntry();
+				}
+			})();
+			return;
+		}
 	};
 
 	const staleQueuedEntries = () => {
-		activeEntry?.abortController.abort();
+		activeEntry?.abortController?.abort();
 		const staleEntries = pendingEntries;
 		const staleHead = pendingHead;
 		pendingEntries = [];
@@ -204,7 +215,7 @@ export function createShellTerminalTransport(input: {
 					segments: segmentSnapshot,
 					interSegmentDelayMs: options?.interSegmentDelayMs,
 					callerIsCurrent: options?.isCurrent,
-					abortController: new AbortController(),
+					abortController: null,
 					resolve,
 					reject,
 					settled: false,

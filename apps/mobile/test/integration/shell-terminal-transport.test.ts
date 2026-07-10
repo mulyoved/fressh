@@ -918,3 +918,243 @@ void test('terminal queue drains a large current backlog in order', async () => 
 		Array.from({ length: 2_001 }, (_, value) => value),
 	);
 });
+
+void test('terminal queue reserves outer entry before reentrant enqueue', async () => {
+	const writes: number[] = [];
+	const transport = createShellTerminalTransport({ onSendFailure: () => {} });
+	transport.setShell(createShellTransportKey('conn', 7), async (segment) => {
+		writes.push(segment[0] ?? -1);
+	});
+	transport.setRuntimeInstance('instance');
+	const lease = transport.captureLease();
+	assert.ok(lease);
+	let nested: Promise<void> | null = null;
+	let didEnqueue = false;
+
+	const outer = transport.sendBatch(lease, [bytes(1)], {
+		isCurrent: () => {
+			if (!didEnqueue) {
+				didEnqueue = true;
+				nested = transport.sendBatch(lease, [bytes(2)]);
+			}
+			return true;
+		},
+	});
+	await outer;
+	assert.ok(nested);
+	await nested;
+	assert.deepEqual(writes, [1, 2]);
+});
+
+void test('terminal queue keeps reentrant delayed owner abortable', async () => {
+	const nestedFirstWrite = deferred();
+	const writes: number[] = [];
+	const transport = createShellTerminalTransport({ onSendFailure: () => {} });
+	transport.setShell(createShellTransportKey('conn', 7), async (segment) => {
+		writes.push(segment[0] ?? -1);
+		if (segment[0] === 2) nestedFirstWrite.resolve();
+	});
+	transport.setRuntimeInstance('instance');
+	const lease = transport.captureLease();
+	assert.ok(lease);
+	let nested: Promise<void> | null = null;
+	let didEnqueue = false;
+
+	const outer = transport.sendBatch(lease, [bytes(1)], {
+		isCurrent: () => {
+			if (!didEnqueue) {
+				didEnqueue = true;
+				nested = transport.sendBatch(lease, [bytes(2), bytes(3)], {
+					interSegmentDelayMs: 10_000,
+				});
+			}
+			return true;
+		},
+	});
+	await nestedFirstWrite.promise;
+	transport.invalidate('runtime-reset');
+	const freshLease = transport.captureLease();
+	assert.ok(freshLease);
+	const fresh = transport.sendBatch(freshLease, [bytes(4)]);
+
+	assert.ok(nested);
+	await Promise.race([
+		Promise.all([outer, nested, fresh]),
+		wait(200).then(() => {
+			throw new Error('reentrant delayed owner did not settle promptly');
+		}),
+	]);
+	assert.deepEqual(writes, [1, 2, 4]);
+});
+
+for (const staleResult of [
+	{ name: 'false', run: () => false },
+	{
+		name: 'throw',
+		run: () => {
+			throw new Error('stale');
+		},
+	},
+]) {
+	void test(`terminal queue preserves nested FIFO when reserved outer returns ${staleResult.name}`, async () => {
+		const writes: number[] = [];
+		const transport = createShellTerminalTransport({ onSendFailure: () => {} });
+		transport.setShell(createShellTransportKey('conn', 7), async (segment) => {
+			writes.push(segment[0] ?? -1);
+		});
+		transport.setRuntimeInstance('instance');
+		const lease = transport.captureLease();
+		assert.ok(lease);
+		let nested: Promise<void> | null = null;
+		let didEnqueue = false;
+
+		const outer = transport.sendBatch(lease, [bytes(1)], {
+			isCurrent: () => {
+				if (!didEnqueue) {
+					didEnqueue = true;
+					nested = transport.sendBatch(lease, [bytes(2)]);
+				}
+				return staleResult.run();
+			},
+		});
+		await outer;
+		assert.ok(nested);
+		await nested;
+		assert.deepEqual(writes, [2]);
+	});
+}
+
+for (const transition of [
+	{
+		name: 'shell replacement',
+		run: (
+			transport: ReturnType<typeof createShellTerminalTransport>,
+			send: (segment: Uint8Array<ArrayBufferLike>) => Promise<void>,
+		) => transport.setShell(createShellTransportKey('conn', 8), send),
+		canContinue: true,
+	},
+	{
+		name: 'runtime replacement',
+		run: (transport: ReturnType<typeof createShellTerminalTransport>) =>
+			transport.setRuntimeInstance('replacement'),
+		canContinue: true,
+	},
+	{
+		name: 'disposal',
+		run: (transport: ReturnType<typeof createShellTerminalTransport>) =>
+			transport.dispose(),
+		canContinue: false,
+	},
+]) {
+	void test(`terminal queue survives reentrant ${transition.name} without slot corruption`, async () => {
+		const writes: number[] = [];
+		const failures: unknown[] = [];
+		const transport = createShellTerminalTransport({
+			onSendFailure: (error) => failures.push(error),
+		});
+		const send = async (segment: Uint8Array<ArrayBufferLike>) => {
+			writes.push(segment[0] ?? -1);
+		};
+		transport.setShell(createShellTransportKey('conn', 7), send);
+		transport.setRuntimeInstance('instance');
+		const lease = transport.captureLease();
+		assert.ok(lease);
+		let nested: Promise<void> | null = null;
+		let didTransition = false;
+
+		const outer = transport.sendBatch(lease, [bytes(1)], {
+			isCurrent: () => {
+				if (!didTransition) {
+					didTransition = true;
+					nested = transport.sendBatch(lease, [bytes(2)]);
+					transition.run(transport, send);
+				}
+				return true;
+			},
+		});
+		await outer;
+		assert.ok(nested);
+		await nested;
+		if (transition.canContinue) {
+			const freshLease = transport.captureLease();
+			assert.ok(freshLease);
+			await transport.sendBatch(freshLease, [bytes(3)]);
+		}
+		assert.deepEqual(writes, transition.canContinue ? [3] : []);
+		assert.deepEqual(failures, []);
+	});
+}
+
+void test('terminal transport allocates no abort controllers for pending or delay-free batches', async () => {
+	const activeStarted = deferred();
+	const releaseActive = deferred();
+	let allocations = 0;
+	const transport = createShellTerminalTransport({
+		onSendFailure: () => {},
+		createAbortController: () => {
+			allocations += 1;
+			return new AbortController();
+		},
+	});
+	transport.setShell(createShellTransportKey('conn', 7), async (segment) => {
+		if (segment[0] === 1) {
+			activeStarted.resolve();
+			await releaseActive.promise;
+		}
+	});
+	transport.setRuntimeInstance('instance');
+	const lease = transport.captureLease();
+	assert.ok(lease);
+	const active = transport.sendBatch(lease, [bytes(1)]);
+	await activeStarted.promise;
+	const backlog = Array.from({ length: 2_000 }, () =>
+		transport.sendBatch(lease, [bytes(2)]),
+	);
+	assert.equal(allocations, 0);
+
+	releaseActive.resolve();
+	await Promise.all([active, ...backlog]);
+	assert.equal(allocations, 0);
+});
+
+void test('terminal transport allocates and aborts controllers only for promoted delayed batches', async () => {
+	const firstWrites = [deferred(), deferred()];
+	let allocations = 0;
+	let aborts = 0;
+	const transport = createShellTerminalTransport({
+		onSendFailure: () => {},
+		createAbortController: () => {
+			allocations += 1;
+			const controller = new AbortController();
+			controller.signal.addEventListener('abort', () => {
+				aborts += 1;
+			});
+			return controller;
+		},
+	});
+	transport.setShell(createShellTransportKey('conn', 7), async (segment) => {
+		if (segment[0] === 1) firstWrites[0]?.resolve();
+		if (segment[0] === 2) firstWrites[1]?.resolve();
+	});
+	transport.setRuntimeInstance('instance');
+	const firstLease = transport.captureLease();
+	assert.ok(firstLease);
+	const first = transport.sendBatch(firstLease, [bytes(1), bytes(9)], {
+		interSegmentDelayMs: 10_000,
+	});
+	await firstWrites[0]?.promise;
+	assert.equal(allocations, 1);
+
+	transport.setRuntimeInstance('replacement');
+	assert.equal(aborts, 1);
+	const secondLease = transport.captureLease();
+	assert.ok(secondLease);
+	const second = transport.sendBatch(secondLease, [bytes(2), bytes(8)], {
+		interSegmentDelayMs: 10_000,
+	});
+	await firstWrites[1]?.promise;
+	assert.equal(allocations, 2);
+	transport.dispose();
+	assert.equal(aborts, 2);
+	await Promise.all([first, second]);
+});
