@@ -45,6 +45,47 @@ export function createShellNotificationRouteEffectKey(
 	]);
 }
 
+export function createShellNotificationHookOrchestrator<
+	TInput extends {
+		context: ShellNotificationContext;
+		route: ShellNotificationRoute;
+	},
+>(
+	initialInput: TInput,
+): {
+	getCommittedInput(): TInput;
+	createRouteEffectKey(input: TInput): string;
+	commitLayout(
+		nextInput: TInput,
+		setContext: (context: ShellNotificationContext) => void,
+		afterContextCommit: () => void,
+	): void;
+	dispatchRoutePassive(
+		handleRoute: (route: ShellNotificationRoute) => Promise<boolean>,
+		onError: (input: TInput, error: unknown) => void,
+	): Promise<void>;
+} {
+	let committedInput = initialInput;
+	return {
+		getCommittedInput: () => committedInput,
+		createRouteEffectKey: (input) =>
+			createShellNotificationRouteEffectKey(input.route, input.context),
+		commitLayout: (nextInput, setContext, afterContextCommit) => {
+			committedInput = nextInput;
+			setContext(nextInput.context);
+			afterContextCommit();
+		},
+		dispatchRoutePassive: async (handleRoute, onError) => {
+			const route = committedInput.route;
+			try {
+				await handleRoute(route);
+			} catch (error) {
+				onError(committedInput, error);
+			}
+		},
+	};
+}
+
 export function setupShellNotificationActivityEffect(input: {
 	getSnapshot(): ShellActivitySnapshot;
 	subscribe(listener: () => void): () => void;

@@ -3,7 +3,6 @@ import {
 	useEffect,
 	useLayoutEffect,
 	useMemo,
-	useRef,
 	useState,
 } from 'react';
 import { Platform } from 'react-native';
@@ -23,7 +22,7 @@ import {
 } from './notifications-core';
 import {
 	createShellNotificationAutomaticAcknowledger,
-	createShellNotificationRouteEffectKey,
+	createShellNotificationHookOrchestrator,
 	setupShellNotificationActivityEffect,
 	setupShellNotificationPendingEffect,
 } from './notifications-lifecycle';
@@ -60,24 +59,31 @@ function warnBestEffort(
 export function useShellNotificationsController(
 	input: UseShellNotificationsControllerInput,
 ): ShellNotificationsControllerHandle {
-	const committedInputRef = useRef(input);
+	const [hookOrchestrator] = useState(() =>
+		createShellNotificationHookOrchestrator(input),
+	);
 	const [automaticAcknowledger] = useState(() =>
 		createShellNotificationAutomaticAcknowledger(),
 	);
 	const [core] = useState(() =>
 		createShellNotificationsControllerCore({
 			activity: {
-				getSnapshot: () => committedInputRef.current.activity.getSnapshot(),
+				getSnapshot: () =>
+					hookOrchestrator.getCommittedInput().activity.getSnapshot(),
 			},
 			context: input.context,
 			platformOS: Platform.OS,
 			runWorkmuxCommand: (argv, timeoutMs) =>
-				committedInputRef.current.runWorkmuxCommand(argv, timeoutMs),
+				hookOrchestrator.getCommittedInput().runWorkmuxCommand(argv, timeoutMs),
 			consumeAuthorizedRouteToken: consumeAuthorizedAgentNotificationRouteToken,
 			restoreAuthorizedRouteToken: restoreAuthorizedAgentNotificationRouteToken,
 			acknowledge: acknowledgeRoutedAgentNotification,
 			warn: (message, error) => {
-				warnBestEffort(committedInputRef.current.logger, message, error);
+				warnBestEffort(
+					hookOrchestrator.getCommittedInput().logger,
+					message,
+					error,
+				);
 			},
 		}),
 	);
@@ -86,23 +92,27 @@ export function useShellNotificationsController(
 	);
 
 	const requestVisibleAcknowledgement = useCallback(() => {
-		const activitySnapshot = committedInputRef.current.activity.getSnapshot();
+		const activitySnapshot = hookOrchestrator
+			.getCommittedInput()
+			.activity.getSnapshot();
 		automaticAcknowledger.request(activitySnapshot, core.getSnapshot(), () => {
 			void core.acknowledgeVisible().catch((error: unknown) => {
 				warnBestEffort(
-					committedInputRef.current.logger,
+					hookOrchestrator.getCommittedInput().logger,
 					'agent notification visible acknowledge failed',
 					error,
 				);
 			});
 		});
-	}, [automaticAcknowledger, core]);
+	}, [automaticAcknowledger, core, hookOrchestrator]);
 
 	useLayoutEffect(() => {
-		committedInputRef.current = input;
-		core.setContext(input.context);
-		requestVisibleAcknowledgement();
-	}, [core, input, requestVisibleAcknowledgement]);
+		hookOrchestrator.commitLayout(
+			input,
+			core.setContext,
+			requestVisibleAcknowledgement,
+		);
+	}, [core, hookOrchestrator, input, requestVisibleAcknowledgement]);
 
 	useEffect(() => {
 		return setupShellNotificationPendingEffect({
@@ -128,20 +138,19 @@ export function useShellNotificationsController(
 		subscribeActivity,
 	]);
 
-	const routeEffectKey = createShellNotificationRouteEffectKey(
-		input.route,
-		input.context,
-	);
+	const routeEffectKey = hookOrchestrator.createRouteEffectKey(input);
 	useEffect(() => {
-		const route = committedInputRef.current.route;
-		void core.handleRoute(route).catch((error: unknown) => {
-			warnBestEffort(
-				committedInputRef.current.logger,
-				'agent notification route handling failed',
-				error,
-			);
-		});
-	}, [core, routeEffectKey]);
+		void hookOrchestrator.dispatchRoutePassive(
+			core.handleRoute,
+			(committedInput, error) => {
+				warnBestEffort(
+					committedInput.logger,
+					'agent notification route handling failed',
+					error,
+				);
+			},
+		);
+	}, [core, hookOrchestrator, routeEffectKey]);
 
 	useEffect(() => coreLifecycle.setup(), [coreLifecycle]);
 

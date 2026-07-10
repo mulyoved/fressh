@@ -424,6 +424,41 @@ void test('handleAgentNotificationRoute restores consumed token after failed rou
 	assert.equal(commands, 2);
 });
 
+void test('handleAgentNotificationRoute restores selection when success callbacks fail', async (t) => {
+	for (const callback of ['mark', 'acknowledge'] as const) {
+		await t.test(callback, async () => {
+			const error = new Error(`${callback} failed`);
+			let restores = 0;
+			const handled = await handleAgentNotificationRoute({
+				agentConnectionId: 'saved-host',
+				storedConnectionId: null,
+				agentSession: 'main',
+				agentWindowId: '@12',
+				agentEventId: 'main:@12:2000:waiting',
+				agentTapToken: 'tap-token',
+				tmuxTarget: 'main',
+				consumeAuthorizedRouteToken: () => true,
+				restoreAuthorizedRouteToken: () => {
+					restores += 1;
+					return true;
+				},
+				isRouteHandled: () => false,
+				markRouteHandled: () => {
+					if (callback === 'mark') throw error;
+				},
+				runWorkmuxCommand: async () => '',
+				acknowledge: () => {
+					if (callback === 'acknowledge') throw error;
+				},
+				warn: () => {},
+			});
+
+			assert.equal(handled, false);
+			assert.equal(restores, 1);
+		});
+	}
+});
+
 void test('handleAgentNotificationRoute falls back to stored connection id', async () => {
 	const acknowledgements: {
 		connectionId: string;

@@ -67,13 +67,41 @@ export type AgentNotificationRouteOptions = {
 	warn: (message: string, error: unknown) => void;
 };
 
-export type ResolvedAgentNotificationRoute = {
+export type ResolvedAgentNotificationRoute = Readonly<{
 	connectionId: string;
 	session: string;
 	windowId: string;
 	eventId: string;
 	tapToken: string;
+	routeKey: string;
 	authorizationIdentityKey: string;
+}>;
+
+export type AgentNotificationRouteTransactionOutcome =
+	| { kind: 'duplicate' }
+	| { kind: 'not-authorized' }
+	| { kind: 'selected' }
+	| { kind: 'failed-restored' }
+	| { kind: 'failed-not-restored' };
+
+export type ResolvedAgentNotificationRouteTransactionOptions = {
+	isRouteHandled(routeKey: string): boolean;
+	consumeAuthorizedRouteToken(
+		connectionId: string,
+		session: string,
+		windowId: string,
+		eventId: string,
+		tapToken: string,
+	): boolean;
+	restoreAuthorizedRouteToken?(
+		connectionId: string,
+		session: string,
+		windowId: string,
+		eventId: string,
+		tapToken: string,
+	): boolean;
+	runWorkmuxCommand(argv: string[], timeoutMs: number): Promise<string>;
+	warn(message: string, error: unknown): void;
 };
 
 export function resolveAgentNotificationRoute(input: {
@@ -96,12 +124,18 @@ export function resolveAgentNotificationRoute(input: {
 	}
 	if (!input.agentEventId || !input.agentTapToken) return null;
 	const session = input.agentSession || input.tmuxTarget.trim() || 'main';
-	return {
+	return Object.freeze({
 		connectionId,
 		session,
 		windowId: input.agentWindowId,
 		eventId: input.agentEventId,
 		tapToken: input.agentTapToken,
+		routeKey: createAgentNotificationRouteIdentityKey({
+			connectionId,
+			session,
+			windowId: input.agentWindowId,
+			eventId: input.agentEventId,
+		}),
 		authorizationIdentityKey: JSON.stringify([
 			connectionId,
 			session,
@@ -109,7 +143,97 @@ export function resolveAgentNotificationRoute(input: {
 			input.agentEventId,
 			input.agentTapToken,
 		]),
-	};
+	});
+}
+
+function warnRouteBestEffort(
+	warn: (message: string, error: unknown) => void,
+	message: string,
+	error: unknown,
+): void {
+	try {
+		warn(message, error);
+	} catch {
+		// Notification routing must remain best effort.
+	}
+}
+
+function restoreResolvedAgentNotificationRouteTransaction(
+	transaction: ResolvedAgentNotificationRoute,
+	restoreAuthorizedRouteToken:
+		| ResolvedAgentNotificationRouteTransactionOptions['restoreAuthorizedRouteToken']
+		| undefined,
+	warn: (message: string, error: unknown) => void,
+): boolean {
+	if (!restoreAuthorizedRouteToken) return false;
+	try {
+		return restoreAuthorizedRouteToken(
+			transaction.connectionId,
+			transaction.session,
+			transaction.windowId,
+			transaction.eventId,
+			transaction.tapToken,
+		);
+	} catch (error) {
+		warnRouteBestEffort(
+			warn,
+			'failed to restore agent notification route token',
+			error,
+		);
+		return false;
+	}
+}
+
+export async function executeResolvedAgentNotificationRouteTransaction(
+	transaction: ResolvedAgentNotificationRoute,
+	options: ResolvedAgentNotificationRouteTransactionOptions,
+): Promise<AgentNotificationRouteTransactionOutcome> {
+	if (options.isRouteHandled(transaction.routeKey)) {
+		return { kind: 'duplicate' };
+	}
+	try {
+		if (
+			!options.consumeAuthorizedRouteToken(
+				transaction.connectionId,
+				transaction.session,
+				transaction.windowId,
+				transaction.eventId,
+				transaction.tapToken,
+			)
+		) {
+			return { kind: 'not-authorized' };
+		}
+	} catch (error) {
+		warnRouteBestEffort(
+			options.warn,
+			'failed to consume agent notification route token',
+			error,
+		);
+		return { kind: 'not-authorized' };
+	}
+
+	try {
+		await options.runWorkmuxCommand(
+			buildWorkmuxAppNotificationOpenArgv(
+				transaction.session,
+				transaction.windowId,
+			),
+			10_000,
+		);
+		return { kind: 'selected' };
+	} catch (error) {
+		const restored = restoreResolvedAgentNotificationRouteTransaction(
+			transaction,
+			options.restoreAuthorizedRouteToken,
+			options.warn,
+		);
+		warnRouteBestEffort(
+			options.warn,
+			'failed to select agent notification window',
+			error,
+		);
+		return { kind: restored ? 'failed-restored' : 'failed-not-restored' };
+	}
 }
 
 const pendingListeners = new Set<() => void>();
@@ -157,60 +281,32 @@ export async function handleAgentNotificationRoute({
 		tmuxTarget,
 	});
 	if (!resolved) return false;
-	const {
-		connectionId: notificationConnectionId,
-		session,
-		windowId,
-		eventId,
-		tapToken,
-	} = resolved;
-	const routeKey = createAgentNotificationRouteIdentityKey({
-		connectionId: notificationConnectionId,
-		session,
-		windowId,
-		eventId,
-	});
-	if (isRouteHandled(routeKey)) return false;
-	let consumedRouteToken = false;
+	const outcome = await executeResolvedAgentNotificationRouteTransaction(
+		resolved,
+		{
+			isRouteHandled,
+			consumeAuthorizedRouteToken,
+			restoreAuthorizedRouteToken,
+			runWorkmuxCommand,
+			warn,
+		},
+	);
+	if (outcome.kind !== 'selected') return false;
 	try {
-		consumedRouteToken = consumeAuthorizedRouteToken(
-			notificationConnectionId,
-			session,
-			windowId,
-			eventId,
-			tapToken,
-		);
-	} catch (error) {
-		warn('failed to consume agent notification route token', error);
-		return false;
-	}
-	if (!consumedRouteToken) {
-		return false;
-	}
-
-	try {
-		await runWorkmuxCommand(
-			buildWorkmuxAppNotificationOpenArgv(session, windowId),
-			10_000,
-		);
-		markRouteHandled(routeKey);
-		acknowledge(notificationConnectionId, session, windowId);
+		markRouteHandled(resolved.routeKey);
+		acknowledge(resolved.connectionId, resolved.session, resolved.windowId);
 		return true;
 	} catch (error) {
-		if (restoreAuthorizedRouteToken) {
-			try {
-				restoreAuthorizedRouteToken(
-					notificationConnectionId,
-					session,
-					windowId,
-					eventId,
-					tapToken,
-				);
-			} catch (restoreError) {
-				warn('failed to restore agent notification route token', restoreError);
-			}
-		}
-		warn('failed to select agent notification window', error);
+		restoreResolvedAgentNotificationRouteTransaction(
+			resolved,
+			restoreAuthorizedRouteToken,
+			warn,
+		);
+		warnRouteBestEffort(
+			warn,
+			'failed to select agent notification window',
+			error,
+		);
 		return false;
 	}
 }

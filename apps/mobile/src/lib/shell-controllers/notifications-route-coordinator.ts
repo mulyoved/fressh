@@ -1,11 +1,11 @@
 import {
-	handleAgentNotificationRoute,
+	executeResolvedAgentNotificationRouteTransaction,
 	resolveAgentNotificationRoute,
+	type AgentNotificationRouteTransactionOutcome,
 	type ResolvedAgentNotificationRoute,
 } from '../agent-notification-visibility';
 import { type ControllerInvalidationReason } from './controller-core';
 import {
-	type ShellNotificationContext,
 	type ShellNotificationRoute,
 	type ShellNotificationsState,
 } from './notifications-core';
@@ -13,13 +13,11 @@ import {
 type RetryBudget = 'restoration-available' | 'none';
 
 type RouteRequest = {
-	route: ShellNotificationRoute;
-	context: ShellNotificationContext;
 	contextRevision: number;
 	generation: number;
 	sequence: number;
 	rawIdentityKey: string;
-	resolved: ResolvedAgentNotificationRoute | null;
+	transaction: ResolvedAgentNotificationRoute | null;
 	retryBudget: RetryBudget;
 	blockedByInvalidation: boolean;
 };
@@ -33,14 +31,13 @@ type AttemptOutcome =
 	| 'unauthorized';
 
 type AttemptPhase =
-	| { kind: 'authorizing' }
-	| { kind: 'lease-consumed'; lease: ResolvedAgentNotificationRoute }
-	| { kind: 'lease-restored'; lease: ResolvedAgentNotificationRoute }
-	| { kind: 'restoration-failed'; lease: ResolvedAgentNotificationRoute }
+	| { kind: 'executing' }
+	| { kind: 'selected'; transaction: ResolvedAgentNotificationRoute }
+	| { kind: 'failed-restored'; transaction: ResolvedAgentNotificationRoute }
+	| { kind: 'failed-not-restored'; transaction: ResolvedAgentNotificationRoute }
 	| {
 			kind: 'committed';
-			lease: ResolvedAgentNotificationRoute;
-			routeKey: string;
+			transaction: ResolvedAgentNotificationRoute;
 	  }
 	| { kind: 'settled'; outcome: AttemptOutcome };
 
@@ -101,18 +98,18 @@ export function createShellNotificationRouteCoordinator(input: {
 		]);
 
 	const equivalentIdentity = (
-		left: Pick<RouteRequest, 'resolved' | 'rawIdentityKey'>,
-		right: Pick<RouteRequest, 'resolved' | 'rawIdentityKey'>,
+		left: Pick<RouteRequest, 'transaction' | 'rawIdentityKey'>,
+		right: Pick<RouteRequest, 'transaction' | 'rawIdentityKey'>,
 	): boolean => {
-		if (left.resolved && right.resolved) {
+		if (left.transaction && right.transaction) {
 			return (
-				left.resolved.authorizationIdentityKey ===
-				right.resolved.authorizationIdentityKey
+				left.transaction.authorizationIdentityKey ===
+				right.transaction.authorizationIdentityKey
 			);
 		}
 		return (
-			!left.resolved &&
-			!right.resolved &&
+			!left.transaction &&
+			!right.transaction &&
 			left.rawIdentityKey === right.rawIdentityKey
 		);
 	};
@@ -122,24 +119,29 @@ export function createShellNotificationRouteCoordinator(input: {
 		right: RouteRequest,
 	): boolean =>
 		Boolean(
-			left.resolved &&
-				right.resolved &&
-				left.resolved.authorizationIdentityKey ===
-					right.resolved.authorizationIdentityKey,
+			left.transaction &&
+				right.transaction &&
+				left.transaction.authorizationIdentityKey ===
+					right.transaction.authorizationIdentityKey,
 		);
 
 	const currentRequest = (route: ShellNotificationRoute): RouteRequest => {
 		const snapshot = input.getSnapshot();
 		const context = { ...snapshot.context };
+		const routeSnapshot: ShellNotificationRoute = {
+			agentConnectionId: route.agentConnectionId,
+			agentSession: route.agentSession,
+			agentWindowId: route.agentWindowId,
+			agentEventId: route.agentEventId,
+			agentTapToken: route.agentTapToken,
+		};
 		return {
-			route,
-			context,
 			contextRevision: snapshot.contextRevision,
 			generation: snapshot.generation,
 			sequence: 0,
-			rawIdentityKey: rawIdentityKey(route),
-			resolved: resolveAgentNotificationRoute({
-				...route,
+			rawIdentityKey: rawIdentityKey(routeSnapshot),
+			transaction: resolveAgentNotificationRoute({
+				...routeSnapshot,
 				storedConnectionId: context.storedConnectionId,
 				tmuxTarget: context.tmuxTarget,
 			}),
@@ -178,106 +180,65 @@ export function createShellNotificationRouteCoordinator(input: {
 				attempt.request.contextRevision === contextRevision,
 		);
 
-	const transitionConsume = (
+	const commitSelected = (
 		attempt: ActiveAttempt,
-		lease: ResolvedAgentNotificationRoute,
-	): boolean => {
-		if (attempt.phase.kind !== 'authorizing') return false;
-		const consumed = input.consumeAuthorizedRouteToken(
-			lease.connectionId,
-			lease.session,
-			lease.windowId,
-			lease.eventId,
-			lease.tapToken,
-		);
-		if (consumed) attempt.phase = { kind: 'lease-consumed', lease };
-		return consumed;
-	};
-
-	const transitionRestore = (
-		attempt: ActiveAttempt,
-		lease: ResolvedAgentNotificationRoute,
-	): boolean => {
-		if (attempt.phase.kind !== 'lease-consumed') return false;
+		transaction: ResolvedAgentNotificationRoute,
+	): AttemptOutcome => {
+		attempt.phase = { kind: 'selected', transaction };
+		if (!isRequestCurrent(attempt.request)) return 'stale-success';
+		attempt.phase = { kind: 'committed', transaction };
 		try {
-			const restored = input.restoreAuthorizedRouteToken(
-				lease.connectionId,
-				lease.session,
-				lease.windowId,
-				lease.eventId,
-				lease.tapToken,
-			);
-			attempt.phase = restored
-				? { kind: 'lease-restored', lease }
-				: { kind: 'restoration-failed', lease };
-			return restored;
-		} catch (error) {
-			attempt.phase = { kind: 'restoration-failed', lease };
-			throw error;
-		}
-	};
-
-	const transitionCommit = (attempt: ActiveAttempt, routeKey: string): void => {
-		if (attempt.phase.kind !== 'lease-consumed') return;
-		if (!isRequestCurrent(attempt.request)) return;
-		const lease = attempt.phase.lease;
-		attempt.phase = { kind: 'committed', lease, routeKey };
-		try {
-			input.publishHandled(routeKey);
+			input.publishHandled(transaction.routeKey);
 		} catch (error) {
 			input.warn('agent notification route state publication failed', error);
 		}
+		try {
+			input.acknowledge(
+				transaction.connectionId,
+				transaction.session,
+				transaction.windowId,
+			);
+		} catch (error) {
+			input.warn('agent notification route acknowledge failed', error);
+		}
+		return 'committed';
 	};
 
-	const outcomeFor = (
-		phase: AttemptPhase,
-		helperHandled: boolean,
+	const mapTransactionOutcome = (
+		attempt: ActiveAttempt,
+		transaction: ResolvedAgentNotificationRoute,
+		outcome: AgentNotificationRouteTransactionOutcome,
 	): AttemptOutcome => {
-		switch (phase.kind) {
-			case 'committed':
-				return 'committed';
-			case 'lease-restored':
+		switch (outcome.kind) {
+			case 'selected':
+				return commitSelected(attempt, transaction);
+			case 'failed-restored':
+				attempt.phase = { kind: 'failed-restored', transaction };
 				return 'restored';
-			case 'restoration-failed':
+			case 'failed-not-restored':
+				attempt.phase = { kind: 'failed-not-restored', transaction };
 				return 'restoration-failed';
-			case 'lease-consumed':
-				return helperHandled ? 'stale-success' : 'failed';
-			case 'authorizing':
+			case 'duplicate':
+			case 'not-authorized':
 				return 'unauthorized';
-			case 'settled':
-				return phase.outcome;
 		}
 	};
 
 	async function runAttempt(attempt: ActiveAttempt): Promise<AttemptOutcome> {
-		const { route, context } = attempt.request;
-		const helperHandled = await handleAgentNotificationRoute({
-			...route,
-			storedConnectionId: context.storedConnectionId,
-			tmuxTarget: context.tmuxTarget,
-			isRouteHandled: (routeKey) =>
-				input.getSnapshot().handledRouteKey === routeKey,
-			markRouteHandled: (routeKey) => transitionCommit(attempt, routeKey),
-			consumeAuthorizedRouteToken: () =>
-				attempt.request.resolved
-					? transitionConsume(attempt, attempt.request.resolved)
-					: false,
-			restoreAuthorizedRouteToken: () =>
-				attempt.request.resolved
-					? transitionRestore(attempt, attempt.request.resolved)
-					: false,
-			runWorkmuxCommand: input.runWorkmuxCommand,
-			acknowledge: (connectionId, session, windowId) => {
-				if (attempt.phase.kind !== 'committed') return;
-				try {
-					input.acknowledge(connectionId, session, windowId);
-				} catch (error) {
-					input.warn('agent notification route acknowledge failed', error);
-				}
+		const { transaction } = attempt.request;
+		if (!transaction) return 'unauthorized';
+		const outcome = await executeResolvedAgentNotificationRouteTransaction(
+			transaction,
+			{
+				isRouteHandled: (routeKey) =>
+					input.getSnapshot().handledRouteKey === routeKey,
+				consumeAuthorizedRouteToken: input.consumeAuthorizedRouteToken,
+				restoreAuthorizedRouteToken: input.restoreAuthorizedRouteToken,
+				runWorkmuxCommand: input.runWorkmuxCommand,
+				warn: input.warn,
 			},
-			warn: input.warn,
-		});
-		return outcomeFor(attempt.phase, helperHandled);
+		);
+		return mapTransactionOutcome(attempt, transaction, outcome);
 	}
 
 	function promoteAfter(attempt: ActiveAttempt, outcome: AttemptOutcome): void {
@@ -317,7 +278,7 @@ export function createShellNotificationRouteCoordinator(input: {
 		});
 		const attempt: ActiveAttempt = {
 			request,
-			phase: { kind: 'authorizing' },
+			phase: { kind: 'executing' },
 			promise,
 		};
 		active = attempt;
@@ -373,6 +334,9 @@ export function createShellNotificationRouteCoordinator(input: {
 						invalidationReason === 'unmount')
 				) {
 					invalidationReason = null;
+					if (active.request.generation !== request.generation) {
+						active.request.sequence = ++latestSequence;
+					}
 					active.request.generation = request.generation;
 					return callerPromise(
 						active,

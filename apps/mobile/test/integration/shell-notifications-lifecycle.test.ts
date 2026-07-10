@@ -1,7 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+	createShellNotificationsControllerCore,
+	type ShellNotificationContext,
+	type ShellNotificationRoute,
+} from '../../src/lib/shell-controllers/notifications-core';
+import {
 	createShellNotificationAutomaticAcknowledger,
+	createShellNotificationHookOrchestrator,
 	createShellNotificationRouteEffectKey,
 	setupShellNotificationActivityEffect,
 	setupShellNotificationPendingEffect,
@@ -14,6 +20,103 @@ import {
 	buildWorkmuxWindowOutput,
 	createNotificationsHarness,
 } from './shell-notifications-test-support';
+
+void test('hook orchestration commits latest input before context and route effects', async () => {
+	type Observation = 'initial' | 'latest';
+	type HookInput = {
+		activity: { getSnapshot(): { marker: Observation } };
+		context: ShellNotificationContext;
+		route: ShellNotificationRoute;
+		runWorkmuxCommand(argv: string[], timeoutMs: number): Promise<string>;
+		logger: { warn(message: string, error: unknown): void };
+	};
+	const harness = createNotificationsHarness();
+	const observations: Observation[] = [];
+	const warnings: Observation[] = [];
+	const consumed: string[] = [];
+	const initialContext = harness.context({ storedConnectionId: null });
+	const initial: HookInput = {
+		activity: {
+			getSnapshot: () => {
+				observations.push('initial');
+				return { marker: 'initial' };
+			},
+		},
+		context: initialContext,
+		route: { ...harness.validRoute(), agentConnectionId: null },
+		runWorkmuxCommand: async () => {
+			observations.push('initial');
+			return '';
+		},
+		logger: { warn: () => warnings.push('initial') },
+	};
+	const orchestrator = createShellNotificationHookOrchestrator(initial);
+	const initialRouteEffectKey = orchestrator.createRouteEffectKey(initial);
+	const core = createShellNotificationsControllerCore({
+		activity: {
+			getSnapshot: () => ({
+				focused: true,
+				appState: 'active',
+				appActive: true,
+				interactive: true,
+				generation: 0,
+			}),
+		},
+		context: initialContext,
+		platformOS: 'android',
+		runWorkmuxCommand: (argv, timeoutMs) =>
+			orchestrator.getCommittedInput().runWorkmuxCommand(argv, timeoutMs),
+		consumeAuthorizedRouteToken: (
+			connectionId,
+			session,
+			windowId,
+			eventId,
+			tapToken,
+		) => {
+			consumed.push(
+				JSON.stringify([connectionId, session, windowId, eventId, tapToken]),
+			);
+			return true;
+		},
+		restoreAuthorizedRouteToken: () => false,
+		acknowledge: () => {
+			throw new Error('observe latest logger');
+		},
+		warn: (message, error) =>
+			orchestrator.getCommittedInput().logger.warn(message, error),
+	});
+	const latest: HookInput = {
+		activity: {
+			getSnapshot: () => {
+				observations.push('latest');
+				return { marker: 'latest' };
+			},
+		},
+		context: harness.context(),
+		route: { ...harness.validRoute(), agentConnectionId: null },
+		runWorkmuxCommand: async () => {
+			observations.push('latest');
+			return '';
+		},
+		logger: { warn: () => warnings.push('latest') },
+	};
+	const latestRouteEffectKey = orchestrator.createRouteEffectKey(latest);
+	assert.notEqual(latestRouteEffectKey, initialRouteEffectKey);
+
+	orchestrator.commitLayout(latest, core.setContext, () => {
+		orchestrator.getCommittedInput().activity.getSnapshot();
+	});
+	await orchestrator.dispatchRoutePassive(core.handleRoute, (input) => {
+		input.logger.warn('route failed', new Error('route failed'));
+	});
+
+	assert.equal(core.getSnapshot().context.storedConnectionId, 'saved-host');
+	assert.deepEqual(consumed, [
+		'["saved-host","main","@12","event-1","token-1"]',
+	]);
+	assert.deepEqual(observations, ['latest', 'latest']);
+	assert.deepEqual(warnings, ['latest']);
+});
 
 void test('notification route effect identity changes for every context field', async (t) => {
 	const harness = createNotificationsHarness();

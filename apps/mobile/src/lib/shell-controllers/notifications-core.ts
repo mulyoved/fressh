@@ -299,6 +299,7 @@ export function createShellNotificationsControllerCore({
 				settleObsolete();
 				epochInvalidated = false;
 			}
+			routeCoordinator.contextChanged();
 			publisher.publish({
 				...current,
 				context,
@@ -307,7 +308,6 @@ export function createShellNotificationsControllerCore({
 				acknowledgeInFlight: inFlight,
 				acknowledgeQueued: queued,
 			});
-			routeCoordinator.contextChanged();
 		},
 		acknowledgeVisible,
 		notifyPending: () => {

@@ -631,6 +631,100 @@ void test('distinct authorized routes serialize physical commands in request ord
 	);
 });
 
+void test('queued route snapshots caller-owned fields before promotion', async () => {
+	const harness = createMultiIdentityHarness();
+	const first = harness.core.handleRoute(harness.validRoute());
+	const queuedRoute = secondAuthorizedRoute(harness);
+	const second = harness.core.handleRoute(queuedRoute);
+
+	queuedRoute.agentConnectionId = 'mutated-host';
+	queuedRoute.agentSession = 'mutated-session';
+	queuedRoute.agentWindowId = '@99';
+	queuedRoute.agentEventId = 'mutated-event';
+	queuedRoute.agentTapToken = 'mutated-token';
+	harness.routeCommands[0]?.resolve('');
+	await harness.tick();
+
+	assert.equal(harness.routeCommands.length, 2);
+	assert.deepEqual(harness.routeCommands[1]?.argv, [
+		'tmux',
+		'app',
+		'notification',
+		'open',
+		'--session',
+		'main',
+		'--window-id',
+		'@13',
+	]);
+	harness.routeCommands[1]?.resolve('');
+	assert.deepEqual(await Promise.all([first, second]), [false, true]);
+	assert.deepEqual(harness.consumedRouteIdentities, [
+		authorizationIdentity('@12', 'event-1', 'token-1'),
+		authorizationIdentity('@13', 'event-2', 'token-2'),
+	]);
+	assert.deepEqual(harness.acknowledgements, [
+		{ connectionId: 'saved-host', session: 'main', windowId: '@13' },
+	]);
+	assert.equal(
+		harness.core.getSnapshot().handledRouteKey,
+		'["saved-host","main","@13","event-2"]',
+	);
+});
+
+void test('context subscriber can enqueue the new revision before old route settles', async () => {
+	const harness = createMultiIdentityHarness();
+	const first = harness.core.handleRoute(harness.validRoute());
+	let second: Promise<boolean> | null = null;
+	let observedRevision = 0;
+	const unsubscribe = harness.core.subscribe(() => {
+		const snapshot = harness.core.getSnapshot();
+		if (snapshot.contextRevision === 1 && !second) {
+			observedRevision = snapshot.contextRevision;
+			second = harness.core.handleRoute(secondAuthorizedRoute(harness));
+		}
+	});
+	const context = harness.core.getSnapshot().context;
+	harness.core.setContext({ ...context, channelId: context.channelId + 1 });
+	assert.equal(observedRevision, 1);
+	assert.ok(second);
+
+	harness.routeCommands[0]?.resolve('');
+	await harness.tick();
+	assert.equal(harness.routeCommands.length, 2);
+	harness.routeCommands[1]?.resolve('');
+	assert.deepEqual(await Promise.all([first, second]), [false, true]);
+	assert.deepEqual(harness.acknowledgements, [
+		{ connectionId: 'saved-host', session: 'main', windowId: '@13' },
+	]);
+	unsubscribe();
+});
+
+void test('unmount replay refreshes sequence after a distinct queue was cancelled', async () => {
+	const harness = createMultiIdentityHarness();
+	const route = harness.validRoute();
+	const original = harness.core.handleRoute(route);
+	const queued = harness.core.handleRoute(secondAuthorizedRoute(harness));
+	harness.core.invalidate('unmount');
+	const replay = harness.core.handleRoute(route);
+
+	assert.deepEqual(harness.consumedTokens, ['token-1']);
+	assert.equal(harness.routeCommands.length, 1);
+	harness.routeCommands[0]?.resolve('');
+	assert.deepEqual(await Promise.all([original, queued, replay]), [
+		false,
+		false,
+		true,
+	]);
+	assert.equal(harness.routeCommands.length, 1);
+	assert.deepEqual(harness.acknowledgements, [
+		{ connectionId: 'saved-host', session: 'main', windowId: '@12' },
+	]);
+	assert.equal(
+		harness.core.getSnapshot().handledRouteKey,
+		'["saved-host","main","@12","event-1"]',
+	);
+});
+
 void test('invalidation or disposal settles a distinct serialized route queue', async (t) => {
 	for (const action of ['invalidate', 'dispose'] as const) {
 		await t.test(action, async () => {
