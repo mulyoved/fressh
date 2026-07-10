@@ -5,7 +5,8 @@ import {
 } from './controller-core';
 
 export type ShellActivityRetainedDomainActions = {
-	resume(snapshot: ShellActivitySnapshot): void;
+	setupInitialKeyboard(snapshot: ShellActivitySnapshot): void;
+	resumeFromAppState(snapshot: ShellActivitySnapshot): void;
 	invalidateRetainedDomains(): void;
 	invalidateBrowserActions(): void;
 	closeBrowserActions(): void;
@@ -84,9 +85,10 @@ export function createShellActivityRetainedDomainBridge(
 			const appBecameInactive = initialReconciliation
 				? !snapshot.appActive
 				: previous.appActive && !snapshot.appActive;
-			const shouldRestoreKeyboard =
-				(initialReconciliation && snapshot.interactive) ||
-				(!initialReconciliation && !previous.appActive && snapshot.appActive);
+			const shouldSetupInitialKeyboard =
+				initialReconciliation && snapshot.interactive;
+			const appBecameActive =
+				!initialReconciliation && !previous.appActive && snapshot.appActive;
 			const actions = getActions();
 			if (focusLost || appBecameInactive) {
 				actions.cancelPendingResumeDismiss();
@@ -97,8 +99,10 @@ export function createShellActivityRetainedDomainBridge(
 			) {
 				actions.invalidateRetainedDomains();
 			}
-			if (shouldRestoreKeyboard) {
-				actions.resume(snapshot);
+			if (shouldSetupInitialKeyboard) {
+				actions.setupInitialKeyboard(snapshot);
+			} else if (appBecameActive) {
+				actions.resumeFromAppState(snapshot);
 			}
 			if (!focusLost && !appBecameInactive) return;
 
@@ -107,8 +111,8 @@ export function createShellActivityRetainedDomainBridge(
 				actions.closeBrowserActions();
 				actions.invalidateScrollbackRequests();
 			}
+			actions.invalidateKeyboardRunner();
 			if (appBecameInactive) {
-				actions.invalidateKeyboardRunner();
 				void actions.runInactiveScrollbackCleanup(snapshot);
 				actions.rememberKeyboardVisibility();
 			} else {

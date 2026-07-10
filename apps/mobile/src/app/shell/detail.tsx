@@ -2823,7 +2823,14 @@ function ShellDetail() {
 		}),
 	);
 	const retainedDomainActions: ShellActivityRetainedDomainActions = {
-		resume: () => {
+		setupInitialKeyboard: () => {
+			if (Platform.OS !== 'android') return;
+			Keyboard.dismiss();
+			xtermRef.current?.setSystemKeyboardEnabled(
+				systemKeyboardEnabledRef.current,
+			);
+		},
+		resumeFromAppState: () => {
 			const isAndroid = Platform.OS === 'android';
 			if (isAndroid) {
 				xtermRef.current?.setSystemKeyboardEnabled(
