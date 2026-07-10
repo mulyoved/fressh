@@ -124,6 +124,7 @@ type RequestCompletionToken = {
 type ManagedRequestId = RequestIdHandle & {
 	prepare(capture: RequestCapture): void;
 	beginCompletion(capture: RequestCapture): RequestCompletionToken;
+	isCompletionCurrent(token: RequestCompletionToken): boolean;
 	complete(token: RequestCompletionToken): void;
 	cancelPrepared(token?: RequestCompletionToken): void;
 };
@@ -202,6 +203,12 @@ function createManagedRequestId(input: {
 			prepare(requestCapture, token);
 			return token;
 		},
+		isCompletionCurrent: (token) =>
+			token.requestId !== null &&
+			token.requestId === currentId &&
+			currentCompletion === token &&
+			currentCapture !== null &&
+			input.isCaptureCurrent(currentCapture),
 		complete: (token) => {
 			token.resolve();
 			if (currentCompletion === token) currentCompletion = null;
@@ -230,18 +237,25 @@ export function createBrowserActionsControllerCore(
 		!disposed &&
 		request.generation === generation &&
 		request.sourceKey === sourceKey;
-	const assertCurrent = (request: RequestCapture) => {
-		if (!isCaptureCurrent(request)) {
+	const assertCurrent = (
+		request: RequestCapture,
+		isInvocationCurrent?: () => boolean,
+	) => {
+		if (
+			!isCaptureCurrent(request) ||
+			(isInvocationCurrent && !isInvocationCurrent())
+		) {
 			throw new SupersededBrowserActionError();
 		}
 	};
 	const guardedAwait = async <T>(
 		request: RequestCapture,
 		work: () => Promise<T>,
+		isInvocationCurrent?: () => boolean,
 	): Promise<T> => {
-		assertCurrent(request);
+		assertCurrent(request, isInvocationCurrent);
 		const value = await work();
-		assertCurrent(request);
+		assertCurrent(request, isInvocationCurrent);
 		return value;
 	};
 	const publish = (next: BrowserActionsState) => {
@@ -269,15 +283,24 @@ export function createBrowserActionsControllerCore(
 		request: RequestCapture,
 		command: string,
 		timeoutMs = 30_000,
+		isInvocationCurrent?: () => boolean,
 	) =>
-		guardedAwait(request, () => deps.runHostBrowserCommand(command, timeoutMs));
+		guardedAwait(
+			request,
+			() => deps.runHostBrowserCommand(command, timeoutMs),
+			isInvocationCurrent,
+		);
 	const runWorkmuxCommandFor = (
 		request: RequestCapture,
 		argv: string[],
 		timeoutMs: number,
 	) => guardedAwait(request, () => deps.runWorkmuxCommand(argv, timeoutMs));
-	const openAndroidUrlFor = (request: RequestCapture, url: string) =>
-		guardedAwait(request, () => deps.openAndroidUrl(url));
+	const openAndroidUrlFor = (
+		request: RequestCapture,
+		url: string,
+		isInvocationCurrent?: () => boolean,
+	) =>
+		guardedAwait(request, () => deps.openAndroidUrl(url), isInvocationCurrent);
 	const contextDependencies = (request: RequestCapture) => ({
 		tmuxEnabled: deps.getTmuxEnabled(),
 		tmuxTarget: deps.getTmuxTarget(),
@@ -299,14 +322,29 @@ export function createBrowserActionsControllerCore(
 		guardedAwait(request, () =>
 			resolveBrowserActionsWorkspace(contextDependencies(request)),
 		);
-	const resolveCurrentGitHubRepositoryContextFor = (request: RequestCapture) =>
-		guardedAwait(request, () =>
-			resolveGitHubRepositoryContext({
-				resolvePanePath: () => resolvePanePathFor(request),
-				runHostBrowserCommand: (command, timeoutMs) =>
-					runHostBrowserCommandFor(request, command, timeoutMs),
-				getErrorMessage: deps.getErrorMessage,
-			}),
+	const resolveCurrentGitHubRepositoryContextFor = (
+		request: RequestCapture,
+		isInvocationCurrent?: () => boolean,
+	) =>
+		guardedAwait(
+			request,
+			() =>
+				resolveGitHubRepositoryContext({
+					resolvePanePath: async () => {
+						const panePath = await resolvePanePathFor(request);
+						assertCurrent(request, isInvocationCurrent);
+						return panePath;
+					},
+					runHostBrowserCommand: (command, timeoutMs) =>
+						runHostBrowserCommandFor(
+							request,
+							command,
+							timeoutMs,
+							isInvocationCurrent,
+						),
+					getErrorMessage: deps.getErrorMessage,
+				}),
+			isInvocationCurrent,
 		);
 
 	const resetHostUrl = () => {
@@ -401,13 +439,18 @@ export function createBrowserActionsControllerCore(
 			resetDetectedOpen();
 			const request = capture();
 			const completion = browserGitHubTargetRequestId.beginCompletion(request);
+			const isInvocationCurrent = () =>
+				browserGitHubTargetRequestId.isCompletionCurrent(completion);
 			runGitHubTargetOpenRequest({
 				target,
 				requestId: browserGitHubTargetRequestId,
 				resolveRepositoryContext: () =>
-					resolveCurrentGitHubRepositoryContextFor(request),
+					resolveCurrentGitHubRepositoryContextFor(
+						request,
+						isInvocationCurrent,
+					),
 				openAndroidUrl: async (url) => {
-					await openAndroidUrlFor(request, url);
+					await openAndroidUrlFor(request, url, isInvocationCurrent);
 					browserGitHubTargetRequestId.complete(completion);
 				},
 				showError: (input) => {

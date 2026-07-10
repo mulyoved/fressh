@@ -96,6 +96,57 @@ void test('GitHub overlap keeps completion promises bound to their own platform 
 	await second;
 });
 
+void test('GitHub same-source supersession stops before the stale repository command', async () => {
+	const firstContext = deferred<string>();
+	const repositoryCommands: string[] = [];
+	const platformOpens: Deferred<void>[] = [];
+	let contextCalls = 0;
+	const core = createBrowserActionsControllerCore({
+		initialSourceKey: sourceKey,
+		requestOpen: (onOpen) => {
+			onOpen();
+			return true;
+		},
+		getTmuxEnabled: () => true,
+		getTmuxTarget: () => 'main',
+		runHostBrowserCommand: async (command) => {
+			repositoryCommands.push(command);
+			return 'git@github.com:mulyoved/fressh.git';
+		},
+		runWorkmuxCommand: async () => {
+			contextCalls += 1;
+			return contextCalls === 1 ? firstContext.promise : workmuxContext;
+		},
+		openAndroidUrl: () => {
+			const pending = deferred<void>();
+			platformOpens.push(pending);
+			return pending.promise;
+		},
+		showError: () => {},
+		getErrorMessage: String,
+	});
+
+	const first = core.openGitHubTarget('issues');
+	await settled();
+	const second = core.openGitHubTarget('pulls');
+	await settled();
+	let secondSettled = false;
+	void second.then(() => {
+		secondSettled = true;
+	});
+
+	await first;
+	assert.equal(repositoryCommands.length, 1);
+	assert.equal(platformOpens.length, 1);
+	firstContext.resolve(workmuxContext);
+	await settled();
+	assert.equal(repositoryCommands.length, 1);
+	assert.equal(platformOpens.length, 1);
+	assert.equal(secondSettled, false);
+	platformOpens[0]!.resolve();
+	await second;
+});
+
 void test('Diffity overlap keeps completion promises bound across invalidation', async () => {
 	const platformOpens: Deferred<void>[] = [];
 	const core = createBrowserActionsControllerCore({
