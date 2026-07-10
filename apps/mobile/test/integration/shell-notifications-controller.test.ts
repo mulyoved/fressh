@@ -5,6 +5,16 @@ import {
 	createNotificationsHarness,
 } from './shell-notifications-test-support';
 
+function createDeferred<T>() {
+	let resolve!: (value: T) => void;
+	let reject!: (error: unknown) => void;
+	const promise = new Promise<T>((innerResolve, innerReject) => {
+		resolve = innerResolve;
+		reject = innerReject;
+	});
+	return { promise, reject, resolve };
+}
+
 void test('notification core coalesces concurrent visible acknowledgements', async () => {
 	const harness = createNotificationsHarness();
 	const first = harness.core.acknowledgeVisible();
@@ -24,6 +34,76 @@ void test('notification core coalesces concurrent visible acknowledgements', asy
 	assert.deepEqual(harness.acknowledgedWindowIds, ['@12', '@13']);
 	assert.equal(harness.core.getSnapshot().acknowledgeInFlight, false);
 	assert.equal(harness.core.getSnapshot().acknowledgeQueued, false);
+});
+
+void test('visible acknowledgement promotes only the replacement port after stale success', async () => {
+	const harness = createNotificationsHarness();
+	const replacementCommands: ReturnType<typeof createDeferred<string>>[] = [];
+	const replacementPort = () => {
+		const command = createDeferred<string>();
+		replacementCommands.push(command);
+		return command.promise;
+	};
+	const old = harness.core.acknowledgeVisible();
+	harness.replaceCommandPort(replacementPort);
+	const replacement = harness.core.acknowledgeVisible();
+	harness.windowCommands[0]?.resolve(buildWorkmuxWindowOutput('@12'));
+	await harness.tick();
+	assert.equal(replacementCommands.length, 1);
+	replacementCommands[0]?.resolve(buildWorkmuxWindowOutput('@13'));
+	await Promise.all([old, replacement]);
+
+	assert.deepEqual(harness.acknowledgedWindowIds, ['@13']);
+});
+
+void test('visible acknowledgement contains old-port failure before latest lookup', async () => {
+	const harness = createNotificationsHarness();
+	const replacementCommands: ReturnType<typeof createDeferred<string>>[] = [];
+	const replacementPort = () => {
+		const command = createDeferred<string>();
+		replacementCommands.push(command);
+		return command.promise;
+	};
+	const old = harness.core.acknowledgeVisible();
+	harness.replaceCommandPort(replacementPort);
+	const replacement = harness.core.acknowledgeVisible();
+	harness.windowCommands[0]?.reject(new Error('old port failed'));
+	await harness.tick();
+	assert.equal(replacementCommands.length, 1);
+	replacementCommands[0]?.resolve(buildWorkmuxWindowOutput('@13'));
+	await Promise.all([old, replacement]);
+
+	assert.deepEqual(harness.acknowledgedWindowIds, ['@13']);
+});
+
+void test('visible acknowledgement promotes only the newest already-queued port', async () => {
+	const harness = createNotificationsHarness();
+	const firstReplacementCommands: ReturnType<typeof createDeferred<string>>[] =
+		[];
+	const latestCommands: ReturnType<typeof createDeferred<string>>[] = [];
+	const firstReplacementPort = () => {
+		const command = createDeferred<string>();
+		firstReplacementCommands.push(command);
+		return command.promise;
+	};
+	const latestPort = () => {
+		const command = createDeferred<string>();
+		latestCommands.push(command);
+		return command.promise;
+	};
+	const old = harness.core.acknowledgeVisible();
+	harness.replaceCommandPort(firstReplacementPort);
+	const firstQueued = harness.core.acknowledgeVisible();
+	harness.replaceCommandPort(latestPort);
+	const latestQueued = harness.core.acknowledgeVisible();
+	harness.windowCommands[0]?.resolve(buildWorkmuxWindowOutput('@12'));
+	await harness.tick();
+
+	assert.equal(firstReplacementCommands.length, 0);
+	assert.equal(latestCommands.length, 1);
+	latestCommands[0]?.resolve(buildWorkmuxWindowOutput('@14'));
+	await Promise.all([old, firstQueued, latestQueued]);
+	assert.deepEqual(harness.acknowledgedWindowIds, ['@14']);
 });
 
 void test('notification queued attempt stays stale across an activity round trip', async () => {

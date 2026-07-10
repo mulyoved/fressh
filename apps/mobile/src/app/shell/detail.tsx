@@ -91,6 +91,7 @@ import {
 	reloadRuntimeShellConfigFromRemote,
 } from '@/lib/shell-config-store-native';
 import { useShellActivityController } from '@/lib/shell-controllers/activity';
+import { createShellActivityKeyboardActions } from '@/lib/shell-controllers/activity-keyboard-actions';
 import {
 	createShellActivityRetainedDomainBridge,
 	createShellKeyboardResumeDismissScheduler,
@@ -2822,32 +2823,24 @@ function ShellDetail() {
 			cancel: (timer) => clearTimeout(timer),
 		}),
 	);
+	const [keyboardActivityActions] = useState(() =>
+		createShellActivityKeyboardActions({
+			platformOS: Platform.OS,
+			getSystemKeyboardEnabled: () => systemKeyboardEnabledRef.current,
+			getWasKeyboardVisible: () => lastKeyboardVisibleRef.current,
+			setKeyboardVisible: (visible) => {
+				systemKeyboardVisibleRef.current = visible;
+			},
+			setXtermSystemKeyboardEnabled: (enabled) => {
+				xtermRef.current?.setSystemKeyboardEnabled(enabled);
+			},
+			dismissKeyboard: () => Keyboard.dismiss(),
+			scheduleDelayedDismiss: keyboardResumeDismissScheduler.schedule,
+		}),
+	);
 	const retainedDomainActions: ShellActivityRetainedDomainActions = {
-		setupInitialKeyboard: () => {
-			if (Platform.OS !== 'android') return;
-			Keyboard.dismiss();
-			xtermRef.current?.setSystemKeyboardEnabled(
-				systemKeyboardEnabledRef.current,
-			);
-		},
-		resumeFromAppState: () => {
-			const isAndroid = Platform.OS === 'android';
-			if (isAndroid) {
-				xtermRef.current?.setSystemKeyboardEnabled(
-					systemKeyboardEnabledRef.current,
-				);
-				if (
-					!systemKeyboardEnabledRef.current ||
-					!lastKeyboardVisibleRef.current
-				) {
-					Keyboard.dismiss();
-					keyboardResumeDismissScheduler.schedule(() => {
-						Keyboard.dismiss();
-					});
-					systemKeyboardVisibleRef.current = false;
-				}
-			}
-		},
+		setupInitialKeyboard: keyboardActivityActions.setupInitialKeyboard,
+		resumeFromAppState: keyboardActivityActions.resumeFromAppState,
 		invalidateRetainedDomains: () => {
 			runtimeShellConfigReloadRequestIdRef.current += 1;
 			invalidateCodexRestartRequests();

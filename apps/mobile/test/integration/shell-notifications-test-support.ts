@@ -70,6 +70,7 @@ export function createNotificationsHarness(
 	const consumedRouteIdentities: string[] = [];
 	const restoredTokens: string[] = [];
 	const routeCommands: WindowCommand[] = [];
+	let commandPortRevision = 0;
 	const authorizedRouteIdentity = JSON.stringify([
 		'saved-host',
 		'main',
@@ -106,27 +107,30 @@ export function createNotificationsHarness(
 		};
 	};
 
+	const defaultCommandPort = (argv: string[], timeoutMs: number) => {
+		if (argv[2] === 'notification') {
+			const deferred = createDeferred<string>();
+			routeCommands.push({ ...deferred, argv, timeoutMs });
+			if (!options.deferRouteCommands) {
+				if (options.routeCommandError) {
+					deferred.reject(options.routeCommandError);
+				} else {
+					deferred.resolve('');
+				}
+			}
+			return deferred.promise;
+		}
+		const deferred = createDeferred<string>();
+		windowCommands.push({ ...deferred, argv, timeoutMs });
+		return deferred.promise;
+	};
+	let commandPort = defaultCommandPort;
 	const core = createShellNotificationsControllerCore({
 		activity,
 		context: context(),
 		platformOS: 'android',
-		runWorkmuxCommand: (argv, timeoutMs) => {
-			if (argv[2] === 'notification') {
-				const deferred = createDeferred<string>();
-				routeCommands.push({ ...deferred, argv, timeoutMs });
-				if (!options.deferRouteCommands) {
-					if (options.routeCommandError) {
-						deferred.reject(options.routeCommandError);
-					} else {
-						deferred.resolve('');
-					}
-				}
-				return deferred.promise;
-			}
-			const deferred = createDeferred<string>();
-			windowCommands.push({ ...deferred, argv, timeoutMs });
-			return deferred.promise;
-		},
+		getCommandPortRevision: () => commandPortRevision,
+		runWorkmuxCommand: (argv, timeoutMs) => commandPort(argv, timeoutMs),
 		consumeAuthorizedRouteToken: (
 			connectionId,
 			session,
@@ -191,6 +195,16 @@ export function createNotificationsHarness(
 		consumedRouteIdentities,
 		context,
 		core,
+		get commandPortRevision() {
+			return commandPortRevision;
+		},
+		replaceCommandPort: (
+			nextPort: (argv: string[], timeoutMs: number) => Promise<string>,
+		) => {
+			if (commandPort === nextPort) return;
+			commandPort = nextPort;
+			commandPortRevision++;
+		},
 		restoredTokens,
 		routeCommands,
 		tick: () => new Promise((resolve) => setTimeout(resolve, 0)),

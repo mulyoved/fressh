@@ -104,6 +104,15 @@ void test('shell detail delegates activity and notification lifecycle', () => {
 		'const enableSystemKeyboard',
 	);
 	assert.match(source, /createShellActivityRetainedDomainBridge/);
+	assert.match(source, /createShellActivityKeyboardActions/);
+	assert.match(
+		source,
+		/setupInitialKeyboard:\s*keyboardActivityActions\.setupInitialKeyboard/,
+	);
+	assert.match(
+		source,
+		/resumeFromAppState:\s*keyboardActivityActions\.resumeFromAppState/,
+	);
 	assert.match(activityBridge, /activity\.snapshot\.generation/);
 	assert.match(activityBridge, /activity\.snapshot\.focused/);
 	assert.match(activityBridge, /activity\.snapshot\.appState/);

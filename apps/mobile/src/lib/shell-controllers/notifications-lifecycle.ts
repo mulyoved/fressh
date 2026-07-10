@@ -11,17 +11,19 @@ export function createShellNotificationAutomaticAcknowledger(): {
 	request(
 		activity: ShellActivitySnapshot,
 		notifications: ShellNotificationsState,
+		commandPortRevision: number,
 		onRequest: () => void,
 	): boolean;
 } {
 	let lastRequestKey: string | null = null;
 	return {
-		request: (activity, notifications, onRequest) => {
+		request: (activity, notifications, commandPortRevision, onRequest) => {
 			if (!activity.interactive) return false;
 			const requestKey = JSON.stringify([
 				activity.generation,
 				notifications.generation,
 				notifications.contextRevision,
+				commandPortRevision,
 			]);
 			if (lastRequestKey === requestKey) return false;
 			lastRequestKey = requestKey;

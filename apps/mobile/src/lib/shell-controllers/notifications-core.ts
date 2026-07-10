@@ -49,7 +49,7 @@ export type CreateShellNotificationsControllerCoreInput = {
 	activity: { getSnapshot(): ShellActivitySnapshot };
 	context: ShellNotificationContext;
 	platformOS: string;
-	getCommandPortRevision?(): number;
+	getCommandPortRevision(): number;
 	runWorkmuxCommand(argv: string[], timeoutMs: number): Promise<string>;
 	consumeAuthorizedRouteToken(
 		connectionId: string,
@@ -76,6 +76,7 @@ type QueuedWaiter = {
 type AcknowledgementAttempt = Readonly<{
 	generation: number;
 	activityGeneration: number;
+	commandPortRevision: number;
 	context: Readonly<ShellNotificationContext>;
 }>;
 
@@ -106,7 +107,7 @@ export function createShellNotificationsControllerCore({
 	activity,
 	context: initialContext,
 	platformOS,
-	getCommandPortRevision = () => 0,
+	getCommandPortRevision,
 	runWorkmuxCommand,
 	consumeAuthorizedRouteToken,
 	restoreAuthorizedRouteToken,
@@ -178,12 +179,14 @@ export function createShellNotificationsControllerCore({
 	const captureAttempt = (): AcknowledgementAttempt => ({
 		generation,
 		activityGeneration: activity.getSnapshot().generation,
+		commandPortRevision: getCommandPortRevision(),
 		context: { ...publisher.getSnapshot().context },
 	});
 
 	const isAttemptCurrent = (attempt: AcknowledgementAttempt): boolean =>
 		!disposed &&
 		attempt.generation === generation &&
+		attempt.commandPortRevision === getCommandPortRevision() &&
 		activity.getSnapshot().generation === attempt.activityGeneration;
 
 	const runAttempt = async (attempt: AcknowledgementAttempt): Promise<void> => {

@@ -153,6 +153,7 @@ void test('hook orchestration commits latest input before context and route effe
 		},
 		context: initialContext,
 		platformOS: 'android',
+		getCommandPortRevision: orchestrator.getCommandPortRevision,
 		runWorkmuxCommand: (argv, timeoutMs) =>
 			orchestrator.getCommittedInput().runWorkmuxCommand(argv, timeoutMs),
 		consumeAuthorizedRouteToken: (
@@ -316,7 +317,12 @@ void test('automatic acknowledgement retries interactive stored connection hydra
 	};
 
 	assert.equal(
-		automaticAcknowledger.request(activity, unavailable, request),
+		automaticAcknowledger.request(
+			activity,
+			unavailable,
+			harness.commandPortRevision,
+			request,
+		),
 		true,
 	);
 	await requests[0];
@@ -330,7 +336,12 @@ void test('automatic acknowledgement retries interactive stored connection hydra
 	assert.equal(hydrated.generation, unavailable.generation);
 	assert.equal(hydrated.contextRevision, unavailable.contextRevision + 1);
 	assert.equal(
-		automaticAcknowledger.request(activity, hydrated, request),
+		automaticAcknowledger.request(
+			activity,
+			hydrated,
+			harness.commandPortRevision,
+			request,
+		),
 		true,
 	);
 	assert.equal(harness.windowCommands.length, 1);
@@ -340,7 +351,12 @@ void test('automatic acknowledgement retries interactive stored connection hydra
 		hydrated.contextRevision,
 	);
 	assert.equal(
-		automaticAcknowledger.request(activity, hydrated, request),
+		automaticAcknowledger.request(
+			activity,
+			hydrated,
+			harness.commandPortRevision,
+			request,
+		),
 		false,
 	);
 	assert.equal(harness.windowCommands.length, 1);
@@ -363,6 +379,7 @@ void test('automatic acknowledgement waits for interactive reconciliation after 
 		automaticAcknowledger.request(
 			inactive,
 			harness.core.getSnapshot(),
+			harness.commandPortRevision,
 			request,
 		),
 		false,
@@ -372,6 +389,7 @@ void test('automatic acknowledgement waits for interactive reconciliation after 
 		automaticAcknowledger.request(
 			inactive,
 			harness.core.getSnapshot(),
+			harness.commandPortRevision,
 			request,
 		),
 		false,
@@ -382,6 +400,7 @@ void test('automatic acknowledgement waits for interactive reconciliation after 
 		automaticAcknowledger.request(
 			harness.activity.getSnapshot(),
 			harness.core.getSnapshot(),
+			harness.commandPortRevision,
 			request,
 		),
 		true,
@@ -389,6 +408,29 @@ void test('automatic acknowledgement waits for interactive reconciliation after 
 	assert.equal(harness.windowCommands.length, 1);
 	harness.windowCommands[0]?.resolve(buildWorkmuxWindowOutput());
 	await Promise.all(requests);
+});
+
+void test('automatic acknowledgement keys requests by command port revision', () => {
+	const harness = createNotificationsHarness();
+	const automaticAcknowledger = createShellNotificationAutomaticAcknowledger();
+	let requests = 0;
+	const request = () => requests++;
+	const activity = harness.activity.getSnapshot();
+	const notifications = harness.core.getSnapshot();
+
+	assert.equal(
+		automaticAcknowledger.request(activity, notifications, 0, request),
+		true,
+	);
+	assert.equal(
+		automaticAcknowledger.request(activity, notifications, 0, request),
+		false,
+	);
+	assert.equal(
+		automaticAcknowledger.request(activity, notifications, 1, request),
+		true,
+	);
+	assert.equal(requests, 2);
 });
 
 void test('notification activity effect subscribes before reconciling and cleans up', () => {
