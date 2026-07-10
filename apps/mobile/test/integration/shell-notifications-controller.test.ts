@@ -16,6 +16,11 @@ type Deferred<T> = {
 	reject(error: unknown): void;
 };
 
+type WindowCommand = Deferred<string> & {
+	argv: string[];
+	timeoutMs: number;
+};
+
 function createDeferred<T>(): Deferred<T> {
 	let resolve!: (value: T) => void;
 	let reject!: (error: unknown) => void;
@@ -47,8 +52,13 @@ function createNotificationsHarness(
 		focused: true,
 		appState: 'active',
 	});
-	const windowCommands: Deferred<string>[] = [];
+	const windowCommands: WindowCommand[] = [];
 	const acknowledgedWindowIds: string[] = [];
+	const acknowledgements: {
+		connectionId: string;
+		session: string;
+		windowId: string;
+	}[] = [];
 	const warnings: unknown[] = [];
 
 	const context = (
@@ -77,13 +87,14 @@ function createNotificationsHarness(
 		activity,
 		context: context(),
 		platformOS: 'android',
-		runWorkmuxCommand: () => {
+		runWorkmuxCommand: (argv, timeoutMs) => {
 			const deferred = createDeferred<string>();
-			windowCommands.push(deferred);
+			windowCommands.push({ ...deferred, argv, timeoutMs });
 			return deferred.promise;
 		},
-		acknowledge: (_connectionId, _session, windowId) => {
+		acknowledge: (connectionId, session, windowId) => {
 			if (options.acknowledgeError) throw options.acknowledgeError;
+			acknowledgements.push({ connectionId, session, windowId });
 			acknowledgedWindowIds.push(windowId);
 		},
 		warn: (_message, error) => {
@@ -93,6 +104,7 @@ function createNotificationsHarness(
 
 	return {
 		activity,
+		acknowledgements,
 		acknowledgedWindowIds,
 		context,
 		core,
@@ -121,6 +133,69 @@ void test('notification core coalesces concurrent visible acknowledgements', asy
 	assert.deepEqual(harness.acknowledgedWindowIds, ['@12', '@13']);
 	assert.equal(harness.core.getSnapshot().acknowledgeInFlight, false);
 	assert.equal(harness.core.getSnapshot().acknowledgeQueued, false);
+});
+
+void test('notification queued attempt stays stale across an activity round trip', async () => {
+	const harness = createNotificationsHarness();
+	const active = harness.core.acknowledgeVisible();
+	const queued = harness.core.acknowledgeVisible();
+
+	harness.activity.setFocused(false);
+	harness.activity.setFocused(true);
+	harness.windowCommands[0]?.resolve(buildWorkmuxWindowOutput('@12'));
+	await harness.tick();
+	const commandCount = harness.windowCommands.length;
+	for (const command of harness.windowCommands.slice(1)) {
+		command.resolve(buildWorkmuxWindowOutput('@13'));
+	}
+	await Promise.all([active, queued]);
+
+	assert.equal(commandCount, 1);
+	assert.deepEqual(harness.acknowledgedWindowIds, []);
+});
+
+void test('new queued trigger refreshes the retained activity capture', async () => {
+	const harness = createNotificationsHarness();
+	const active = harness.core.acknowledgeVisible();
+	const staleQueued = harness.core.acknowledgeVisible();
+	harness.activity.setFocused(false);
+	harness.activity.setFocused(true);
+	const refreshedQueued = harness.core.acknowledgeVisible();
+
+	harness.windowCommands[0]?.resolve(buildWorkmuxWindowOutput('@12'));
+	await harness.tick();
+	assert.equal(harness.windowCommands.length, 2);
+	harness.windowCommands[1]?.resolve(buildWorkmuxWindowOutput('@13'));
+	await Promise.all([active, staleQueued, refreshedQueued]);
+
+	assert.deepEqual(harness.acknowledgedWindowIds, ['@13']);
+});
+
+void test('notification worker recovers after an initial publication subscriber throws', async () => {
+	const harness = createNotificationsHarness();
+	const failure = new Error('subscriber failed');
+	let shouldThrow = true;
+	harness.core.subscribe(() => {
+		if (shouldThrow && harness.core.getSnapshot().acknowledgeInFlight) {
+			shouldThrow = false;
+			throw failure;
+		}
+	});
+
+	await assert.rejects(harness.core.acknowledgeVisible(), failure);
+	const inFlightAfterFailure = harness.core.getSnapshot().acknowledgeInFlight;
+	const recovered = harness.core.acknowledgeVisible();
+	const commandCount = harness.windowCommands.length;
+	if (harness.windowCommands[0]) {
+		harness.windowCommands[0].resolve(buildWorkmuxWindowOutput('@12'));
+	} else {
+		harness.core.dispose();
+	}
+	await recovered;
+
+	assert.equal(inFlightAfterFailure, false);
+	assert.equal(commandCount, 1);
+	assert.deepEqual(harness.acknowledgedWindowIds, ['@12']);
 });
 
 void test('notification core skips an initial attempt invalidated during publication', async () => {
@@ -232,6 +307,49 @@ void test('target context change immediately settles queued callers without a st
 	await active;
 	assert.equal(harness.windowCommands.length, 1);
 	assert.deepEqual(harness.acknowledgedWindowIds, []);
+});
+
+void test('transport replacement settles obsolete work and fresh calls use replacement context', async () => {
+	const harness = createNotificationsHarness();
+	const active = harness.core.acknowledgeVisible();
+	const queued = harness.core.acknowledgeVisible();
+	let queuedSettled = false;
+	void queued.then(() => {
+		queuedSettled = true;
+	});
+	const generation = harness.core.getSnapshot().generation;
+	const replacement = harness.context({
+		storedConnectionId: 'replacement-host',
+		channelId: 19,
+		tmuxTarget: 'replacement-session',
+	});
+
+	harness.core.setContext(replacement);
+	await harness.tick();
+	assert.equal(harness.core.getSnapshot().generation, generation + 1);
+	assert.equal(queuedSettled, true);
+	harness.windowCommands[0]?.resolve(buildWorkmuxWindowOutput('@12'));
+	await active;
+	assert.deepEqual(harness.acknowledgements, []);
+
+	const fresh = harness.core.acknowledgeVisible();
+	assert.deepEqual(harness.windowCommands[1]?.argv, [
+		'tmux',
+		'app',
+		'window',
+		'--session',
+		'replacement-session',
+	]);
+	harness.windowCommands[1]?.resolve(buildWorkmuxWindowOutput('@19'));
+	await fresh;
+	assert.deepEqual(harness.core.getSnapshot().context, replacement);
+	assert.deepEqual(harness.acknowledgements, [
+		{
+			connectionId: 'replacement-host',
+			session: 'replacement-session',
+			windowId: '@19',
+		},
+	]);
 });
 
 void test('notification core invalidates an acknowledgement when tmux is disabled', async () => {

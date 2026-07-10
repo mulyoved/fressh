@@ -95,6 +95,7 @@ export function createShellNotificationsControllerCore({
 	let inFlight = false;
 	let queued = false;
 	let queuedWaiters: QueuedWaiter[] = [];
+	let queuedAttempt: AcknowledgementAttempt | null = null;
 	let promotedWaiters: QueuedWaiter[] = [];
 	let epochInvalidated = false;
 	let disposed = false;
@@ -116,6 +117,7 @@ export function createShellNotificationsControllerCore({
 	const settleQueued = (): void => {
 		const waiters = queuedWaiters;
 		queuedWaiters = [];
+		queuedAttempt = null;
 		queued = false;
 		settleWaiters(waiters);
 	};
@@ -176,6 +178,7 @@ export function createShellNotificationsControllerCore({
 		if (disposed) return;
 		epochInvalidated = false;
 		if (inFlight) {
+			queuedAttempt = captureAttempt();
 			const promise = new Promise<void>((resolve) => {
 				queuedWaiters.push({ resolve });
 			});
@@ -188,8 +191,8 @@ export function createShellNotificationsControllerCore({
 
 		let attempt = captureAttempt();
 		inFlight = true;
-		publish();
 		try {
+			publish();
 			do {
 				if (isAttemptCurrent(attempt)) {
 					await runAttempt(attempt);
@@ -198,8 +201,14 @@ export function createShellNotificationsControllerCore({
 				if (disposed || !queued) break;
 				promotedWaiters = queuedWaiters;
 				queuedWaiters = [];
+				const promotedAttempt = queuedAttempt;
+				queuedAttempt = null;
 				queued = false;
-				attempt = captureAttempt();
+				if (!promotedAttempt) {
+					settlePromoted();
+					break;
+				}
+				attempt = promotedAttempt;
 				publish();
 			} while (!disposed);
 		} finally {
