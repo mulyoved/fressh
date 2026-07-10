@@ -6,6 +6,7 @@ import {
 	type ShellNotificationContext,
 } from '../../src/lib/shell-controllers/notifications-core';
 import {
+	createShellNotificationAutomaticAcknowledger,
 	createShellNotificationRouteEffectKey,
 	setupShellNotificationActivityEffect,
 	setupShellNotificationPendingEffect,
@@ -871,6 +872,83 @@ void test('notification route effect identity changes when the stored connection
 		createShellNotificationRouteEffectKey(route, unavailable),
 		createShellNotificationRouteEffectKey(route, hydrated),
 	);
+});
+
+void test('automatic acknowledgement retries interactive stored connection hydration once', async () => {
+	const harness = createNotificationsHarness();
+	const automaticAcknowledger = createShellNotificationAutomaticAcknowledger();
+	const activity = harness.activity.getSnapshot();
+	harness.core.setContext(harness.context({ storedConnectionId: null }));
+	const unavailable = harness.core.getSnapshot();
+	const requests: Promise<void>[] = [];
+	const request = () => {
+		requests.push(harness.core.acknowledgeVisible());
+	};
+
+	assert.equal(
+		automaticAcknowledger.request(activity, unavailable, request),
+		true,
+	);
+	await requests[0];
+	assert.equal(harness.windowCommands.length, 0);
+
+	harness.core.setContext(harness.context());
+	const hydrated = harness.core.getSnapshot();
+	assert.equal(
+		automaticAcknowledger.request(activity, hydrated, request),
+		true,
+	);
+	assert.equal(harness.windowCommands.length, 1);
+	assert.equal(
+		automaticAcknowledger.request(activity, hydrated, request),
+		false,
+	);
+	assert.equal(harness.windowCommands.length, 1);
+	harness.windowCommands[0]?.resolve(buildWorkmuxWindowOutput());
+	await Promise.all(requests);
+});
+
+void test('automatic acknowledgement waits for interactive reconciliation after hydration', async () => {
+	const harness = createNotificationsHarness();
+	const automaticAcknowledger = createShellNotificationAutomaticAcknowledger();
+	harness.activity.setFocused(false);
+	harness.core.setContext(harness.context({ storedConnectionId: null }));
+	const inactive = harness.activity.getSnapshot();
+	const requests: Promise<void>[] = [];
+	const request = () => {
+		requests.push(harness.core.acknowledgeVisible());
+	};
+
+	assert.equal(
+		automaticAcknowledger.request(
+			inactive,
+			harness.core.getSnapshot(),
+			request,
+		),
+		false,
+	);
+	harness.core.setContext(harness.context());
+	assert.equal(
+		automaticAcknowledger.request(
+			inactive,
+			harness.core.getSnapshot(),
+			request,
+		),
+		false,
+	);
+	assert.equal(harness.windowCommands.length, 0);
+	harness.activity.setFocused(true);
+	assert.equal(
+		automaticAcknowledger.request(
+			harness.activity.getSnapshot(),
+			harness.core.getSnapshot(),
+			request,
+		),
+		true,
+	);
+	assert.equal(harness.windowCommands.length, 1);
+	harness.windowCommands[0]?.resolve(buildWorkmuxWindowOutput());
+	await Promise.all(requests);
 });
 
 void test('notification activity effect subscribes before reconciling and cleans up', () => {

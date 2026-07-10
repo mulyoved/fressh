@@ -3,7 +3,38 @@ import { type ControllerInvalidationReason } from './controller-core';
 import {
 	type ShellNotificationContext,
 	type ShellNotificationRoute,
+	type ShellNotificationsState,
 } from './notifications-core';
+
+export function createShellNotificationAutomaticAcknowledger(): {
+	request(
+		activity: ShellActivitySnapshot,
+		notifications: ShellNotificationsState,
+		onRequest: () => void,
+	): boolean;
+} {
+	let lastRequestKey: string | null = null;
+	return {
+		request: (activity, notifications, onRequest) => {
+			if (!activity.interactive) return false;
+			const { context } = notifications;
+			const requestKey = JSON.stringify([
+				activity.generation,
+				notifications.generation,
+				context.transportKey,
+				context.targetKey,
+				context.storedConnectionId,
+				context.channelId,
+				context.tmuxEnabled,
+				context.tmuxTarget,
+			]);
+			if (lastRequestKey === requestKey) return false;
+			lastRequestKey = requestKey;
+			onRequest();
+			return true;
+		},
+	};
+}
 
 export function createShellNotificationRouteEffectKey(
 	route: ShellNotificationRoute,

@@ -22,6 +22,7 @@ import {
 	type ShellNotificationRoute,
 } from './notifications-core';
 import {
+	createShellNotificationAutomaticAcknowledger,
 	createShellNotificationRouteEffectKey,
 	setupShellNotificationActivityEffect,
 	setupShellNotificationPendingEffect,
@@ -60,7 +61,9 @@ export function useShellNotificationsController(
 	input: UseShellNotificationsControllerInput,
 ): ShellNotificationsControllerHandle {
 	const committedInputRef = useRef(input);
-	const lastAutomaticAcknowledgeKeyRef = useRef<string | null>(null);
+	const [automaticAcknowledger] = useState(() =>
+		createShellNotificationAutomaticAcknowledger(),
+	);
 	const [core] = useState(() =>
 		createShellNotificationsControllerCore({
 			activity: {
@@ -84,29 +87,21 @@ export function useShellNotificationsController(
 
 	const requestVisibleAcknowledgement = useCallback(() => {
 		const activitySnapshot = committedInputRef.current.activity.getSnapshot();
-		if (!activitySnapshot.interactive) return;
-		const automaticKey = JSON.stringify([
-			activitySnapshot.generation,
-			core.getSnapshot().generation,
-		]);
-		if (lastAutomaticAcknowledgeKeyRef.current === automaticKey) return;
-		lastAutomaticAcknowledgeKeyRef.current = automaticKey;
-		void core.acknowledgeVisible().catch((error: unknown) => {
-			warnBestEffort(
-				committedInputRef.current.logger,
-				'agent notification visible acknowledge failed',
-				error,
-			);
+		automaticAcknowledger.request(activitySnapshot, core.getSnapshot(), () => {
+			void core.acknowledgeVisible().catch((error: unknown) => {
+				warnBestEffort(
+					committedInputRef.current.logger,
+					'agent notification visible acknowledge failed',
+					error,
+				);
+			});
 		});
-	}, [core]);
+	}, [automaticAcknowledger, core]);
 
 	useLayoutEffect(() => {
 		committedInputRef.current = input;
-		const previousGeneration = core.getSnapshot().generation;
 		core.setContext(input.context);
-		if (core.getSnapshot().generation !== previousGeneration) {
-			requestVisibleAcknowledgement();
-		}
+		requestVisibleAcknowledgement();
 	}, [core, input, requestVisibleAcknowledgement]);
 
 	useEffect(() => {
