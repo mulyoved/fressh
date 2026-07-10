@@ -77,6 +77,15 @@ type AcknowledgementAttempt = Readonly<{
 	context: Readonly<ShellNotificationContext>;
 }>;
 
+type ActiveRouteAttempt = {
+	identityKey: string;
+	contextRevision: number;
+	generation: number;
+	requestId: number;
+	committed: boolean;
+	promise: Promise<boolean>;
+};
+
 function contextsEqual(
 	left: ShellNotificationContext,
 	right: ShellNotificationContext,
@@ -89,6 +98,25 @@ function contextsEqual(
 		left.tmuxEnabled === right.tmuxEnabled &&
 		left.tmuxTarget === right.tmuxTarget
 	);
+}
+
+function createRouteAttemptIdentityKey(
+	route: ShellNotificationRoute,
+	context: ShellNotificationContext,
+): string {
+	return JSON.stringify([
+		route.agentConnectionId,
+		route.agentSession,
+		route.agentWindowId,
+		route.agentEventId,
+		route.agentTapToken,
+		context.transportKey,
+		context.targetKey,
+		context.storedConnectionId,
+		context.channelId,
+		context.tmuxEnabled,
+		context.tmuxTarget,
+	]);
 }
 
 export function createShellNotificationsControllerCore({
@@ -117,6 +145,8 @@ export function createShellNotificationsControllerCore({
 	let epochInvalidated = false;
 	let disposed = false;
 	let routeRequestId = 0;
+	let routeContextRevision = 0;
+	let activeRouteAttempt: ActiveRouteAttempt | null = null;
 
 	const publish = (): void => {
 		const current = publisher.getSnapshot();
@@ -252,6 +282,54 @@ export function createShellNotificationsControllerCore({
 		publish();
 	};
 
+	const isRouteAttemptCurrent = (attempt: ActiveRouteAttempt): boolean =>
+		!disposed &&
+		attempt.requestId === routeRequestId &&
+		attempt.generation === generation &&
+		attempt.contextRevision === routeContextRevision;
+
+	const runRouteAttempt = async (
+		attempt: ActiveRouteAttempt,
+		route: ShellNotificationRoute,
+		context: ShellNotificationContext,
+	): Promise<boolean> => {
+		const handled = await handleAgentNotificationRoute({
+			...route,
+			storedConnectionId: context.storedConnectionId,
+			tmuxTarget: context.tmuxTarget,
+			isRouteHandled: (routeKey) =>
+				publisher.getSnapshot().handledRouteKey === routeKey,
+			markRouteHandled: (routeKey) => {
+				if (!isRouteAttemptCurrent(attempt)) return;
+				attempt.committed = true;
+				try {
+					publisher.publish({
+						...publisher.getSnapshot(),
+						handledRouteKey: routeKey,
+					});
+				} catch (error) {
+					warnBestEffort(
+						'agent notification route state publication failed',
+						error,
+					);
+				}
+			},
+			consumeAuthorizedRouteToken,
+			restoreAuthorizedRouteToken,
+			runWorkmuxCommand,
+			acknowledge: (connectionId, session, windowId) => {
+				if (!attempt.committed) return;
+				try {
+					acknowledge(connectionId, session, windowId);
+				} catch (error) {
+					warnBestEffort('agent notification route acknowledge failed', error);
+				}
+			},
+			warn: warnBestEffort,
+		});
+		return handled && attempt.committed;
+	};
+
 	return {
 		getSnapshot: publisher.getSnapshot,
 		subscribe: publisher.subscribe,
@@ -259,6 +337,7 @@ export function createShellNotificationsControllerCore({
 			if (disposed) return;
 			const current = publisher.getSnapshot();
 			if (contextsEqual(current.context, context)) return;
+			routeContextRevision += 1;
 			const semanticContextChanged =
 				current.context.transportKey !== context.transportKey ||
 				current.context.targetKey !== context.targetKey ||
@@ -287,54 +366,48 @@ export function createShellNotificationsControllerCore({
 				});
 			}
 		},
-		handleRoute: async (route) => {
-			if (disposed) return false;
+		handleRoute: (route) => {
+			if (disposed) return Promise.resolve(false);
+			const context = { ...publisher.getSnapshot().context };
+			const identityKey = createRouteAttemptIdentityKey(route, context);
+			if (
+				activeRouteAttempt &&
+				!activeRouteAttempt.committed &&
+				activeRouteAttempt.identityKey === identityKey &&
+				activeRouteAttempt.contextRevision === routeContextRevision
+			) {
+				epochInvalidated = false;
+				activeRouteAttempt.generation = generation;
+				activeRouteAttempt.contextRevision = routeContextRevision;
+				return activeRouteAttempt.promise;
+			}
 			epochInvalidated = false;
 			const requestId = ++routeRequestId;
-			const attemptGeneration = generation;
-			const context = { ...publisher.getSnapshot().context };
-			const isCurrentAttempt = (): boolean =>
-				!disposed &&
-				requestId === routeRequestId &&
-				attemptGeneration === generation &&
-				contextsEqual(context, publisher.getSnapshot().context);
-			const handled = await handleAgentNotificationRoute({
-				...route,
-				storedConnectionId: context.storedConnectionId,
-				tmuxTarget: context.tmuxTarget,
-				isRouteHandled: (routeKey) =>
-					publisher.getSnapshot().handledRouteKey === routeKey,
-				markRouteHandled: (routeKey) => {
-					if (!isCurrentAttempt()) return;
-					try {
-						publisher.publish({
-							...publisher.getSnapshot(),
-							handledRouteKey: routeKey,
-						});
-					} catch (error) {
-						warnBestEffort(
-							'agent notification route state publication failed',
-							error,
-						);
-					}
-				},
-				consumeAuthorizedRouteToken,
-				restoreAuthorizedRouteToken,
-				runWorkmuxCommand,
-				acknowledge: (connectionId, session, windowId) => {
-					if (!isCurrentAttempt()) return;
-					try {
-						acknowledge(connectionId, session, windowId);
-					} catch (error) {
-						warnBestEffort(
-							'agent notification route acknowledge failed',
-							error,
-						);
-					}
-				},
-				warn: warnBestEffort,
+			let resolveAttempt!: (handled: boolean) => void;
+			let rejectAttempt!: (error: unknown) => void;
+			const promise = new Promise<boolean>((resolve, reject) => {
+				resolveAttempt = resolve;
+				rejectAttempt = reject;
 			});
-			return handled && isCurrentAttempt();
+			const attempt: ActiveRouteAttempt = {
+				identityKey,
+				contextRevision: routeContextRevision,
+				generation,
+				requestId,
+				committed: false,
+				promise,
+			};
+			activeRouteAttempt = attempt;
+			void (async () => {
+				try {
+					resolveAttempt(await runRouteAttempt(attempt, route, context));
+				} catch (error) {
+					rejectAttempt(error);
+				} finally {
+					if (activeRouteAttempt === attempt) activeRouteAttempt = null;
+				}
+			})();
+			return promise;
 		},
 		invalidate,
 		dispose: () => {
