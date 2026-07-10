@@ -334,9 +334,8 @@ export function createShellNotificationRouteCoordinator(input: {
 						invalidationReason === 'unmount')
 				) {
 					invalidationReason = null;
-					if (active.request.generation !== request.generation) {
-						active.request.sequence = ++latestSequence;
-					}
+					settleQueued();
+					active.request.sequence = ++latestSequence;
 					active.request.generation = request.generation;
 					return callerPromise(
 						active,

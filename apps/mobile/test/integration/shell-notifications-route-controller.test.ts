@@ -631,6 +631,39 @@ void test('distinct authorized routes serialize physical commands in request ord
 	);
 });
 
+void test('newest active-equivalent route displaces a distinct queued route', async () => {
+	const harness = createMultiIdentityHarness();
+	const routeA = harness.validRoute();
+	const originalA = harness.core.handleRoute(routeA);
+	const queuedB = harness.core.handleRoute(secondAuthorizedRoute(harness));
+	let queuedBResult: boolean | null = null;
+	void queuedB.then((handled) => {
+		queuedBResult = handled;
+	});
+	const newestA = harness.core.handleRoute({ ...routeA });
+	await harness.tick();
+
+	assert.equal(queuedBResult, false);
+	assert.deepEqual(harness.consumedTokens, ['token-1']);
+	assert.equal(harness.routeCommands.length, 1);
+	harness.routeCommands[0]?.resolve('');
+
+	assert.deepEqual(await Promise.all([originalA, queuedB, newestA]), [
+		true,
+		false,
+		true,
+	]);
+	assert.deepEqual(harness.consumedTokens, ['token-1']);
+	assert.equal(harness.routeCommands.length, 1);
+	assert.deepEqual(harness.acknowledgements, [
+		{ connectionId: 'saved-host', session: 'main', windowId: '@12' },
+	]);
+	assert.equal(
+		harness.core.getSnapshot().handledRouteKey,
+		'["saved-host","main","@12","event-1"]',
+	);
+});
+
 void test('queued route snapshots caller-owned fields before promotion', async () => {
 	const harness = createMultiIdentityHarness();
 	const first = harness.core.handleRoute(harness.validRoute());
