@@ -183,7 +183,7 @@ void test('simple modal core invalidation closes every modal', () => {
 	});
 });
 
-void test('replay setup cancels a queued lifecycle disposal', () => {
+void test('replay setup cancels queued disposal before real unmount disposes', () => {
 	const queue = createTaskQueue();
 	let disposalCount = 0;
 	const lifecycle = createReplaySafeDisposer(() => {
@@ -192,10 +192,13 @@ void test('replay setup cancels a queued lifecycle disposal', () => {
 	const replayCleanup = lifecycle.setup();
 
 	replayCleanup();
-	lifecycle.setup();
+	const realUnmountCleanup = lifecycle.setup();
 	queue.flush();
-
 	assert.equal(disposalCount, 0);
+
+	realUnmountCleanup();
+	queue.flush();
+	assert.equal(disposalCount, 1);
 });
 
 void test('real unmount cleanup disposes after the deferred boundary', () => {
