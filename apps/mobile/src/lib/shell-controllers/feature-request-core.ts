@@ -64,9 +64,15 @@ export function createFeatureRequestControllerCore(
 	let disposed = false;
 
 	const reset = () => publisher.publish(CLOSED_STATE);
-	const cancelRequests = () => {
+	const cancelResolve = () => {
 		resolveGeneration += 1;
+	};
+	const cancelSubmit = () => {
 		submitGeneration += 1;
+	};
+	const cancelRequests = () => {
+		cancelResolve();
+		cancelSubmit();
 	};
 	const isCurrentResolve = (generation: number) =>
 		!disposed && resolveGeneration === generation;
@@ -85,7 +91,6 @@ export function createFeatureRequestControllerCore(
 	const beginOpen = () => {
 		if (disposed) return;
 		const generation = ++resolveGeneration;
-		const resolutionSubmitGeneration = ++submitGeneration;
 		sourceStale = false;
 		publisher.publish({
 			...CLOSED_STATE,
@@ -102,9 +107,7 @@ export function createFeatureRequestControllerCore(
 					...current,
 					targetRepository: repository,
 					isResolvingTarget: false,
-					...(submitGeneration === resolutionSubmitGeneration
-						? { error: undefined }
-						: {}),
+					error: undefined,
 				});
 			} catch (error) {
 				if (!isCurrentResolve(generation)) return;
@@ -113,9 +116,7 @@ export function createFeatureRequestControllerCore(
 					...current,
 					targetRepository: null,
 					isResolvingTarget: false,
-					...(submitGeneration === resolutionSubmitGeneration
-						? { error: deps.getErrorMessage(error) }
-						: {}),
+					error: deps.getErrorMessage(error),
 				});
 			}
 		})();
@@ -123,7 +124,7 @@ export function createFeatureRequestControllerCore(
 
 	const markSourceStale = () => {
 		if (disposed) return;
-		resolveGeneration += 1;
+		cancelResolve();
 		if (publisher.getSnapshot().isSubmitting) {
 			sourceStale = true;
 			return;
@@ -144,6 +145,11 @@ export function createFeatureRequestControllerCore(
 		markSourceStale,
 		submit: async (description, repository) => {
 			if (disposed || publisher.getSnapshot().isSubmitting) return;
+			cancelResolve();
+			publisher.publish({
+				...publisher.getSnapshot(),
+				isResolvingTarget: false,
+			});
 			const generation = ++submitGeneration;
 			if (!deps.isSubmissionAvailable()) {
 				publisher.publish({
@@ -184,11 +190,7 @@ export function createFeatureRequestControllerCore(
 						output: result.output,
 						issueUrl: result.issueUrl,
 					});
-					publisher.publish({
-						...publisher.getSnapshot(),
-						open: false,
-						error: undefined,
-					});
+					reset();
 					sourceStale = false;
 					deps.showSubmittedAlert(result.issueUrl ?? null);
 				} else {

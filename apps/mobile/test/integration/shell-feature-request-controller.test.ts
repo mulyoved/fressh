@@ -213,10 +213,11 @@ void test('feature request submission rejection logs and clears submitting', asy
 	assert.equal(harness.errorLogs[0]?.message, 'Feature request error');
 });
 
-void test('feature request resolver success preserves a newer submission error', async () => {
+void test('feature request suppresses resolver success after a newer submission error', async () => {
 	const harness = createFeatureRequestHarness();
 	harness.core.open();
 	const pending = harness.core.submit('description', 'pinned/repository');
+	assert.equal(harness.core.getSnapshot().isResolvingTarget, false);
 	harness.submissions[0]?.resolve({
 		success: false,
 		output: '',
@@ -226,15 +227,16 @@ void test('feature request resolver success preserves a newer submission error',
 	harness.resolves[0]?.resolve('resolved/current');
 	await harness.settled();
 
-	assert.equal(harness.core.getSnapshot().targetRepository, 'resolved/current');
+	assert.equal(harness.core.getSnapshot().targetRepository, null);
 	assert.equal(harness.core.getSnapshot().isResolvingTarget, false);
 	assert.equal(harness.core.getSnapshot().error, 'pinned submission failed');
 });
 
-void test('feature request resolver rejection preserves a newer submission error', async () => {
+void test('feature request suppresses resolver rejection after a newer submission error', async () => {
 	const harness = createFeatureRequestHarness();
 	harness.core.open();
 	const pending = harness.core.submit('description', 'pinned/repository');
+	assert.equal(harness.core.getSnapshot().isResolvingTarget, false);
 	harness.submissions[0]?.resolve({
 		success: false,
 		output: '',
@@ -247,6 +249,82 @@ void test('feature request resolver rejection preserves a newer submission error
 	assert.equal(harness.core.getSnapshot().targetRepository, null);
 	assert.equal(harness.core.getSnapshot().isResolvingTarget, false);
 	assert.equal(harness.core.getSnapshot().error, 'pinned submission failed');
+});
+
+void test('feature request accepted validation failure cancels repository resolution', async () => {
+	const harness = createFeatureRequestHarness({ connected: false });
+	harness.core.open();
+	await harness.core.submit('description', 'pinned/repository');
+
+	assert.equal(harness.core.getSnapshot().isResolvingTarget, false);
+	assert.equal(harness.core.getSnapshot().error, 'No SSH connection available');
+	harness.resolves[0]?.resolve('older/current');
+	await harness.settled();
+	assert.equal(harness.core.getSnapshot().targetRepository, null);
+	assert.equal(harness.core.getSnapshot().error, 'No SSH connection available');
+});
+
+void test('feature request pinned success closes exactly and suppresses older resolver success', async () => {
+	const harness = createFeatureRequestHarness();
+	harness.core.open();
+	const pending = harness.core.submit('description', 'pinned/repository');
+	harness.submissions[0]?.resolve({
+		success: true,
+		output: '',
+		issueUrl: 'https://github.com/pinned/repository/issues/83',
+	});
+	await pending;
+
+	const closedState = {
+		open: false,
+		isSubmitting: false,
+		targetRepository: null,
+		isResolvingTarget: false,
+		error: undefined,
+	} as const;
+	assert.deepEqual(harness.core.getSnapshot(), closedState);
+	assert.deepEqual(harness.alerts, [
+		'https://github.com/pinned/repository/issues/83',
+	]);
+
+	harness.resolves[0]?.resolve('older/current');
+	await harness.settled();
+	assert.deepEqual(harness.core.getSnapshot(), closedState);
+});
+
+void test('feature request pinned success suppresses older resolver rejection', async () => {
+	const harness = createFeatureRequestHarness();
+	harness.core.open();
+	const pending = harness.core.submit('description', 'pinned/repository');
+	harness.submissions[0]?.resolve({ success: true, output: '' });
+	await pending;
+	harness.resolves[0]?.reject(new Error('older resolution failed'));
+	await harness.settled();
+
+	assert.deepEqual(harness.core.getSnapshot(), {
+		open: false,
+		isSubmitting: false,
+		targetRepository: null,
+		isResolvingTarget: false,
+		error: undefined,
+	});
+});
+
+void test('feature request open during submission starts no new work', async () => {
+	const harness = createFeatureRequestHarness();
+	harness.core.open();
+	const pending = harness.core.submit('description', 'pinned/repository');
+	harness.core.open();
+
+	assert.equal(harness.resolves.length, 1);
+	assert.equal(harness.commands.length, 1);
+	assert.equal(harness.submissions.length, 1);
+	harness.submissions[0]?.resolve({
+		success: false,
+		output: '',
+		error: 'failed',
+	});
+	await pending;
 });
 
 void test('feature request suppresses a stale rejected submission', async () => {

@@ -133,4 +133,5 @@ void test('useFeatureRequestController binds the submitted alert and replay-safe
 void test('feature request core has one owner for submission state', () => {
 	const source = readFileSync(featureRequestCorePath, 'utf8');
 	assert.doesNotMatch(source, /submitInFlight/);
+	assert.doesNotMatch(source, /resolutionSubmitGeneration/);
 });
