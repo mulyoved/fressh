@@ -156,11 +156,21 @@ export function createShellTerminalTransport(input: {
 				continue;
 			}
 
-			if ((entry.interSegmentDelayMs ?? 0) > 0) {
-				entry.abortController = createAbortController();
-			}
 			void (async () => {
+				let sendAttempted = false;
 				try {
+					if ((entry.interSegmentDelayMs ?? 0) > 0) {
+						entry.abortController = createAbortController();
+						if (
+							entry.abortController.signal.aborted ||
+							!isEntryCurrent(entry)
+						) {
+							entry.abortController.abort();
+							resolveEntry(entry);
+							return;
+						}
+					}
+					sendAttempted = true;
 					await entry.writer.sendBatch(entry.segments, {
 						interSegmentDelayMs: entry.interSegmentDelayMs,
 						isCurrent: () => isEntryCurrent(entry),
@@ -168,7 +178,9 @@ export function createShellTerminalTransport(input: {
 					});
 					resolveEntry(entry);
 				} catch (error) {
-					if (isEntryCurrent(entry)) reportFailure(error);
+					if (sendAttempted && isEntryCurrent(entry)) {
+						reportFailure(error);
+					}
 					rejectEntry(entry, error);
 				} finally {
 					if (activeEntry === entry) activeEntry = null;
