@@ -3,8 +3,6 @@ import {
 	XtermJsWebView,
 	type XtermWebViewHandle,
 } from '@fressh/react-native-xtermjs-webview';
-import { useIsFocused } from '@react-navigation/native';
-
 import * as Clipboard from 'expo-clipboard';
 import Constants from 'expo-constants';
 import * as Linking from 'expo-linking';
@@ -27,7 +25,6 @@ import {
 	Alert,
 	ActivityIndicator,
 	Animated,
-	AppState,
 	Keyboard,
 	KeyboardAvoidingView,
 	PixelRatio,
@@ -38,16 +35,6 @@ import {
 	View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import {
-	acknowledgeRoutedAgentNotification,
-	consumeAuthorizedAgentNotificationRouteToken,
-	restoreAuthorizedAgentNotificationRouteToken,
-} from '@/lib/agent-notification-route-store';
-import {
-	acknowledgeVisibleAgentNotification as acknowledgeVisibleAgentNotificationIfVisible,
-	handleAgentNotificationRoute,
-	subscribeAgentNotificationPending,
-} from '@/lib/agent-notification-visibility';
 import { useAutoConnectStore } from '@/lib/auto-connect';
 import { restartCodexWithBridge } from '@/lib/codex-restart';
 import {
@@ -103,10 +90,12 @@ import {
 	loadRuntimeShellConfigState,
 	reloadRuntimeShellConfigFromRemote,
 } from '@/lib/shell-config-store-native';
+import { useShellActivityController } from '@/lib/shell-controllers/activity';
 import { useBrowserActionsController } from '@/lib/shell-controllers/browser-actions';
 import { useFeatureRequestController } from '@/lib/shell-controllers/feature-request';
 import { createGenerationRequestGate } from '@/lib/shell-controllers/generation-request-gate';
 import { createShellModalArbiter } from '@/lib/shell-controllers/modal-arbiter';
+import { useShellNotificationsController } from '@/lib/shell-controllers/notifications';
 import { syncShellCommandLifecycle } from '@/lib/shell-controllers/shell-command-lifecycle';
 import { useShellSimpleModals } from '@/lib/shell-controllers/simple-modals';
 import { useSkillSelectorController } from '@/lib/shell-controllers/skill-selector';
@@ -501,9 +490,10 @@ function ShellDetail() {
 	const tmuxSessionName = searchParams.tmuxSessionName;
 	const tmuxAttachFailureReason =
 		searchParams.tmuxAttachFailureReason?.trim() || undefined;
+	const activity = useShellActivityController();
+	const getActivitySnapshot = activity.getSnapshot;
 
 	const router = useRouter();
-	const isFocused = useIsFocused();
 	const theme = useTheme();
 	const insets = useSafeAreaInsets();
 
@@ -765,9 +755,9 @@ function ShellDetail() {
 	const [systemKeyboardEnabled, setSystemKeyboardEnabled] = useState(
 		Platform.OS === 'android',
 	);
+	const systemKeyboardEnabledRef = useRef(systemKeyboardEnabled);
 	const systemKeyboardVisibleRef = useRef(false);
 	const lastKeyboardVisibleRef = useRef(false);
-	const appStateRef = useRef(AppState.currentState);
 	const [selectionModeEnabled, setSelectionModeEnabled] = useState(false);
 	const {
 		commandMenu: commandMenuModal,
@@ -831,20 +821,13 @@ function ShellDetail() {
 	);
 	const wisprAutoCloseAttemptIdRef = useRef(0);
 	const wisprAutomationRequestIdRef = useRef(0);
-	const agentNotificationAckRequestIdRef = useRef(0);
 	const runtimeShellConfigReloadRequestIdRef = useRef(0);
-	const handledAgentAlertRouteRef = useRef<string | null>(null);
-	const acknowledgeVisibleAgentNotificationRef = useRef<() => void>(() => {});
-	const isFocusedRef = useRef(false);
-	const isAppActiveRef = useRef(AppState.currentState === 'active');
-	const visibleConnectionIdRef = useRef<string | null>(null);
-	const visibleChannelIdRef = useRef<number | null>(null);
-	const visibleTmuxTargetRef = useRef('main');
 	const wisprOpeningTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
 		null,
 	);
 	const lastSelectionRef = useRef<{ text: string; at: number } | null>(null);
 	const { width, height } = useWindowDimensions();
+	systemKeyboardEnabledRef.current = systemKeyboardEnabled;
 	autoWisprEnabledRef.current = autoWisprEnabled;
 	const scrollTraceEnabled = isConfiguredScrollTraceEnabled();
 	configureScrollTraceEnabled(scrollTraceEnabled);
@@ -967,7 +950,7 @@ function ShellDetail() {
 				clearLocalScrollbackUiState();
 				return;
 			}
-			if (!isFocusedRef.current || !isAppActiveRef.current) {
+			if (!getActivitySnapshot().interactive) {
 				logger.warn(message);
 				if (context.commandKind === 'exit') {
 					clearLocalScrollbackUiState();
@@ -992,7 +975,12 @@ function ShellDetail() {
 				warn: (warning) => logger.warn(warning),
 			});
 		},
-		[clearLocalScrollbackUiState, clearScrollbackState, traceScroll],
+		[
+			clearLocalScrollbackUiState,
+			clearScrollbackState,
+			getActivitySnapshot,
+			traceScroll,
+		],
 	);
 
 	const workmuxScrollbackCommandExecutor = useMemo(() => {
@@ -1110,8 +1098,8 @@ function ShellDetail() {
 					requestWriter,
 					currentInstanceId: currentInstanceIdRef.current,
 					currentWriter: writerRef.current,
-					isFocused: isFocusedRef.current,
-					isAppActive: isAppActiveRef.current,
+					isFocused: getActivitySnapshot().focused,
+					isAppActive: getActivitySnapshot().appActive,
 					requestGeneration: requestLiveInputGeneration,
 					currentGeneration: liveInputGenerationRef.current,
 				});
@@ -1132,7 +1120,7 @@ function ShellDetail() {
 				onPayloadAccepted: opts?.onAccepted,
 			});
 		},
-		[clearScrollbackState],
+		[clearScrollbackState, getActivitySnapshot],
 	);
 
 	const sendBytesRaw = useCallback(
@@ -2034,6 +2022,31 @@ function ShellDetail() {
 		},
 		[workmuxControlChannel],
 	);
+	const runNotificationWorkmuxCommand = useCallback(
+		(argv: string[], timeoutMs: number) =>
+			runBrowserActionsWorkmuxCommand(null, argv, timeoutMs),
+		[runBrowserActionsWorkmuxCommand],
+	);
+	useShellNotificationsController({
+		activity,
+		context: {
+			transportKey,
+			targetKey,
+			storedConnectionId: connectionStoredConnectionId ?? null,
+			channelId,
+			tmuxEnabled,
+			tmuxTarget,
+		},
+		route: {
+			agentConnectionId,
+			agentSession,
+			agentWindowId,
+			agentEventId,
+			agentTapToken,
+		},
+		runWorkmuxCommand: runNotificationWorkmuxCommand,
+		logger,
+	});
 
 	const browserActions = useBrowserActionsController({
 		connection: connection ?? null,
@@ -2072,9 +2085,11 @@ function ShellDetail() {
 	const workmuxKeyboardTmuxEnabledRef = useRef(tmuxEnabled);
 	const workmuxKeyboardTmuxTargetRef = useRef(tmuxTarget);
 	const browserActionsInvalidateAllRef = useRef(browserActions.invalidateAll);
+	const browserActionsCloseRef = useRef(browserActions.close);
 	workmuxKeyboardTmuxEnabledRef.current = tmuxEnabled;
 	workmuxKeyboardTmuxTargetRef.current = tmuxTarget;
 	browserActionsInvalidateAllRef.current = browserActions.invalidateAll;
+	browserActionsCloseRef.current = browserActions.close;
 
 	const featureRequest = useFeatureRequestController({
 		connection: connection ?? null,
@@ -2278,8 +2293,8 @@ function ShellDetail() {
 				requestId,
 				isCurrentRequest: (id) =>
 					id === runtimeShellConfigReloadRequestIdRef.current,
-				isFocused: isFocusedRef.current,
-				isAppActive: isAppActiveRef.current,
+				isFocused: getActivitySnapshot().focused,
+				isAppActive: getActivitySnapshot().appActive,
 			});
 		try {
 			const nextState = await reloadRuntimeShellConfigFromRemote();
@@ -2299,7 +2314,7 @@ function ShellDetail() {
 			}));
 			Alert.alert('Config reload failed', message);
 		}
-	}, [configureModal]);
+	}, [configureModal, getActivitySnapshot]);
 
 	const handleHostConfig = useCallback(() => {
 		configureModal.onClose();
@@ -2319,134 +2334,6 @@ function ShellDetail() {
 		configureModal.onClose();
 		void Linking.openURL(SHELL_CONFIG_DOC_URL);
 	}, [configureModal]);
-
-	useEffect(() => {
-		void handleAgentNotificationRoute({
-			agentConnectionId,
-			storedConnectionId: connectionStoredConnectionId,
-			agentSession,
-			agentWindowId,
-			agentEventId,
-			agentTapToken,
-			tmuxTarget,
-			isRouteHandled: (routeKey) =>
-				handledAgentAlertRouteRef.current === routeKey,
-			markRouteHandled: (routeKey) => {
-				handledAgentAlertRouteRef.current = routeKey;
-			},
-			consumeAuthorizedRouteToken: consumeAuthorizedAgentNotificationRouteToken,
-			restoreAuthorizedRouteToken: restoreAuthorizedAgentNotificationRouteToken,
-			runWorkmuxCommand: (argv, timeoutMs) =>
-				runBrowserActionsWorkmuxCommand(null, argv, timeoutMs),
-			acknowledge: (connectionId, session, windowId) => {
-				acknowledgeRoutedAgentNotification(connectionId, session, windowId);
-			},
-			warn: (message, error) => {
-				logger.warn(message, error);
-			},
-		});
-	}, [
-		agentConnectionId,
-		agentEventId,
-		agentSession,
-		agentTapToken,
-		agentWindowId,
-		connectionStoredConnectionId,
-		runBrowserActionsWorkmuxCommand,
-		tmuxTarget,
-	]);
-
-	const acknowledgeVisibleAgentNotification = useCallback(async () => {
-		await acknowledgeVisibleAgentNotificationIfVisible({
-			platformOS: Platform.OS,
-			connectionId: connectionStoredConnectionId ?? null,
-			channelId,
-			tmuxEnabled,
-			tmuxTarget,
-			getVisibility: () => ({
-				isFocused: isFocusedRef.current,
-				isAppActive: isAppActiveRef.current,
-				connectionId: visibleConnectionIdRef.current,
-				channelId: visibleChannelIdRef.current,
-				tmuxTarget: visibleTmuxTargetRef.current,
-			}),
-			nextRequestId: () => ++agentNotificationAckRequestIdRef.current,
-			isCurrentRequest: (requestId) =>
-				requestId === agentNotificationAckRequestIdRef.current,
-			runWorkmuxCommand: (argv, timeoutMs) =>
-				runBrowserActionsWorkmuxCommand(null, argv, timeoutMs),
-			acknowledge: acknowledgeRoutedAgentNotification,
-			warn: (message, error) => {
-				logger.warn(message, error);
-			},
-		});
-	}, [
-		channelId,
-		connectionStoredConnectionId,
-		runBrowserActionsWorkmuxCommand,
-		tmuxEnabled,
-		tmuxTarget,
-	]);
-
-	useLayoutEffect(() => {
-		acknowledgeVisibleAgentNotificationRef.current = () => {
-			void acknowledgeVisibleAgentNotification();
-		};
-	}, [acknowledgeVisibleAgentNotification]);
-
-	useLayoutEffect(() => {
-		isFocusedRef.current = isFocused;
-		visibleConnectionIdRef.current = isFocused
-			? (connectionStoredConnectionId ?? null)
-			: null;
-		visibleChannelIdRef.current = isFocused ? channelId : null;
-		visibleTmuxTargetRef.current = tmuxTarget.trim() || 'main';
-		agentNotificationAckRequestIdRef.current += 1;
-		if (isFocused) {
-			void acknowledgeVisibleAgentNotification();
-		} else {
-			runtimeShellConfigReloadRequestIdRef.current += 1;
-			browserActions.invalidateAll();
-			browserActions.close();
-			invalidateCodexRestartRequests();
-			liveInputGenerationRef.current += 1;
-			clearCommandTimeouts();
-			scrollbackEnterRequestGenerationRef.current += 1;
-			void clearScrollbackState({ failurePolicy: 'suppress' });
-		}
-	}, [
-		acknowledgeVisibleAgentNotification,
-		browserActions,
-		channelId,
-		clearScrollbackState,
-		clearCommandTimeouts,
-		connectionStoredConnectionId,
-		invalidateCodexRestartRequests,
-		isFocused,
-		tmuxTarget,
-	]);
-
-	useLayoutEffect(() => {
-		return () => {
-			agentNotificationAckRequestIdRef.current += 1;
-			isFocusedRef.current = false;
-			isAppActiveRef.current = false;
-			invalidateCodexRestartRequests();
-			runtimeShellConfigReloadRequestIdRef.current += 1;
-			visibleConnectionIdRef.current = null;
-			visibleChannelIdRef.current = null;
-			visibleTmuxTargetRef.current = 'main';
-			liveInputGenerationRef.current += 1;
-			clearCommandTimeouts();
-		};
-	}, [clearCommandTimeouts, invalidateCodexRestartRequests]);
-
-	useLayoutEffect(() => {
-		if (Platform.OS !== 'android') return undefined;
-		return subscribeAgentNotificationPending(() => {
-			acknowledgeVisibleAgentNotificationRef.current();
-		});
-	}, []);
 
 	const workmuxKeyboardCommandRunner = useMemo(
 		() =>
@@ -2519,6 +2406,7 @@ function ShellDetail() {
 					});
 				},
 				showFailure: ({ message, failureClass }) => {
+					const activitySnapshot = getActivitySnapshot();
 					const state = useSshStore.getState();
 					const storeKey = `${connectionId}-${channelId}` as const;
 					logger.warn('Workmux keyboard command failure', {
@@ -2533,8 +2421,8 @@ function ShellDetail() {
 					});
 					showShellWorkmuxKeyboardFailure({
 						failureClass,
-						isFocused: isFocusedRef.current,
-						isAppActive: isAppActiveRef.current,
+						isFocused: activitySnapshot.focused,
+						isAppActive: activitySnapshot.appActive,
 						message,
 						onTransportUnhealthy: (failure) => {
 							logger.warn('Workmux transport unhealthy, triggering reconnect', {
@@ -2543,7 +2431,7 @@ function ShellDetail() {
 								failureClass: failure.failureClass,
 								message: failure.message,
 							});
-							if (!isFocusedRef.current || !isAppActiveRef.current) return;
+							if (!getActivitySnapshot().interactive) return;
 							useSshStore
 								.getState()
 								.invalidateShellTransport(connectionId, channelId);
@@ -2553,18 +2441,13 @@ function ShellDetail() {
 				},
 				getErrorMessage,
 			}),
-		[channelId, connectionId],
+		[channelId, connectionId, getActivitySnapshot],
 	);
 	const workmuxKeyboardSourceRef = useRef({
 		targetKey,
 		tmuxEnabled,
 		connection,
 	});
-
-	useLayoutEffect(() => {
-		if (isFocused) return;
-		workmuxKeyboardCommandRunner.invalidate();
-	}, [isFocused, workmuxKeyboardCommandRunner]);
 
 	useLayoutEffect(() => {
 		syncShellCommandLifecycle({
@@ -2600,7 +2483,7 @@ function ShellDetail() {
 	}, [commandMenuModal, manualTerminalFitRunner]);
 
 	const debugConnectionInCodex = useConnectionDebugCommand({
-		appActive: isAppActiveRef.current,
+		appActive: activity.snapshot.appActive,
 		closeMenu: commandMenuModal.onClose,
 		allowTerminalPaste: false,
 		pasteIntoTerminal: sendTextRaw,
@@ -2642,8 +2525,8 @@ function ShellDetail() {
 						}
 						if (
 							!shouldShowFocusedActiveFeedback({
-								isFocused: isFocusedRef.current,
-								isAppActive: isAppActiveRef.current,
+								isFocused: getActivitySnapshot().focused,
+								isAppActive: getActivitySnapshot().appActive,
 							})
 						) {
 							logger.warn('Codex restart failed', message);
@@ -2659,7 +2542,13 @@ function ShellDetail() {
 				codexRestartGate.finish(restartToken);
 			}
 		},
-		[activeTmuxSessionName, codexRestartGate, commandMenuModal, tmuxEnabled],
+		[
+			activeTmuxSessionName,
+			codexRestartGate,
+			commandMenuModal,
+			getActivitySnapshot,
+			tmuxEnabled,
+		],
 	);
 
 	const actionContext = useMemo<ActionContext>(
@@ -2928,8 +2817,15 @@ function ShellDetail() {
 		};
 	}, []);
 
-	useEffect(() => {
+	useLayoutEffect(() => {
+		const activitySnapshot = getActivitySnapshot();
 		const isAndroid = Platform.OS === 'android';
+		const invalidateRetainedDomains = () => {
+			runtimeShellConfigReloadRequestIdRef.current += 1;
+			invalidateCodexRestartRequests();
+			liveInputGenerationRef.current += 1;
+			clearCommandTimeouts();
+		};
 		const dismissKeyboard = () => {
 			if (isAndroid) Keyboard.dismiss();
 		};
@@ -2941,60 +2837,48 @@ function ShellDetail() {
 				dismissKeyboard();
 			}, 150);
 		};
-		appStateRef.current = AppState.currentState;
-		if (isAndroid) {
-			dismissKeyboard();
-			xtermRef.current?.setSystemKeyboardEnabled(systemKeyboardEnabled);
-		}
-		// eslint-disable-next-line @eslint-react/web-api/no-leaked-event-listener -- React Native AppState cleans up via subscription.remove()
-		const subscription = AppState.addEventListener('change', (nextState) => {
-			const previousState = appStateRef.current;
-			appStateRef.current = nextState;
-			isAppActiveRef.current = nextState === 'active';
-			if (nextState === 'active') {
-				if (isAndroid) {
-					xtermRef.current?.setSystemKeyboardEnabled(systemKeyboardEnabled);
-				}
-				acknowledgeVisibleAgentNotificationRef.current();
+		if (activitySnapshot.interactive) {
+			if (isAndroid) {
+				xtermRef.current?.setSystemKeyboardEnabled(
+					systemKeyboardEnabledRef.current,
+				);
 				if (
-					isAndroid &&
-					(!systemKeyboardEnabled || !lastKeyboardVisibleRef.current)
+					!systemKeyboardEnabledRef.current ||
+					!lastKeyboardVisibleRef.current
 				) {
 					dismissKeyboard();
 					scheduleKeyboardDismiss();
 					systemKeyboardVisibleRef.current = false;
 				}
-				return;
 			}
+			return invalidateRetainedDomains;
+		}
 
+		invalidateRetainedDomains();
+		browserActionsInvalidateAllRef.current();
+		browserActionsCloseRef.current();
+		workmuxKeyboardCommandRunner.invalidate();
+		scrollbackEnterRequestGenerationRef.current += 1;
+		void clearScrollbackState({ failurePolicy: 'suppress' });
+		if (!activitySnapshot.appActive) {
 			void runShellScrollbackInactiveCleanup({
-				previousState,
-				nextState,
+				previousState: 'active',
+				nextState: activitySnapshot.appState,
 				clearScrollbackState: () =>
 					clearScrollbackState({ failurePolicy: 'suppress' }),
 				warn: (message, error) => logger.warn(message, error),
 			});
-			if (previousState === 'active') {
-				agentNotificationAckRequestIdRef.current += 1;
-				runtimeShellConfigReloadRequestIdRef.current += 1;
-				browserActionsInvalidateAllRef.current();
-				workmuxKeyboardCommandRunner.invalidate();
-				invalidateCodexRestartRequests();
-				liveInputGenerationRef.current += 1;
-				clearCommandTimeouts();
-				if (isAndroid) {
-					lastKeyboardVisibleRef.current = systemKeyboardVisibleRef.current;
-				}
+			if (isAndroid) {
+				lastKeyboardVisibleRef.current = systemKeyboardVisibleRef.current;
 			}
-		});
-		return () => {
-			subscription.remove();
-		};
+		}
+		return invalidateRetainedDomains;
 	}, [
+		activity.snapshot.generation,
 		clearCommandTimeouts,
 		clearScrollbackState,
+		getActivitySnapshot,
 		invalidateCodexRestartRequests,
-		systemKeyboardEnabled,
 		workmuxKeyboardCommandRunner,
 	]);
 
@@ -3077,7 +2961,7 @@ function ShellDetail() {
 
 	const handleScrollbackEnterRequested = useCallback(
 		async (event: { instanceId: string; requestId: number }) => {
-			if (!isFocusedRef.current || !isAppActiveRef.current) {
+			if (!getActivitySnapshot().interactive) {
 				clearLocalScrollbackUiState();
 				return;
 			}
@@ -3086,12 +2970,12 @@ function ShellDetail() {
 			const requestGeneration = scrollbackEnterRequestGenerationRef.current;
 			const isRequestCurrent = () =>
 				scrollbackEnterRequestGenerationRef.current === requestGeneration &&
-				isFocusedRef.current &&
-				isAppActiveRef.current &&
+				getActivitySnapshot().interactive &&
 				currentInstanceIdRef.current === event.instanceId;
+			const activitySnapshot = getActivitySnapshot();
 			await handleTmuxScrollbackEnterRequested({
 				event,
-				isAppActive: isAppActiveRef.current,
+				isAppActive: activitySnapshot.appActive,
 				currentInstanceId: currentInstanceIdRef.current,
 				shellAvailable: Boolean(shell),
 				selectionModeEnabled,
@@ -3111,6 +2995,7 @@ function ShellDetail() {
 		[
 			clearLocalScrollbackUiState,
 			connection,
+			getActivitySnapshot,
 			selectionModeEnabled,
 			shell,
 			tmuxEnabled,

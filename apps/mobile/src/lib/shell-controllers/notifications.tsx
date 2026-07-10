@@ -139,6 +139,7 @@ export function useShellNotificationsController(
 	]);
 
 	const routeEffectKey = hookOrchestrator.createRouteEffectKey(input);
+	const runWorkmuxCommand = input.runWorkmuxCommand;
 	useEffect(() => {
 		void hookOrchestrator.dispatchRoutePassive(
 			core.handleRoute,
@@ -150,7 +151,7 @@ export function useShellNotificationsController(
 				);
 			},
 		);
-	}, [core, hookOrchestrator, routeEffectKey]);
+	}, [core, hookOrchestrator, routeEffectKey, runWorkmuxCommand]);
 
 	useEffect(() => coreLifecycle.setup(), [coreLifecycle]);
 
