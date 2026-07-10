@@ -9,7 +9,7 @@ import {
 } from 'react';
 import { Alert } from 'react-native';
 import { buildFeatureRequestSubmittedAlert } from '../repo-feature-request';
-import { createReplaySafeDisposer } from './controller-core';
+import { createReplaySafeControllerLifecycle } from './controller-lifecycle';
 import {
 	createFeatureRequestControllerAdapter,
 	type FeatureRequestControllerDependencies,
@@ -64,7 +64,7 @@ export function useFeatureRequestController<TConnection>(
 		}),
 	);
 	const [coreLifecycle] = useState(() =>
-		createReplaySafeDisposer(core.dispose),
+		createReplaySafeControllerLifecycle(core),
 	);
 	const snapshot = useSyncExternalStore(
 		core.subscribe,

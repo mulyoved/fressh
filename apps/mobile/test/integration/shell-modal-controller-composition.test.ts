@@ -69,25 +69,51 @@ void test('shell detail tracks tmux-only lifecycle changes separately from targe
 		join(process.cwd(), 'src/lib/shell-controllers/skill-selector.tsx'),
 		'utf8',
 	);
+	const browserSource = readFileSync(
+		join(process.cwd(), 'src/lib/shell-controllers/browser-actions.tsx'),
+		'utf8',
+	);
 
 	assert.match(
 		skillSource,
-		/syncSkillSelectorControllerSource\(\{[\s\S]*?dependencies: deps,[\s\S]*?core,[\s\S]*?\}\)/,
+		/syncControllerSource\(\{[\s\S]*?dependencies: deps,[\s\S]*?core,[\s\S]*?\}\)/,
+	);
+	assert.match(
+		browserSource,
+		/syncControllerSource\(\{[\s\S]*?dependencies: deps,[\s\S]*?core,[\s\S]*?\}\)/,
 	);
 	assert.match(
 		source,
-		/markFeatureRequestSourceStale\(\);\s*\}, \[markFeatureRequestSourceStale, targetKey, tmuxEnabled\]\)/,
+		/markFeatureRequestSourceStale\(\);\s*\}, \[connection, markFeatureRequestSourceStale, targetKey, tmuxEnabled\]\)/,
 	);
 	assert.match(
 		source,
-		/const workmuxKeyboardSourceRef = useRef\(\{\s*targetKey,\s*tmuxEnabled,\s*\}\)/,
+		/const workmuxKeyboardSourceRef = useRef\(\{\s*targetKey,\s*tmuxEnabled,\s*connection,\s*\}\)/,
 	);
 	assert.match(
 		source,
-		/workmuxKeyboardSourceRef\.current\.targetKey === targetKey[\s\S]*?workmuxKeyboardSourceRef\.current\.tmuxEnabled === tmuxEnabled/,
+		/syncShellCommandLifecycle\(\{[\s\S]*?trackedSource: workmuxKeyboardSourceRef,[\s\S]*?nextSource: \{ targetKey, tmuxEnabled, connection \},[\s\S]*?invalidateWorkmux:[\s\S]*?invalidateCodex:/,
 	);
 	assert.match(
 		source,
-		/\[\s*invalidateCodexRestartRequests,\s*targetKey,\s*tmuxEnabled,\s*workmuxKeyboardCommandRunner,?\s*\]/,
+		/\[\s*connection,\s*invalidateCodexRestartRequests,\s*targetKey,\s*tmuxEnabled,\s*workmuxKeyboardCommandRunner,?\s*\]/,
+	);
+	assert.equal(
+		existsSync(
+			join(
+				process.cwd(),
+				'src/lib/shell-controllers/browser-actions-lifecycle.ts',
+			),
+		),
+		false,
+	);
+	assert.equal(
+		existsSync(
+			join(
+				process.cwd(),
+				'src/lib/shell-controllers/skill-selector-lifecycle.ts',
+			),
+		),
+		false,
 	);
 });

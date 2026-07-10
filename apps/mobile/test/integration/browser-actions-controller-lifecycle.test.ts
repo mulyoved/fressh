@@ -2,9 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createBrowserActionsControllerCore } from '../../src/lib/shell-controllers/browser-actions-core';
 import {
-	createBrowserActionsControllerLifecycle,
-	syncBrowserActionsControllerSource,
-} from '../../src/lib/shell-controllers/browser-actions-lifecycle';
+	createReplaySafeControllerLifecycle,
+	syncControllerSource,
+} from '../../src/lib/shell-controllers/controller-lifecycle';
 import {
 	createShellTargetKey,
 	createShellTransportKey,
@@ -26,6 +26,7 @@ void test('tmux-only dependency change invalidates stale browser work once', asy
 		'main',
 	);
 	let tmuxEnabled = true;
+	const connection = { id: 'connection-1' };
 	const core = createBrowserActionsControllerCore({
 		initialSourceKey: sourceKey,
 		requestOpen: (onOpen) => {
@@ -59,22 +60,79 @@ void test('tmux-only dependency change invalidates stale browser work once', asy
 		showError: () => {},
 		getErrorMessage: String,
 	});
-	const committed = { current: { sourceKey, tmuxEnabled } };
-	const tracked = { current: { sourceKey, tmuxEnabled } };
+	const committed = { current: { sourceKey, tmuxEnabled, connection } };
+	const tracked = { current: { sourceKey, tmuxEnabled, connection } };
 	const pending = core.openGitHubTarget('issues');
 
 	tmuxEnabled = false;
-	syncBrowserActionsControllerSource({
+	syncControllerSource({
 		committedDependencies: committed,
 		trackedSource: tracked,
-		dependencies: { sourceKey, tmuxEnabled },
+		dependencies: { sourceKey, tmuxEnabled, connection },
 		core,
 	});
 	repository.resolve('mulyoved/fressh');
 	await pending;
 
 	assert.deepEqual(openedUrls, []);
-	assert.deepEqual(committed.current, { sourceKey, tmuxEnabled: false });
+	assert.deepEqual(committed.current, {
+		sourceKey,
+		tmuxEnabled: false,
+		connection,
+	});
+});
+
+void test('connection loss invalidates stale browser work with an unchanged route key', async () => {
+	const repository = deferred<string>();
+	const openedUrls: string[] = [];
+	const sourceKey = createShellTargetKey(
+		createShellTransportKey('conn', 7),
+		'main',
+	);
+	const connection = { id: 'connection-1' };
+	const core = createBrowserActionsControllerCore({
+		initialSourceKey: sourceKey,
+		requestOpen: (onOpen) => {
+			onOpen();
+			return true;
+		},
+		getTmuxEnabled: () => true,
+		getTmuxTarget: () => 'main',
+		runHostBrowserCommand: async (command) =>
+			command.includes('git remote get-url') ? repository.promise : '',
+		runWorkmuxCommand: async () => '',
+		openAndroidUrl: async (url) => {
+			openedUrls.push(url);
+		},
+		showError: () => {},
+		getErrorMessage: String,
+	});
+	const committed = {
+		current: {
+			sourceKey,
+			tmuxEnabled: true,
+			connection: connection as object | null,
+		},
+	};
+	const tracked = {
+		current: {
+			sourceKey,
+			tmuxEnabled: true,
+			connection: connection as object | null,
+		},
+	};
+	const pending = core.openGitHubTarget('issues');
+
+	syncControllerSource({
+		committedDependencies: committed,
+		trackedSource: tracked,
+		dependencies: { sourceKey, tmuxEnabled: true, connection: null },
+		core,
+	});
+	repository.resolve('mulyoved/fressh');
+	await pending;
+
+	assert.deepEqual(openedUrls, []);
 });
 
 void test('source synchronization avoids a second invalidation when target key changed', () => {
@@ -87,14 +145,27 @@ void test('source synchronization avoids a second invalidation when target key c
 		'other',
 	);
 	const events: string[] = [];
-	const dependencies = { sourceKey: secondKey, tmuxEnabled: false };
+	const firstConnection = { id: 'first' };
+	const dependencies = {
+		sourceKey: secondKey,
+		tmuxEnabled: false,
+		connection: { id: 'second' },
+	};
 
-	syncBrowserActionsControllerSource({
+	syncControllerSource({
 		committedDependencies: {
-			current: { sourceKey: firstKey, tmuxEnabled: true },
+			current: {
+				sourceKey: firstKey,
+				tmuxEnabled: true,
+				connection: firstConnection,
+			},
 		},
 		trackedSource: {
-			current: { sourceKey: firstKey, tmuxEnabled: true },
+			current: {
+				sourceKey: firstKey,
+				tmuxEnabled: true,
+				connection: firstConnection,
+			},
 		},
 		dependencies,
 		core: {
@@ -111,7 +182,7 @@ void test('browser lifecycle invalidates synchronously and defers replay-safe di
 	const queued: (() => void)[] = [];
 	let continuationCurrent = true;
 	let continuationSideEffects = 0;
-	const lifecycle = createBrowserActionsControllerLifecycle(
+	const lifecycle = createReplaySafeControllerLifecycle(
 		{
 			invalidate: () => {
 				continuationCurrent = false;

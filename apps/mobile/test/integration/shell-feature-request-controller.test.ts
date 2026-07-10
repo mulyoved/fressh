@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { buildCreateGitHubIssueCommand } from '../../src/lib/repo-feature-request';
+import { createReplaySafeControllerLifecycle } from '../../src/lib/shell-controllers/controller-lifecycle';
 import { createFeatureRequestControllerAdapter } from '../../src/lib/shell-controllers/feature-request-adapter';
 import {
 	createFeatureRequestControllerCore,
@@ -376,6 +377,30 @@ void test('feature request disposal suppresses an active submission', async () =
 	assert.equal(harness.core.getSnapshot().open, false);
 	assert.equal(harness.core.getSnapshot().isSubmitting, false);
 	assert.equal(harness.alerts.length, 0);
+});
+
+void test('feature request lifecycle invalidates synchronously before replay-safe disposal', async () => {
+	const harness = createFeatureRequestHarness();
+	const queued: (() => void)[] = [];
+	const lifecycle = createReplaySafeControllerLifecycle(harness.core, (task) =>
+		queued.push(task),
+	);
+	const cleanup = lifecycle.setup();
+	harness.core.open();
+	await harness.resolveCurrent();
+	const pending = harness.core.submit('description', 'mulyoved/fressh');
+
+	cleanup();
+	harness.submissions[0]?.resolve({
+		success: true,
+		output: '',
+		issueUrl: 'https://github.com/mulyoved/fressh/issues/83',
+	});
+	await pending;
+
+	assert.equal(queued.length, 1);
+	assert.deepEqual(harness.alerts, []);
+	assert.equal(harness.core.getSnapshot().open, false);
 });
 
 void test('feature request suppresses older resolution and respects an open veto', async () => {

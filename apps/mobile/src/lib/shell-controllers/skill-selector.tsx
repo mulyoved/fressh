@@ -10,7 +10,10 @@ import {
 import { type DiscoveredSkill } from '@/lib/skill-discovery';
 import { skillDiscoveryCache } from '@/lib/skill-discovery-cache-native';
 import { loadSkillSelectorProject } from '@/lib/skill-selector-loader';
-import { createReplaySafeDisposer } from './controller-core';
+import {
+	createReplaySafeControllerLifecycle,
+	syncControllerSource,
+} from './controller-lifecycle';
 import {
 	createSkillSelectorControllerAdapter,
 	type SkillSelectorControllerDependencies,
@@ -19,7 +22,6 @@ import {
 	createSkillSelectorControllerCore,
 	type SkillSelectorControllerCore,
 } from './skill-selector-core';
-import { syncSkillSelectorControllerSource } from './skill-selector-lifecycle';
 
 export type SkillSelectorModalProps = {
 	open: boolean;
@@ -50,6 +52,7 @@ export function useSkillSelectorController<TConnection>(
 	const trackedSourceRef = useRef({
 		sourceKey: deps.sourceKey,
 		tmuxEnabled: deps.tmuxEnabled,
+		connection: deps.connection,
 	});
 	const [adapter] = useState(() =>
 		createSkillSelectorControllerAdapter({
@@ -68,7 +71,7 @@ export function useSkillSelectorController<TConnection>(
 		}),
 	);
 	const [coreLifecycle] = useState(() =>
-		createReplaySafeDisposer(core.dispose),
+		createReplaySafeControllerLifecycle(core),
 	);
 	const snapshot = useSyncExternalStore(
 		core.subscribe,
@@ -77,7 +80,7 @@ export function useSkillSelectorController<TConnection>(
 	);
 
 	useLayoutEffect(() => {
-		syncSkillSelectorControllerSource({
+		syncControllerSource({
 			committedDependencies: committedDepsRef,
 			trackedSource: trackedSourceRef,
 			dependencies: deps,

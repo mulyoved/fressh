@@ -106,6 +106,7 @@ import {
 import { useBrowserActionsController } from '@/lib/shell-controllers/browser-actions';
 import { useFeatureRequestController } from '@/lib/shell-controllers/feature-request';
 import { createShellModalArbiter } from '@/lib/shell-controllers/modal-arbiter';
+import { syncShellCommandLifecycle } from '@/lib/shell-controllers/shell-command-lifecycle';
 import { useShellSimpleModals } from '@/lib/shell-controllers/simple-modals';
 import { useSkillSelectorController } from '@/lib/shell-controllers/skill-selector';
 import {
@@ -2101,7 +2102,7 @@ function ShellDetail() {
 
 	useLayoutEffect(() => {
 		markFeatureRequestSourceStale();
-	}, [markFeatureRequestSourceStale, targetKey, tmuxEnabled]);
+	}, [connection, markFeatureRequestSourceStale, targetKey, tmuxEnabled]);
 
 	const handleOpenWisprTextEditor = useCallback(() => {
 		browserActions.invalidateHostUrlReads();
@@ -2557,6 +2558,7 @@ function ShellDetail() {
 	const workmuxKeyboardSourceRef = useRef({
 		targetKey,
 		tmuxEnabled,
+		connection,
 	});
 
 	useLayoutEffect(() => {
@@ -2565,16 +2567,14 @@ function ShellDetail() {
 	}, [isFocused, workmuxKeyboardCommandRunner]);
 
 	useLayoutEffect(() => {
-		if (
-			workmuxKeyboardSourceRef.current.targetKey === targetKey &&
-			workmuxKeyboardSourceRef.current.tmuxEnabled === tmuxEnabled
-		) {
-			return;
-		}
-		workmuxKeyboardSourceRef.current = { targetKey, tmuxEnabled };
-		workmuxKeyboardCommandRunner.invalidate();
-		invalidateCodexRestartRequests();
+		syncShellCommandLifecycle({
+			trackedSource: workmuxKeyboardSourceRef,
+			nextSource: { targetKey, tmuxEnabled, connection },
+			invalidateWorkmux: () => workmuxKeyboardCommandRunner.invalidate(),
+			invalidateCodex: invalidateCodexRestartRequests,
+		});
 	}, [
+		connection,
 		invalidateCodexRestartRequests,
 		targetKey,
 		tmuxEnabled,

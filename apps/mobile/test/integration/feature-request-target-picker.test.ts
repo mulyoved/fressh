@@ -127,7 +127,7 @@ void test('useFeatureRequestController binds the submitted alert and replay-safe
 		source,
 		/Alert\.alert\(alert\.title, alert\.message, \[\{ text: 'OK' \}\]\)/,
 	);
-	assert.match(source, /createReplaySafeDisposer\(core\.dispose\)/);
+	assert.match(source, /createReplaySafeControllerLifecycle\(core\)/);
 });
 
 void test('feature request core has one owner for submission state', () => {

@@ -25,15 +25,15 @@ import {
 	type BrowserActionsControllerHandle,
 } from './browser-actions-facade';
 import {
-	createBrowserActionsControllerLifecycle,
-	syncBrowserActionsControllerSource,
-} from './browser-actions-lifecycle';
-import {
 	createBrowserActionsModalProps,
 	type BrowserActionsModalProps,
 	type DetectedOpenPickerModalProps,
 	type HostUrlModalProps,
 } from './browser-actions-modal-props';
+import {
+	createReplaySafeControllerLifecycle,
+	syncControllerSource,
+} from './controller-lifecycle';
 
 const logger = rootLogger.extend('BrowserActionsController');
 
@@ -54,6 +54,7 @@ export function useBrowserActionsController<TConnection>(
 	const trackedSourceRef = useRef({
 		sourceKey: deps.sourceKey,
 		tmuxEnabled: deps.tmuxEnabled,
+		connection: deps.connection,
 	});
 	const [adapter] = useState(() =>
 		createBrowserActionsControllerAdapter({
@@ -96,7 +97,7 @@ export function useBrowserActionsController<TConnection>(
 		}),
 	);
 	const [coreLifecycle] = useState(() =>
-		createBrowserActionsControllerLifecycle(core),
+		createReplaySafeControllerLifecycle(core),
 	);
 	const [facade] = useState(() => createBrowserActionsControllerFacade(core));
 	const snapshot = useSyncExternalStore(
@@ -106,7 +107,7 @@ export function useBrowserActionsController<TConnection>(
 	);
 
 	useLayoutEffect(() => {
-		syncBrowserActionsControllerSource({
+		syncControllerSource({
 			committedDependencies: committedDepsRef,
 			trackedSource: trackedSourceRef,
 			dependencies: deps,
