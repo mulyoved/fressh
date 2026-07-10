@@ -21,10 +21,6 @@ function createDeferred<T>(): Deferred<T> {
 	return { promise, resolve };
 }
 
-function waitForMicrotask() {
-	return new Promise((resolve) => setTimeout(resolve, 0));
-}
-
 function buildWorkmuxWindowOutput(windowId = '@12'): string {
 	return JSON.stringify({
 		sessionName: 'main',
@@ -178,41 +174,6 @@ void test('acknowledgeVisibleAgentNotification ignores superseded requests witho
 	await pending;
 
 	assert.deepEqual(harness.acknowledgements, []);
-});
-
-void test('acknowledgeVisibleAgentNotification coalesces concurrent requests into one queued rerun', async () => {
-	const harness = createHarness();
-	const first = createDeferred<string>();
-	const second = createDeferred<string>();
-	let commandCount = 0;
-	const runCommand = async () => {
-		commandCount += 1;
-		return commandCount === 1 ? first.promise : second.promise;
-	};
-
-	const firstPending = acknowledgeVisibleAgentNotification(
-		harness.options(runCommand),
-	);
-	const queuedA = acknowledgeVisibleAgentNotification(
-		harness.options(runCommand),
-	);
-	const queuedB = acknowledgeVisibleAgentNotification(
-		harness.options(runCommand),
-	);
-	await waitForMicrotask();
-
-	assert.equal(commandCount, 1);
-	first.resolve(buildWorkmuxWindowOutput());
-	await waitForMicrotask();
-	assert.equal(commandCount, 2);
-	second.resolve(buildWorkmuxWindowOutput());
-	await Promise.all([firstPending, queuedA, queuedB]);
-
-	assert.equal(commandCount, 2);
-	assert.deepEqual(harness.acknowledgements, [
-		{ connectionId: 'conn-1', session: 'main', windowId: '@12' },
-		{ connectionId: 'conn-1', session: 'main', windowId: '@12' },
-	]);
 });
 
 void test('acknowledgeVisibleAgentNotification ignores empty command output', async () => {

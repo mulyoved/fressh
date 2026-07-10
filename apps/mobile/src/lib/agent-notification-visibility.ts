@@ -68,14 +68,6 @@ export type AgentNotificationRouteOptions = {
 };
 
 const pendingListeners = new Set<() => void>();
-let acknowledgeInFlight = false;
-let acknowledgeQueued = false;
-let latestAcknowledgeOptions: VisibleAgentNotificationAcknowledgeOptions | null =
-	null;
-let queuedAcknowledgeWaiters: {
-	resolve: () => void;
-	reject: (error: unknown) => void;
-}[] = [];
 
 export function subscribeAgentNotificationPending(listener: () => void) {
 	pendingListeners.add(listener);
@@ -177,66 +169,6 @@ export async function handleAgentNotificationRoute({
 }
 
 export async function acknowledgeVisibleAgentNotification({
-	platformOS,
-	connectionId,
-	channelId,
-	tmuxEnabled,
-	tmuxTarget,
-	getVisibility,
-	nextRequestId,
-	isCurrentRequest,
-	runWorkmuxCommand,
-	acknowledge,
-	warn,
-}: VisibleAgentNotificationAcknowledgeOptions) {
-	const options = {
-		platformOS,
-		connectionId,
-		channelId,
-		tmuxEnabled,
-		tmuxTarget,
-		getVisibility,
-		nextRequestId,
-		isCurrentRequest,
-		runWorkmuxCommand,
-		acknowledge,
-		warn,
-	};
-	if (acknowledgeInFlight) {
-		latestAcknowledgeOptions = options;
-		acknowledgeQueued = true;
-		return new Promise<void>((resolve, reject) => {
-			queuedAcknowledgeWaiters.push({ resolve, reject });
-		});
-	}
-	acknowledgeInFlight = true;
-	let activeQueuedWaiters: typeof queuedAcknowledgeWaiters = [];
-	try {
-		let activeOptions = options;
-		do {
-			acknowledgeQueued = false;
-			latestAcknowledgeOptions = null;
-			await acknowledgeVisibleAgentNotificationOnce(activeOptions);
-			for (const waiter of activeQueuedWaiters) waiter.resolve();
-			activeQueuedWaiters = [];
-			if (acknowledgeQueued && latestAcknowledgeOptions) {
-				activeOptions = latestAcknowledgeOptions;
-				activeQueuedWaiters = queuedAcknowledgeWaiters;
-				queuedAcknowledgeWaiters = [];
-			}
-		} while (acknowledgeQueued);
-	} catch (error) {
-		for (const waiter of activeQueuedWaiters) waiter.reject(error);
-		for (const waiter of queuedAcknowledgeWaiters) waiter.reject(error);
-		queuedAcknowledgeWaiters = [];
-		throw error;
-	} finally {
-		latestAcknowledgeOptions = null;
-		acknowledgeInFlight = false;
-	}
-}
-
-async function acknowledgeVisibleAgentNotificationOnce({
 	platformOS,
 	connectionId,
 	channelId,
