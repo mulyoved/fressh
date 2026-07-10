@@ -36,10 +36,6 @@ export type ShellTerminalTransportController = ShellTerminalTransportPort & {
 export function createShellTerminalTransport(input: {
 	onSendFailure(error: unknown): void;
 }): ShellTerminalTransportController {
-	type LeaseMetadata = {
-		runtimeKey: TerminalRuntimeKey;
-		writerGeneration: number;
-	};
 	type BatchEntry = {
 		writer: OrderedWriter;
 		lease: TerminalInputLease;
@@ -61,8 +57,9 @@ export function createShellTerminalTransport(input: {
 	let writerGeneration = 0;
 	let disposed = false;
 	let activeEntry: BatchEntry | null = null;
-	const pendingEntries: BatchEntry[] = [];
-	const leaseMetadata = new WeakMap<TerminalInputLease, LeaseMetadata>();
+	let pendingEntries: (BatchEntry | undefined)[] = [];
+	let pendingHead = 0;
+	const ownedLeases = new WeakSet<TerminalInputLease>();
 
 	const refreshRuntimeKey = () => {
 		runtimeKey =
@@ -75,24 +72,23 @@ export function createShellTerminalTransport(input: {
 	};
 
 	const isLeaseCurrent = (lease: TerminalInputLease) => {
-		const metadata = leaseMetadata.get(lease);
 		return (
-			metadata !== undefined &&
+			ownedLeases.has(lease) &&
 			!disposed &&
 			writer !== null &&
 			runtimeKey !== null &&
-			metadata.runtimeKey === runtimeKey &&
-			metadata.writerGeneration === writerGeneration
+			lease.runtimeKey === runtimeKey &&
+			lease.writerGeneration === writerGeneration
 		);
 	};
 
 	const isEntryCurrent = (entry: BatchEntry) => {
-		if (!isLeaseCurrent(entry.lease)) return false;
 		try {
-			return entry.callerIsCurrent?.() !== false;
+			if (entry.callerIsCurrent?.() === false) return false;
 		} catch {
 			return false;
 		}
+		return isLeaseCurrent(entry.lease);
 	};
 
 	const releaseEntry = (entry: BatchEntry) => {
@@ -122,12 +118,34 @@ export function createShellTerminalTransport(input: {
 		}
 	};
 
+	const dequeuePendingEntry = () => {
+		const entry = pendingEntries[pendingHead];
+		if (entry === undefined) {
+			pendingEntries = [];
+			pendingHead = 0;
+			return undefined;
+		}
+		pendingEntries[pendingHead] = undefined;
+		pendingHead += 1;
+		if (pendingHead === pendingEntries.length) {
+			pendingEntries = [];
+			pendingHead = 0;
+		} else if (
+			pendingHead >= 1_024 &&
+			pendingHead * 2 >= pendingEntries.length
+		) {
+			pendingEntries = pendingEntries.slice(pendingHead);
+			pendingHead = 0;
+		}
+		return entry;
+	};
+
 	const startNextEntry = () => {
 		if (activeEntry !== null) return;
-		let entry = pendingEntries.shift();
+		let entry = dequeuePendingEntry();
 		while (entry !== undefined && !isEntryCurrent(entry)) {
 			resolveEntry(entry);
-			entry = pendingEntries.shift();
+			entry = dequeuePendingEntry();
 		}
 		if (entry === undefined) return;
 
@@ -152,16 +170,22 @@ export function createShellTerminalTransport(input: {
 
 	const staleQueuedEntries = () => {
 		activeEntry?.abortController.abort();
-		const staleEntries = pendingEntries.splice(0);
-		for (const entry of staleEntries) resolveEntry(entry);
+		const staleEntries = pendingEntries;
+		const staleHead = pendingHead;
+		pendingEntries = [];
+		pendingHead = 0;
+		for (let index = staleHead; index < staleEntries.length; index += 1) {
+			const entry = staleEntries[index];
+			if (entry !== undefined) resolveEntry(entry);
+			staleEntries[index] = undefined;
+		}
 	};
 
 	return {
 		captureLease: () => {
 			if (disposed || writer === null || runtimeKey === null) return null;
-			const metadata = { runtimeKey, writerGeneration };
-			const lease = Object.freeze({ ...metadata });
-			leaseMetadata.set(lease, metadata);
+			const lease = Object.freeze({ runtimeKey, writerGeneration });
+			ownedLeases.add(lease);
 			return lease;
 		},
 		isLeaseCurrent,

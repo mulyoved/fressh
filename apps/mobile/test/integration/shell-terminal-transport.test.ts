@@ -695,3 +695,226 @@ void test('terminal clear and restoration keeps pre-clear leases stale', async (
 	await transport.sendBatch(afterRuntimeRestore, [bytes(1)]);
 	assert.deepEqual(writes, [1]);
 });
+
+type ReentrantTransition = {
+	name: string;
+	transition(
+		transport: ReturnType<typeof createShellTerminalTransport>,
+		send: (segment: Uint8Array<ArrayBufferLike>) => Promise<void>,
+	): void;
+};
+
+const reentrantTransitions = [
+	{
+		name: 'invalidation',
+		transition: (transport) => transport.invalidate('runtime-reset'),
+	},
+	{
+		name: 'shell replacement',
+		transition: (transport, send) =>
+			transport.setShell(createShellTransportKey('conn', 8), send),
+	},
+	{
+		name: 'runtime replacement',
+		transition: (transport) => transport.setRuntimeInstance('replacement'),
+	},
+	{
+		name: 'shell clear',
+		transition: (transport) => transport.clearShell(),
+	},
+	{
+		name: 'runtime clear',
+		transition: (transport) => transport.clearRuntime(),
+	},
+	{
+		name: 'disposal',
+		transition: (transport) => transport.dispose(),
+	},
+] satisfies ReentrantTransition[];
+
+for (const scenario of reentrantTransitions) {
+	void test(`terminal transport rechecks lease after reentrant ${scenario.name} before write`, async () => {
+		const writes: number[] = [];
+		const transport = createShellTerminalTransport({ onSendFailure: () => {} });
+		const send = async (segment: Uint8Array<ArrayBufferLike>) => {
+			writes.push(segment[0] ?? -1);
+		};
+		transport.setShell(createShellTransportKey('conn', 7), send);
+		transport.setRuntimeInstance('instance');
+		const lease = transport.captureLease();
+		assert.ok(lease);
+		let freshnessChecks = 0;
+
+		await transport.sendBatch(lease, [bytes(1)], {
+			isCurrent: () => {
+				freshnessChecks += 1;
+				if (freshnessChecks >= 2) scenario.transition(transport, send);
+				return true;
+			},
+		});
+
+		assert.deepEqual(writes, []);
+	});
+
+	void test(`terminal transport rechecks lease after reentrant ${scenario.name} before failure feedback`, async () => {
+		const sendError = new Error('send failed');
+		const sendStarted = deferred();
+		const pendingSend = deferred();
+		const failures: unknown[] = [];
+		let sendHasStarted = false;
+		const transport = createShellTerminalTransport({
+			onSendFailure: (error) => failures.push(error),
+		});
+		const send = async () => {
+			sendHasStarted = true;
+			sendStarted.resolve();
+			return pendingSend.promise;
+		};
+		transport.setShell(createShellTransportKey('conn', 7), send);
+		transport.setRuntimeInstance('instance');
+		const lease = transport.captureLease();
+		assert.ok(lease);
+		const batch = transport.sendBatch(lease, [bytes(1)], {
+			isCurrent: () => {
+				if (sendHasStarted) scenario.transition(transport, send);
+				return true;
+			},
+		});
+		await sendStarted.promise;
+
+		pendingSend.reject(sendError);
+		await assert.rejects(batch, sendError);
+		assert.deepEqual(failures, []);
+	});
+}
+
+void test('terminal transport rejects unauthenticated leases at sendBatch', async () => {
+	const writes: number[] = [];
+	const key = createShellTransportKey('conn', 7);
+	const send = async (segment: Uint8Array<ArrayBufferLike>) => {
+		writes.push(segment[0] ?? -1);
+	};
+	const owner = createShellTerminalTransport({ onSendFailure: () => {} });
+	const foreign = createShellTerminalTransport({ onSendFailure: () => {} });
+	for (const transport of [owner, foreign]) {
+		transport.setShell(key, send);
+		transport.setRuntimeInstance('instance');
+	}
+	const lease = owner.captureLease();
+	assert.ok(lease);
+	const foreignLease = foreign.captureLease();
+	assert.ok(foreignLease);
+	const clone = { ...lease };
+	const forged = {
+		runtimeKey: lease.runtimeKey,
+		writerGeneration: lease.writerGeneration,
+	};
+
+	await Promise.all([
+		owner.sendBatch(clone, [bytes(1)]),
+		owner.sendBatch(forged, [bytes(2)]),
+		owner.sendBatch(foreignLease, [bytes(3)]),
+	]);
+	owner.dispose();
+	await Promise.all([
+		owner.sendBatch(lease, [bytes(4)]),
+		foreign.sendBatch(lease, [bytes(5)]),
+	]);
+	assert.deepEqual(writes, []);
+});
+
+for (const stalePredicate of [
+	{ name: 'false', check: () => false },
+	{
+		name: 'throwing',
+		check: () => {
+			throw new Error('stale');
+		},
+	},
+]) {
+	void test(`terminal queue skips ${stalePredicate.name} caller-stale head and runs successor`, async () => {
+		const activeStarted = deferred();
+		const releaseActive = deferred();
+		const writes: number[] = [];
+		const transport = createShellTerminalTransport({ onSendFailure: () => {} });
+		transport.setShell(createShellTransportKey('conn', 7), async (segment) => {
+			writes.push(segment[0] ?? -1);
+			if (segment[0] === 1) {
+				activeStarted.resolve();
+				await releaseActive.promise;
+			}
+		});
+		transport.setRuntimeInstance('instance');
+		const lease = transport.captureLease();
+		assert.ok(lease);
+		const active = transport.sendBatch(lease, [bytes(1)]);
+		await activeStarted.promise;
+		const stale = transport.sendBatch(lease, [bytes(2)], {
+			isCurrent: stalePredicate.check,
+		});
+		const successor = transport.sendBatch(lease, [bytes(3)]);
+
+		releaseActive.resolve();
+		await Promise.all([active, stale, successor]);
+		assert.deepEqual(writes, [1, 3]);
+	});
+}
+
+void test('terminal queue runs a queued successor after active rejection', async () => {
+	const activeStarted = deferred();
+	const rejectActive = deferred();
+	const sendError = new Error('send failed');
+	const writes: number[] = [];
+	const transport = createShellTerminalTransport({ onSendFailure: () => {} });
+	transport.setShell(createShellTransportKey('conn', 7), async (segment) => {
+		if (segment[0] === 1) {
+			activeStarted.resolve();
+			return rejectActive.promise;
+		}
+		writes.push(segment[0] ?? -1);
+	});
+	transport.setRuntimeInstance('instance');
+	const lease = transport.captureLease();
+	assert.ok(lease);
+	const active = transport.sendBatch(lease, [bytes(1)]);
+	await activeStarted.promise;
+	const successor = transport.sendBatch(lease, [bytes(2)]);
+
+	rejectActive.reject(sendError);
+	await assert.rejects(active, sendError);
+	await successor;
+	assert.deepEqual(writes, [2]);
+});
+
+void test('terminal queue drains a large current backlog in order', async () => {
+	const activeStarted = deferred();
+	const releaseActive = deferred();
+	const writes: number[] = [];
+	const transport = createShellTerminalTransport({ onSendFailure: () => {} });
+	transport.setShell(createShellTransportKey('conn', 7), async (segment) => {
+		const value = ((segment[0] ?? 0) << 8) | (segment[1] ?? 0);
+		writes.push(value);
+		if (value === 0) {
+			activeStarted.resolve();
+			await releaseActive.promise;
+		}
+	});
+	transport.setRuntimeInstance('instance');
+	const lease = transport.captureLease();
+	assert.ok(lease);
+	const active = transport.sendBatch(lease, [new Uint8Array([0, 0])]);
+	await activeStarted.promise;
+	const backlog = Array.from({ length: 2_000 }, (_, offset) => {
+		const value = offset + 1;
+		return transport.sendBatch(lease, [
+			new Uint8Array([value >> 8, value & 0xff]),
+		]);
+	});
+
+	releaseActive.resolve();
+	await Promise.all([active, ...backlog]);
+	assert.deepEqual(
+		writes,
+		Array.from({ length: 2_001 }, (_, value) => value),
+	);
+});
