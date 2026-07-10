@@ -165,6 +165,10 @@ void test('visible acknowledgement between unmount and route replay preserves ad
 	harness.core.invalidate('unmount');
 	const visibleAcknowledgement = harness.core.acknowledgeVisible();
 	assert.equal(harness.windowCommands.length, 1);
+	const replay = harness.core.handleRoute(route);
+
+	assert.deepEqual(harness.consumedTokens, ['token-1']);
+	assert.equal(harness.routeCommands.length, 1);
 	harness.windowCommands[0]?.resolve(buildWorkmuxWindowOutput('@99'));
 	await visibleAcknowledgement;
 	assert.equal(
@@ -172,10 +176,6 @@ void test('visible acknowledgement between unmount and route replay preserves ad
 			.length,
 		1,
 	);
-	const replay = harness.core.handleRoute(route);
-
-	assert.deepEqual(harness.consumedTokens, ['token-1']);
-	assert.equal(harness.routeCommands.length, 1);
 	harness.routeCommands[0]?.resolve('');
 	assert.deepEqual(await Promise.all([original, replay]), [false, true]);
 	assert.deepEqual(harness.restoredTokens, []);
