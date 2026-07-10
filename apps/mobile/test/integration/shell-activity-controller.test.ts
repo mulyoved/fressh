@@ -1,7 +1,86 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import { subscribeShellActivityToAppState } from '../../src/lib/shell-controllers/activity-app-state';
 import { createShellActivityControllerCore } from '../../src/lib/shell-controllers/activity-core';
+
+void test('activity initializes an unfocused active shell as noninteractive', () => {
+	const core = createShellActivityControllerCore({
+		focused: false,
+		appState: 'active',
+	});
+
+	assert.deepEqual(core.getSnapshot(), {
+		focused: false,
+		appState: 'active',
+		appActive: true,
+		interactive: false,
+		generation: 0,
+	});
+});
+
+void test('activity initializes a focused background shell as noninteractive', () => {
+	const core = createShellActivityControllerCore({
+		focused: true,
+		appState: 'background',
+	});
+
+	assert.deepEqual(core.getSnapshot(), {
+		focused: true,
+		appState: 'background',
+		appActive: false,
+		interactive: false,
+		generation: 0,
+	});
+});
+
+void test('activity AppState subscription reconciles after registration and removes once', () => {
+	const core = createShellActivityControllerCore({
+		focused: true,
+		appState: 'active',
+	});
+	const lifecycleEvents: string[] = [];
+	let listener: ((appState: string) => void) | undefined;
+	let removalCount = 0;
+
+	const cleanup = subscribeShellActivityToAppState({
+		setAppState: core.setAppState,
+		getCurrentAppState: () => {
+			lifecycleEvents.push('read-current');
+			return 'background';
+		},
+		addChangeListener: (nextListener) => {
+			lifecycleEvents.push('registered');
+			listener = nextListener;
+			return {
+				remove: () => {
+					removalCount += 1;
+				},
+			};
+		},
+	});
+
+	assert.deepEqual(lifecycleEvents, ['registered', 'read-current']);
+	assert.deepEqual(core.getSnapshot(), {
+		focused: true,
+		appState: 'background',
+		appActive: false,
+		interactive: false,
+		generation: 1,
+	});
+
+	listener?.('active');
+	assert.deepEqual(core.getSnapshot(), {
+		focused: true,
+		appState: 'active',
+		appActive: true,
+		interactive: true,
+		generation: 2,
+	});
+
+	cleanup();
+	assert.equal(removalCount, 1);
+});
 
 void test('activity generation advances at interactive boundaries only', () => {
 	const core = createShellActivityControllerCore({

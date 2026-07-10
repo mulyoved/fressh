@@ -7,6 +7,7 @@ import {
 	useSyncExternalStore,
 } from 'react';
 import { AppState } from 'react-native';
+import { subscribeShellActivityToAppState } from './activity-app-state';
 import {
 	createShellActivityControllerCore,
 	type ShellActivitySnapshot,
@@ -37,11 +38,18 @@ export function useShellActivityController(): ShellActivityControllerHandle {
 	);
 
 	useLayoutEffect(() => core.setFocused(focused), [core, focused]);
-	useEffect(() => {
-		// eslint-disable-next-line @eslint-react/web-api/no-leaked-event-listener -- React Native AppState cleans up via subscription.remove()
-		const subscription = AppState.addEventListener('change', core.setAppState);
-		return () => subscription.remove();
-	}, [core]);
+	useEffect(
+		() =>
+			subscribeShellActivityToAppState({
+				setAppState: core.setAppState,
+				getCurrentAppState: () => AppState.currentState,
+				addChangeListener: (listener) => {
+					// eslint-disable-next-line @eslint-react/web-api/no-leaked-event-listener -- React Native AppState cleans up via subscription.remove()
+					return AppState.addEventListener('change', listener);
+				},
+			}),
+		[core],
+	);
 	useEffect(() => coreLifecycle.setup(), [coreLifecycle]);
 
 	return useMemo(
