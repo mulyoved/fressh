@@ -104,26 +104,118 @@ void test('skill selector suppresses completion after source invalidation', asyn
 	assert.equal(harness.core.getSnapshot().projectName, null);
 });
 
-void test('skill selector refresh preserves visible skills and reports refresh errors', async () => {
+void test('skill selector suppresses rejection after source invalidation', async () => {
+	const harness = createSkillSelectorHarness();
+	harness.core.open();
+	harness.core.setSourceKey('source-2');
+	harness.loads[0]?.reject(new Error('stale failure'));
+	await harness.settled();
+
+	assert.deepEqual(harness.core.getSnapshot(), {
+		open: false,
+		skills: [],
+		projectName: null,
+		projectRoot: null,
+		updatedAt: null,
+		isLoading: false,
+		isRefreshing: false,
+		error: null,
+		refreshError: null,
+	});
+});
+
+void test('skill selector retry clears an initial error and can succeed', async () => {
+	const harness = createSkillSelectorHarness();
+	harness.core.open();
+	harness.loads[0]?.reject(new Error('initial failure'));
+	await harness.settled();
+	assert.equal(harness.core.getSnapshot().isLoading, false);
+	assert.equal(harness.core.getSnapshot().error, 'initial failure');
+
+	harness.core.retry();
+	assert.equal(harness.core.getSnapshot().isLoading, true);
+	assert.equal(harness.core.getSnapshot().error, null);
+	harness.loads[1]?.resolve({
+		projectName: 'recovered',
+		projectRoot: '/repo/recovered',
+		updatedAt: null,
+		skills: [brainstorming],
+	});
+	await harness.settled();
+
+	assert.equal(harness.core.getSnapshot().projectName, 'recovered');
+	assert.equal(harness.core.getSnapshot().isLoading, false);
+	assert.equal(harness.core.getSnapshot().error, null);
+	assert.deepEqual(harness.forceRefreshes, [false, true]);
+});
+
+void test('skill selector older success cannot replace a newer result', async () => {
+	const harness = createSkillSelectorHarness();
+	harness.core.open();
+	harness.core.refresh();
+	harness.loads[1]?.resolve({
+		projectName: 'newer',
+		projectRoot: '/repo/newer',
+		updatedAt: 'newer',
+		skills: [brainstorming],
+	});
+	await harness.settled();
+	harness.loads[0]?.resolve({
+		projectName: 'older',
+		projectRoot: '/repo/older',
+		updatedAt: 'older',
+		skills: [],
+	});
+	await harness.settled();
+
+	assert.equal(harness.core.getSnapshot().projectName, 'newer');
+	assert.equal(harness.core.getSnapshot().updatedAt, 'newer');
+});
+
+void test('skill selector older failure cannot clear a newer result', async () => {
+	const harness = createSkillSelectorHarness();
+	harness.core.open();
+	harness.core.refresh();
+	harness.loads[1]?.resolve({
+		projectName: 'newer',
+		projectRoot: '/repo/newer',
+		updatedAt: null,
+		skills: [brainstorming],
+	});
+	await harness.settled();
+	harness.loads[0]?.reject(new Error('older failure'));
+	await harness.settled();
+
+	assert.equal(harness.core.getSnapshot().projectName, 'newer');
+	assert.equal(harness.core.getSnapshot().error, null);
+	assert.equal(harness.core.getSnapshot().isLoading, false);
+});
+
+void test('skill selector refresh preserves a loaded empty project and reports refresh errors', async () => {
 	const harness = createSkillSelectorHarness();
 	harness.core.open();
 	harness.loads[0]?.resolve({
 		projectName: 'fressh',
 		projectRoot: '/repo/fressh',
 		updatedAt: null,
-		skills: [brainstorming],
+		skills: [],
 	});
 	await harness.settled();
 
 	harness.core.refresh();
 	assert.equal(harness.core.getSnapshot().isRefreshing, true);
-	assert.deepEqual(harness.core.getSnapshot().skills, [brainstorming]);
+	assert.equal(harness.core.getSnapshot().isLoading, false);
+	assert.equal(harness.core.getSnapshot().projectName, 'fressh');
+	assert.equal(harness.core.getSnapshot().projectRoot, '/repo/fressh');
+	assert.deepEqual(harness.core.getSnapshot().skills, []);
 	harness.loads[1]?.reject(new Error('refresh failed'));
 	await harness.settled();
 
 	assert.equal(harness.core.getSnapshot().error, null);
 	assert.equal(harness.core.getSnapshot().refreshError, 'refresh failed');
-	assert.deepEqual(harness.core.getSnapshot().skills, [brainstorming]);
+	assert.equal(harness.core.getSnapshot().projectName, 'fressh');
+	assert.equal(harness.core.getSnapshot().projectRoot, '/repo/fressh');
+	assert.deepEqual(harness.core.getSnapshot().skills, []);
 	assert.deepEqual(harness.forceRefreshes, [false, true]);
 });
 

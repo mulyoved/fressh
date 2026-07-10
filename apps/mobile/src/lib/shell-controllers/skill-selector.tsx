@@ -7,13 +7,14 @@ import {
 	useState,
 	useSyncExternalStore,
 } from 'react';
-import { type BrowserActionsWorkspace } from '@/lib/browser-actions-controller-actions';
-import { HOST_BROWSER_NO_CONNECTION_MESSAGE } from '@/lib/host-browser-actions';
 import { type DiscoveredSkill } from '@/lib/skill-discovery';
 import { skillDiscoveryCache } from '@/lib/skill-discovery-cache-native';
 import { loadSkillSelectorProject } from '@/lib/skill-selector-loader';
-import { type ShellModalArbiter } from './modal-arbiter';
-import { createReplaySafeDisposer } from './simple-modals';
+import { createReplaySafeDisposer } from './controller-core';
+import {
+	createSkillSelectorControllerAdapter,
+	type SkillSelectorControllerDependencies,
+} from './skill-selector-adapter';
 import {
 	createSkillSelectorControllerCore,
 	type SkillSelectorControllerCore,
@@ -41,72 +42,24 @@ export type SkillSelectorControllerHandle = {
 	close: () => void;
 };
 
-type SkillSelectorControllerDependencies<TConnection> = {
-	connection: TConnection | null;
-	tmuxEnabled: boolean;
-	runHostBrowserCommand: (
-		command: string,
-		timeoutMs?: number,
-	) => Promise<string>;
-	resolveHostBrowserWorkspace: () => Promise<BrowserActionsWorkspace>;
-	sendTextRaw: (text: string) => void;
-	sourceKey: string;
-	stableConnectionId: string;
-	tmuxTarget: string;
-	getErrorMessage: (error: unknown) => string;
-	arbiter: ShellModalArbiter;
-};
-
-const SKILL_SELECTOR_CONFLICTS = [
-	'command-menu',
-	'browser-actions',
-	'commander',
-	'configure',
-	'feature-request',
-	'text-entry',
-] as const;
-
 export function useSkillSelectorController<TConnection>(
 	deps: SkillSelectorControllerDependencies<TConnection>,
 ): SkillSelectorControllerHandle {
-	const depsRef = useRef(deps);
-	depsRef.current = deps;
+	const committedDepsRef = useRef(deps);
+	const [adapter] = useState(() =>
+		createSkillSelectorControllerAdapter({
+			getCommittedDependencies: () => committedDepsRef.current,
+			cache: skillDiscoveryCache,
+			loadProject: loadSkillSelectorProject,
+		}),
+	);
 	const [core] = useState<SkillSelectorControllerCore>(() =>
 		createSkillSelectorControllerCore({
 			initialSourceKey: deps.sourceKey,
-			loadProject: async ({ forceRefresh }) => {
-				const current = depsRef.current;
-				const requestSourceKey = current.sourceKey;
-				if (!current.connection) {
-					throw new Error(HOST_BROWSER_NO_CONNECTION_MESSAGE);
-				}
-				if (!current.tmuxEnabled) {
-					throw new Error('Skill selector requires a tmux-enabled connection.');
-				}
-				return loadSkillSelectorProject({
-					cache: skillDiscoveryCache,
-					stableConnectionId: current.stableConnectionId,
-					tmuxTarget: current.tmuxTarget,
-					resolveWorkspace: async () => {
-						const workspace = await current.resolveHostBrowserWorkspace();
-						if (depsRef.current.sourceKey !== requestSourceKey) {
-							throw new Error('Skill selector source changed.');
-						}
-						return workspace;
-					},
-					runCommand: (command) =>
-						current.runHostBrowserCommand(command, 10_000),
-					forceRefresh,
-				});
-			},
-			sendText: (value) => depsRef.current.sendTextRaw(value),
-			requestOpen: (onOpen) =>
-				depsRef.current.arbiter.requestOpen({
-					target: 'skill-selector',
-					conflicts: SKILL_SELECTOR_CONFLICTS,
-					onOpen,
-				}),
-			getErrorMessage: (error) => depsRef.current.getErrorMessage(error),
+			loadProject: adapter.loadProject,
+			sendText: adapter.sendText,
+			requestOpen: adapter.requestOpen,
+			getErrorMessage: adapter.getErrorMessage,
 		}),
 	);
 	const [coreLifecycle] = useState(() =>
@@ -119,12 +72,13 @@ export function useSkillSelectorController<TConnection>(
 	);
 
 	useLayoutEffect(() => {
+		committedDepsRef.current = deps;
 		core.setSourceKey(deps.sourceKey);
-	}, [core, deps.sourceKey]);
+	}, [core, deps]);
 
 	useEffect(() => {
-		return deps.arbiter.register('skill-selector', core.close);
-	}, [core, deps.arbiter]);
+		return adapter.registerClose(core.close);
+	}, [adapter, core, deps.arbiter]);
 
 	useEffect(() => coreLifecycle.setup(), [coreLifecycle]);
 

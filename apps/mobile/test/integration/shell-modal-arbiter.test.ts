@@ -1,10 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { createReplaySafeDisposer } from '../../src/lib/shell-controllers/controller-core';
 import { createShellModalArbiter } from '../../src/lib/shell-controllers/modal-arbiter';
-import {
-	createReplaySafeDisposer,
-	createShellSimpleModalsCore,
-} from '../../src/lib/shell-controllers/simple-modals';
+import { createShellSimpleModalsCore } from '../../src/lib/shell-controllers/simple-modals';
 
 function createTaskQueue() {
 	const tasks: (() => void)[] = [];

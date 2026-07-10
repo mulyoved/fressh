@@ -69,7 +69,7 @@ export function createSkillSelectorControllerCore(deps: {
 		const requestSourceKey = sourceKey;
 		const id = ++requestId;
 		const snapshot = publisher.getSnapshot();
-		const refreshVisibleSkills = forceRefresh && snapshot.skills.length > 0;
+		const refreshVisibleSkills = forceRefresh && snapshot.projectRoot !== null;
 		publisher.publish(
 			refreshVisibleSkills
 				? {

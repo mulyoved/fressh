@@ -9,6 +9,7 @@ import {
 } from 'react';
 import {
 	createControllerPublisher,
+	createReplaySafeDisposer,
 	type ControllerCore,
 } from './controller-core';
 import { type ShellModalArbiter, type ShellModalId } from './modal-arbiter';
@@ -28,10 +29,6 @@ export type ShellSimpleModalsState = {
 export type ShellSimpleModalsCore = ControllerCore<ShellSimpleModalsState> & {
 	open(id: ShellSimpleModalId): void;
 	close(id: ShellSimpleModalId): void;
-};
-
-export type ReplaySafeDisposer = {
-	setup(): () => void;
 };
 
 export type SimpleModalHandle = {
@@ -69,27 +66,6 @@ function getStateKey(id: ShellSimpleModalId): keyof ShellSimpleModalsState {
 		case 'configure':
 			return 'configure';
 	}
-}
-
-export function createReplaySafeDisposer(
-	dispose: () => void,
-	defer: (task: () => void) => void = queueMicrotask,
-): ReplaySafeDisposer {
-	let generation = 0;
-	let disposed = false;
-
-	return {
-		setup: () => {
-			const setupGeneration = ++generation;
-			return () => {
-				defer(() => {
-					if (disposed || generation !== setupGeneration) return;
-					disposed = true;
-					dispose();
-				});
-			};
-		},
-	};
 }
 
 export function createShellSimpleModalsCore(): ShellSimpleModalsCore {

@@ -26,6 +26,31 @@ export type ControllerPublisher<State> = {
 	disposePublisher(): void;
 };
 
+export type ReplaySafeDisposer = {
+	setup(): () => void;
+};
+
+export function createReplaySafeDisposer(
+	dispose: () => void,
+	defer: (task: () => void) => void = queueMicrotask,
+): ReplaySafeDisposer {
+	let generation = 0;
+	let disposed = false;
+
+	return {
+		setup: () => {
+			const setupGeneration = ++generation;
+			return () => {
+				defer(() => {
+					if (disposed || generation !== setupGeneration) return;
+					disposed = true;
+					dispose();
+				});
+			};
+		},
+	};
+}
+
 export function createControllerPublisher<State>(
 	initialSnapshot: State,
 ): ControllerPublisher<State> {
