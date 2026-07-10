@@ -1,11 +1,15 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { createShellActivityControllerCore } from '../../src/lib/shell-controllers/activity-core';
 import {
 	createShellNotificationsControllerCore,
 	type ShellNotificationContext,
 } from '../../src/lib/shell-controllers/notifications-core';
+import {
+	createShellNotificationRouteEffectKey,
+	setupShellNotificationActivityEffect,
+	setupShellNotificationPendingEffect,
+} from '../../src/lib/shell-controllers/notifications-lifecycle';
 import {
 	createShellTargetKey,
 	createShellTransportKey,
@@ -49,6 +53,7 @@ function buildWorkmuxWindowOutput(windowId = '@12'): string {
 function createNotificationsHarness(
 	options: {
 		acknowledgeError?: Error;
+		deferRouteCommands?: boolean;
 		routeCommandError?: Error;
 		warnError?: Error;
 	} = {},
@@ -67,7 +72,7 @@ function createNotificationsHarness(
 	const warnings: unknown[] = [];
 	const consumedTokens: string[] = [];
 	const restoredTokens: string[] = [];
-	const routeCommands: { argv: string[]; timeoutMs: number }[] = [];
+	const routeCommands: WindowCommand[] = [];
 	let routeTokenAvailable = true;
 
 	const context = (
@@ -75,7 +80,9 @@ function createNotificationsHarness(
 			Omit<ShellNotificationContext, 'transportKey' | 'targetKey'>
 		> = {},
 	): ShellNotificationContext => {
-		const storedConnectionId = overrides.storedConnectionId ?? 'saved-host';
+		const storedConnectionId = Object.hasOwn(overrides, 'storedConnectionId')
+			? (overrides.storedConnectionId ?? null)
+			: 'saved-host';
 		const channelId = overrides.channelId ?? 7;
 		const tmuxTarget = overrides.tmuxTarget ?? 'main';
 		const transportKey = createShellTransportKey(
@@ -98,10 +105,16 @@ function createNotificationsHarness(
 		platformOS: 'android',
 		runWorkmuxCommand: (argv, timeoutMs) => {
 			if (argv[2] === 'notification') {
-				routeCommands.push({ argv, timeoutMs });
-				return options.routeCommandError
-					? Promise.reject(options.routeCommandError)
-					: Promise.resolve('');
+				const deferred = createDeferred<string>();
+				routeCommands.push({ ...deferred, argv, timeoutMs });
+				if (!options.deferRouteCommands) {
+					if (options.routeCommandError) {
+						deferred.reject(options.routeCommandError);
+					} else {
+						deferred.resolve('');
+					}
+				}
+				return deferred.promise;
 			}
 			const deferred = createDeferred<string>();
 			windowCommands.push({ ...deferred, argv, timeoutMs });
@@ -198,6 +211,74 @@ void test('notification route acknowledgement remains best effort after selectio
 		harness.core.getSnapshot().handledRouteKey,
 		'["saved-host","main","@12","event-1"]',
 	);
+});
+
+async function assertStaleSuccessfulRoute(
+	mutate: (harness: ReturnType<typeof createNotificationsHarness>) => void,
+): Promise<void> {
+	const harness = createNotificationsHarness({ deferRouteCommands: true });
+	const pending = harness.core.handleRoute(harness.validRoute());
+	assert.deepEqual(harness.consumedTokens, ['token-1']);
+	mutate(harness);
+	harness.routeCommands[0]?.resolve('');
+
+	assert.equal(await pending, false);
+	assert.equal(harness.core.getSnapshot().handledRouteKey, null);
+	assert.deepEqual(harness.acknowledgements, []);
+	assert.deepEqual(harness.consumedTokens, ['token-1']);
+	assert.deepEqual(harness.restoredTokens, []);
+}
+
+void test('semantic context change suppresses a pending successful route', async () => {
+	await assertStaleSuccessfulRoute((harness) => {
+		harness.core.setContext(harness.context({ tmuxTarget: 'other' }));
+	});
+});
+
+void test('stored connection change suppresses a pending successful route without advancing generation', async () => {
+	await assertStaleSuccessfulRoute((harness) => {
+		const before = harness.core.getSnapshot();
+		harness.core.setContext({
+			...before.context,
+			storedConnectionId: 'replacement-host',
+		});
+		assert.equal(harness.core.getSnapshot().generation, before.generation);
+	});
+});
+
+void test('explicit invalidation suppresses a pending successful route', async () => {
+	await assertStaleSuccessfulRoute((harness) => {
+		harness.core.invalidate('runtime-reset');
+	});
+});
+
+void test('route handling establishes a fresh explicit invalidation epoch', async () => {
+	const harness = createNotificationsHarness({ deferRouteCommands: true });
+	harness.core.invalidate('source-change');
+	const pending = harness.core.handleRoute(harness.validRoute());
+	harness.core.invalidate('runtime-reset');
+	harness.routeCommands[0]?.resolve('');
+
+	assert.equal(await pending, false);
+	assert.equal(harness.core.getSnapshot().handledRouteKey, null);
+	assert.deepEqual(harness.acknowledgements, []);
+	assert.deepEqual(harness.consumedTokens, ['token-1']);
+	assert.deepEqual(harness.restoredTokens, []);
+});
+
+void test('disposal suppresses a pending successful route', async () => {
+	await assertStaleSuccessfulRoute((harness) => {
+		harness.core.dispose();
+	});
+});
+
+void test('a newer route request supersedes a pending successful route', async () => {
+	await assertStaleSuccessfulRoute((harness) => {
+		void harness.core.handleRoute({
+			...harness.validRoute(),
+			agentTapToken: null,
+		});
+	});
 });
 
 void test('notification core coalesces concurrent visible acknowledgements', async () => {
@@ -753,15 +834,6 @@ void test('notification pending subscriber failure is reported without an unhand
 });
 
 void test('notification disposal tears down its publisher when final publication throws', () => {
-	const source = readFileSync(
-		'src/lib/shell-controllers/notifications-core.ts',
-		'utf8',
-	);
-	assert.match(
-		source,
-		/dispose: \(\) => \{[\s\S]*?try \{[\s\S]*?publish\(\);[\s\S]*?\} finally \{[\s\S]*?publisher\.disposePublisher\(\);[\s\S]*?\}/,
-	);
-
 	const harness = createNotificationsHarness();
 	const failure = new Error('dispose subscriber failed');
 	let subscriberCalls = 0;
@@ -783,35 +855,156 @@ void test('notification disposal tears down its publisher when final publication
 	assert.equal(laterCalls, 0);
 });
 
-void test('notification hook owns route, activity, pending, and replay-safe lifecycle effects', () => {
-	const source = readFileSync(
-		'src/lib/shell-controllers/notifications.tsx',
-		'utf8',
-	);
+void test('notification route effect identity changes when the stored connection hydrates', () => {
+	const harness = createNotificationsHarness();
+	const route = {
+		...harness.validRoute(),
+		agentConnectionId: null,
+	};
+	const unavailable = harness.context({ storedConnectionId: null });
+	const hydrated = {
+		...unavailable,
+		storedConnectionId: 'saved-host',
+	};
 
-	assert.match(source, /createReplaySafeControllerLifecycle\(core\)/);
-	assert.match(source, /useLayoutEffect\(\(\) => \{/);
-	assert.match(source, /subscribeActivity\(handleActivityChanged\)/);
-	assert.match(
-		source,
-		/subscribeAgentNotificationPending\(core\.notifyPending\)/,
+	assert.notEqual(
+		createShellNotificationRouteEffectKey(route, unavailable),
+		createShellNotificationRouteEffectKey(route, hydrated),
 	);
-	assert.match(source, /Platform\.OS !== 'android'/);
-	assert.match(source, /core\.handleRoute\(route\)\.catch/);
-	assert.match(source, /core\.acknowledgeVisible\(\)\.catch/);
-	assert.doesNotMatch(
-		source.slice(
-			source.indexOf('export function useShellNotificationsController'),
-			source.indexOf('\tuseLayoutEffect'),
-		),
-		/committedInputRef\.current = input/,
-	);
-	assert.ok(
-		source.indexOf('subscribeActivity(handleActivityChanged)') <
-			source.indexOf('handleActivityChanged();'),
-	);
-	assert.doesNotMatch(
-		source,
-		/if \(!previous\?\.interactive\) requestVisibleAcknowledgement\(\)/,
-	);
+});
+
+void test('notification activity effect subscribes before reconciling and cleans up', () => {
+	const events: string[] = [];
+	const cleanup = setupShellNotificationActivityEffect({
+		getSnapshot: () => ({
+			focused: true,
+			appState: 'active',
+			appActive: true,
+			interactive: true,
+			generation: 0,
+		}),
+		subscribe: () => {
+			events.push('subscribe');
+			return () => events.push('cleanup');
+		},
+		onInteractive: () => events.push('interactive'),
+		onInactive: () => events.push('inactive'),
+	});
+
+	assert.deepEqual(events, ['subscribe', 'interactive']);
+	cleanup();
+	assert.deepEqual(events, ['subscribe', 'interactive', 'cleanup']);
+});
+
+void test('notification activity effect acknowledges interactive transitions and invalidates inactive transitions', () => {
+	let snapshot = {
+		focused: true,
+		appState: 'active',
+		appActive: true,
+		interactive: true,
+		generation: 0,
+	};
+	const listeners = new Set<() => void>();
+	const acknowledgements: number[] = [];
+	const invalidations: string[] = [];
+	const cleanup = setupShellNotificationActivityEffect({
+		getSnapshot: () => snapshot,
+		subscribe: (next) => {
+			listeners.add(next);
+			return () => listeners.delete(next);
+		},
+		onInteractive: () => acknowledgements.push(snapshot.generation),
+		onInactive: (reason) => invalidations.push(reason),
+	});
+
+	snapshot = {
+		...snapshot,
+		appState: 'background',
+		appActive: false,
+		interactive: false,
+		generation: 1,
+	};
+	listeners.values().next().value?.();
+	snapshot = {
+		...snapshot,
+		appState: 'active',
+		appActive: true,
+		interactive: true,
+		generation: 2,
+	};
+	listeners.values().next().value?.();
+	snapshot = {
+		...snapshot,
+		focused: false,
+		interactive: false,
+		generation: 3,
+	};
+	listeners.values().next().value?.();
+	cleanup();
+
+	assert.deepEqual(acknowledgements, [0, 2]);
+	assert.deepEqual(invalidations, ['app-inactive', 'focus-lost']);
+	assert.equal(listeners.size, 0);
+});
+
+void test('notification activity replay leaves only the current subscription', () => {
+	const listeners = new Set<() => void>();
+	const setup = () =>
+		setupShellNotificationActivityEffect({
+			getSnapshot: () => ({
+				focused: true,
+				appState: 'active',
+				appActive: true,
+				interactive: true,
+				generation: 0,
+			}),
+			subscribe: (listener) => {
+				listeners.add(listener);
+				return () => listeners.delete(listener);
+			},
+			onInteractive: () => {},
+			onInactive: () => {},
+		});
+
+	const firstCleanup = setup();
+	firstCleanup();
+	const replayCleanup = setup();
+	assert.equal(listeners.size, 1);
+	replayCleanup();
+	assert.equal(listeners.size, 0);
+});
+
+void test('notification pending effect is Android-only and cleans up', () => {
+	let subscriptions = 0;
+	let cleanups = 0;
+	let pendingEvents = 0;
+	const pendingListeners = new Set<() => void>();
+	const subscribe = (listener: () => void) => {
+		subscriptions += 1;
+		pendingListeners.add(listener);
+		return () => {
+			cleanups += 1;
+			pendingListeners.delete(listener);
+		};
+	};
+
+	const androidCleanup = setupShellNotificationPendingEffect({
+		platformOS: 'android',
+		subscribe,
+		onPending: () => {
+			pendingEvents += 1;
+		},
+	});
+	const iosCleanup = setupShellNotificationPendingEffect({
+		platformOS: 'ios',
+		subscribe,
+		onPending: () => {},
+	});
+	assert.equal(subscriptions, 1);
+	for (const listener of pendingListeners) listener();
+	assert.equal(pendingEvents, 1);
+	androidCleanup();
+	iosCleanup();
+	assert.equal(cleanups, 1);
+	assert.equal(pendingListeners.size, 0);
 });

@@ -21,6 +21,11 @@ import {
 	type ShellNotificationContext,
 	type ShellNotificationRoute,
 } from './notifications-core';
+import {
+	createShellNotificationRouteEffectKey,
+	setupShellNotificationActivityEffect,
+	setupShellNotificationPendingEffect,
+} from './notifications-lifecycle';
 
 export type ShellNotificationsControllerHandle = {
 	acknowledgeVisible(): Promise<void>;
@@ -55,9 +60,6 @@ export function useShellNotificationsController(
 	input: UseShellNotificationsControllerInput,
 ): ShellNotificationsControllerHandle {
 	const committedInputRef = useRef(input);
-	const lastActivitySnapshotRef = useRef<ReturnType<
-		typeof input.activity.getSnapshot
-	> | null>(null);
 	const lastAutomaticAcknowledgeKeyRef = useRef<string | null>(null);
 	const [core] = useState(() =>
 		createShellNotificationsControllerCore({
@@ -108,29 +110,22 @@ export function useShellNotificationsController(
 	}, [core, input, requestVisibleAcknowledgement]);
 
 	useEffect(() => {
-		if (Platform.OS !== 'android') return undefined;
-		return subscribeAgentNotificationPending(core.notifyPending);
+		return setupShellNotificationPendingEffect({
+			platformOS: Platform.OS,
+			subscribe: subscribeAgentNotificationPending,
+			onPending: core.notifyPending,
+		});
 	}, [core]);
 
 	const getActivitySnapshot = input.activity.getSnapshot;
 	const subscribeActivity = input.activity.subscribe;
 	useEffect(() => {
-		const handleActivityChanged = (): void => {
-			const snapshot = getActivitySnapshot();
-			const previous = lastActivitySnapshotRef.current;
-			lastActivitySnapshotRef.current = snapshot;
-			if (snapshot.interactive) {
-				requestVisibleAcknowledgement();
-				return;
-			}
-			if (previous?.interactive) {
-				core.invalidate(snapshot.focused ? 'app-inactive' : 'focus-lost');
-			}
-		};
-
-		const unsubscribe = subscribeActivity(handleActivityChanged);
-		handleActivityChanged();
-		return unsubscribe;
+		return setupShellNotificationActivityEffect({
+			getSnapshot: getActivitySnapshot,
+			subscribe: subscribeActivity,
+			onInteractive: requestVisibleAcknowledgement,
+			onInactive: core.invalidate,
+		});
 	}, [
 		core,
 		getActivitySnapshot,
@@ -138,13 +133,10 @@ export function useShellNotificationsController(
 		subscribeActivity,
 	]);
 
-	const {
-		agentConnectionId,
-		agentSession,
-		agentWindowId,
-		agentEventId,
-		agentTapToken,
-	} = input.route;
+	const routeEffectKey = createShellNotificationRouteEffectKey(
+		input.route,
+		input.context,
+	);
 	useEffect(() => {
 		const route = committedInputRef.current.route;
 		void core.handleRoute(route).catch((error: unknown) => {
@@ -154,16 +146,7 @@ export function useShellNotificationsController(
 				error,
 			);
 		});
-	}, [
-		agentConnectionId,
-		agentEventId,
-		agentSession,
-		agentTapToken,
-		agentWindowId,
-		core,
-		input.context.targetKey,
-		input.context.transportKey,
-	]);
+	}, [core, routeEffectKey]);
 
 	useEffect(() => coreLifecycle.setup(), [coreLifecycle]);
 

@@ -116,7 +116,7 @@ export function createShellNotificationsControllerCore({
 	let promotedWaiters: QueuedWaiter[] = [];
 	let epochInvalidated = false;
 	let disposed = false;
-	let handledRouteKey: string | null = null;
+	let routeRequestId = 0;
 
 	const publish = (): void => {
 		const current = publisher.getSnapshot();
@@ -289,18 +289,27 @@ export function createShellNotificationsControllerCore({
 		},
 		handleRoute: async (route) => {
 			if (disposed) return false;
-			const { context } = publisher.getSnapshot();
-			return handleAgentNotificationRoute({
+			epochInvalidated = false;
+			const requestId = ++routeRequestId;
+			const attemptGeneration = generation;
+			const context = { ...publisher.getSnapshot().context };
+			const isCurrentAttempt = (): boolean =>
+				!disposed &&
+				requestId === routeRequestId &&
+				attemptGeneration === generation &&
+				contextsEqual(context, publisher.getSnapshot().context);
+			const handled = await handleAgentNotificationRoute({
 				...route,
 				storedConnectionId: context.storedConnectionId,
 				tmuxTarget: context.tmuxTarget,
-				isRouteHandled: (routeKey) => handledRouteKey === routeKey,
+				isRouteHandled: (routeKey) =>
+					publisher.getSnapshot().handledRouteKey === routeKey,
 				markRouteHandled: (routeKey) => {
-					handledRouteKey = routeKey;
+					if (!isCurrentAttempt()) return;
 					try {
 						publisher.publish({
 							...publisher.getSnapshot(),
-							handledRouteKey,
+							handledRouteKey: routeKey,
 						});
 					} catch (error) {
 						warnBestEffort(
@@ -313,6 +322,7 @@ export function createShellNotificationsControllerCore({
 				restoreAuthorizedRouteToken,
 				runWorkmuxCommand,
 				acknowledge: (connectionId, session, windowId) => {
+					if (!isCurrentAttempt()) return;
 					try {
 						acknowledge(connectionId, session, windowId);
 					} catch (error) {
@@ -324,6 +334,7 @@ export function createShellNotificationsControllerCore({
 				},
 				warn: warnBestEffort,
 			});
+			return handled && isCurrentAttempt();
 		},
 		invalidate,
 		dispose: () => {
