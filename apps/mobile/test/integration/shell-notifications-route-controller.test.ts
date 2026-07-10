@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createNotificationsHarness } from './shell-notifications-test-support';
+import {
+	buildWorkmuxWindowOutput,
+	createNotificationsHarness,
+} from './shell-notifications-test-support';
 
 void test('notification core restores consumed token when route command fails', async () => {
 	const harness = createNotificationsHarness({
@@ -148,6 +151,39 @@ void test('identical route replay adopts the pending attempt after unmount inval
 	assert.equal(
 		harness.core.getSnapshot().handledRouteKey,
 		'["saved-host","main","@12","event-1"]',
+	);
+});
+
+void test('visible acknowledgement between unmount and route replay preserves adoption', async () => {
+	const harness = createNotificationsHarness({ deferRouteCommands: true });
+	const route = harness.validRoute();
+	let handledPublications = 0;
+	harness.core.subscribe(() => {
+		if (harness.core.getSnapshot().handledRouteKey) handledPublications += 1;
+	});
+	const original = harness.core.handleRoute(route);
+	harness.core.invalidate('unmount');
+	const visibleAcknowledgement = harness.core.acknowledgeVisible();
+	assert.equal(harness.windowCommands.length, 1);
+	harness.windowCommands[0]?.resolve(buildWorkmuxWindowOutput('@99'));
+	await visibleAcknowledgement;
+	assert.equal(
+		harness.acknowledgements.filter(({ windowId }) => windowId === '@99')
+			.length,
+		1,
+	);
+	const replay = harness.core.handleRoute(route);
+
+	assert.deepEqual(harness.consumedTokens, ['token-1']);
+	assert.equal(harness.routeCommands.length, 1);
+	harness.routeCommands[0]?.resolve('');
+	assert.deepEqual(await Promise.all([original, replay]), [false, true]);
+	assert.deepEqual(harness.restoredTokens, []);
+	assert.equal(handledPublications, 1);
+	assert.equal(
+		harness.acknowledgements.filter(({ windowId }) => windowId === '@12')
+			.length,
+		1,
 	);
 });
 

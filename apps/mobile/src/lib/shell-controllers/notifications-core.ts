@@ -148,7 +148,7 @@ export function createShellNotificationsControllerCore({
 	let disposed = false;
 	let routeRequestId = 0;
 	let activeRouteAttempt: ActiveRouteAttempt | null = null;
-	let effectiveInvalidationReason: ControllerInvalidationReason | null = null;
+	let routeInvalidationReason: ControllerInvalidationReason | null = null;
 
 	const publish = (): void => {
 		const current = publisher.getSnapshot();
@@ -235,7 +235,6 @@ export function createShellNotificationsControllerCore({
 	const acknowledgeVisible = async (): Promise<void> => {
 		if (disposed) return;
 		epochInvalidated = false;
-		effectiveInvalidationReason = null;
 		if (inFlight) {
 			queuedAttempt = captureAttempt();
 			const promise = new Promise<void>((resolve) => {
@@ -279,12 +278,13 @@ export function createShellNotificationsControllerCore({
 
 	const invalidate = (reason: ControllerInvalidationReason): void => {
 		if (disposed) return;
+		if (reason !== 'unmount' || routeInvalidationReason === null) {
+			routeInvalidationReason = reason;
+		}
 		if (epochInvalidated) {
-			if (reason !== 'unmount') effectiveInvalidationReason = reason;
 			return;
 		}
 		epochInvalidated = true;
-		effectiveInvalidationReason = reason;
 		generation += 1;
 		settleObsolete();
 		publish();
@@ -353,7 +353,6 @@ export function createShellNotificationsControllerCore({
 				generation += 1;
 				settleObsolete();
 				epochInvalidated = false;
-				effectiveInvalidationReason = null;
 			}
 			publisher.publish({
 				...current,
@@ -386,11 +385,11 @@ export function createShellNotificationsControllerCore({
 				activeRouteAttempt.routeIdentityKey === routeIdentityKey &&
 				activeRouteAttempt.contextRevision === contextRevision &&
 				(activeRouteAttempt.generation === generation ||
-					effectiveInvalidationReason === 'unmount')
+					routeInvalidationReason === 'unmount')
 			) {
 				const attempt = activeRouteAttempt;
 				epochInvalidated = false;
-				effectiveInvalidationReason = null;
+				routeInvalidationReason = null;
 				attempt.generation = generation;
 				const callerGeneration = generation;
 				return attempt.promise.then(
@@ -401,7 +400,7 @@ export function createShellNotificationsControllerCore({
 				);
 			}
 			epochInvalidated = false;
-			effectiveInvalidationReason = null;
+			routeInvalidationReason = null;
 			const requestId = ++routeRequestId;
 			let resolveAttempt!: (handled: boolean) => void;
 			let rejectAttempt!: (error: unknown) => void;
