@@ -103,12 +103,15 @@ import {
 	loadRuntimeShellConfigState,
 	reloadRuntimeShellConfigFromRemote,
 } from '@/lib/shell-config-store-native';
+import { useBrowserActionsController } from '@/lib/shell-controllers/browser-actions';
+import { useFeatureRequestController } from '@/lib/shell-controllers/feature-request';
+import { createShellModalArbiter } from '@/lib/shell-controllers/modal-arbiter';
+import { useShellSimpleModals } from '@/lib/shell-controllers/simple-modals';
+import { useSkillSelectorController } from '@/lib/shell-controllers/skill-selector';
 import {
-	useBrowserActionsController,
-	useFeatureRequestController,
-	useShellSimpleModals,
-	useSkillSelectorController,
-} from '@/lib/shell-modals';
+	createShellTargetKey,
+	createShellTransportKey,
+} from '@/lib/shell-controllers/source-keys';
 import { executeSideChannelCommand } from '@/lib/ssh-side-channel';
 import { useSshStore } from '@/lib/ssh-store';
 import {
@@ -551,6 +554,15 @@ function ShellDetail() {
 	const normalizedTmuxTarget = tmuxTarget.trim().length
 		? tmuxTarget.trim()
 		: 'main';
+	const transportKey = useMemo(
+		() => createShellTransportKey(connectionId, channelId),
+		[channelId, connectionId],
+	);
+	const targetKey = useMemo(
+		() => createShellTargetKey(transportKey, tmuxTarget),
+		[tmuxTarget, transportKey],
+	);
+	const modalArbiter = useMemo(() => createShellModalArbiter(), []);
 	const workmuxControlChannel = useMemo<WorkmuxControlChannel>(() => {
 		void normalizedTmuxTarget;
 		return createWorkmuxControlChannel({
@@ -760,7 +772,7 @@ function ShellDetail() {
 		commander: commanderModal,
 		textEntry: textEntryModal,
 		configure: configureModal,
-	} = useShellSimpleModals();
+	} = useShellSimpleModals(modalArbiter);
 	const [textEntryHistoryState, setTextEntryHistoryState] =
 		useState<TextEntryHistoryState>(() => textEntryHistoryStore.load());
 	const [autoWisprEnabled, setAutoWisprEnabled] = useState(false);
@@ -2000,21 +2012,12 @@ function ShellDetail() {
 		consumeWisprAutoCloseDecision(autoCloseDecision);
 	}, [consumeWisprAutoCloseDecision, resetWisprAutomation, textEntryModal]);
 
+	useEffect(
+		() => modalArbiter.register('text-entry', handleCloseTextEntry),
+		[handleCloseTextEntry, modalArbiter],
+	);
+
 	const activeTmuxSessionName = tmuxTarget.trim() || 'main';
-	const skillSelectorSourceKey = `${connectionId}:${connectionStoredConnectionId ?? ''}:${channelId}:${tmuxEnabled ? 'tmux' : 'plain'}:${activeTmuxSessionName}`;
-
-	const skillSelectorCloseRef = useRef<() => void>(() => {});
-	const featureRequestCloseRef = useRef<() => boolean>(() => true);
-
-	const closeBrowserActionsOtherModals = useCallback((): boolean => {
-		commandMenuModal.onClose();
-		commanderModal.onClose();
-		skillSelectorCloseRef.current();
-		handleCloseTextEntry();
-		configureModal.onClose();
-		if (!featureRequestCloseRef.current()) return false;
-		return true;
-	}, [commandMenuModal, commanderModal, configureModal, handleCloseTextEntry]);
 
 	const runBrowserActionsWorkmuxCommand = useCallback(
 		async (_connection: unknown, argv: string[], timeoutMs: number) => {
@@ -2035,10 +2038,11 @@ function ShellDetail() {
 		connection: connection ?? null,
 		tmuxEnabled,
 		tmuxTarget,
+		sourceKey: targetKey,
 		executeSideChannelCommand,
 		runWorkmuxCommand: runBrowserActionsWorkmuxCommand,
 		getErrorMessage,
-		closeOtherModals: closeBrowserActionsOtherModals,
+		arbiter: modalArbiter,
 	});
 	const manualTerminalFitRunner = useMemo(
 		() =>
@@ -2071,13 +2075,6 @@ function ShellDetail() {
 	workmuxKeyboardTmuxTargetRef.current = tmuxTarget;
 	browserActionsInvalidateAllRef.current = browserActions.invalidateAll;
 
-	const closeFeatureRequestOtherModals = useCallback(() => {
-		browserActions.invalidateHostUrlReads();
-		skillSelectorCloseRef.current();
-		browserActions.close();
-		configureModal.onClose();
-	}, [browserActions, configureModal]);
-
 	const featureRequest = useFeatureRequestController({
 		connection: connection ?? null,
 		resolveCurrentGitHubRepository:
@@ -2085,24 +2082,8 @@ function ShellDetail() {
 		executeSideChannelCommand,
 		getErrorMessage,
 		logger,
-		closeOtherModals: closeFeatureRequestOtherModals,
+		arbiter: modalArbiter,
 	});
-
-	const closeSkillSelectorOtherModals = useCallback(() => {
-		commandMenuModal.onClose();
-		browserActions.close();
-		commanderModal.onClose();
-		configureModal.onClose();
-		if (!featureRequestCloseRef.current()) return false;
-		handleCloseTextEntry();
-		return true;
-	}, [
-		browserActions,
-		commandMenuModal,
-		commanderModal,
-		configureModal,
-		handleCloseTextEntry,
-	]);
 
 	const skillSelector = useSkillSelectorController({
 		connection,
@@ -2110,25 +2091,17 @@ function ShellDetail() {
 		runHostBrowserCommand: browserActions.runHostBrowserCommand,
 		resolveHostBrowserWorkspace: browserActions.resolveHostBrowserWorkspace,
 		sendTextRaw,
-		sourceKey: skillSelectorSourceKey,
+		sourceKey: targetKey,
 		stableConnectionId: connectionStoredConnectionId ?? connectionId,
 		tmuxTarget: activeTmuxSessionName,
 		getErrorMessage,
-		closeOtherModals: closeSkillSelectorOtherModals,
+		arbiter: modalArbiter,
 	});
-
-	skillSelectorCloseRef.current = skillSelector.close;
-	featureRequestCloseRef.current = featureRequest.close;
-
-	const sourceKeyChangeTrackerRef = useRef(skillSelectorSourceKey);
+	const markFeatureRequestSourceStale = featureRequest.markSourceStale;
 
 	useLayoutEffect(() => {
-		if (sourceKeyChangeTrackerRef.current === skillSelectorSourceKey) return;
-		sourceKeyChangeTrackerRef.current = skillSelectorSourceKey;
-		browserActions.invalidateAll();
-		browserActions.close();
-		featureRequest.markSourceStale();
-	}, [browserActions, featureRequest, skillSelectorSourceKey]);
+		markFeatureRequestSourceStale();
+	}, [markFeatureRequestSourceStale, targetKey]);
 
 	const handleOpenWisprTextEditor = useCallback(() => {
 		browserActions.invalidateHostUrlReads();
@@ -2581,7 +2554,7 @@ function ShellDetail() {
 			}),
 		[channelId, connectionId],
 	);
-	const workmuxKeyboardSourceKeyRef = useRef(skillSelectorSourceKey);
+	const workmuxKeyboardSourceKeyRef = useRef(targetKey);
 
 	useLayoutEffect(() => {
 		if (isFocused) return;
@@ -2589,15 +2562,11 @@ function ShellDetail() {
 	}, [isFocused, workmuxKeyboardCommandRunner]);
 
 	useLayoutEffect(() => {
-		if (workmuxKeyboardSourceKeyRef.current === skillSelectorSourceKey) return;
-		workmuxKeyboardSourceKeyRef.current = skillSelectorSourceKey;
+		if (workmuxKeyboardSourceKeyRef.current === targetKey) return;
+		workmuxKeyboardSourceKeyRef.current = targetKey;
 		workmuxKeyboardCommandRunner.invalidate();
 		invalidateCodexRestartRequests();
-	}, [
-		invalidateCodexRestartRequests,
-		skillSelectorSourceKey,
-		workmuxKeyboardCommandRunner,
-	]);
+	}, [invalidateCodexRestartRequests, targetKey, workmuxKeyboardCommandRunner]);
 
 	useLayoutEffect(() => {
 		return () => {

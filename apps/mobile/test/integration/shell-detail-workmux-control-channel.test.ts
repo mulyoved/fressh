@@ -228,15 +228,9 @@ void describe('shell detail Workmux control channel wiring', () => {
 	void test('routes Workmux transport failures into shell transport invalidation', () => {
 		const source = readFileSync(detailSourcePath, 'utf8');
 
-		assert.match(
-			source,
-			/import \{ useSshStore \} from '@\/lib\/ssh-store'/,
-		);
+		assert.match(source, /import \{ useSshStore \} from '@\/lib\/ssh-store'/);
 		assert.match(source, /onTransportUnhealthy:\s*\(failure\)\s*=>/);
-		assert.match(
-			source,
-			/Workmux transport unhealthy, triggering reconnect/,
-		);
+		assert.match(source, /Workmux transport unhealthy, triggering reconnect/);
 		assert.match(
 			source,
 			/useSshStore\s*\.\s*getState\(\)\s*\.\s*invalidateShellTransport\(connectionId,\s*channelId\)/,
@@ -273,6 +267,21 @@ void describe('shell detail Workmux control channel wiring', () => {
 		assert.match(
 			effectBlock,
 			/\[\s*agentConnectionId[\s\S]*runBrowserActionsWorkmuxCommand[\s\S]*\]/,
+		);
+	});
+
+	void test('keeps the focused browser controller on the shared Workmux command channel', () => {
+		const source = readFileSync(detailSourcePath, 'utf8');
+		const callbackBlock = extractRunBrowserActionsWorkmuxCommandBlock(source);
+
+		assert.match(
+			source,
+			/import \{ useBrowserActionsController \} from '@\/lib\/shell-controllers\/browser-actions'/,
+		);
+		assert.match(callbackBlock, /workmuxControlChannel\.command/);
+		assert.match(
+			source,
+			/runWorkmuxCommand:\s*runBrowserActionsWorkmuxCommand/,
 		);
 	});
 
