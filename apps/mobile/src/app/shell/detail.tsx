@@ -91,6 +91,10 @@ import {
 	reloadRuntimeShellConfigFromRemote,
 } from '@/lib/shell-config-store-native';
 import { useShellActivityController } from '@/lib/shell-controllers/activity';
+import {
+	createShellActivityRetainedDomainBridge,
+	type ShellActivityRetainedDomainActions,
+} from '@/lib/shell-controllers/activity-retained-domain-bridge';
 import { useBrowserActionsController } from '@/lib/shell-controllers/browser-actions';
 import { useFeatureRequestController } from '@/lib/shell-controllers/feature-request';
 import { createGenerationRequestGate } from '@/lib/shell-controllers/generation-request-gate';
@@ -2817,27 +2821,9 @@ function ShellDetail() {
 		};
 	}, []);
 
-	useLayoutEffect(() => {
-		const activitySnapshot = getActivitySnapshot();
-		const isAndroid = Platform.OS === 'android';
-		const invalidateRetainedDomains = () => {
-			runtimeShellConfigReloadRequestIdRef.current += 1;
-			invalidateCodexRestartRequests();
-			liveInputGenerationRef.current += 1;
-			clearCommandTimeouts();
-		};
-		const dismissKeyboard = () => {
-			if (isAndroid) Keyboard.dismiss();
-		};
-		const scheduleKeyboardDismiss = () => {
-			if (resumeDismissTimeoutRef.current) {
-				clearTimeout(resumeDismissTimeoutRef.current);
-			}
-			resumeDismissTimeoutRef.current = setTimeout(() => {
-				dismissKeyboard();
-			}, 150);
-		};
-		if (activitySnapshot.interactive) {
+	const retainedDomainActions: ShellActivityRetainedDomainActions = {
+		resume: () => {
+			const isAndroid = Platform.OS === 'android';
 			if (isAndroid) {
 				xtermRef.current?.setSystemKeyboardEnabled(
 					systemKeyboardEnabledRef.current,
@@ -2846,41 +2832,58 @@ function ShellDetail() {
 					!systemKeyboardEnabledRef.current ||
 					!lastKeyboardVisibleRef.current
 				) {
-					dismissKeyboard();
-					scheduleKeyboardDismiss();
+					Keyboard.dismiss();
+					if (resumeDismissTimeoutRef.current) {
+						clearTimeout(resumeDismissTimeoutRef.current);
+					}
+					resumeDismissTimeoutRef.current = setTimeout(() => {
+						Keyboard.dismiss();
+					}, 150);
 					systemKeyboardVisibleRef.current = false;
 				}
 			}
-			return invalidateRetainedDomains;
-		}
-
-		invalidateRetainedDomains();
-		browserActionsInvalidateAllRef.current();
-		browserActionsCloseRef.current();
-		workmuxKeyboardCommandRunner.invalidate();
-		scrollbackEnterRequestGenerationRef.current += 1;
-		void clearScrollbackState({ failurePolicy: 'suppress' });
-		if (!activitySnapshot.appActive) {
+		},
+		invalidateRetainedDomains: () => {
+			runtimeShellConfigReloadRequestIdRef.current += 1;
+			invalidateCodexRestartRequests();
+			liveInputGenerationRef.current += 1;
+			clearCommandTimeouts();
+		},
+		invalidateBrowserActions: () => browserActionsInvalidateAllRef.current(),
+		closeBrowserActions: () => browserActionsCloseRef.current(),
+		invalidateKeyboardRunner: () => workmuxKeyboardCommandRunner.invalidate(),
+		invalidateScrollbackRequests: () => {
+			scrollbackEnterRequestGenerationRef.current += 1;
+		},
+		clearScrollbackDirectly: () =>
+			clearScrollbackState({ failurePolicy: 'suppress' }),
+		runInactiveScrollbackCleanup: (activitySnapshot) =>
 			void runShellScrollbackInactiveCleanup({
 				previousState: 'active',
 				nextState: activitySnapshot.appState,
 				clearScrollbackState: () =>
 					clearScrollbackState({ failurePolicy: 'suppress' }),
 				warn: (message, error) => logger.warn(message, error),
-			});
+			}),
+		rememberKeyboardVisibility: () => {
+			const isAndroid = Platform.OS === 'android';
 			if (isAndroid) {
 				lastKeyboardVisibleRef.current = systemKeyboardVisibleRef.current;
 			}
-		}
-		return invalidateRetainedDomains;
-	}, [
-		activity.snapshot.generation,
-		clearCommandTimeouts,
-		clearScrollbackState,
-		getActivitySnapshot,
-		invalidateCodexRestartRequests,
-		workmuxKeyboardCommandRunner,
-	]);
+		},
+	};
+	const retainedDomainActionsRef = useRef(retainedDomainActions);
+	retainedDomainActionsRef.current = retainedDomainActions;
+	const [retainedDomainBridge] = useState(() =>
+		createShellActivityRetainedDomainBridge(
+			() => retainedDomainActionsRef.current,
+		),
+	);
+
+	useLayoutEffect(() => {
+		retainedDomainBridge.reconcile(getActivitySnapshot());
+	}, [activity.snapshot.generation, getActivitySnapshot, retainedDomainBridge]);
+	useEffect(() => retainedDomainBridge.setup(), [retainedDomainBridge]);
 
 	const enableSystemKeyboard = useCallback(() => {
 		if (Platform.OS !== 'android') return;

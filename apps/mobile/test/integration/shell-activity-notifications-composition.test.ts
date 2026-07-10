@@ -65,13 +65,22 @@ void test('shell detail delegates activity and notification lifecycle', () => {
 
 	const activityBridge = extractBlock(
 		source,
-		'useLayoutEffect(() => {\n\t\tconst activitySnapshot = getActivitySnapshot();',
+		'const [retainedDomainBridge] = useState',
 		'const enableSystemKeyboard',
 	);
+	assert.match(source, /createShellActivityRetainedDomainBridge/);
 	assert.match(activityBridge, /activity\.snapshot\.generation/);
 	assert.match(source, /const getActivitySnapshot = activity\.getSnapshot/);
-	assert.match(activityBridge, /getActivitySnapshot\(\)/);
-	assert.match(activityBridge, /workmuxKeyboardCommandRunner\.invalidate\(\)/);
-	assert.match(activityBridge, /clearScrollbackState/);
+	assert.match(
+		activityBridge,
+		/retainedDomainBridge\.reconcile\(getActivitySnapshot\(\)\)/,
+	);
+	assert.match(activityBridge, /retainedDomainBridge\.setup\(\)/);
+	assert.match(source, /invalidateKeyboardRunner/);
+	assert.match(source, /clearScrollbackState/);
+	assert.doesNotMatch(
+		activityBridge,
+		/return retainedDomainBridge\.reconcile|return invalidateRetainedDomains/,
+	);
 	assert.doesNotMatch(activityBridge, /addEventListener|Notification/);
 });
