@@ -67,6 +67,51 @@ export type AgentNotificationRouteOptions = {
 	warn: (message: string, error: unknown) => void;
 };
 
+export type ResolvedAgentNotificationRoute = {
+	connectionId: string;
+	session: string;
+	windowId: string;
+	eventId: string;
+	tapToken: string;
+	authorizationIdentityKey: string;
+};
+
+export function resolveAgentNotificationRoute(input: {
+	agentConnectionId: string | null;
+	storedConnectionId: string | null | undefined;
+	agentSession: string | null;
+	agentWindowId: string | null;
+	agentEventId: string | null;
+	agentTapToken: string | null;
+	tmuxTarget: string;
+}): ResolvedAgentNotificationRoute | null {
+	const connectionId = input.agentConnectionId || input.storedConnectionId;
+	if (!connectionId || !input.agentWindowId) return null;
+	if (
+		input.agentConnectionId &&
+		input.storedConnectionId &&
+		input.agentConnectionId !== input.storedConnectionId
+	) {
+		return null;
+	}
+	if (!input.agentEventId || !input.agentTapToken) return null;
+	const session = input.agentSession || input.tmuxTarget.trim() || 'main';
+	return {
+		connectionId,
+		session,
+		windowId: input.agentWindowId,
+		eventId: input.agentEventId,
+		tapToken: input.agentTapToken,
+		authorizationIdentityKey: JSON.stringify([
+			connectionId,
+			session,
+			input.agentWindowId,
+			input.agentEventId,
+			input.agentTapToken,
+		]),
+	};
+}
+
 const pendingListeners = new Set<() => void>();
 
 export function subscribeAgentNotificationPending(listener: () => void) {
@@ -102,26 +147,28 @@ export async function handleAgentNotificationRoute({
 	acknowledge,
 	warn,
 }: AgentNotificationRouteOptions) {
-	const notificationConnectionId = agentConnectionId || storedConnectionId;
-	if (!agentWindowId || !notificationConnectionId) {
-		return false;
-	}
-	if (
-		agentConnectionId &&
-		storedConnectionId &&
-		agentConnectionId !== storedConnectionId
-	) {
-		return false;
-	}
-	const session = agentSession || tmuxTarget.trim() || 'main';
-	if (!agentEventId || !agentTapToken) {
-		return false;
-	}
+	const resolved = resolveAgentNotificationRoute({
+		agentConnectionId,
+		storedConnectionId,
+		agentSession,
+		agentWindowId,
+		agentEventId,
+		agentTapToken,
+		tmuxTarget,
+	});
+	if (!resolved) return false;
+	const {
+		connectionId: notificationConnectionId,
+		session,
+		windowId,
+		eventId,
+		tapToken,
+	} = resolved;
 	const routeKey = createAgentNotificationRouteIdentityKey({
 		connectionId: notificationConnectionId,
 		session,
-		windowId: agentWindowId,
-		eventId: agentEventId,
+		windowId,
+		eventId,
 	});
 	if (isRouteHandled(routeKey)) return false;
 	let consumedRouteToken = false;
@@ -129,9 +176,9 @@ export async function handleAgentNotificationRoute({
 		consumedRouteToken = consumeAuthorizedRouteToken(
 			notificationConnectionId,
 			session,
-			agentWindowId,
-			agentEventId,
-			agentTapToken,
+			windowId,
+			eventId,
+			tapToken,
 		);
 	} catch (error) {
 		warn('failed to consume agent notification route token', error);
@@ -143,11 +190,11 @@ export async function handleAgentNotificationRoute({
 
 	try {
 		await runWorkmuxCommand(
-			buildWorkmuxAppNotificationOpenArgv(session, agentWindowId),
+			buildWorkmuxAppNotificationOpenArgv(session, windowId),
 			10_000,
 		);
 		markRouteHandled(routeKey);
-		acknowledge(notificationConnectionId, session, agentWindowId);
+		acknowledge(notificationConnectionId, session, windowId);
 		return true;
 	} catch (error) {
 		if (restoreAuthorizedRouteToken) {
@@ -155,9 +202,9 @@ export async function handleAgentNotificationRoute({
 				restoreAuthorizedRouteToken(
 					notificationConnectionId,
 					session,
-					agentWindowId,
-					agentEventId,
-					agentTapToken,
+					windowId,
+					eventId,
+					tapToken,
 				);
 			} catch (restoreError) {
 				warn('failed to restore agent notification route token', restoreError);

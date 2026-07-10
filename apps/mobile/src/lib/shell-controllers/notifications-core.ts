@@ -1,6 +1,5 @@
 import {
 	acknowledgeVisibleAgentNotification,
-	handleAgentNotificationRoute,
 	type VisibleAgentNotificationSnapshot,
 } from '../agent-notification-visibility';
 import { type ShellActivitySnapshot } from './activity-core';
@@ -9,6 +8,7 @@ import {
 	type ControllerCore,
 	type ControllerInvalidationReason,
 } from './controller-core';
+import { createShellNotificationRouteCoordinator } from './notifications-route-coordinator';
 import { type ShellTargetKey, type ShellTransportKey } from './source-keys';
 
 export type ShellNotificationContext = {
@@ -78,33 +78,6 @@ type AcknowledgementAttempt = Readonly<{
 	context: Readonly<ShellNotificationContext>;
 }>;
 
-type ActiveRouteAttempt = {
-	routeIdentityKey: string;
-	authorizationIdentityKey: string | null;
-	contextRevision: number;
-	generation: number;
-	requestId: number;
-	committed: boolean;
-	restorationRetryAvailable: boolean;
-	tokenConsumed: boolean;
-	tokenRestored: boolean;
-	promise: Promise<boolean>;
-};
-
-type RouteRequestSnapshot = {
-	route: ShellNotificationRoute;
-	context: ShellNotificationContext;
-	contextRevision: number;
-	generation: number;
-	routeIdentityKey: string;
-	authorizationIdentityKey: string | null;
-};
-
-type QueuedRouteRequest = RouteRequestSnapshot & {
-	promise: Promise<boolean>;
-	resolve(handled: boolean): void;
-};
-
 export function createShellNotificationContextIdentity(
 	context: ShellNotificationContext,
 ): string {
@@ -126,40 +99,6 @@ function contextsEqual(
 		createShellNotificationContextIdentity(left) ===
 		createShellNotificationContextIdentity(right)
 	);
-}
-
-function createRouteIdentityKey(route: ShellNotificationRoute): string {
-	return JSON.stringify([
-		route.agentConnectionId,
-		route.agentSession,
-		route.agentWindowId,
-		route.agentEventId,
-		route.agentTapToken,
-	]);
-}
-
-function createRouteAuthorizationIdentityKey(
-	route: ShellNotificationRoute,
-	context: ShellNotificationContext,
-): string | null {
-	const connectionId = route.agentConnectionId || context.storedConnectionId;
-	if (!connectionId || !route.agentWindowId) return null;
-	if (
-		route.agentConnectionId &&
-		context.storedConnectionId &&
-		route.agentConnectionId !== context.storedConnectionId
-	) {
-		return null;
-	}
-	if (!route.agentEventId || !route.agentTapToken) return null;
-	const session = route.agentSession || context.tmuxTarget.trim() || 'main';
-	return JSON.stringify([
-		connectionId,
-		session,
-		route.agentWindowId,
-		route.agentEventId,
-		route.agentTapToken,
-	]);
 }
 
 export function createShellNotificationsControllerCore({
@@ -188,10 +127,6 @@ export function createShellNotificationsControllerCore({
 	let promotedWaiters: QueuedWaiter[] = [];
 	let epochInvalidated = false;
 	let disposed = false;
-	let routeRequestId = 0;
-	let activeRouteAttempt: ActiveRouteAttempt | null = null;
-	let queuedRouteRequest: QueuedRouteRequest | null = null;
-	let routeInvalidationReason: ControllerInvalidationReason | null = null;
 
 	const publish = (): void => {
 		const current = publisher.getSnapshot();
@@ -319,196 +254,33 @@ export function createShellNotificationsControllerCore({
 		}
 	};
 
-	const settleQueuedRouteRequest = (handled = false): void => {
-		const queuedRequest = queuedRouteRequest;
-		queuedRouteRequest = null;
-		queuedRequest?.resolve(handled);
-	};
+	const routeCoordinator = createShellNotificationRouteCoordinator({
+		getSnapshot: publisher.getSnapshot,
+		isDisposed: () => disposed,
+		beginRouteEpoch: () => {
+			epochInvalidated = false;
+		},
+		runWorkmuxCommand,
+		consumeAuthorizedRouteToken,
+		restoreAuthorizedRouteToken,
+		acknowledge,
+		publishHandled: (routeKey) => {
+			publisher.publish({
+				...publisher.getSnapshot(),
+				handledRouteKey: routeKey,
+			});
+		},
+		warn: warnBestEffort,
+	});
 
 	const invalidate = (reason: ControllerInvalidationReason): void => {
 		if (disposed) return;
-		settleQueuedRouteRequest();
-		if (reason !== 'unmount' || routeInvalidationReason === null) {
-			routeInvalidationReason = reason;
-		}
-		if (epochInvalidated) {
-			return;
-		}
+		routeCoordinator.invalidate(reason);
+		if (epochInvalidated) return;
 		epochInvalidated = true;
 		generation += 1;
 		settleObsolete();
 		publish();
-	};
-
-	const isRouteAttemptCurrent = (attempt: ActiveRouteAttempt): boolean =>
-		!disposed &&
-		attempt.requestId === routeRequestId &&
-		attempt.generation === generation &&
-		attempt.contextRevision === publisher.getSnapshot().contextRevision;
-
-	const runRouteAttempt = async (
-		attempt: ActiveRouteAttempt,
-		route: ShellNotificationRoute,
-		context: ShellNotificationContext,
-	): Promise<boolean> => {
-		const handled = await handleAgentNotificationRoute({
-			...route,
-			storedConnectionId: context.storedConnectionId,
-			tmuxTarget: context.tmuxTarget,
-			isRouteHandled: (routeKey) =>
-				publisher.getSnapshot().handledRouteKey === routeKey,
-			markRouteHandled: (routeKey) => {
-				if (!isRouteAttemptCurrent(attempt)) return;
-				attempt.committed = true;
-				try {
-					publisher.publish({
-						...publisher.getSnapshot(),
-						handledRouteKey: routeKey,
-					});
-				} catch (error) {
-					warnBestEffort(
-						'agent notification route state publication failed',
-						error,
-					);
-				}
-			},
-			consumeAuthorizedRouteToken: (...args) => {
-				const consumed = consumeAuthorizedRouteToken(...args);
-				attempt.tokenConsumed = consumed;
-				return consumed;
-			},
-			restoreAuthorizedRouteToken: (...args) => {
-				const restored = restoreAuthorizedRouteToken(...args);
-				attempt.tokenRestored = restored;
-				return restored;
-			},
-			runWorkmuxCommand,
-			acknowledge: (connectionId, session, windowId) => {
-				if (!attempt.committed) return;
-				try {
-					acknowledge(connectionId, session, windowId);
-				} catch (error) {
-					warnBestEffort('agent notification route acknowledge failed', error);
-				}
-			},
-			warn: warnBestEffort,
-		});
-		return handled && attempt.committed;
-	};
-
-	const createRouteCallerPromise = (
-		attempt: ActiveRouteAttempt,
-		callerGeneration: number,
-		callerContextRevision: number,
-	): Promise<boolean> =>
-		attempt.promise.then(
-			(handled) =>
-				handled &&
-				attempt.generation === callerGeneration &&
-				attempt.contextRevision === callerContextRevision,
-		);
-
-	function startRouteAttempt(
-		request: RouteRequestSnapshot,
-		restorationRetryAvailable: boolean,
-	): Promise<boolean> {
-		epochInvalidated = false;
-		routeInvalidationReason = null;
-		const requestId = ++routeRequestId;
-		let resolveAttempt!: (handled: boolean) => void;
-		let rejectAttempt!: (error: unknown) => void;
-		const promise = new Promise<boolean>((resolve, reject) => {
-			resolveAttempt = resolve;
-			rejectAttempt = reject;
-		});
-		const attempt: ActiveRouteAttempt = {
-			routeIdentityKey: request.routeIdentityKey,
-			authorizationIdentityKey: request.authorizationIdentityKey,
-			contextRevision: request.contextRevision,
-			generation: request.generation,
-			requestId,
-			committed: false,
-			restorationRetryAvailable,
-			tokenConsumed: false,
-			tokenRestored: false,
-			promise,
-		};
-		activeRouteAttempt = attempt;
-		void (async () => {
-			let handled = false;
-			try {
-				handled = await runRouteAttempt(
-					attempt,
-					request.route,
-					request.context,
-				);
-				resolveAttempt(handled);
-			} catch (error) {
-				rejectAttempt(error);
-			} finally {
-				finishRouteAttempt(attempt, handled);
-			}
-		})();
-		return createRouteCallerPromise(
-			attempt,
-			request.generation,
-			request.contextRevision,
-		);
-	}
-
-	function finishRouteAttempt(
-		attempt: ActiveRouteAttempt,
-		handled: boolean,
-	): void {
-		if (activeRouteAttempt !== attempt) return;
-		activeRouteAttempt = null;
-		const queuedRequest = queuedRouteRequest;
-		queuedRouteRequest = null;
-		if (!queuedRequest) return;
-		const snapshot = publisher.getSnapshot();
-		if (
-			handled ||
-			!attempt.restorationRetryAvailable ||
-			!attempt.tokenRestored ||
-			disposed ||
-			queuedRequest.generation !== generation ||
-			queuedRequest.contextRevision !== snapshot.contextRevision
-		) {
-			queuedRequest.resolve(false);
-			return;
-		}
-		void startRouteAttempt(queuedRequest, false).then(
-			queuedRequest.resolve,
-			(error: unknown) => {
-				warnBestEffort('agent notification restored route retry failed', error);
-				queuedRequest.resolve(false);
-			},
-		);
-	}
-
-	const queueRouteRequest = (
-		request: RouteRequestSnapshot,
-	): Promise<boolean> => {
-		if (
-			queuedRouteRequest &&
-			queuedRouteRequest.authorizationIdentityKey ===
-				request.authorizationIdentityKey &&
-			queuedRouteRequest.contextRevision === request.contextRevision &&
-			queuedRouteRequest.generation === request.generation
-		) {
-			return queuedRouteRequest.promise;
-		}
-		settleQueuedRouteRequest();
-		let resolveQueued!: (handled: boolean) => void;
-		const promise = new Promise<boolean>((resolve) => {
-			resolveQueued = resolve;
-		});
-		queuedRouteRequest = {
-			...request,
-			promise,
-			resolve: resolveQueued,
-		};
-		return promise;
 	};
 
 	return {
@@ -518,7 +290,6 @@ export function createShellNotificationsControllerCore({
 			if (disposed) return;
 			const current = publisher.getSnapshot();
 			if (contextsEqual(current.context, context)) return;
-			settleQueuedRouteRequest();
 			const semanticContextChanged =
 				current.context.transportKey !== context.transportKey ||
 				current.context.targetKey !== context.targetKey ||
@@ -536,6 +307,7 @@ export function createShellNotificationsControllerCore({
 				acknowledgeInFlight: inFlight,
 				acknowledgeQueued: queued,
 			});
+			routeCoordinator.contextChanged();
 		},
 		acknowledgeVisible,
 		notifyPending: () => {
@@ -548,63 +320,11 @@ export function createShellNotificationsControllerCore({
 				});
 			}
 		},
-		handleRoute: (route) => {
-			if (disposed) return Promise.resolve(false);
-			const snapshot = publisher.getSnapshot();
-			const context = { ...snapshot.context };
-			const contextRevision = snapshot.contextRevision;
-			const routeIdentityKey = createRouteIdentityKey(route);
-			const authorizationIdentityKey = createRouteAuthorizationIdentityKey(
-				route,
-				context,
-			);
-			const request: RouteRequestSnapshot = {
-				route,
-				context,
-				contextRevision,
-				generation,
-				routeIdentityKey,
-				authorizationIdentityKey,
-			};
-			if (
-				activeRouteAttempt &&
-				!activeRouteAttempt.committed &&
-				activeRouteAttempt.routeIdentityKey === routeIdentityKey &&
-				activeRouteAttempt.contextRevision === contextRevision &&
-				(activeRouteAttempt.generation === generation ||
-					routeInvalidationReason === 'unmount')
-			) {
-				const attempt = activeRouteAttempt;
-				epochInvalidated = false;
-				routeInvalidationReason = null;
-				attempt.generation = generation;
-				const callerGeneration = generation;
-				return attempt.promise.then(
-					(handled) =>
-						handled &&
-						attempt.generation === callerGeneration &&
-						attempt.contextRevision === contextRevision,
-				);
-			}
-			if (
-				activeRouteAttempt &&
-				!activeRouteAttempt.committed &&
-				activeRouteAttempt.tokenConsumed &&
-				authorizationIdentityKey !== null &&
-				activeRouteAttempt.authorizationIdentityKey ===
-					authorizationIdentityKey &&
-				activeRouteAttempt.contextRevision !== contextRevision &&
-				routeInvalidationReason === null
-			) {
-				return queueRouteRequest(request);
-			}
-			settleQueuedRouteRequest();
-			return startRouteAttempt(request, true);
-		},
+		handleRoute: routeCoordinator.handleRoute,
 		invalidate,
 		dispose: () => {
 			if (disposed) return;
-			settleQueuedRouteRequest();
+			routeCoordinator.dispose();
 			generation += 1;
 			disposed = true;
 			settleObsolete();

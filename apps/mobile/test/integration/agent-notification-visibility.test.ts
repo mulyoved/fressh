@@ -4,9 +4,45 @@ import {
 	acknowledgeVisibleAgentNotification,
 	handleAgentNotificationRoute,
 	notifyAgentNotificationPending,
+	resolveAgentNotificationRoute,
 	subscribeAgentNotificationPending,
 	type VisibleAgentNotificationSnapshot,
 } from '../../src/lib/agent-notification-visibility';
+
+void test('route resolver normalizes fallback and explicit authorization identically', () => {
+	const fallback = resolveAgentNotificationRoute({
+		agentConnectionId: null,
+		storedConnectionId: 'saved-host',
+		agentSession: null,
+		agentWindowId: '@12',
+		agentEventId: 'event-1',
+		agentTapToken: 'token-1',
+		tmuxTarget: ' main ',
+	});
+	const explicit = resolveAgentNotificationRoute({
+		agentConnectionId: 'saved-host',
+		storedConnectionId: 'saved-host',
+		agentSession: 'main',
+		agentWindowId: '@12',
+		agentEventId: 'event-1',
+		agentTapToken: 'token-1',
+		tmuxTarget: 'ignored',
+	});
+
+	assert.deepEqual(fallback, explicit);
+	assert.equal(
+		resolveAgentNotificationRoute({
+			agentConnectionId: 'forged-host',
+			storedConnectionId: 'saved-host',
+			agentSession: 'main',
+			agentWindowId: '@12',
+			agentEventId: 'event-1',
+			agentTapToken: 'token-1',
+			tmuxTarget: 'main',
+		}),
+		null,
+	);
+});
 
 type Deferred<T> = {
 	promise: Promise<T>;

@@ -221,7 +221,7 @@ void test('non-unmount invalidations never transfer a pending route operation', 
 			}
 			const replacement = harness.core.handleRoute(route);
 
-			assert.deepEqual(harness.consumedTokens, ['token-1', 'token-1']);
+			assert.deepEqual(harness.consumedTokens, ['token-1']);
 			assert.equal(harness.routeCommands.length, 1);
 			harness.routeCommands[0]?.resolve('');
 			assert.deepEqual(await Promise.all([original, replacement]), [
@@ -437,14 +437,17 @@ void test('fallback session change cannot queue behind a different authorization
 	});
 	await harness.tick();
 
-	assert.equal(replacementSettled, true);
+	assert.equal(replacementSettled, false);
 	assert.deepEqual(harness.consumedRouteIdentities, [
 		'["saved-host","main","@12","event-1","token-1"]',
-		'["saved-host","other","@12","event-1","token-1"]',
 	]);
 	assert.equal(harness.routeCommands.length, 1);
 	harness.routeCommands[0]?.reject(new Error('old context failed'));
 	assert.deepEqual(await Promise.all([original, replacement]), [false, false]);
+	assert.deepEqual(harness.consumedRouteIdentities, [
+		'["saved-host","main","@12","event-1","token-1"]',
+		'["saved-host","other","@12","event-1","token-1"]',
+	]);
 	assert.deepEqual(harness.restoredTokens, ['token-1']);
 	assert.equal(harness.core.getSnapshot().handledRouteKey, null);
 	assert.deepEqual(harness.acknowledgements, []);
@@ -466,14 +469,17 @@ void test('fallback connection change cannot queue behind a different authorizat
 	});
 	await harness.tick();
 
-	assert.equal(replacementSettled, true);
+	assert.equal(replacementSettled, false);
 	assert.deepEqual(harness.consumedRouteIdentities, [
 		'["saved-host","main","@12","event-1","token-1"]',
-		'["replacement-host","main","@12","event-1","token-1"]',
 	]);
 	assert.equal(harness.routeCommands.length, 1);
 	harness.routeCommands[0]?.reject(new Error('old context failed'));
 	assert.deepEqual(await Promise.all([original, replacement]), [false, false]);
+	assert.deepEqual(harness.consumedRouteIdentities, [
+		'["saved-host","main","@12","event-1","token-1"]',
+		'["replacement-host","main","@12","event-1","token-1"]',
+	]);
 	assert.deepEqual(harness.restoredTokens, ['token-1']);
 	assert.equal(harness.core.getSnapshot().handledRouteKey, null);
 	assert.deepEqual(harness.acknowledgements, []);
@@ -518,4 +524,187 @@ void test('equivalent explicit and fallback route fields share authorization ide
 			assert.equal(harness.acknowledgements.length, 1);
 		});
 	}
+});
+
+void test('same-context equivalent authorization callers share one physical attempt', async (t) => {
+	const cases = [
+		{
+			name: 'session fallback to explicit',
+			first: { agentSession: null },
+			second: { agentSession: 'main' },
+		},
+		{
+			name: 'session explicit to fallback',
+			first: { agentSession: 'main' },
+			second: { agentSession: null },
+		},
+		{
+			name: 'connection fallback to explicit',
+			first: { agentConnectionId: null },
+			second: { agentConnectionId: 'saved-host' },
+		},
+		{
+			name: 'connection explicit to fallback',
+			first: { agentConnectionId: 'saved-host' },
+			second: { agentConnectionId: null },
+		},
+	];
+
+	for (const entry of cases) {
+		await t.test(entry.name, async () => {
+			const harness = createNotificationsHarness({ deferRouteCommands: true });
+			let handledPublications = 0;
+			harness.core.subscribe(() => {
+				if (harness.core.getSnapshot().handledRouteKey) {
+					handledPublications += 1;
+				}
+			});
+			const first = harness.core.handleRoute({
+				...harness.validRoute(),
+				...entry.first,
+			});
+			const second = harness.core.handleRoute({
+				...harness.validRoute(),
+				...entry.second,
+			});
+
+			assert.deepEqual(harness.consumedTokens, ['token-1']);
+			assert.equal(harness.routeCommands.length, 1);
+			harness.routeCommands[0]?.resolve('');
+			assert.deepEqual(await Promise.all([first, second]), [true, true]);
+			assert.equal(handledPublications, 1);
+			assert.equal(harness.acknowledgements.length, 1);
+		});
+	}
+});
+
+function authorizationIdentity(
+	windowId: string,
+	eventId: string,
+	tapToken: string,
+): string {
+	return JSON.stringify(['saved-host', 'main', windowId, eventId, tapToken]);
+}
+
+function secondAuthorizedRoute(
+	harness: ReturnType<typeof createNotificationsHarness>,
+) {
+	return {
+		...harness.validRoute(),
+		agentWindowId: '@13',
+		agentEventId: 'event-2',
+		agentTapToken: 'token-2',
+	};
+}
+
+function createMultiIdentityHarness() {
+	return createNotificationsHarness({
+		deferRouteCommands: true,
+		authorizedRouteIdentities: [
+			authorizationIdentity('@12', 'event-1', 'token-1'),
+			authorizationIdentity('@13', 'event-2', 'token-2'),
+		],
+	});
+}
+
+void test('distinct authorized routes serialize physical commands in request order', async () => {
+	const harness = createMultiIdentityHarness();
+	const first = harness.core.handleRoute(harness.validRoute());
+	const second = harness.core.handleRoute(secondAuthorizedRoute(harness));
+
+	assert.deepEqual(harness.consumedTokens, ['token-1']);
+	assert.equal(harness.routeCommands.length, 1);
+	harness.routeCommands[0]?.resolve('');
+	await harness.tick();
+	assert.equal(harness.routeCommands.length, 2);
+	assert.deepEqual(harness.consumedTokens, ['token-1', 'token-2']);
+	harness.routeCommands[1]?.resolve('');
+
+	assert.deepEqual(await Promise.all([first, second]), [false, true]);
+	assert.deepEqual(harness.restoredTokens, []);
+	assert.deepEqual(harness.acknowledgements, [
+		{ connectionId: 'saved-host', session: 'main', windowId: '@13' },
+	]);
+	assert.equal(
+		harness.core.getSnapshot().handledRouteKey,
+		'["saved-host","main","@13","event-2"]',
+	);
+});
+
+void test('invalidation or disposal settles a distinct serialized route queue', async (t) => {
+	for (const action of ['invalidate', 'dispose'] as const) {
+		await t.test(action, async () => {
+			const harness = createMultiIdentityHarness();
+			const first = harness.core.handleRoute(harness.validRoute());
+			const second = harness.core.handleRoute(secondAuthorizedRoute(harness));
+			if (action === 'invalidate') {
+				harness.core.invalidate('runtime-reset');
+			} else {
+				harness.core.dispose();
+			}
+			harness.routeCommands[0]?.resolve('');
+
+			assert.deepEqual(await Promise.all([first, second]), [false, false]);
+			assert.deepEqual(harness.consumedTokens, ['token-1']);
+			assert.equal(harness.routeCommands.length, 1);
+			assert.deepEqual(harness.acknowledgements, []);
+		});
+	}
+});
+
+void test('restoration retry budget cannot fund a third same-lease command', async () => {
+	const harness = createNotificationsHarness({ deferRouteCommands: true });
+	const route = harness.validRoute();
+	const original = harness.core.handleRoute(route);
+	const contextA = harness.core.getSnapshot().context;
+	harness.core.setContext({ ...contextA, channelId: 8 });
+	const contextB = harness.core.handleRoute(route);
+	harness.routeCommands[0]?.reject(new Error('context A failed'));
+	await harness.tick();
+	assert.equal(harness.routeCommands.length, 2);
+
+	const current = harness.core.getSnapshot().context;
+	harness.core.setContext({ ...current, channelId: 9 });
+	const contextC = harness.core.handleRoute(route);
+	harness.routeCommands[1]?.reject(new Error('context B failed'));
+
+	assert.deepEqual(await Promise.all([original, contextB, contextC]), [
+		false,
+		false,
+		false,
+	]);
+	assert.equal(harness.routeCommands.length, 2);
+	assert.deepEqual(harness.consumedTokens, ['token-1', 'token-1']);
+	assert.deepEqual(harness.restoredTokens, ['token-1', 'token-1']);
+	assert.equal(harness.core.getSnapshot().handledRouteKey, null);
+	assert.deepEqual(harness.acknowledgements, []);
+});
+
+void test('distinct authorization queued during restoration retry runs independently', async () => {
+	const harness = createMultiIdentityHarness();
+	const firstRoute = harness.validRoute();
+	const original = harness.core.handleRoute(firstRoute);
+	const context = harness.core.getSnapshot().context;
+	harness.core.setContext({ ...context, channelId: 8 });
+	const restorationRetry = harness.core.handleRoute(firstRoute);
+	harness.routeCommands[0]?.reject(new Error('original failed'));
+	await harness.tick();
+	assert.equal(harness.routeCommands.length, 2);
+
+	const distinct = harness.core.handleRoute(secondAuthorizedRoute(harness));
+	harness.routeCommands[1]?.reject(new Error('restoration retry failed'));
+	await harness.tick();
+	assert.equal(harness.routeCommands.length, 3);
+	harness.routeCommands[2]?.resolve('');
+
+	assert.deepEqual(await Promise.all([original, restorationRetry, distinct]), [
+		false,
+		false,
+		true,
+	]);
+	assert.deepEqual(harness.consumedTokens, ['token-1', 'token-1', 'token-2']);
+	assert.deepEqual(harness.restoredTokens, ['token-1', 'token-1']);
+	assert.deepEqual(harness.acknowledgements, [
+		{ connectionId: 'saved-host', session: 'main', windowId: '@13' },
+	]);
 });

@@ -46,6 +46,7 @@ export function buildWorkmuxWindowOutput(windowId = '@12'): string {
 export function createNotificationsHarness(
 	options: {
 		acknowledgeError?: Error;
+		authorizedRouteIdentities?: string[];
 		deferRouteCommands?: boolean;
 		restoreTokenError?: Error;
 		restoreTokenResult?: boolean;
@@ -69,7 +70,6 @@ export function createNotificationsHarness(
 	const consumedRouteIdentities: string[] = [];
 	const restoredTokens: string[] = [];
 	const routeCommands: WindowCommand[] = [];
-	let routeTokenAvailable = true;
 	const authorizedRouteIdentity = JSON.stringify([
 		'saved-host',
 		'main',
@@ -77,6 +77,10 @@ export function createNotificationsHarness(
 		'event-1',
 		'token-1',
 	]);
+	const authorizedRouteIdentities = new Set(
+		options.authorizedRouteIdentities ?? [authorizedRouteIdentity],
+	);
+	const availableRouteIdentities = new Set(authorizedRouteIdentities);
 
 	const context = (
 		overrides: Partial<
@@ -139,10 +143,10 @@ export function createNotificationsHarness(
 				tapToken,
 			]);
 			consumedRouteIdentities.push(identity);
-			if (identity !== authorizedRouteIdentity || !routeTokenAvailable) {
+			if (!availableRouteIdentities.has(identity)) {
 				return false;
 			}
-			routeTokenAvailable = false;
+			availableRouteIdentities.delete(identity);
 			return true;
 		},
 		restoreAuthorizedRouteToken: (
@@ -155,13 +159,17 @@ export function createNotificationsHarness(
 			restoredTokens.push(tapToken);
 			if (options.restoreTokenError) throw options.restoreTokenError;
 			if (options.restoreTokenResult === false) return false;
-			if (
-				JSON.stringify([connectionId, session, windowId, eventId, tapToken]) !==
-				authorizedRouteIdentity
-			) {
+			const identity = JSON.stringify([
+				connectionId,
+				session,
+				windowId,
+				eventId,
+				tapToken,
+			]);
+			if (!authorizedRouteIdentities.has(identity)) {
 				return false;
 			}
-			routeTokenAvailable = true;
+			availableRouteIdentities.add(identity);
 			return true;
 		},
 		acknowledge: (connectionId, session, windowId) => {
