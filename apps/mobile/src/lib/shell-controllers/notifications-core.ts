@@ -80,6 +80,7 @@ type AcknowledgementAttempt = Readonly<{
 
 type ActiveRouteAttempt = {
 	routeIdentityKey: string;
+	authorizationIdentityKey: string | null;
 	contextRevision: number;
 	generation: number;
 	requestId: number;
@@ -96,6 +97,7 @@ type RouteRequestSnapshot = {
 	contextRevision: number;
 	generation: number;
 	routeIdentityKey: string;
+	authorizationIdentityKey: string | null;
 };
 
 type QueuedRouteRequest = RouteRequestSnapshot & {
@@ -130,6 +132,30 @@ function createRouteIdentityKey(route: ShellNotificationRoute): string {
 	return JSON.stringify([
 		route.agentConnectionId,
 		route.agentSession,
+		route.agentWindowId,
+		route.agentEventId,
+		route.agentTapToken,
+	]);
+}
+
+function createRouteAuthorizationIdentityKey(
+	route: ShellNotificationRoute,
+	context: ShellNotificationContext,
+): string | null {
+	const connectionId = route.agentConnectionId || context.storedConnectionId;
+	if (!connectionId || !route.agentWindowId) return null;
+	if (
+		route.agentConnectionId &&
+		context.storedConnectionId &&
+		route.agentConnectionId !== context.storedConnectionId
+	) {
+		return null;
+	}
+	if (!route.agentEventId || !route.agentTapToken) return null;
+	const session = route.agentSession || context.tmuxTarget.trim() || 'main';
+	return JSON.stringify([
+		connectionId,
+		session,
 		route.agentWindowId,
 		route.agentEventId,
 		route.agentTapToken,
@@ -397,6 +423,7 @@ export function createShellNotificationsControllerCore({
 		});
 		const attempt: ActiveRouteAttempt = {
 			routeIdentityKey: request.routeIdentityKey,
+			authorizationIdentityKey: request.authorizationIdentityKey,
 			contextRevision: request.contextRevision,
 			generation: request.generation,
 			requestId,
@@ -464,7 +491,8 @@ export function createShellNotificationsControllerCore({
 	): Promise<boolean> => {
 		if (
 			queuedRouteRequest &&
-			queuedRouteRequest.routeIdentityKey === request.routeIdentityKey &&
+			queuedRouteRequest.authorizationIdentityKey ===
+				request.authorizationIdentityKey &&
 			queuedRouteRequest.contextRevision === request.contextRevision &&
 			queuedRouteRequest.generation === request.generation
 		) {
@@ -526,12 +554,17 @@ export function createShellNotificationsControllerCore({
 			const context = { ...snapshot.context };
 			const contextRevision = snapshot.contextRevision;
 			const routeIdentityKey = createRouteIdentityKey(route);
+			const authorizationIdentityKey = createRouteAuthorizationIdentityKey(
+				route,
+				context,
+			);
 			const request: RouteRequestSnapshot = {
 				route,
 				context,
 				contextRevision,
 				generation,
 				routeIdentityKey,
+				authorizationIdentityKey,
 			};
 			if (
 				activeRouteAttempt &&
@@ -557,7 +590,9 @@ export function createShellNotificationsControllerCore({
 				activeRouteAttempt &&
 				!activeRouteAttempt.committed &&
 				activeRouteAttempt.tokenConsumed &&
-				activeRouteAttempt.routeIdentityKey === routeIdentityKey &&
+				authorizationIdentityKey !== null &&
+				activeRouteAttempt.authorizationIdentityKey ===
+					authorizationIdentityKey &&
 				activeRouteAttempt.contextRevision !== contextRevision &&
 				routeInvalidationReason === null
 			) {

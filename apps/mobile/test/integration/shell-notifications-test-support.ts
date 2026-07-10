@@ -66,9 +66,17 @@ export function createNotificationsHarness(
 	}[] = [];
 	const warnings: unknown[] = [];
 	const consumedTokens: string[] = [];
+	const consumedRouteIdentities: string[] = [];
 	const restoredTokens: string[] = [];
 	const routeCommands: WindowCommand[] = [];
 	let routeTokenAvailable = true;
+	const authorizedRouteIdentity = JSON.stringify([
+		'saved-host',
+		'main',
+		'@12',
+		'event-1',
+		'token-1',
+	]);
 
 	const context = (
 		overrides: Partial<
@@ -116,27 +124,43 @@ export function createNotificationsHarness(
 			return deferred.promise;
 		},
 		consumeAuthorizedRouteToken: (
-			_connectionId,
-			_session,
-			_windowId,
-			_eventId,
+			connectionId,
+			session,
+			windowId,
+			eventId,
 			tapToken,
 		) => {
 			consumedTokens.push(tapToken);
-			if (!routeTokenAvailable) return false;
+			const identity = JSON.stringify([
+				connectionId,
+				session,
+				windowId,
+				eventId,
+				tapToken,
+			]);
+			consumedRouteIdentities.push(identity);
+			if (identity !== authorizedRouteIdentity || !routeTokenAvailable) {
+				return false;
+			}
 			routeTokenAvailable = false;
 			return true;
 		},
 		restoreAuthorizedRouteToken: (
-			_connectionId,
-			_session,
-			_windowId,
-			_eventId,
+			connectionId,
+			session,
+			windowId,
+			eventId,
 			tapToken,
 		) => {
 			restoredTokens.push(tapToken);
 			if (options.restoreTokenError) throw options.restoreTokenError;
 			if (options.restoreTokenResult === false) return false;
+			if (
+				JSON.stringify([connectionId, session, windowId, eventId, tapToken]) !==
+				authorizedRouteIdentity
+			) {
+				return false;
+			}
 			routeTokenAvailable = true;
 			return true;
 		},
@@ -156,6 +180,7 @@ export function createNotificationsHarness(
 		acknowledgements,
 		acknowledgedWindowIds,
 		consumedTokens,
+		consumedRouteIdentities,
 		context,
 		core,
 		restoredTokens,
