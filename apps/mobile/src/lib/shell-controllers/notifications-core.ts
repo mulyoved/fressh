@@ -56,6 +56,12 @@ type QueuedWaiter = {
 	resolve(): void;
 };
 
+type AcknowledgementAttempt = Readonly<{
+	generation: number;
+	activityGeneration: number;
+	context: Readonly<ShellNotificationContext>;
+}>;
+
 function contextsEqual(
 	left: ShellNotificationContext,
 	right: ShellNotificationContext,
@@ -137,10 +143,19 @@ export function createShellNotificationsControllerCore({
 		};
 	};
 
-	const runAttempt = async (): Promise<void> => {
-		const requestGeneration = generation;
-		const activityGeneration = activity.getSnapshot().generation;
-		const { context } = publisher.getSnapshot();
+	const captureAttempt = (): AcknowledgementAttempt => ({
+		generation,
+		activityGeneration: activity.getSnapshot().generation,
+		context: { ...publisher.getSnapshot().context },
+	});
+
+	const isAttemptCurrent = (attempt: AcknowledgementAttempt): boolean =>
+		!disposed &&
+		attempt.generation === generation &&
+		activity.getSnapshot().generation === attempt.activityGeneration;
+
+	const runAttempt = async (attempt: AcknowledgementAttempt): Promise<void> => {
+		const { context } = attempt;
 		await acknowledgeVisibleAgentNotification({
 			platformOS,
 			connectionId: context.storedConnectionId,
@@ -148,11 +163,9 @@ export function createShellNotificationsControllerCore({
 			tmuxEnabled: context.tmuxEnabled,
 			tmuxTarget: context.tmuxTarget,
 			getVisibility,
-			nextRequestId: () => requestGeneration,
+			nextRequestId: () => attempt.generation,
 			isCurrentRequest: (requestId) =>
-				!disposed &&
-				requestId === generation &&
-				activity.getSnapshot().generation === activityGeneration,
+				requestId === attempt.generation && isAttemptCurrent(attempt),
 			runWorkmuxCommand,
 			acknowledge,
 			warn,
@@ -163,25 +176,30 @@ export function createShellNotificationsControllerCore({
 		if (disposed) return;
 		epochInvalidated = false;
 		if (inFlight) {
+			const promise = new Promise<void>((resolve) => {
+				queuedWaiters.push({ resolve });
+			});
 			if (!queued) {
 				queued = true;
 				publish();
 			}
-			return new Promise<void>((resolve) => {
-				queuedWaiters.push({ resolve });
-			});
+			return promise;
 		}
 
+		let attempt = captureAttempt();
 		inFlight = true;
 		publish();
 		try {
 			do {
-				await runAttempt();
+				if (isAttemptCurrent(attempt)) {
+					await runAttempt(attempt);
+				}
 				settlePromoted();
 				if (disposed || !queued) break;
 				promotedWaiters = queuedWaiters;
 				queuedWaiters = [];
 				queued = false;
+				attempt = captureAttempt();
 				publish();
 			} while (!disposed);
 		} finally {

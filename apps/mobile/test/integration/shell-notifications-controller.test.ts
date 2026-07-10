@@ -123,6 +123,84 @@ void test('notification core coalesces concurrent visible acknowledgements', asy
 	assert.equal(harness.core.getSnapshot().acknowledgeQueued, false);
 });
 
+void test('notification core skips an initial attempt invalidated during publication', async () => {
+	const harness = createNotificationsHarness();
+	let invalidated = false;
+	harness.core.subscribe(() => {
+		if (!invalidated && harness.core.getSnapshot().acknowledgeInFlight) {
+			invalidated = true;
+			harness.core.invalidate('source-change');
+		}
+	});
+
+	const pending = harness.core.acknowledgeVisible();
+	const commandCount = harness.windowCommands.length;
+	for (const command of harness.windowCommands) {
+		command.resolve(buildWorkmuxWindowOutput());
+	}
+	await pending;
+
+	assert.equal(commandCount, 0);
+	assert.deepEqual(harness.acknowledgedWindowIds, []);
+	assert.equal(harness.core.getSnapshot().acknowledgeInFlight, false);
+});
+
+void test('notification queued publication registers its waiter before reentrant invalidation', async () => {
+	const harness = createNotificationsHarness();
+	const active = harness.core.acknowledgeVisible();
+	let invalidated = false;
+	harness.core.subscribe(() => {
+		if (!invalidated && harness.core.getSnapshot().acknowledgeQueued) {
+			invalidated = true;
+			harness.core.invalidate('source-change');
+		}
+	});
+	const queued = harness.core.acknowledgeVisible();
+	let queuedSettled = false;
+	void queued.then(() => {
+		queuedSettled = true;
+	});
+
+	await harness.tick();
+	const settledBeforeLookupCompletion = queuedSettled;
+	const queuedBeforeLookupCompletion =
+		harness.core.getSnapshot().acknowledgeQueued;
+	harness.windowCommands[0]?.resolve(buildWorkmuxWindowOutput());
+	await Promise.all([active, queued]);
+	assert.equal(settledBeforeLookupCompletion, true);
+	assert.equal(queuedBeforeLookupCompletion, false);
+	assert.deepEqual(harness.acknowledgedWindowIds, []);
+});
+
+void test('notification core skips a promoted attempt invalidated during publication', async () => {
+	const harness = createNotificationsHarness();
+	const active = harness.core.acknowledgeVisible();
+	const promoted = harness.core.acknowledgeVisible();
+	let invalidated = false;
+	harness.core.subscribe(() => {
+		const snapshot = harness.core.getSnapshot();
+		if (
+			!invalidated &&
+			snapshot.acknowledgeInFlight &&
+			!snapshot.acknowledgeQueued
+		) {
+			invalidated = true;
+			harness.core.invalidate('source-change');
+		}
+	});
+
+	harness.windowCommands[0]?.resolve(buildWorkmuxWindowOutput('@12'));
+	await harness.tick();
+	const commandCount = harness.windowCommands.length;
+	for (const command of harness.windowCommands.slice(1)) {
+		command.resolve(buildWorkmuxWindowOutput('@13'));
+	}
+	await Promise.all([active, promoted]);
+
+	assert.equal(commandCount, 1);
+	assert.deepEqual(harness.acknowledgedWindowIds, ['@12']);
+});
+
 void test('notification core suppresses acknowledgement after target change', async () => {
 	const harness = createNotificationsHarness();
 	const pending = harness.core.acknowledgeVisible();
@@ -133,6 +211,26 @@ void test('notification core suppresses acknowledgement after target change', as
 	harness.windowCommands[0]?.resolve(buildWorkmuxWindowOutput('@12'));
 	await pending;
 
+	assert.deepEqual(harness.acknowledgedWindowIds, []);
+});
+
+void test('target context change immediately settles queued callers without a stale rerun', async () => {
+	const harness = createNotificationsHarness();
+	const active = harness.core.acknowledgeVisible();
+	const queued = harness.core.acknowledgeVisible();
+	let queuedSettled = false;
+	void queued.then(() => {
+		queuedSettled = true;
+	});
+
+	harness.core.setContext(harness.context({ tmuxTarget: 'other' }));
+	await harness.tick();
+	assert.equal(queuedSettled, true);
+	assert.equal(harness.core.getSnapshot().acknowledgeQueued, false);
+
+	harness.windowCommands[0]?.resolve(buildWorkmuxWindowOutput('@12'));
+	await active;
+	assert.equal(harness.windowCommands.length, 1);
 	assert.deepEqual(harness.acknowledgedWindowIds, []);
 });
 
@@ -250,6 +348,28 @@ void test('notification invalidation immediately settles promoted rerun callers'
 	await Promise.all([active, current]);
 	assert.equal(currentSettled, true);
 	assert.deepEqual(harness.acknowledgedWindowIds, ['@12', '@14']);
+});
+
+void test('tmux context change immediately settles promoted callers without stale acknowledgement', async () => {
+	const harness = createNotificationsHarness();
+	const active = harness.core.acknowledgeVisible();
+	const promoted = harness.core.acknowledgeVisible();
+	let promotedSettled = false;
+	void promoted.then(() => {
+		promotedSettled = true;
+	});
+
+	harness.windowCommands[0]?.resolve(buildWorkmuxWindowOutput('@12'));
+	await harness.tick();
+	assert.equal(harness.windowCommands.length, 2);
+	harness.core.setContext(harness.context({ tmuxEnabled: false }));
+	await harness.tick();
+	assert.equal(promotedSettled, true);
+
+	harness.windowCommands[1]?.resolve(buildWorkmuxWindowOutput('@13'));
+	await active;
+	assert.equal(harness.windowCommands.length, 2);
+	assert.deepEqual(harness.acknowledgedWindowIds, ['@12']);
 });
 
 void test('notification invalidation advances once per acknowledgement epoch', async () => {
