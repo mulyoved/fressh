@@ -47,7 +47,11 @@ function buildWorkmuxWindowOutput(windowId = '@12'): string {
 }
 
 function createNotificationsHarness(
-	options: { acknowledgeError?: Error; warnError?: Error } = {},
+	options: {
+		acknowledgeError?: Error;
+		routeCommandError?: Error;
+		warnError?: Error;
+	} = {},
 ) {
 	const activity = createShellActivityControllerCore({
 		focused: true,
@@ -61,6 +65,10 @@ function createNotificationsHarness(
 		windowId: string;
 	}[] = [];
 	const warnings: unknown[] = [];
+	const consumedTokens: string[] = [];
+	const restoredTokens: string[] = [];
+	const routeCommands: { argv: string[]; timeoutMs: number }[] = [];
+	let routeTokenAvailable = true;
 
 	const context = (
 		overrides: Partial<
@@ -89,9 +97,38 @@ function createNotificationsHarness(
 		context: context(),
 		platformOS: 'android',
 		runWorkmuxCommand: (argv, timeoutMs) => {
+			if (argv[2] === 'notification') {
+				routeCommands.push({ argv, timeoutMs });
+				return options.routeCommandError
+					? Promise.reject(options.routeCommandError)
+					: Promise.resolve('');
+			}
 			const deferred = createDeferred<string>();
 			windowCommands.push({ ...deferred, argv, timeoutMs });
 			return deferred.promise;
+		},
+		consumeAuthorizedRouteToken: (
+			_connectionId,
+			_session,
+			_windowId,
+			_eventId,
+			tapToken,
+		) => {
+			consumedTokens.push(tapToken);
+			if (!routeTokenAvailable) return false;
+			routeTokenAvailable = false;
+			return true;
+		},
+		restoreAuthorizedRouteToken: (
+			_connectionId,
+			_session,
+			_windowId,
+			_eventId,
+			tapToken,
+		) => {
+			restoredTokens.push(tapToken);
+			routeTokenAvailable = true;
+			return true;
 		},
 		acknowledge: (connectionId, session, windowId) => {
 			if (options.acknowledgeError) throw options.acknowledgeError;
@@ -108,13 +145,60 @@ function createNotificationsHarness(
 		activity,
 		acknowledgements,
 		acknowledgedWindowIds,
+		consumedTokens,
 		context,
 		core,
+		restoredTokens,
+		routeCommands,
 		tick: () => new Promise((resolve) => setTimeout(resolve, 0)),
+		validRoute: () => ({
+			agentConnectionId: 'saved-host',
+			agentSession: 'main',
+			agentWindowId: '@12',
+			agentEventId: 'event-1',
+			agentTapToken: 'token-1',
+		}),
 		warnings,
 		windowCommands,
 	};
 }
+
+void test('notification core restores consumed token when route command fails', async () => {
+	const harness = createNotificationsHarness({
+		routeCommandError: new Error('failed'),
+	});
+	const handled = await harness.core.handleRoute(harness.validRoute());
+
+	assert.equal(handled, false);
+	assert.deepEqual(harness.consumedTokens, ['token-1']);
+	assert.deepEqual(harness.restoredTokens, ['token-1']);
+});
+
+void test('notification core handles an authorized route only once', async () => {
+	const harness = createNotificationsHarness();
+	const route = harness.validRoute();
+
+	assert.equal(await harness.core.handleRoute(route), true);
+	assert.equal(await harness.core.handleRoute(route), false);
+	assert.equal(harness.routeCommands.length, 1);
+	assert.equal(
+		harness.core.getSnapshot().handledRouteKey,
+		'["saved-host","main","@12","event-1"]',
+	);
+});
+
+void test('notification route acknowledgement remains best effort after selection', async () => {
+	const failure = new Error('bridge failed');
+	const harness = createNotificationsHarness({ acknowledgeError: failure });
+
+	assert.equal(await harness.core.handleRoute(harness.validRoute()), true);
+	assert.deepEqual(harness.restoredTokens, []);
+	assert.deepEqual(harness.warnings, [failure]);
+	assert.equal(
+		harness.core.getSnapshot().handledRouteKey,
+		'["saved-host","main","@12","event-1"]',
+	);
+});
 
 void test('notification core coalesces concurrent visible acknowledgements', async () => {
 	const harness = createNotificationsHarness();
@@ -697,4 +781,37 @@ void test('notification disposal tears down its publisher when final publication
 
 	assert.equal(subscriberCalls, 1);
 	assert.equal(laterCalls, 0);
+});
+
+void test('notification hook owns route, activity, pending, and replay-safe lifecycle effects', () => {
+	const source = readFileSync(
+		'src/lib/shell-controllers/notifications.tsx',
+		'utf8',
+	);
+
+	assert.match(source, /createReplaySafeControllerLifecycle\(core\)/);
+	assert.match(source, /useLayoutEffect\(\(\) => \{/);
+	assert.match(source, /subscribeActivity\(handleActivityChanged\)/);
+	assert.match(
+		source,
+		/subscribeAgentNotificationPending\(core\.notifyPending\)/,
+	);
+	assert.match(source, /Platform\.OS !== 'android'/);
+	assert.match(source, /core\.handleRoute\(route\)\.catch/);
+	assert.match(source, /core\.acknowledgeVisible\(\)\.catch/);
+	assert.doesNotMatch(
+		source.slice(
+			source.indexOf('export function useShellNotificationsController'),
+			source.indexOf('\tuseLayoutEffect'),
+		),
+		/committedInputRef\.current = input/,
+	);
+	assert.ok(
+		source.indexOf('subscribeActivity(handleActivityChanged)') <
+			source.indexOf('handleActivityChanged();'),
+	);
+	assert.doesNotMatch(
+		source,
+		/if \(!previous\?\.interactive\) requestVisibleAcknowledgement\(\)/,
+	);
 });

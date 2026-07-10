@@ -1,5 +1,6 @@
 import {
 	acknowledgeVisibleAgentNotification,
+	handleAgentNotificationRoute,
 	type VisibleAgentNotificationSnapshot,
 } from '../agent-notification-visibility';
 import { type ShellActivitySnapshot } from './activity-core';
@@ -48,6 +49,20 @@ export type CreateShellNotificationsControllerCoreInput = {
 	context: ShellNotificationContext;
 	platformOS: string;
 	runWorkmuxCommand(argv: string[], timeoutMs: number): Promise<string>;
+	consumeAuthorizedRouteToken(
+		connectionId: string,
+		session: string,
+		windowId: string,
+		eventId: string,
+		tapToken: string,
+	): boolean;
+	restoreAuthorizedRouteToken(
+		connectionId: string,
+		session: string,
+		windowId: string,
+		eventId: string,
+		tapToken: string,
+	): boolean;
 	acknowledge(connectionId: string, session: string, windowId: string): void;
 	warn(message: string, error: unknown): void;
 };
@@ -81,6 +96,8 @@ export function createShellNotificationsControllerCore({
 	context: initialContext,
 	platformOS,
 	runWorkmuxCommand,
+	consumeAuthorizedRouteToken,
+	restoreAuthorizedRouteToken,
 	acknowledge,
 	warn,
 }: CreateShellNotificationsControllerCoreInput): ShellNotificationsControllerCore {
@@ -99,6 +116,7 @@ export function createShellNotificationsControllerCore({
 	let promotedWaiters: QueuedWaiter[] = [];
 	let epochInvalidated = false;
 	let disposed = false;
+	let handledRouteKey: string | null = null;
 
 	const publish = (): void => {
 		const current = publisher.getSnapshot();
@@ -269,7 +287,44 @@ export function createShellNotificationsControllerCore({
 				});
 			}
 		},
-		handleRoute: async (_route) => false,
+		handleRoute: async (route) => {
+			if (disposed) return false;
+			const { context } = publisher.getSnapshot();
+			return handleAgentNotificationRoute({
+				...route,
+				storedConnectionId: context.storedConnectionId,
+				tmuxTarget: context.tmuxTarget,
+				isRouteHandled: (routeKey) => handledRouteKey === routeKey,
+				markRouteHandled: (routeKey) => {
+					handledRouteKey = routeKey;
+					try {
+						publisher.publish({
+							...publisher.getSnapshot(),
+							handledRouteKey,
+						});
+					} catch (error) {
+						warnBestEffort(
+							'agent notification route state publication failed',
+							error,
+						);
+					}
+				},
+				consumeAuthorizedRouteToken,
+				restoreAuthorizedRouteToken,
+				runWorkmuxCommand,
+				acknowledge: (connectionId, session, windowId) => {
+					try {
+						acknowledge(connectionId, session, windowId);
+					} catch (error) {
+						warnBestEffort(
+							'agent notification route acknowledge failed',
+							error,
+						);
+					}
+				},
+				warn: warnBestEffort,
+			});
+		},
 		invalidate,
 		dispose: () => {
 			if (disposed) return;
