@@ -89,6 +89,8 @@ export function createShellNotificationsControllerCore({
 	let inFlight = false;
 	let queued = false;
 	let queuedWaiters: QueuedWaiter[] = [];
+	let promotedWaiters: QueuedWaiter[] = [];
+	let epochInvalidated = false;
 	let disposed = false;
 
 	const publish = (): void => {
@@ -101,11 +103,26 @@ export function createShellNotificationsControllerCore({
 		});
 	};
 
+	const settleWaiters = (waiters: QueuedWaiter[]): void => {
+		for (const waiter of waiters) waiter.resolve();
+	};
+
 	const settleQueued = (): void => {
 		const waiters = queuedWaiters;
 		queuedWaiters = [];
 		queued = false;
-		for (const waiter of waiters) waiter.resolve();
+		settleWaiters(waiters);
+	};
+
+	const settlePromoted = (): void => {
+		const waiters = promotedWaiters;
+		promotedWaiters = [];
+		settleWaiters(waiters);
+	};
+
+	const settleObsolete = (): void => {
+		settlePromoted();
+		settleQueued();
 	};
 
 	const getVisibility = (): VisibleAgentNotificationSnapshot => {
@@ -144,6 +161,7 @@ export function createShellNotificationsControllerCore({
 
 	const acknowledgeVisible = async (): Promise<void> => {
 		if (disposed) return;
+		epochInvalidated = false;
 		if (inFlight) {
 			if (!queued) {
 				queued = true;
@@ -156,30 +174,28 @@ export function createShellNotificationsControllerCore({
 
 		inFlight = true;
 		publish();
-		let activeWaiters: QueuedWaiter[] = [];
 		try {
 			do {
 				await runAttempt();
-				for (const waiter of activeWaiters) waiter.resolve();
-				activeWaiters = [];
+				settlePromoted();
 				if (disposed || !queued) break;
-				activeWaiters = queuedWaiters;
+				promotedWaiters = queuedWaiters;
 				queuedWaiters = [];
 				queued = false;
 				publish();
 			} while (!disposed);
 		} finally {
-			for (const waiter of activeWaiters) waiter.resolve();
-			settleQueued();
+			settleObsolete();
 			inFlight = false;
 			if (!disposed) publish();
 		}
 	};
 
 	const invalidate = (_reason: ControllerInvalidationReason): void => {
-		if (disposed) return;
+		if (disposed || epochInvalidated) return;
+		epochInvalidated = true;
 		generation += 1;
-		settleQueued();
+		settleObsolete();
 		publish();
 	};
 
@@ -190,12 +206,14 @@ export function createShellNotificationsControllerCore({
 			if (disposed) return;
 			const current = publisher.getSnapshot();
 			if (contextsEqual(current.context, context)) return;
-			if (
+			const semanticContextChanged =
 				current.context.transportKey !== context.transportKey ||
-				current.context.targetKey !== context.targetKey
-			) {
+				current.context.targetKey !== context.targetKey ||
+				current.context.tmuxEnabled !== context.tmuxEnabled;
+			if (semanticContextChanged) {
 				generation += 1;
-				settleQueued();
+				settleObsolete();
+				epochInvalidated = false;
 			}
 			publisher.publish({
 				...current,
@@ -217,7 +235,7 @@ export function createShellNotificationsControllerCore({
 			if (disposed) return;
 			generation += 1;
 			disposed = true;
-			settleQueued();
+			settleObsolete();
 			inFlight = false;
 			publish();
 			publisher.disposePublisher();
