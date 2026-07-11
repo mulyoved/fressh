@@ -31,8 +31,17 @@ export function createScrollbackLocalUiCoordinator({
 	warn(context: ShellScrollbackContext, message: string, error: unknown): void;
 }) {
 	let nextRequestId = 0;
-	return (context: ShellScrollbackContext): void => {
+	return (
+		context: ShellScrollbackContext,
+		token?: { instanceId: string; isCurrent(): boolean },
+	): void => {
 		const current = getCurrentState();
+		if (
+			token &&
+			(!token.isCurrent() || current.runtimeInstanceId !== token.instanceId)
+		) {
+			return;
+		}
 		if (current.snapshot.active || current.snapshot.phase !== 'active') {
 			publish({
 				active: false,
@@ -41,7 +50,8 @@ export function createScrollbackLocalUiCoordinator({
 			});
 		}
 		clearTmuxScrollbackLineAccumulator(lineAccumulator);
-		const instanceId = current.runtimeInstanceId;
+		if (token && !token.isCurrent()) return;
+		const instanceId = token?.instanceId ?? current.runtimeInstanceId;
 		if (
 			instanceId === null ||
 			current.context !== context ||
@@ -49,6 +59,7 @@ export function createScrollbackLocalUiCoordinator({
 		) {
 			return;
 		}
+		if (token && !token.isCurrent()) return;
 		nextRequestId += 1;
 		const exitRequest = createTmuxScrollbackLocalExitRequest({
 			requestIds: localExitRequestIds,

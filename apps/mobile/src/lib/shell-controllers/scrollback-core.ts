@@ -1,9 +1,5 @@
 import { type ScrollTraceSink } from '../scroll-trace';
-import {
-	handleTmuxScrollbackEnterRequested,
-	registerTmuxScrollbackRemoteCopyModeExitCleanup,
-	resetTmuxScrollbackRuntimeState,
-} from '../tmux-scrollback';
+import { handleTmuxScrollbackEnterRequested } from '../tmux-scrollback';
 import { resetTmuxScrollbackLocalExitRequests } from '../tmux-scrollback-local-exit';
 import { type WorkmuxControlChannel } from '../workmux-control-channel';
 import {
@@ -27,6 +23,12 @@ import {
 	type ControllerOutcome,
 } from './controller-core';
 import { handleScrollbackBatch } from './scrollback-batch-coordinator';
+import {
+	createSafeScrollbackWarn as createSafeWarn,
+	isScrollbackTerminalInstanceCurrent as isTerminalInstanceCurrent,
+	traceScrollbackSafely,
+} from './scrollback-callback-safety';
+import { createScrollbackCleanupCoordinator } from './scrollback-cleanup-coordinator';
 import {
 	createScrollbackEntryCoordinator,
 	type ScrollbackEnterRequestToken,
@@ -172,178 +174,27 @@ export function createShellScrollbackControllerCore(
 	let nextTraceId = 0;
 	let activeTraceId = 'scroll-0';
 	let disposed = false;
-	let nextResetInvocationRevision = 0;
-	type ResetOperationKey = Readonly<{
-		failurePolicy: 'notify' | 'suppress';
-		invocationRevision: number;
-		remoteCopyModeGeneration: number;
-		requiresDurableTargetExit: boolean;
-		targetOwnershipRevision: number;
-	}>;
-	type PendingResetOperation = ResetOperationKey &
-		Readonly<{ cleanup: Promise<boolean> }>;
-	const pendingResetOperations = new WeakMap<
-		WorkmuxScrollbackCommandExecutor,
-		PendingResetOperation
-	>();
-
-	type CleanupOwnership = Readonly<{
-		targetOwnershipRevision: number;
-		remoteCopyModeGeneration: number;
-		targetKey: ShellTargetKey;
-		targetName: string;
-	}>;
-	const createSafeWarn =
-		(logger: ShellScrollbackLogger | undefined) =>
-		(message: string, error?: unknown): void => {
-			try {
-				logger?.warn(message, error);
-			} catch {
-				// Logging is best-effort and must not interrupt owned cleanup.
-			}
-		};
-
 	const warn = (message: string, error?: unknown): void => {
 		createSafeWarn(context?.logger)(message, error);
 	};
 
-	const captureCleanupOwnership = (
-		ownerContext: ShellScrollbackContext,
-	): CleanupOwnership => ({
-		targetOwnershipRevision,
-		remoteCopyModeGeneration: remoteCopyModeGeneration.current,
-		targetKey: ownerContext.targetKey,
-		targetName: ownerContext.targetName,
+	const cleanupCoordinator = createScrollbackCleanupCoordinator({
+		cleanupBarrier,
+		getCurrentState: () => ({
+			context,
+			disposed,
+			executor,
+			targetOwnershipRevision,
+		}),
+		lineAccumulator,
+		remoteCopyModeActive,
+		remoteCopyModeGeneration,
+		warn: (logger, message, error) => createSafeWarn(logger)(message, error),
 	});
-
-	const isCleanupFailureCurrent = (ownership: CleanupOwnership): boolean =>
-		!disposed &&
-		targetOwnershipRevision === ownership.targetOwnershipRevision &&
-		context?.targetKey === ownership.targetKey &&
-		context.targetName === ownership.targetName;
-
-	const isCleanupSuccessCurrent = (ownership: CleanupOwnership): boolean =>
-		isCleanupFailureCurrent(ownership) &&
-		remoteCopyModeGeneration.current === ownership.remoteCopyModeGeneration;
-
-	const captureResetOperationKey = (
-		requiresDurableTargetExit: boolean,
-		failurePolicy: 'notify' | 'suppress',
-	): ResetOperationKey => ({
-		failurePolicy,
-		invocationRevision: ++nextResetInvocationRevision,
-		remoteCopyModeGeneration: remoteCopyModeGeneration.current,
-		requiresDurableTargetExit,
-		targetOwnershipRevision,
-	});
-
-	const getPendingResetOperation = (
-		ownerExecutor: WorkmuxScrollbackCommandExecutor,
-		requiresDurableTargetExit: boolean,
-		failurePolicy: 'notify' | 'suppress',
-	): Promise<boolean> | null => {
-		const pending = pendingResetOperations.get(ownerExecutor);
-		return pending?.targetOwnershipRevision === targetOwnershipRevision &&
-			pending.remoteCopyModeGeneration === remoteCopyModeGeneration.current &&
-			pending.requiresDurableTargetExit === requiresDurableTargetExit &&
-			pending.failurePolicy === failurePolicy
-			? pending.cleanup
-			: null;
-	};
-
-	const recordPendingResetOperation = (
-		ownerExecutor: WorkmuxScrollbackCommandExecutor,
-		key: ResetOperationKey,
-		cleanup: Promise<boolean> | null,
-	): void => {
-		if (!cleanup) return;
-		if (
-			key.targetOwnershipRevision !== targetOwnershipRevision ||
-			key.remoteCopyModeGeneration !== remoteCopyModeGeneration.current ||
-			executor !== ownerExecutor
-		) {
-			return;
-		}
-		const existing = pendingResetOperations.get(ownerExecutor);
-		if (existing && existing.invocationRevision > key.invocationRevision)
-			return;
-		const pending: PendingResetOperation = {
-			...key,
-			cleanup,
-		};
-		pendingResetOperations.set(ownerExecutor, pending);
-		const clearIfCurrent = () => {
-			if (pendingResetOperations.get(ownerExecutor) !== pending) return;
-			pendingResetOperations.delete(ownerExecutor);
-		};
-		void cleanup.then(clearIfCurrent, clearIfCurrent);
-	};
-
-	const registerCleanup = ({
-		cleanup,
-		failureMessage,
-		logger,
-		ownership,
-		remoteWasActive,
-		restoreRemoteOnFailure,
-		currentAfterDispose = false,
-		clearRemoteOnSuccess = true,
-		reportResolvedFalse = true,
-	}: {
-		cleanup: Promise<boolean> | null | undefined;
-		failureMessage: string;
-		logger: ShellScrollbackLogger | undefined;
-		ownership: CleanupOwnership | null;
-		remoteWasActive: boolean;
-		restoreRemoteOnFailure: boolean;
-		currentAfterDispose?: boolean;
-		clearRemoteOnSuccess?: boolean;
-		reportResolvedFalse?: boolean;
-	}): Promise<boolean> | null => {
-		if (!cleanup) return null;
-		const safeWarn = createSafeWarn(logger);
-		const isSuccessCurrent = () =>
-			currentAfterDispose ||
-			(ownership !== null && isCleanupSuccessCurrent(ownership));
-		const isFailureCurrent = () =>
-			currentAfterDispose ||
-			(ownership !== null && isCleanupFailureCurrent(ownership));
-		const register = (barrier: WorkmuxScrollbackLiveInputCleanupBarrier) =>
-			registerTmuxScrollbackRemoteCopyModeExitCleanup({
-				barrier,
-				cleanup,
-				remoteCopyModeActiveRef: remoteCopyModeActive,
-				remoteCopyModeWasActive: remoteWasActive,
-				freshness: currentAfterDispose
-					? { kind: 'always' }
-					: {
-							kind: 'predicates',
-							isSuccessCurrent,
-							isFailureCurrent,
-						},
-				failureOwnership: restoreRemoteOnFailure
-					? { kind: 'restore' }
-					: { kind: 'ignore' },
-				successOwnership: clearRemoteOnSuccess ? 'clear' : 'preserve',
-				failureReporting: {
-					kind: 'report',
-					report: (error, failure) => {
-						if (failure.kind === 'rejected' || reportResolvedFalse) {
-							safeWarn(failureMessage, error);
-						}
-					},
-				},
-			});
-		try {
-			return register(cleanupBarrier);
-		} catch (error) {
-			safeWarn(failureMessage, error);
-			if (restoreRemoteOnFailure && isFailureCurrent()) {
-				remoteCopyModeActive.current = true;
-			}
-			return register({ current: () => null, track: (value) => value ?? null });
-		}
-	};
+	const captureCleanupOwnership = cleanupCoordinator.captureOwnership;
+	const isCleanupFailureCurrent = cleanupCoordinator.isFailureCurrent;
+	const registerCleanup = cleanupCoordinator.register;
+	const resetExecutor = cleanupCoordinator.reset;
 
 	const safelyPublish = (snapshot: ShellScrollbackState): void => {
 		try {
@@ -370,88 +221,10 @@ export function createShellScrollbackControllerCore(
 	): boolean =>
 		left.targetKey === right.targetKey && left.targetName === right.targetName;
 
-	const resetExecutor = ({
-		failurePolicy,
-		ownerContext,
-		remoteWasActive,
-	}: {
-		failurePolicy: 'notify' | 'suppress';
-		ownerContext: ShellScrollbackContext;
-		remoteWasActive: boolean;
-	}): Promise<boolean> | null => {
-		const activeExecutor = executor;
-		if (!activeExecutor) return null;
-		const pending = getPendingResetOperation(
-			activeExecutor,
-			remoteWasActive,
-			failurePolicy,
-		);
-		if (pending) return pending;
-		remoteCopyModeGeneration.current += 1;
-		const ownership = captureCleanupOwnership(ownerContext);
-		const operationKey = captureResetOperationKey(
-			remoteWasActive,
-			failurePolicy,
-		);
-		let cleanup: Promise<boolean> | null = null;
-		try {
-			cleanup = resetTmuxScrollbackRuntimeState({
-				lineAccumulator,
-				commandExecutor: activeExecutor,
-				targetName: remoteWasActive ? ownerContext.targetName : undefined,
-				failurePolicy,
-			});
-		} catch (error) {
-			createSafeWarn(ownerContext.logger)(
-				'Workmux scrollback reset failed',
-				error,
-			);
-			if (remoteWasActive && isCleanupFailureCurrent(ownership)) {
-				remoteCopyModeActive.current = true;
-			}
-			return null;
-		}
-		recordPendingResetOperation(activeExecutor, operationKey, cleanup);
-		void registerCleanup({
-			cleanup,
-			failureMessage: 'Workmux scrollback reset failed',
-			logger: ownerContext.logger,
-			ownership,
-			remoteWasActive,
-			restoreRemoteOnFailure: remoteWasActive,
-			reportResolvedFalse: false,
-		});
-		return cleanup;
-	};
-
 	const safelyTrace = (
 		ownerContext: ShellScrollbackContext,
 		event: Parameters<ScrollTraceSink>[0],
-	): void => {
-		try {
-			ownerContext.trace({ traceId: activeTraceId, ...event });
-		} catch (error) {
-			createSafeWarn(ownerContext.logger)(
-				'Workmux scrollback trace failed',
-				error,
-			);
-		}
-	};
-
-	const isTerminalInstanceCurrent = (
-		ownerContext: ShellScrollbackContext,
-		instanceId: string,
-	): boolean => {
-		try {
-			return ownerContext.terminalView.isCurrentInstance(instanceId);
-		} catch (error) {
-			createSafeWarn(ownerContext.logger)(
-				'Scrollback terminal instance check failed',
-				error,
-			);
-			return false;
-		}
-	};
+	): void => traceScrollbackSafely(ownerContext, activeTraceId, event);
 
 	const clearLocalScrollbackUiState = createScrollbackLocalUiCoordinator({
 		getCurrentState: () => ({
@@ -470,8 +243,10 @@ export function createShellScrollbackControllerCore(
 	const clearScrollbackState = (
 		ownerContext: ShellScrollbackContext,
 		failurePolicy: 'notify' | 'suppress' = 'notify',
+		localToken?: { instanceId: string; isCurrent(): boolean },
 	): Promise<boolean> | null => {
-		clearLocalScrollbackUiState(ownerContext);
+		clearLocalScrollbackUiState(ownerContext, localToken);
+		if (localToken && !localToken.isCurrent()) return null;
 		return resetExecutor({
 			failurePolicy,
 			ownerContext,
@@ -773,7 +548,10 @@ export function createShellScrollbackControllerCore(
 				event,
 				getCurrentState: () => ({
 					...publisher.getSnapshot(),
+					contextIdentity: context,
 					disposed,
+					executorIdentity: executor,
+					targetOwnershipRevision,
 				}),
 				isTerminalInstanceCurrent: (instanceId) =>
 					isTerminalInstanceCurrent(ownerContext, instanceId),
@@ -933,17 +711,30 @@ export function createShellScrollbackControllerCore(
 		},
 		jumpToLive: () => {
 			const ownerContext = context;
+			const ownerExecutor = executor;
 			const instanceId = runtimeInstanceId;
+			const ownerTargetOwnershipRevision = targetOwnershipRevision;
 			if (
 				disposed ||
 				ownerContext === null ||
-				executor === null ||
+				ownerExecutor === null ||
 				instanceId === null ||
-				!isTerminalInstanceCurrent(ownerContext, instanceId)
+				runtimeInstanceId !== instanceId
 			) {
 				return;
 			}
-			void clearScrollbackState(ownerContext);
+			const isCurrent = () =>
+				!disposed &&
+				context === ownerContext &&
+				executor === ownerExecutor &&
+				runtimeInstanceId === instanceId &&
+				targetOwnershipRevision === ownerTargetOwnershipRevision;
+			if (!isTerminalInstanceCurrent(ownerContext, instanceId)) return;
+			if (!isCurrent()) return;
+			void clearScrollbackState(ownerContext, 'notify', {
+				instanceId,
+				isCurrent,
+			});
 		},
 		invalidate,
 		dispose,
