@@ -169,26 +169,41 @@ export function createShellScrollbackControllerCore(
 	const observeCleanup = (
 		cleanup: Promise<boolean> | null | undefined,
 		failureMessage: string,
+		restoreRemoteOnFailure = false,
+		cleanupGeneration = remoteCopyModeGeneration.current,
 	): Promise<boolean> | null => {
 		if (!cleanup) return cleanup ?? null;
-		const cleanupGeneration = remoteCopyModeGeneration.current;
+		const restoreRemoteOwnership = (): void => {
+			if (
+				!disposed &&
+				restoreRemoteOnFailure &&
+				remoteCopyModeGeneration.current === cleanupGeneration
+			) {
+				remoteCopyModeActive.current = true;
+			}
+		};
+		const observeResult = (result: Promise<boolean>): void => {
+			void result.then(
+				(exited) => {
+					if (!exited) restoreRemoteOwnership();
+				},
+				(error) => {
+					restoreRemoteOwnership();
+					if (remoteCopyModeGeneration.current === cleanupGeneration) {
+						warn(failureMessage, error);
+					}
+				},
+			);
+		};
 		let tracked: Promise<boolean>;
 		try {
 			tracked = cleanupBarrier.track(cleanup) ?? cleanup;
 		} catch (error) {
 			warn(failureMessage, error);
-			void cleanup.catch((cleanupError) => {
-				if (remoteCopyModeGeneration.current === cleanupGeneration) {
-					warn(failureMessage, cleanupError);
-				}
-			});
+			observeResult(cleanup);
 			return cleanup;
 		}
-		void tracked.catch((error) => {
-			if (remoteCopyModeGeneration.current === cleanupGeneration) {
-				warn(failureMessage, error);
-			}
-		});
+		observeResult(tracked);
 		return tracked;
 	};
 
@@ -216,6 +231,8 @@ export function createShellScrollbackControllerCore(
 	const resetExecutor = (failurePolicy: 'notify' | 'suppress'): void => {
 		const activeExecutor = executor;
 		if (!activeExecutor) return;
+		const remoteWasActive = remoteCopyModeActive.current;
+		const cleanupGeneration = remoteCopyModeGeneration.current;
 		let cleanup: Promise<boolean> | null = null;
 		try {
 			cleanup = resetTmuxScrollbackRuntimeState({
@@ -229,7 +246,12 @@ export function createShellScrollbackControllerCore(
 		} catch (error) {
 			warn('Workmux scrollback reset failed', error);
 		}
-		void observeCleanup(cleanup, 'Workmux scrollback reset failed');
+		void observeCleanup(
+			cleanup,
+			'Workmux scrollback reset failed',
+			remoteWasActive,
+			cleanupGeneration,
+		);
 	};
 
 	const buildExecutor = (nextContext: ShellScrollbackContext): void => {
@@ -273,6 +295,7 @@ export function createShellScrollbackControllerCore(
 		const replacementRevision = executorRevision;
 		advanceFreshness();
 		const remoteWasActive = remoteCopyModeActive.current;
+		const cleanupGeneration = remoteCopyModeGeneration.current;
 		clearOwnedState();
 		if (previousExecutor) {
 			let cleanup: Promise<boolean> | null = null;
@@ -286,6 +309,8 @@ export function createShellScrollbackControllerCore(
 			void observeCleanup(
 				cleanup,
 				'Workmux scrollback executor disposal failed',
+				remoteWasActive,
+				cleanupGeneration,
 			);
 		}
 		if (disposed || executorRevision !== replacementRevision) return;
