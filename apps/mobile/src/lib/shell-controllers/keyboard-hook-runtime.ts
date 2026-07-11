@@ -1,4 +1,39 @@
-import { type ControllerInvalidationReason } from './controller-core';
+import {
+	type ControllerInvalidationReason,
+	type ControllerOutcome,
+} from './controller-core';
+
+export type KeyboardActivityTransitionController = {
+	reconcile(
+		interactive: boolean,
+		actions: {
+			setupInitialKeyboard(): void;
+			resumeFromAppState(): void;
+		},
+		rememberVisibility: () => void,
+	): void;
+};
+
+export function createKeyboardActivityTransitionController(
+	initialInteractive: boolean,
+): KeyboardActivityTransitionController {
+	let previousInteractive = initialInteractive;
+	let initialized = false;
+	return {
+		reconcile: (interactive, actions, rememberVisibility) => {
+			if (previousInteractive && !interactive) rememberVisibility();
+			if (interactive) {
+				if (!initialized) {
+					initialized = true;
+					actions.setupInitialKeyboard();
+				} else if (!previousInteractive) {
+					actions.resumeFromAppState();
+				}
+			}
+			previousInteractive = interactive;
+		},
+	};
+}
 
 export function invalidateKeyboardControllerDomains(
 	reason: ControllerInvalidationReason,
@@ -209,23 +244,26 @@ export type KeyboardClipboardPorts = {
 	writeClipboard(text: string): Promise<void>;
 	exitSelectionState(): void;
 	exitSelectionView(): void;
-	completeSlotPress(): void;
 	warn(message: string, error: unknown): void;
 };
 
+export type KeyboardClipboardOutcome = ControllerOutcome<{ message: string }>;
+
 export type KeyboardClipboardAuthority = {
-	copy(ports: KeyboardClipboardPorts): Promise<void>;
+	copy(ports: KeyboardClipboardPorts): Promise<KeyboardClipboardOutcome>;
 	noteSelection(text: string, instanceId?: string | null): void;
 	invalidate(): void;
 };
 
 export function createKeyboardClipboardAuthority(): KeyboardClipboardAuthority {
+	let request = 0;
 	let operation = 0;
 	let lastCopied: { instanceId: string; text: string } | null = null;
 	let activeWrite: {
 		instanceId: string;
 		text: string;
 		release(): void;
+		result: Promise<KeyboardClipboardOutcome>;
 	} | null = null;
 	const detachWrite = () => {
 		activeWrite?.release();
@@ -261,8 +299,8 @@ export function createKeyboardClipboardAuthority(): KeyboardClipboardAuthority {
 	};
 	return {
 		copy: async (ports) => {
-			const id = ++operation;
-			if (!ports.isAdmitted()) return;
+			const requestId = ++request;
+			if (!ports.isAdmitted()) return { status: 'unavailable' };
 			let instanceId: string | null;
 			try {
 				instanceId = ports.getInstanceId();
@@ -272,69 +310,79 @@ export function createKeyboardClipboardAuthority(): KeyboardClipboardAuthority {
 					'Failed to read terminal instance for selection copy',
 					error,
 				);
-				return;
+				return {
+					status: 'failed',
+					failure: { message: 'Failed to copy terminal selection.' },
+				};
 			}
-			if (!instanceId) return;
+			if (!instanceId) return { status: 'unavailable' };
 			let text: string;
 			try {
 				text = await ports.getSelection();
 			} catch (error) {
 				safeWarn(ports, 'Failed to read terminal selection', error);
-				return;
+				return {
+					status: 'failed',
+					failure: { message: 'Failed to copy terminal selection.' },
+				};
 			}
-			if (
-				!text ||
-				(lastCopied?.instanceId === instanceId && lastCopied.text === text) ||
-				(activeWrite?.instanceId === instanceId && activeWrite.text === text) ||
-				!safeCurrent(ports, id, instanceId)
-			)
-				return;
+			if (!text) return { status: 'unavailable' };
+			if (activeWrite?.instanceId === instanceId && activeWrite.text === text)
+				return activeWrite.result;
+			if (lastCopied?.instanceId === instanceId && lastCopied.text === text)
+				return { status: 'unavailable' };
+			if (requestId !== request) return { status: 'superseded' };
 			detachWrite();
+			const id = ++operation;
+			if (!safeCurrent(ports, id, instanceId)) return { status: 'superseded' };
 			let release = () => {};
 			const detached = new Promise<void>((resolve) => {
 				release = resolve;
 			});
-			activeWrite = { instanceId, text, release };
-			try {
-				await Promise.race([ports.writeClipboard(text), detached]);
-			} catch (error) {
-				safeWarn(
-					ports,
-					'Failed to write terminal selection to clipboard',
-					error,
-				);
-				return;
-			} finally {
+			const result = (async (): Promise<KeyboardClipboardOutcome> => {
+				try {
+					await Promise.race([ports.writeClipboard(text), detached]);
+				} catch (error) {
+					safeWarn(
+						ports,
+						'Failed to write terminal selection to clipboard',
+						error,
+					);
+					return id === operation
+						? {
+								status: 'failed',
+								failure: { message: 'Failed to copy terminal selection.' },
+							}
+						: { status: 'superseded' };
+				}
+				if (id !== operation) return { status: 'superseded' };
+				lastCopied = { instanceId, text };
+				if (!safeCurrent(ports, id, instanceId))
+					return { status: 'superseded' };
+				try {
+					ports.exitSelectionState();
+				} catch (error) {
+					safeWarn(ports, 'Failed to exit selection state after copy', error);
+				}
+				if (!safeCurrent(ports, id, instanceId))
+					return { status: 'superseded' };
+				try {
+					ports.exitSelectionView();
+				} catch (error) {
+					safeWarn(
+						ports,
+						'Failed to exit terminal selection view after copy',
+						error,
+					);
+				}
+				return safeCurrent(ports, id, instanceId)
+					? { status: 'completed' }
+					: { status: 'superseded' };
+			})().finally(() => {
 				if (activeWrite?.release === release) activeWrite = null;
-			}
-			if (id !== operation) return;
-			lastCopied = { instanceId, text };
-			if (!safeCurrent(ports, id, instanceId)) return;
-			try {
-				ports.exitSelectionState();
-			} catch (error) {
-				safeWarn(ports, 'Failed to exit selection state after copy', error);
-			}
-			if (!safeCurrent(ports, id, instanceId)) return;
-			try {
-				ports.exitSelectionView();
-			} catch (error) {
-				safeWarn(
-					ports,
-					'Failed to exit terminal selection view after copy',
-					error,
-				);
-			}
-			if (!safeCurrent(ports, id, instanceId)) return;
-			try {
-				ports.completeSlotPress();
-			} catch (error) {
-				safeWarn(
-					ports,
-					'Failed to complete one-shot keyboard after copy',
-					error,
-				);
-			}
+			});
+			activeWrite = { instanceId, text, release, result };
+			return result;
 		},
 		noteSelection: (text, instanceId) => {
 			if (
@@ -345,6 +393,7 @@ export function createKeyboardClipboardAuthority(): KeyboardClipboardAuthority {
 				lastCopied = null;
 		},
 		invalidate: () => {
+			request += 1;
 			operation += 1;
 			detachWrite();
 			lastCopied = null;

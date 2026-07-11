@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createShellActivityKeyboardActions } from '../../src/lib/shell-controllers/activity-keyboard-actions';
 import { createShellKeyboardResumeDismissScheduler } from '../../src/lib/shell-controllers/activity-retained-domain-bridge';
+import { createKeyboardActivityTransitionController } from '../../src/lib/shell-controllers/keyboard-hook-runtime';
 
 function createHarness(
 	input: {
@@ -142,4 +143,52 @@ void test('production keyboard actions compose with exact scheduler replacement'
 	assert.deepEqual(canceled, [1, 3]);
 	assert.equal(timers.size, 0);
 	assert.equal(dismisses, 4);
+});
+
+void test('initial noninteractive composition defers setup and reserves resume scheduling for later activation', () => {
+	const timers = new Map<number, { delayMs: number; task: () => void }>();
+	let nextTimer = 0;
+	const events: string[] = [];
+	const scheduler = createShellKeyboardResumeDismissScheduler({
+		schedule: (task, delayMs) => {
+			nextTimer += 1;
+			timers.set(nextTimer, { delayMs, task });
+			return nextTimer;
+		},
+		cancel: (timer) => timers.delete(timer),
+	});
+	const actions = createShellActivityKeyboardActions({
+		platformOS: 'android',
+		getSystemKeyboardEnabled: () => true,
+		getWasKeyboardVisible: () => false,
+		setKeyboardVisible: (visible) => events.push(`visible:${visible}`),
+		setXtermSystemKeyboardEnabled: (enabled) =>
+			events.push(`terminal:${enabled}`),
+		dismissKeyboard: () => events.push('dismiss'),
+		scheduleDelayedDismiss: scheduler.schedule,
+	});
+	const transition = createKeyboardActivityTransitionController(false);
+	const remember = () => events.push('remember');
+	transition.reconcile(false, actions, remember);
+	assert.deepEqual(events, []);
+	assert.equal(timers.size, 0);
+
+	transition.reconcile(true, actions, remember);
+	assert.deepEqual(events, ['dismiss', 'terminal:true']);
+	assert.equal(timers.size, 0);
+
+	transition.reconcile(false, actions, remember);
+	transition.reconcile(true, actions, remember);
+	assert.deepEqual(events, [
+		'dismiss',
+		'terminal:true',
+		'remember',
+		'terminal:true',
+		'dismiss',
+		'visible:false',
+	]);
+	assert.equal(timers.size, 1);
+	assert.equal(timers.get(1)?.delayMs, 150);
+	timers.get(1)?.task();
+	assert.equal(events.at(-1), 'dismiss');
 });

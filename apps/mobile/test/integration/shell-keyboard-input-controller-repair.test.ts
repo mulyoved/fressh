@@ -1,8 +1,110 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { runAction, type ActionContext } from '../../src/lib/keyboard-actions';
 import { type ControllerOutcome } from '../../src/lib/shell-controllers/controller-core';
+import { createKeyboardClipboardAuthority } from '../../src/lib/shell-controllers/keyboard-hook-runtime';
 import { createKeyboardInputHarness } from './shell-keyboard-input-controller-test-support';
+
+void test('composed COPY_SELECTION awaits clipboard finalization and has one completion owner', async () => {
+	for (const writeFails of [false, true]) {
+		const harness = createKeyboardInputHarness();
+		const authority = createKeyboardClipboardAuthority();
+		const events: string[] = [];
+		const context: ActionContext = {
+			availableKeyboardIds: new Set(),
+			selectKeyboard: () => {},
+			rotateKeyboard: () => {},
+			openConfigurator: () => {},
+			sendBytes: () => {},
+			pasteClipboard: async () => {},
+			copySelection: () =>
+				authority.copy({
+					isAdmitted: () => true,
+					getInstanceId: () => 'instance',
+					getSelection: async () => 'selection',
+					isCurrentInstance: () => true,
+					writeClipboard: async () => {
+						events.push('write');
+						if (writeFails) throw new Error('write failed');
+					},
+					exitSelectionState: () => events.push('state'),
+					exitSelectionView: () => events.push('view'),
+					warn: () => events.push('warn'),
+				}),
+		};
+		harness.setActionImplementation((actionId, options) =>
+			runAction(actionId, context, options),
+		);
+		const result = await harness.core.handleSlotPress({
+			type: 'action',
+			actionId: 'COPY_SELECTION',
+			label: 'Copy',
+			icon: null,
+		});
+		assert.equal(result.status, writeFails ? 'failed' : 'completed');
+		assert.deepEqual(
+			events,
+			writeFails ? ['write', 'warn'] : ['write', 'state', 'view'],
+		);
+		assert.equal(harness.completedSlots.length, writeFails ? 0 : 1);
+	}
+});
+
+void test('composed overlapping identical COPY_SELECTION joins finalization and completes one-shot once', async () => {
+	const harness = createKeyboardInputHarness();
+	const authority = createKeyboardClipboardAuthority();
+	const events: string[] = [];
+	let release!: () => void;
+	const write = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	const context: ActionContext = {
+		availableKeyboardIds: new Set(),
+		selectKeyboard: () => {},
+		rotateKeyboard: () => {},
+		openConfigurator: () => {},
+		sendBytes: () => {},
+		pasteClipboard: async () => {},
+		copySelection: () =>
+			authority.copy({
+				isAdmitted: () => true,
+				getInstanceId: () => 'instance',
+				getSelection: async () => 'selection',
+				isCurrentInstance: () => true,
+				writeClipboard: async () => {
+					events.push('write');
+					await write;
+				},
+				exitSelectionState: () => events.push('state'),
+				exitSelectionView: () => events.push('view'),
+				warn: () => events.push('warn'),
+			}),
+	};
+	harness.setActionImplementation((actionId, options) =>
+		runAction(actionId, context, options),
+	);
+	const slot = {
+		type: 'action' as const,
+		actionId: 'COPY_SELECTION',
+		label: 'Copy',
+		icon: null,
+	};
+	const first = harness.core.handleSlotPress(slot);
+	await Promise.resolve();
+	await Promise.resolve();
+	const duplicate = harness.core.handleSlotPress(slot);
+	await Promise.resolve();
+	await Promise.resolve();
+	assert.deepEqual(events, ['write']);
+	release();
+	assert.deepEqual(await Promise.all([first, duplicate]), [
+		{ status: 'superseded' },
+		{ status: 'completed' },
+	]);
+	assert.deepEqual(events, ['write', 'state', 'view']);
+	assert.deepEqual(harness.completedSlots, ['complete']);
+});
 
 void test('final authority getter reentry cannot let an older request send', async () => {
 	const harness = createKeyboardInputHarness();

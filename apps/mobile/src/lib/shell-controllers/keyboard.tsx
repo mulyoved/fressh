@@ -41,6 +41,7 @@ import {
 } from './controller-core';
 import {
 	applyKeyboardSelectionMode,
+	createKeyboardActivityTransitionController,
 	createKeyboardAnimationController,
 	createKeyboardClipboardAuthority,
 	createKeyboardControllerAdmission,
@@ -169,11 +170,14 @@ export function useShellKeyboardController(
 	const committedDeps = useRef(deps);
 	const visibleRef = useRef(false);
 	const lastVisibleRef = useRef(false);
-	const lastInteractiveRef = useRef(deps.activity.snapshot.interactive);
 	const [clipboardAuthority] = useState(createKeyboardClipboardAuthority);
 	const [flashName, setFlashName] = useState<string | null>(null);
 	const [flashOpacity] = useState(() => new Animated.Value(0));
-	const initialKeyboardSetupRef = useRef(false);
+	const [activityTransition] = useState(() =>
+		createKeyboardActivityTransitionController(
+			deps.activity.snapshot.interactive,
+		),
+	);
 
 	useLayoutEffect(() => {
 		committedDeps.current = deps;
@@ -299,7 +303,7 @@ export function useShellKeyboardController(
 		}
 	}, []);
 	const copySelection = useCallback(async () => {
-		await clipboardAuthority.copy({
+		return await clipboardAuthority.copy({
 			isAdmitted: () => admission.getGeneration() !== null,
 			getInstanceId: () =>
 				committedDeps.current.terminalView.getRuntimeInstanceId(),
@@ -312,7 +316,6 @@ export function useShellKeyboardController(
 			exitSelectionState: () => stateCore.setSelectionModeEnabled(false),
 			exitSelectionView: () =>
 				committedDeps.current.terminalView.setSelectionModeEnabled(false),
-			completeSlotPress: stateCore.completeSlotPress,
 			warn: safeWarn,
 		});
 	}, [admission, clipboardAuthority, safeWarn, stateCore]);
@@ -365,9 +368,7 @@ export function useShellKeyboardController(
 				void inputCore.sendBytes(bytes);
 			},
 			pasteClipboard,
-			copySelection: () => {
-				void copySelection();
-			},
+			copySelection,
 			fitTerminalToDevice: () => committedDeps.current.fitTerminalToDevice(),
 			restartCodex: async () => {
 				await remoteCore.restartCodex();
@@ -461,26 +462,31 @@ export function useShellKeyboardController(
 			dismissKeyboard: () => Keyboard.dismiss(),
 			scheduleDelayedDismiss: scheduler.schedule,
 		});
-		if (!initialKeyboardSetupRef.current) {
-			initialKeyboardSetupRef.current = true;
-			try {
-				actions.setupInitialKeyboard();
-			} catch (error) {
-				safeWarn('Failed to set up initial system keyboard', error);
-			}
-		}
-		if (lastInteractiveRef.current && !deps.activity.snapshot.interactive)
-			lastVisibleRef.current = visibleRef.current;
-		if (!lastInteractiveRef.current && deps.activity.snapshot.interactive) {
-			try {
-				actions.resumeFromAppState();
-			} catch (error) {
-				safeWarn('Failed to resume system keyboard', error);
-			}
-		}
-		lastInteractiveRef.current = deps.activity.snapshot.interactive;
+		activityTransition.reconcile(
+			deps.activity.snapshot.interactive,
+			{
+				setupInitialKeyboard: () => {
+					try {
+						actions.setupInitialKeyboard();
+					} catch (error) {
+						safeWarn('Failed to set up initial system keyboard', error);
+					}
+				},
+				resumeFromAppState: () => {
+					try {
+						actions.resumeFromAppState();
+					} catch (error) {
+						safeWarn('Failed to resume system keyboard', error);
+					}
+				},
+			},
+			() => {
+				lastVisibleRef.current = visibleRef.current;
+			},
+		);
 		return scheduler.cancel;
 	}, [
+		activityTransition,
 		deps.activity.snapshot.generation,
 		deps.activity.snapshot.interactive,
 		deps.platformOS,
@@ -544,8 +550,14 @@ export function useShellKeyboardController(
 		[admission, inputCore],
 	);
 	const onCopySelection = useCallback(() => {
-		void copySelection();
-	}, [copySelection]);
+		if (admission.getGeneration() !== null)
+			void inputCore.handleSlotPress({
+				type: 'action',
+				actionId: 'COPY_SELECTION',
+				label: 'Copy selection',
+				icon: null,
+			});
+	}, [admission, inputCore]);
 	const onPreset = useCallback(
 		(preset: CommandPreset) => {
 			if (admission.getGeneration() !== null)

@@ -4,6 +4,7 @@ import {
 	applyKeyboardSelectionMode,
 	createKeyboardAnimationIdentityTracker,
 	createKeyboardAnimationController,
+	createKeyboardActivityTransitionController,
 	createKeyboardClipboardAuthority,
 	createKeyboardControllerAdmission,
 	createKeyboardPasteClipboardCommand,
@@ -58,6 +59,7 @@ void test('same-instance overlapping duplicate writes once and replacement insta
 	const hung = new Promise<void>((resolve) => {
 		release = resolve;
 	});
+	const events: string[] = [];
 	const ports = (instance: string, write: Promise<void>) => ({
 		isAdmitted: () => true,
 		getInstanceId: () => instance,
@@ -67,21 +69,68 @@ void test('same-instance overlapping duplicate writes once and replacement insta
 			writes.push(`${instance}:${text}`);
 			await write;
 		},
-		exitSelectionState: () => {},
-		exitSelectionView: () => {},
-		completeSlotPress: () => {},
+		exitSelectionState: () => events.push(`${instance}:state`),
+		exitSelectionView: () => events.push(`${instance}:view`),
 		warn: () => {},
 	});
 	const first = authority.copy(ports('one', hung));
 	await Promise.resolve();
 	await Promise.resolve();
-	await authority.copy(ports('one', Promise.resolve()));
+	const duplicate = authority.copy(ports('one', Promise.resolve()));
 	assert.deepEqual(writes, ['one:same']);
 	release();
-	await first;
+	assert.deepEqual(await Promise.all([first, duplicate]), [
+		{ status: 'completed' },
+		{ status: 'completed' },
+	]);
+	assert.deepEqual(events, ['one:state', 'one:view']);
 	authority.invalidate();
-	await authority.copy(ports('two', Promise.resolve()));
+	assert.deepEqual(await authority.copy(ports('two', Promise.resolve())), {
+		status: 'completed',
+	});
 	assert.deepEqual(writes, ['one:same', 'two:same']);
+});
+
+void test('newer different clipboard copy supersedes an active copy without stale finalization', async () => {
+	const authority = createKeyboardClipboardAuthority();
+	let release!: () => void;
+	const oldWrite = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	const events: string[] = [];
+	const ports = (text: string, write: Promise<void>) => ({
+		isAdmitted: () => true,
+		getInstanceId: () => 'instance',
+		getSelection: async () => text,
+		isCurrentInstance: () => true,
+		writeClipboard: async () => write,
+		exitSelectionState: () => events.push(`${text}:state`),
+		exitSelectionView: () => events.push(`${text}:view`),
+		warn: () => {},
+	});
+	const old = authority.copy(ports('old', oldWrite));
+	await Promise.resolve();
+	await Promise.resolve();
+	assert.deepEqual(await authority.copy(ports('new', Promise.resolve())), {
+		status: 'completed',
+	});
+	release();
+	assert.deepEqual(await old, { status: 'superseded' });
+	assert.deepEqual(events, ['new:state', 'new:view']);
+});
+
+void test('activity transition defers initial setup until first interactive mount', () => {
+	const events: string[] = [];
+	const controller = createKeyboardActivityTransitionController(false);
+	const actions = {
+		setupInitialKeyboard: () => events.push('setup'),
+		resumeFromAppState: () => events.push('resume'),
+	};
+	controller.reconcile(false, actions, () => events.push('remember'));
+	controller.reconcile(true, actions, () => events.push('remember'));
+	controller.reconcile(false, actions, () => events.push('remember'));
+	controller.reconcile(true, actions, () => events.push('remember'));
+	assert.deepEqual(events, ['setup', 'remember', 'resume']);
 });
 
 void test('paste revalidates exact authority after deferred clipboard read', async () => {
@@ -226,7 +275,6 @@ void test('clipboard authority supersedes an older selection read before write',
 		},
 		exitSelectionState: () => {},
 		exitSelectionView: () => {},
-		completeSlotPress: () => {},
 		warn: () => {},
 	});
 	const first = authority.copy(ports(() => firstSelection));
@@ -252,12 +300,11 @@ void test('clipboard authority suppresses duplicate copy and completes despite v
 			calls.push('view');
 			throw new Error('view');
 		},
-		completeSlotPress: () => calls.push('complete'),
 		warn: () => calls.push('warn'),
 	};
-	await authority.copy(ports);
-	await authority.copy(ports);
-	assert.deepEqual(calls, ['write', 'state', 'view', 'warn', 'complete']);
+	assert.deepEqual(await authority.copy(ports), { status: 'completed' });
+	assert.deepEqual(await authority.copy(ports), { status: 'unavailable' });
+	assert.deepEqual(calls, ['write', 'state', 'view', 'warn']);
 });
 
 void test('selection entry and exit preserve exact legacy system keyboard order', () => {
