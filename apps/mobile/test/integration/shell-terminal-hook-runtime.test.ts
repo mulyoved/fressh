@@ -23,7 +23,22 @@ import {
 	type TerminalInputLease,
 } from '../../src/lib/shell-controllers/terminal-transport';
 
-function createFixture(options: { lifecycleDisposeError?: Error } = {}) {
+function deferred<T>() {
+	let resolve!: (value: T) => void;
+	let reject!: (error: unknown) => void;
+	const promise = new Promise<T>((yes, no) => {
+		resolve = yes;
+		reject = no;
+	});
+	return { promise, resolve, reject };
+}
+
+function createFixture(
+	options: {
+		lifecycleDisposeError?: Error;
+		attachPromise?: Promise<void>;
+	} = {},
+) {
 	const calls: string[] = [];
 	const deferredTasks: (() => void)[] = [];
 	let transportInput:
@@ -69,8 +84,9 @@ function createFixture(options: { lifecycleDisposeError?: Error } = {}) {
 			calls.push(`modes:${systemKeyboardEnabled}:${selectionModeEnabled}`),
 		handleInitialized: () => {},
 		handleLoadStart: () => {},
-		attach: async () => {
+		attach: () => {
 			calls.push('lifecycle.attach');
+			return options.attachPromise ?? Promise.resolve();
 		},
 		detach: () => {},
 		getRuntimeKey: () => null,
@@ -270,4 +286,41 @@ void test('hook runtime ordinary and Strict Mode cleanup attempts every disposer
 		'size.dispose',
 		'transport.dispose',
 	]);
+});
+
+void test('replayed pending attach reports failure once through the latest logger', async () => {
+	const pending = deferred<void>();
+	const fixture = createFixture({ attachPromise: pending.promise });
+	const first = fixture.runtime.requestAttach(true, true);
+	const currentEvents: string[] = [];
+	fixture.runtime.updateDependencies({
+		logger: {
+			info: () => {},
+			warn: (message) => currentEvents.push(message),
+		},
+		router: { back: () => {} },
+		onRuntimeChanged: () => {},
+	});
+	const replayed = fixture.runtime.requestAttach(true, true);
+	const error = new Error('attach failed');
+	pending.reject(error);
+	await Promise.allSettled([first, replayed]);
+	assert.deepEqual(fixture.oldEvents, []);
+	assert.deepEqual(currentEvents, ['Failed to attach shell listener']);
+
+	const throwing = deferred<void>();
+	const throwingFixture = createFixture({ attachPromise: throwing.promise });
+	throwingFixture.runtime.updateDependencies({
+		logger: {
+			info: () => {},
+			warn: () => {
+				throw new Error('logger failed');
+			},
+		},
+		router: { back: () => {} },
+		onRuntimeChanged: () => {},
+	});
+	const observed = throwingFixture.runtime.requestAttach(true, true);
+	throwing.reject(error);
+	await assert.rejects(observed, error);
 });

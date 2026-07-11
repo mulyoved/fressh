@@ -101,16 +101,8 @@ export function useShellTerminalController({
 	}, [runtime, selectionModeEnabled, systemKeyboardEnabled]);
 
 	useEffect(() => {
-		void runtime
-			.requestAttach(lifecycleState.ready, Boolean(shell))
-			.catch((error) => {
-				try {
-					logger.warn('Failed to attach shell listener', error);
-				} catch {
-					// An attach failure is already represented by the missing listener.
-				}
-			});
-	}, [lifecycleState.ready, logger, runtime, shell]);
+		void runtime.requestAttach(lifecycleState.ready, Boolean(shell));
+	}, [lifecycleState.ready, runtime, shell]);
 
 	useEffect(() => runtime.setupDisposal(), [runtime]);
 

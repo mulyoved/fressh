@@ -127,6 +127,7 @@ export function createShellTerminalHookRuntime(input: {
 	const factories = input.factories ?? defaultFactories;
 	let dependencies = input.dependencies;
 	let shell: SshShell | null = null;
+	const observedAttachPromises = new WeakSet<Promise<void>>();
 	const currentLogger: TerminalLifecycleLogger = {
 		info: (message, details) => dependencies.logger.info(message, details),
 		warn: (message, error) => dependencies.logger.warn(message, error),
@@ -185,6 +186,18 @@ export function createShellTerminalHookRuntime(input: {
 		sendScrollbackEnterAck: (requestId, instanceId) =>
 			input.xtermRef.current?.sendScrollbackEnterAck(requestId, instanceId),
 	};
+	const observeAttachFailure = (promise: Promise<void>): Promise<void> => {
+		if (observedAttachPromises.has(promise)) return promise;
+		observedAttachPromises.add(promise);
+		void promise.catch((error) => {
+			try {
+				dependencies.logger.warn('Failed to attach shell listener', error);
+			} catch {
+				// Attach ownership is already represented by the rejected promise.
+			}
+		});
+		return promise;
+	};
 
 	return {
 		transport,
@@ -204,8 +217,14 @@ export function createShellTerminalHookRuntime(input: {
 			lifecycle.setShell(transportKey, shell);
 		},
 		updateViewModes: lifecycle.setViewModes,
-		requestAttach: (ready, hasShell) =>
-			ready && hasShell ? lifecycle.attach() : Promise.resolve(),
+		requestAttach: (ready, hasShell) => {
+			if (!ready || !hasShell) return Promise.resolve();
+			try {
+				return observeAttachFailure(lifecycle.attach());
+			} catch (error) {
+				return observeAttachFailure(Promise.reject(error));
+			}
+		},
 		setupDisposal: disposer.setup,
 		retry: () => dependencies.router.back(),
 	};
