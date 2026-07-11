@@ -28,19 +28,14 @@ export async function flushPromises() {
 }
 
 export function createRecordingCleanupBarrier() {
-	let currentCleanup: Promise<boolean> | null = null;
+	const aggregateBarrier = createWorkmuxScrollbackLiveInputCleanupBarrier();
 	const trackedInputs: Promise<boolean>[] = [];
 	return {
 		barrier: {
-			current: () => currentCleanup,
+			current: aggregateBarrier.current,
 			track: (cleanup?: Promise<boolean> | null) => {
-				if (!cleanup) return currentCleanup;
-				trackedInputs.push(cleanup);
-				const tracked = cleanup.finally(() => {
-					if (currentCleanup === tracked) currentCleanup = null;
-				});
-				currentCleanup = tracked;
-				return tracked;
+				if (cleanup) trackedInputs.push(cleanup);
+				return aggregateBarrier.track(cleanup);
 			},
 		},
 		trackedInputs,
