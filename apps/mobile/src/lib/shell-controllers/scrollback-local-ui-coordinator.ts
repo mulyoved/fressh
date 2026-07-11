@@ -50,8 +50,8 @@ export function createScrollbackLocalUiCoordinator({
 			});
 		}
 		current = getCurrentState();
-		clearTmuxScrollbackLineAccumulator(lineAccumulator);
 		if (token && !token.isCurrent()) return;
+		clearTmuxScrollbackLineAccumulator(lineAccumulator);
 		const instanceId = token?.instanceId ?? current.runtimeInstanceId;
 		if (
 			instanceId === null ||

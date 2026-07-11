@@ -36,6 +36,60 @@ void test('scrollback clear publish reentry cannot reset replacement executor', 
 	assert.equal(harness.events.filter((event) => event === 'reset:2').length, 2);
 });
 
+void test('scrollback stale clear preserves replacement batch accumulator state', () => {
+	const harness = createScrollbackHarness();
+	harness.core.onTerminalRuntimeChanged('instance-1');
+	harness.core.onScrollbackModeChange({
+		active: true,
+		phase: 'active',
+		instanceId: 'instance-1',
+	});
+	let reentered = false;
+	const replacementBatches: unknown[] = [];
+	harness.core.subscribe(() => {
+		if (reentered) return;
+		reentered = true;
+		replaceAuthority(harness);
+		harness.core.onScrollbackModeChange({
+			active: true,
+			phase: 'active',
+			instanceId: 'instance-2',
+		});
+		harness.remoteCopyModeActive.current = true;
+		const replacementExecutor = harness.executors.at(-1);
+		assert.ok(replacementExecutor);
+		replacementExecutor.enqueueScrollBatch = async (commands) => {
+			replacementBatches.push(commands);
+			return true;
+		};
+		harness.core.onScrollbackBatch({
+			direction: 'up',
+			pages: 0,
+			lines: 1.5,
+			pageStep: 24,
+			instanceId: 'instance-2',
+		});
+		// Represents the replacement generation's retained fractional remainder.
+		harness.lineAccumulator.direction = 'up';
+		harness.lineAccumulator.lines = 0.5;
+	});
+
+	void harness.core.clear();
+
+	assert.deepEqual(harness.lineAccumulator, { direction: 'up', lines: 0.5 });
+	harness.core.onScrollbackBatch({
+		direction: 'up',
+		pages: 0,
+		lines: 1,
+		pageStep: 24,
+		instanceId: 'instance-2',
+	});
+	assert.deepEqual(replacementBatches, [
+		[{ sessionName: 'other', direction: 'up', unit: 'line', count: 1 }],
+		[{ sessionName: 'other', direction: 'up', unit: 'line', count: 1 }],
+	]);
+});
+
 void test('scrollback clear terminal reentry cannot exit or reset replacement', () => {
 	const harness = createScrollbackHarness();
 	harness.core.onTerminalRuntimeChanged('instance-1');
