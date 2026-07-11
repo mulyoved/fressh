@@ -142,6 +142,21 @@ void describe('shell detail Workmux control channel wiring', () => {
 		assert.notEqual(controllerIndex, -1);
 		assert.notEqual(sequencedDisposeIndex, -1);
 		assert.ok(controllerIndex < sequencedDisposeIndex);
+		const compositionEnd = source.indexOf(
+			'scrollbackRuntimeChangedRef.current',
+			controllerIndex,
+		);
+		assert.notEqual(compositionEnd, -1);
+		const composition = source.slice(controllerIndex, compositionEnd);
+		assert.match(composition, /onTeardownCleanup:\s*\(cleanup\)\s*=>\s*\{/);
+		assert.match(
+			composition,
+			/disposeWorkmuxControlChannelAfterCleanup\(\{[\s\S]*?^\s*cleanup,/m,
+		);
+		assert.doesNotMatch(
+			source.slice(compositionEnd),
+			/disposeWorkmuxControlChannelAfterCleanup/,
+		);
 		assert.doesNotMatch(
 			source,
 			/disposeTmuxScrollbackRuntimeStateForUiReset|createWorkmuxScrollbackCommandExecutor/,

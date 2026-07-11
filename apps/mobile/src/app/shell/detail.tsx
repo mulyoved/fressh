@@ -827,25 +827,26 @@ function ShellDetail() {
 			getErrorMessage,
 			logger,
 		},
-	});
-	scrollbackRuntimeChangedRef.current = scrollback.onTerminalRuntimeChanged;
-
-	useEffect(
-		() => () => {
+		onTeardownCleanup: (cleanup) => {
 			const disposeReason = useAutoConnectStore.getState().isReconnecting
 				? 'reconnect'
 				: 'unmount';
 			disposeWorkmuxControlChannelAfterCleanup({
+				cleanup,
 				prepareDispose: () =>
 					workmuxControlChannel.prepareDispose({ reason: disposeReason }),
 				dispose: () => workmuxControlChannel.dispose({ reason: disposeReason }),
 				onDisposeError: (error) => {
-					logger.warn('Workmux control channel dispose failed', error);
+					try {
+						logger.warn('Workmux control channel dispose failed', error);
+					} catch {
+						// Channel teardown must not depend on diagnostics.
+					}
 				},
 			});
 		},
-		[workmuxControlChannel],
-	);
+	});
+	scrollbackRuntimeChangedRef.current = scrollback.onTerminalRuntimeChanged;
 	const terminalSizeSnapshotRef = useRef(terminal.lastSize);
 	terminalSizeSnapshotRef.current = terminal.lastSize;
 	const exitSelectionMode = useCallback(() => {

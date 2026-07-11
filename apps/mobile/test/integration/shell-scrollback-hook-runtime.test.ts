@@ -5,13 +5,19 @@ import {
 	createShellScrollbackHookRuntime,
 	type ShellScrollbackHookRuntimeFactories,
 } from '../../src/lib/shell-controllers/scrollback';
+import { disposeWorkmuxControlChannelAfterCleanup } from '../../src/lib/workmux-control-channel';
 import {
 	createDeferred,
 	createScrollbackHarness,
 	flushPromises,
 } from './shell-scrollback-controller-test-support';
 
-function createFixture() {
+function createFixture(
+	onTeardownCleanup?: (
+		cleanup: Promise<boolean> | null,
+		reason: 'channel-replaced' | 'unmount',
+	) => void,
+) {
 	const harness = createScrollbackHarness();
 	const calls: string[] = [];
 	const deferredTasks: (() => void)[] = [];
@@ -59,6 +65,7 @@ function createFixture() {
 				snapshot: harness.context.getActivitySnapshot(),
 			},
 			context: harness.context,
+			onTeardownCleanup,
 		},
 		factories,
 		deferDisposal: (task) => deferredTasks.push(task),
@@ -71,6 +78,179 @@ function createFixture() {
 		runtime,
 	};
 }
+
+void test('real unmount starts scrollback rollback before handing its composite cleanup to channel teardown', async () => {
+	const order: string[] = [];
+	let handedCleanup: Promise<boolean> | null | undefined;
+	const fixture = createFixture((cleanup, reason) => {
+		order.push(`teardown:${reason}`);
+		handedCleanup = cleanup;
+	});
+	fixture.runtime.onTerminalRuntimeChanged('instance-1');
+	fixture.harness.remoteCopyModeActive.current = true;
+	const rollback = createDeferred<boolean>();
+	const executor = fixture.harness.executors[0];
+	assert.ok(executor);
+	executor.dispose = () => {
+		order.push('rollback');
+		return rollback.promise;
+	};
+
+	const cleanupEffect = fixture.runtime.setupDisposal();
+	cleanupEffect();
+	assert.deepEqual(order, []);
+	fixture.deferredTasks.shift()?.();
+	assert.deepEqual(order, ['rollback', 'teardown:unmount']);
+	assert.ok(handedCleanup);
+	let settled = false;
+	void handedCleanup.then(() => {
+		settled = true;
+	});
+	await flushPromises();
+	assert.equal(settled, false);
+	rollback.resolve(true);
+	assert.equal(await handedCleanup, true);
+});
+
+void test('Strict Mode replay performs neither rollback nor channel teardown', () => {
+	const reasons: string[] = [];
+	const fixture = createFixture((_cleanup, reason) => reasons.push(reason));
+	const firstCleanup = fixture.runtime.setupDisposal();
+	firstCleanup();
+	const replayCleanup = fixture.runtime.setupDisposal();
+	fixture.deferredTasks.shift()?.();
+	assert.deepEqual(reasons, []);
+	assert.equal(fixture.calls.includes('invalidate:unmount'), false);
+	assert.equal(fixture.calls.includes('dispose'), false);
+	replayCleanup();
+});
+
+void test('channel replacement releases old authority through only the old teardown callback', async () => {
+	const oldCalls: (Promise<boolean> | null)[] = [];
+	const newCalls: (Promise<boolean> | null)[] = [];
+	const fixture = createFixture((cleanup) => oldCalls.push(cleanup));
+	fixture.runtime.onTerminalRuntimeChanged('instance-1');
+	fixture.harness.remoteCopyModeActive.current = true;
+	const rollback = createDeferred<boolean>();
+	const oldExecutor = fixture.harness.executors[0];
+	assert.ok(oldExecutor);
+	oldExecutor.dispose = () => rollback.promise;
+	const replacementScroll = {
+		enter: fixture.harness.context.workmuxScroll.enter,
+		move: fixture.harness.context.workmuxScroll.move,
+		exit: fixture.harness.context.workmuxScroll.exit,
+	};
+
+	fixture.runtime.commit({
+		...fixture.runtime.getInput(),
+		context: {
+			...fixture.runtime.getInput().context,
+			workmuxScroll: replacementScroll,
+		},
+		onTeardownCleanup: (cleanup) => newCalls.push(cleanup),
+	});
+	assert.equal(oldCalls.length, 1);
+	assert.equal(newCalls.length, 0);
+	assert.ok(oldCalls[0]);
+	let settled = false;
+	void oldCalls[0]?.then(() => {
+		settled = true;
+	});
+	await flushPromises();
+	assert.equal(settled, false);
+	rollback.resolve(true);
+	assert.equal(await oldCalls[0], true);
+	assert.equal(newCalls.length, 0);
+});
+
+void test('channel teardown waits for rejected rollback before disposing and leaves cleanup logging to its owner', async () => {
+	const events: string[] = [];
+	const fixture = createFixture((cleanup) => {
+		disposeWorkmuxControlChannelAfterCleanup({
+			cleanup,
+			prepareDispose: () => events.push('prepare'),
+			dispose: async () => {
+				events.push('dispose');
+			},
+		});
+	});
+	const warningCount = fixture.harness.warnings.length;
+	fixture.runtime.onTerminalRuntimeChanged('instance-1');
+	fixture.harness.remoteCopyModeActive.current = true;
+	const rollback = createDeferred<boolean>();
+	const executor = fixture.harness.executors[0];
+	assert.ok(executor);
+	executor.dispose = () => rollback.promise;
+	const cleanupEffect = fixture.runtime.setupDisposal();
+	cleanupEffect();
+	fixture.deferredTasks.shift()?.();
+	assert.deepEqual(events, ['prepare']);
+	const failure = new Error('rollback failed');
+	rollback.reject(failure);
+	await flushPromises();
+	assert.deepEqual(events, ['prepare', 'dispose']);
+	assert.equal(fixture.harness.warnings.length, warningCount + 1);
+});
+
+void test('channel teardown waits for false rollback and logs exactly once through the cleanup owner', async () => {
+	const events: string[] = [];
+	const fixture = createFixture((cleanup) => {
+		disposeWorkmuxControlChannelAfterCleanup({
+			cleanup,
+			prepareDispose: () => events.push('prepare'),
+			dispose: async () => {
+				events.push('dispose');
+			},
+		});
+	});
+	const warningCount = fixture.harness.warnings.length;
+	fixture.runtime.onTerminalRuntimeChanged('instance-1');
+	fixture.harness.remoteCopyModeActive.current = true;
+	const rollback = createDeferred<boolean>();
+	const executor = fixture.harness.executors[0];
+	assert.ok(executor);
+	executor.dispose = () => rollback.promise;
+	const cleanupEffect = fixture.runtime.setupDisposal();
+	cleanupEffect();
+	fixture.deferredTasks.shift()?.();
+	assert.deepEqual(events, ['prepare']);
+	rollback.resolve(false);
+	await flushPromises();
+	assert.deepEqual(events, ['prepare', 'dispose']);
+	assert.equal(fixture.harness.warnings.length, warningCount + 1);
+});
+
+void test('channel teardown timeout disposes while an exact rollback remains pending', () => {
+	const events: string[] = [];
+	let fireTimeout: (() => void) | undefined;
+	const fixture = createFixture((cleanup) => {
+		disposeWorkmuxControlChannelAfterCleanup({
+			cleanup,
+			cleanupTimeoutMs: 5,
+			clearTimeout: () => {},
+			setTimeout: (callback) => {
+				fireTimeout = callback;
+				return Symbol('timer');
+			},
+			prepareDispose: () => events.push('prepare'),
+			dispose: async () => {
+				events.push('dispose');
+			},
+		});
+	});
+	fixture.runtime.onTerminalRuntimeChanged('instance-1');
+	fixture.harness.remoteCopyModeActive.current = true;
+	const executor = fixture.harness.executors[0];
+	assert.ok(executor);
+	executor.dispose = () => new Promise<boolean>(() => {});
+	const cleanupEffect = fixture.runtime.setupDisposal();
+	cleanupEffect();
+	fixture.deferredTasks.shift()?.();
+	assert.deepEqual(events, ['prepare']);
+	assert.ok(fireTimeout);
+	fireTimeout();
+	assert.deepEqual(events, ['prepare', 'dispose']);
+});
 
 void test('hook runtime owns one core and keeps input and xterm ports stable across current context updates', async () => {
 	const fixture = createFixture();

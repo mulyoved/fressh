@@ -47,6 +47,10 @@ export type ShellScrollbackControllerHandle = {
 export type UseShellScrollbackControllerInput = {
 	activity: ShellActivityControllerHandle;
 	context: ShellScrollbackContext;
+	onTeardownCleanup?(
+		cleanup: Promise<boolean> | null,
+		reason: 'channel-replaced' | 'unmount',
+	): void;
 };
 
 export type ShellScrollbackHookRuntimeFactories = {
@@ -85,7 +89,26 @@ export function createShellScrollbackHookRuntime({
 }): ShellScrollbackHookRuntime {
 	let committedInput = input;
 	const core = factories.createCore();
+	const safelyHandOffCleanup = (
+		ownerInput: UseShellScrollbackControllerInput,
+		reason: 'channel-replaced' | 'unmount',
+	): unknown => {
+		let cleanup: Promise<boolean> | null = null;
+		let firstError: unknown;
+		try {
+			cleanup = core.getCurrentCleanup();
+		} catch (error) {
+			firstError = error;
+		}
+		try {
+			ownerInput.onTeardownCleanup?.(cleanup, reason);
+		} catch (error) {
+			firstError ??= error;
+		}
+		return firstError;
+	};
 	const disposeCore = (): void => {
+		const ownerInput = committedInput;
 		let firstError: unknown;
 		for (const action of [
 			() => core.invalidate('unmount'),
@@ -97,9 +120,11 @@ export function createShellScrollbackHookRuntime({
 				firstError ??= error;
 			}
 		}
+		const handoffError = safelyHandOffCleanup(ownerInput, 'unmount');
+		firstError ??= handoffError;
 		if (firstError === undefined) return;
 		try {
-			committedInput.context.logger.warn(
+			ownerInput.context.logger.warn(
 				'Failed to dispose scrollback controller',
 				firstError,
 			);
@@ -139,8 +164,24 @@ export function createShellScrollbackHookRuntime({
 		input: inputPort,
 		xtermProps,
 		commit: (nextInput) => {
+			const previousInput = committedInput;
+			const channelReplaced =
+				previousInput.context.workmuxScroll !== nextInput.context.workmuxScroll;
 			committedInput = nextInput;
-			core.setContext(nextInput.context);
+			let firstError: unknown;
+			try {
+				core.setContext(nextInput.context);
+			} catch (error) {
+				firstError = error;
+			}
+			if (channelReplaced) {
+				const handoffError = safelyHandOffCleanup(
+					previousInput,
+					'channel-replaced',
+				);
+				firstError ??= handoffError;
+			}
+			if (firstError !== undefined) throw firstError;
 		},
 		getInput: () => committedInput,
 		onActivityChanged: core.onActivityChanged,

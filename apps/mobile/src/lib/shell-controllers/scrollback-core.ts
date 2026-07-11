@@ -61,6 +61,7 @@ export type ShellScrollbackControllerCore =
 			failurePolicy?: 'notify' | 'suppress';
 		}): Promise<boolean> | null;
 		jumpToLive(): void;
+		getCurrentCleanup(): Promise<boolean> | null;
 	};
 
 type CreateExecutorInput = Parameters<
@@ -620,6 +621,7 @@ export function createShellScrollbackControllerCore(
 			);
 		},
 		jumpToLive: requestJumpToLive,
+		getCurrentCleanup: cleanupBarrier.current,
 		invalidate,
 		dispose,
 	};
