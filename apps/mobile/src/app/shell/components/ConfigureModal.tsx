@@ -1,6 +1,8 @@
 import React from 'react';
 import { Modal, Pressable, Text, View } from 'react-native';
 import { useTheme } from '@/lib/theme';
+import { type ConfigureModalProps } from './keyboard-component-props';
+export type { ConfigureModalProps } from './keyboard-component-props';
 
 interface ConfigOption {
 	label: string;
@@ -23,22 +25,7 @@ export function ConfigureModal({
 	configSource,
 	configLastLoadedAt,
 	configLastError,
-}: {
-	open: boolean;
-	bottomOffset: number;
-	onClose: () => void;
-	onDevServer: () => void;
-	onReloadConfig: () => void;
-	onHostConfig: () => void;
-	onRequestFeature: () => void;
-	onOpenGitHubIssues: () => void;
-	onOpenShellConfigDocs: () => void;
-	configVersion: string;
-	configUpdatedAt: string;
-	configSource: string;
-	configLastLoadedAt: string | null;
-	configLastError: string | null;
-}) {
+}: ConfigureModalProps) {
 	const theme = useTheme();
 
 	const options: ConfigOption[] = [

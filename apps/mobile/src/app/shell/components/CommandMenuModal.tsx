@@ -1,14 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Modal, Pressable, ScrollView, Text, View } from 'react-native';
 import { dispatchCommandMenuSelection } from '@/lib/command-menu-selection';
-import { type ActionId } from '@/lib/keyboard-actions';
-import {
-	type CommandBridgeEntry,
-	type CommandMenu,
-	type CommandMenuEntry,
-	type CommandPreset,
-} from '@/lib/shell-config';
+import { type CommandMenu, type CommandMenuEntry } from '@/lib/shell-config';
 import { useTheme } from '@/lib/theme';
+import { type CommandMenuModalProps } from './keyboard-component-props';
+export type { CommandMenuModalProps } from './keyboard-component-props';
 
 const isCommandMenu = (entry: CommandMenuEntry): entry is CommandMenu =>
 	entry.type === 'submenu';
@@ -21,15 +17,7 @@ export function CommandMenuModal({
 	onSelect,
 	onAction,
 	onBridge,
-}: {
-	open: boolean;
-	entries: CommandMenuEntry[];
-	bottomOffset: number;
-	onClose: () => void;
-	onSelect: (preset: CommandPreset) => void;
-	onAction: (actionId: ActionId) => void;
-	onBridge: (entry: CommandBridgeEntry) => void;
-}) {
+}: CommandMenuModalProps) {
 	const theme = useTheme();
 	const [menuStack, setMenuStack] = useState<CommandMenu[]>([]);
 

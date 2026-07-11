@@ -215,14 +215,22 @@ export type KeyboardClipboardPorts = {
 
 export type KeyboardClipboardAuthority = {
 	copy(ports: KeyboardClipboardPorts): Promise<void>;
-	noteSelection(text: string): void;
+	noteSelection(text: string, instanceId?: string | null): void;
 	invalidate(): void;
 };
 
 export function createKeyboardClipboardAuthority(): KeyboardClipboardAuthority {
 	let operation = 0;
-	let lastCopied = '';
-	let queued = Promise.resolve();
+	let lastCopied: { instanceId: string; text: string } | null = null;
+	let activeWrite: {
+		instanceId: string;
+		text: string;
+		release(): void;
+	} | null = null;
+	const detachWrite = () => {
+		activeWrite?.release();
+		activeWrite = null;
+	};
 	const safeWarn = (
 		ports: KeyboardClipboardPorts,
 		message: string,
@@ -274,16 +282,21 @@ export function createKeyboardClipboardAuthority(): KeyboardClipboardAuthority {
 				safeWarn(ports, 'Failed to read terminal selection', error);
 				return;
 			}
-			if (!text || text === lastCopied || !safeCurrent(ports, id, instanceId))
+			if (
+				!text ||
+				(lastCopied?.instanceId === instanceId && lastCopied.text === text) ||
+				(activeWrite?.instanceId === instanceId && activeWrite.text === text) ||
+				!safeCurrent(ports, id, instanceId)
+			)
 				return;
-			await queued;
-			if (!safeCurrent(ports, id, instanceId)) return;
+			detachWrite();
 			let release = () => {};
-			queued = new Promise<void>((resolve) => {
+			const detached = new Promise<void>((resolve) => {
 				release = resolve;
 			});
+			activeWrite = { instanceId, text, release };
 			try {
-				await ports.writeClipboard(text);
+				await Promise.race([ports.writeClipboard(text), detached]);
 			} catch (error) {
 				safeWarn(
 					ports,
@@ -292,10 +305,11 @@ export function createKeyboardClipboardAuthority(): KeyboardClipboardAuthority {
 				);
 				return;
 			} finally {
-				release();
+				if (activeWrite?.release === release) activeWrite = null;
 			}
+			if (id !== operation) return;
+			lastCopied = { instanceId, text };
 			if (!safeCurrent(ports, id, instanceId)) return;
-			lastCopied = text;
 			try {
 				ports.exitSelectionState();
 			} catch (error) {
@@ -322,13 +336,83 @@ export function createKeyboardClipboardAuthority(): KeyboardClipboardAuthority {
 				);
 			}
 		},
-		noteSelection: (text) => {
-			if (text !== lastCopied) lastCopied = '';
+		noteSelection: (text, instanceId) => {
+			if (
+				lastCopied &&
+				(instanceId === undefined || instanceId === lastCopied.instanceId) &&
+				text !== lastCopied.text
+			)
+				lastCopied = null;
 		},
 		invalidate: () => {
 			operation += 1;
+			detachWrite();
+			lastCopied = null;
 		},
 	};
+}
+
+export function createKeyboardPasteClipboardCommand<Token>(input: {
+	captureAuthority(): Token | null;
+	isCurrent(token: Token): boolean;
+	readClipboard(): Promise<string>;
+	paste(text: string): Promise<unknown>;
+	warn(message: string, error: unknown): void;
+}): () => Promise<void> {
+	const safeWarn = (message: string, error: unknown) => {
+		try {
+			input.warn(message, error);
+		} catch {
+			/* Diagnostics are contained. */
+		}
+	};
+	return async () => {
+		let token: Token | null;
+		try {
+			token = input.captureAuthority();
+		} catch (error) {
+			safeWarn('Failed to capture clipboard paste authority', error);
+			return;
+		}
+		if (token === null) return;
+		let text: string;
+		try {
+			text = await input.readClipboard();
+		} catch (error) {
+			safeWarn('Failed to read clipboard', error);
+			return;
+		}
+		try {
+			if (!input.isCurrent(token)) return;
+		} catch (error) {
+			safeWarn('Failed to validate clipboard paste authority', error);
+			return;
+		}
+		try {
+			await input.paste(text);
+		} catch (error) {
+			safeWarn('Failed to paste clipboard', error);
+		}
+	};
+}
+
+export function runKeyboardFireAndForget(
+	task: () => void | PromiseLike<unknown>,
+	isCurrent: () => boolean,
+	warn: (message: string, error: unknown) => void,
+): void {
+	const report = (error: unknown) => {
+		try {
+			if (isCurrent()) warn('Keyboard action failed', error);
+		} catch {
+			/* Contained. */
+		}
+	};
+	try {
+		Promise.resolve(task()).catch(report);
+	} catch (error) {
+		report(error);
+	}
 }
 
 export function subscribeKeyboardVisibility(input: {
@@ -343,11 +427,29 @@ export function subscribeKeyboardVisibility(input: {
 	const show = input.addListener('keyboardDidShow', () =>
 		input.onVisibility(true),
 	);
-	const hide = input.addListener('keyboardDidHide', () =>
-		input.onVisibility(false),
-	);
+	let hide: { remove(): void };
+	try {
+		hide = input.addListener('keyboardDidHide', () =>
+			input.onVisibility(false),
+		);
+	} catch (error) {
+		try {
+			show.remove();
+		} catch {
+			/* Preserve registration failure. */
+		}
+		throw error;
+	}
 	return () => {
-		show.remove();
-		hide.remove();
+		try {
+			show.remove();
+		} catch {
+			/* Hide removal must still run. */
+		}
+		try {
+			hide.remove();
+		} catch {
+			/* Cleanup is contained. */
+		}
 	};
 }

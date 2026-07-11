@@ -18,7 +18,6 @@ import {
 import {
 	getKeyboardActionTarget,
 	type CommandBridgeEntry,
-	type CommandMenuEntry,
 	type CommandPreset,
 	type KeyboardDefinition,
 	type KeyboardExecutableItem,
@@ -27,6 +26,10 @@ import {
 } from '@/lib/shell-config';
 import { type ShellConfigState } from '@/lib/shell-config-store';
 import { textEntryHistoryStore } from '@/lib/text-entry-history-store-native';
+import { type CommandMenuModalProps } from '../../app/shell/components/CommandMenuModal';
+import { type ConfigureModalProps } from '../../app/shell/components/ConfigureModal';
+import { type TerminalCommanderModalProps } from '../../app/shell/components/TerminalCommanderModal';
+import { type TerminalKeyboardProps } from '../../app/shell/components/TerminalKeyboard';
 import { type TextEntryHistoryModalProps } from '../../app/shell/components/TextEntryModal';
 import { type WorkmuxNavScope } from '../workmux-app-commands';
 import { type ShellActivitySnapshot } from './activity-core';
@@ -41,7 +44,9 @@ import {
 	createKeyboardAnimationController,
 	createKeyboardClipboardAuthority,
 	createKeyboardControllerAdmission,
+	createKeyboardPasteClipboardCommand,
 	invalidateKeyboardControllerDomains,
+	runKeyboardFireAndForget,
 	subscribeKeyboardVisibility,
 	type KeyboardAnimationController,
 } from './keyboard-hook-runtime';
@@ -50,6 +55,11 @@ import {
 	type ShellKeyboardInputCore,
 } from './keyboard-input-contracts';
 import { createShellKeyboardInputCore } from './keyboard-input-core';
+import {
+	createShellCommanderProps,
+	createShellCommandMenuProps,
+	createShellTerminalKeyboardProps,
+} from './keyboard-props';
 import {
 	type ShellKeyboardRemoteCore,
 	type ShellKeyboardRemoteLogger,
@@ -91,42 +101,25 @@ export type ShellKeyboardControllerHandle = {
 	selectionModeEnabled: boolean;
 	flash: { name: string | null; opacity: Animated.Value };
 	shellConfigState: ShellConfigState;
-	terminalKeyboardProps: {
-		keyboard: KeyboardDefinition | null;
-		modifierKeysActive: ModifierKey[];
-		onSlotPress(slot: KeyboardExecutableItem): void;
-		selectionModeEnabled: boolean;
-		onCopySelection(): void;
+	terminalKeyboardProps: Omit<TerminalKeyboardProps, 'navScope'> & {
 		navScope: WorkmuxNavScope;
 	};
-	commandMenuProps: {
-		entries: CommandMenuEntry[];
-		onSelect(preset: CommandPreset): void;
-		onAction(actionId: ActionId): void;
-		onBridge(entry: CommandBridgeEntry): void;
-	};
-	commanderProps: {
-		onExecuteCommand(value: string): void;
-		onPasteText(value: string): void;
-		onSendShortcut(sequence: string): void;
-	};
+	commandMenuProps: Pick<
+		CommandMenuModalProps,
+		'entries' | 'onSelect' | 'onAction' | 'onBridge'
+	>;
+	commanderProps: Pick<
+		TerminalCommanderModalProps,
+		'onExecuteCommand' | 'onPasteText' | 'onSendShortcut'
+	>;
 	textEntryProps: {
 		onPaste(value: string): void;
 		history: TextEntryHistoryModalProps;
 	};
-	configureProps: {
-		onDevServer(): void;
-		onReloadConfig(): void;
-		onHostConfig(): void;
-		onRequestFeature(): void;
-		onOpenGitHubIssues(): void;
-		onOpenShellConfigDocs(): void;
-		configVersion: string;
-		configUpdatedAt: string;
-		configSource: string;
-		configLastLoadedAt: string | null;
-		configLastError: string | null;
-	};
+	configureProps: Omit<
+		ConfigureModalProps,
+		'open' | 'bottomOffset' | 'onClose'
+	>;
 	onWebViewInput(input: { str: string; instanceId: string }): void;
 	onSelectionChanged(text: string): void;
 	onSelectionModeChange(enabled: boolean): void;
@@ -323,6 +316,38 @@ export function useShellKeyboardController(
 			warn: safeWarn,
 		});
 	}, [admission, clipboardAuthority, safeWarn, stateCore]);
+	const pasteClipboard = useCallback(async () => {
+		const command = createKeyboardPasteClipboardCommand({
+			captureAuthority: () => {
+				const generation = admission.getGeneration();
+				if (generation === null) return null;
+				return {
+					generation,
+					source: committedDeps.current.sourceKey,
+					runtime: committedDeps.current.terminalView.getRuntimeKey(),
+					instance: committedDeps.current.terminalView.getRuntimeInstanceId(),
+					activityGeneration:
+						committedDeps.current.activity.getSnapshot().generation,
+				};
+			},
+			isCurrent: (token) =>
+				admission.isCurrent(token.generation) &&
+				Object.is(token.source, committedDeps.current.sourceKey) &&
+				token.runtime === committedDeps.current.terminalView.getRuntimeKey() &&
+				token.instance ===
+					committedDeps.current.terminalView.getRuntimeInstanceId() &&
+				(token.instance === null ||
+					committedDeps.current.terminalView.isCurrentInstance(
+						token.instance,
+					)) &&
+				token.activityGeneration ===
+					committedDeps.current.activity.getSnapshot().generation,
+			readClipboard: Clipboard.getStringAsync,
+			paste: (text) => inputCore.pasteClipboard(text),
+			warn: safeWarn,
+		});
+		await command();
+	}, [admission, inputCore, safeWarn]);
 
 	const actionContext = useMemo<ActionContext>(
 		() => ({
@@ -339,16 +364,7 @@ export function useShellKeyboardController(
 			sendBytes: (bytes) => {
 				void inputCore.sendBytes(bytes);
 			},
-			pasteClipboard: async () => {
-				try {
-					await inputCore.pasteClipboard(await Clipboard.getStringAsync());
-				} catch (error) {
-					committedDeps.current.logger?.warn(
-						'Failed to paste clipboard',
-						error,
-					);
-				}
-			},
+			pasteClipboard,
 			copySelection: () => {
 				void copySelection();
 			},
@@ -382,6 +398,7 @@ export function useShellKeyboardController(
 		[
 			copySelection,
 			inputCore,
+			pasteClipboard,
 			remoteCore,
 			snapshot.activeKeyboardIds,
 			stateCore,
@@ -408,17 +425,22 @@ export function useShellKeyboardController(
 	}, [admission]);
 	useEffect(() => lifecycle.setup(), [lifecycle]);
 	useEffect(() => {
-		return subscribeKeyboardVisibility({
-			platformOS: deps.platformOS ?? Platform.OS,
-			addListener: (event, listener) =>
-				event === 'keyboardDidShow'
-					? Keyboard.addListener('keyboardDidShow', listener)
-					: Keyboard.addListener('keyboardDidHide', listener),
-			onVisibility: (visible) => {
-				visibleRef.current = visible;
-			},
-		});
-	}, [deps.platformOS]);
+		try {
+			return subscribeKeyboardVisibility({
+				platformOS: deps.platformOS ?? Platform.OS,
+				addListener: (event, listener) =>
+					event === 'keyboardDidShow'
+						? Keyboard.addListener('keyboardDidShow', listener)
+						: Keyboard.addListener('keyboardDidHide', listener),
+				onVisibility: (visible) => {
+					visibleRef.current = visible;
+				},
+			});
+		} catch (error) {
+			safeWarn('Failed to subscribe to system keyboard visibility', error);
+			return;
+		}
+	}, [deps.platformOS, safeWarn]);
 
 	useEffect(() => {
 		const scheduler = createShellKeyboardResumeDismissScheduler({
@@ -441,18 +463,28 @@ export function useShellKeyboardController(
 		});
 		if (!initialKeyboardSetupRef.current) {
 			initialKeyboardSetupRef.current = true;
-			actions.setupInitialKeyboard();
+			try {
+				actions.setupInitialKeyboard();
+			} catch (error) {
+				safeWarn('Failed to set up initial system keyboard', error);
+			}
 		}
 		if (lastInteractiveRef.current && !deps.activity.snapshot.interactive)
 			lastVisibleRef.current = visibleRef.current;
-		if (!lastInteractiveRef.current && deps.activity.snapshot.interactive)
-			actions.resumeFromAppState();
+		if (!lastInteractiveRef.current && deps.activity.snapshot.interactive) {
+			try {
+				actions.resumeFromAppState();
+			} catch (error) {
+				safeWarn('Failed to resume system keyboard', error);
+			}
+		}
 		lastInteractiveRef.current = deps.activity.snapshot.interactive;
 		return scheduler.cancel;
 	}, [
 		deps.activity.snapshot.generation,
 		deps.activity.snapshot.interactive,
 		deps.platformOS,
+		safeWarn,
 		stateCore,
 	]);
 
@@ -469,9 +501,13 @@ export function useShellKeyboardController(
 			const generation = admission.getGeneration();
 			const context = actionContextRef.current;
 			if (generation === null || !context) return;
-			void runAction(actionId, context);
+			runKeyboardFireAndForget(
+				() => runAction(actionId, context),
+				() => admission.isCurrent(generation),
+				safeWarn,
+			);
 		},
-		[admission],
+		[admission, safeWarn],
 	);
 	const onSelectionModeChange = useCallback(
 		(enabled: boolean) => {
@@ -564,22 +600,31 @@ export function useShellKeyboardController(
 	);
 	const onSelectionChanged = useCallback(
 		(text: string) => {
-			clipboardAuthority.noteSelection(text);
+			if (admission.getGeneration() === null) return;
+			let instanceId: string | null = null;
+			try {
+				instanceId = committedDeps.current.terminalView.getRuntimeInstanceId();
+			} catch (error) {
+				safeWarn('Failed to read selection change terminal instance', error);
+				return;
+			}
+			clipboardAuthority.noteSelection(text, instanceId);
 		},
-		[clipboardAuthority],
+		[admission, clipboardAuthority, safeWarn],
 	);
 
 	const terminalKeyboardProps = useMemo<
 		ShellKeyboardControllerHandle['terminalKeyboardProps']
 	>(
-		() => ({
-			keyboard: snapshot.keyboard,
-			modifierKeysActive: [...snapshot.modifierKeysActive],
-			onSlotPress,
-			selectionModeEnabled: snapshot.selectionModeEnabled,
-			onCopySelection,
-			navScope: deps.navScope,
-		}),
+		() =>
+			createShellTerminalKeyboardProps({
+				keyboard: snapshot.keyboard,
+				modifierKeysActive: [...snapshot.modifierKeysActive],
+				onSlotPress,
+				selectionModeEnabled: snapshot.selectionModeEnabled,
+				onCopySelection,
+				navScope: deps.navScope,
+			}),
 		[
 			deps.navScope,
 			onCopySelection,
@@ -592,12 +637,13 @@ export function useShellKeyboardController(
 	const commandMenuProps = useMemo<
 		ShellKeyboardControllerHandle['commandMenuProps']
 	>(
-		() => ({
-			entries: [...snapshot.shellConfigState.config.commandMenus],
-			onSelect: onPreset,
-			onAction,
-			onBridge,
-		}),
+		() =>
+			createShellCommandMenuProps({
+				entries: [...snapshot.shellConfigState.config.commandMenus],
+				onSelect: onPreset,
+				onAction,
+				onBridge,
+			}),
 		[
 			onAction,
 			onBridge,
@@ -608,11 +654,12 @@ export function useShellKeyboardController(
 	const commanderProps = useMemo<
 		ShellKeyboardControllerHandle['commanderProps']
 	>(
-		() => ({
-			onExecuteCommand,
-			onPasteText,
-			onSendShortcut,
-		}),
+		() =>
+			createShellCommanderProps({
+				onExecuteCommand,
+				onPasteText,
+				onSendShortcut,
+			}),
 		[onExecuteCommand, onPasteText, onSendShortcut],
 	);
 	const historyProps = useMemo<TextEntryHistoryModalProps>(

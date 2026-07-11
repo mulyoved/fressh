@@ -6,7 +6,9 @@ import {
 	createKeyboardAnimationController,
 	createKeyboardClipboardAuthority,
 	createKeyboardControllerAdmission,
+	createKeyboardPasteClipboardCommand,
 	invalidateKeyboardControllerDomains,
+	runKeyboardFireAndForget,
 	subscribeKeyboardVisibility,
 } from '../../src/lib/shell-controllers/keyboard-hook-runtime';
 
@@ -16,6 +18,154 @@ void test('animation identity survives setup replay and animates semantic replac
 	assert.equal(tracker.replace('main'), false);
 	assert.equal(tracker.replace('advanced'), true);
 	assert.equal(tracker.replace('advanced'), false);
+});
+
+void test('clipboard invalidation detaches a hung write and replacement progresses', async () => {
+	const authority = createKeyboardClipboardAuthority();
+	let release!: () => void;
+	const hung = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	const writes: string[] = [];
+	const ports = (instance: string, text: string, write: Promise<void>) => ({
+		isAdmitted: () => true,
+		getInstanceId: () => instance,
+		getSelection: async () => text,
+		isCurrentInstance: () => true,
+		writeClipboard: async (value: string) => {
+			writes.push(value);
+			await write;
+		},
+		exitSelectionState: () => {},
+		exitSelectionView: () => {},
+		completeSlotPress: () => {},
+		warn: () => {},
+	});
+	const old = authority.copy(ports('one', 'old', hung));
+	await Promise.resolve();
+	await Promise.resolve();
+	authority.invalidate();
+	await authority.copy(ports('two', 'new', Promise.resolve()));
+	assert.deepEqual(writes, ['old', 'new']);
+	release();
+	await old;
+});
+
+void test('same-instance overlapping duplicate writes once and replacement instance copies', async () => {
+	const authority = createKeyboardClipboardAuthority();
+	const writes: string[] = [];
+	let release!: () => void;
+	const hung = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	const ports = (instance: string, write: Promise<void>) => ({
+		isAdmitted: () => true,
+		getInstanceId: () => instance,
+		getSelection: async () => 'same',
+		isCurrentInstance: () => true,
+		writeClipboard: async (text: string) => {
+			writes.push(`${instance}:${text}`);
+			await write;
+		},
+		exitSelectionState: () => {},
+		exitSelectionView: () => {},
+		completeSlotPress: () => {},
+		warn: () => {},
+	});
+	const first = authority.copy(ports('one', hung));
+	await Promise.resolve();
+	await Promise.resolve();
+	await authority.copy(ports('one', Promise.resolve()));
+	assert.deepEqual(writes, ['one:same']);
+	release();
+	await first;
+	authority.invalidate();
+	await authority.copy(ports('two', Promise.resolve()));
+	assert.deepEqual(writes, ['one:same', 'two:same']);
+});
+
+void test('paste revalidates exact authority after deferred clipboard read', async () => {
+	let generation = 1;
+	let resolve!: (text: string) => void;
+	const read = new Promise<string>((next) => {
+		resolve = next;
+	});
+	const pasted: string[] = [];
+	const paste = createKeyboardPasteClipboardCommand({
+		captureAuthority: () => ({
+			generation,
+			source: 's',
+			runtime: 'r',
+			instance: 'i',
+		}),
+		isCurrent: (token) => token.generation === generation,
+		readClipboard: () => read,
+		paste: async (text) => {
+			pasted.push(text);
+		},
+		warn: () => {},
+	});
+	const pending = paste();
+	generation = 2;
+	resolve('stale');
+	await pending;
+	assert.deepEqual(pasted, []);
+});
+
+void test('fire-and-forget contains sync throw and async rejection', async () => {
+	const warnings: string[] = [];
+	runKeyboardFireAndForget(
+		() => {
+			throw new Error('sync');
+		},
+		() => true,
+		(message) => warnings.push(message),
+	);
+	runKeyboardFireAndForget(
+		async () => {
+			throw new Error('async');
+		},
+		() => true,
+		(message) => warnings.push(message),
+	);
+	await Promise.resolve();
+	await Promise.resolve();
+	assert.deepEqual(warnings, [
+		'Keyboard action failed',
+		'Keyboard action failed',
+	]);
+});
+
+void test('visibility registration is failure-atomic and cleanup attempts both removals', () => {
+	let partialRemoved = 0;
+	assert.throws(() =>
+		subscribeKeyboardVisibility({
+			platformOS: 'android',
+			onVisibility: () => {},
+			addListener: (event) => {
+				if (event === 'keyboardDidHide') throw new Error('hide');
+				return {
+					remove: () => {
+						partialRemoved += 1;
+					},
+				};
+			},
+		}),
+	);
+	assert.equal(partialRemoved, 1);
+	const removed: string[] = [];
+	const cleanup = subscribeKeyboardVisibility({
+		platformOS: 'android',
+		onVisibility: () => {},
+		addListener: (event) => ({
+			remove: () => {
+				removed.push(event);
+				if (event === 'keyboardDidShow') throw new Error('show');
+			},
+		}),
+	});
+	cleanup();
+	assert.deepEqual(removed, ['keyboardDidShow', 'keyboardDidHide']);
 });
 
 void test('domain invalidation attempts every sibling after failures', () => {
