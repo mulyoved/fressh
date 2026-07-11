@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, test } from 'node:test';
+import ts from 'typescript';
 
 const detailSourcePath = join(process.cwd(), 'src/app/shell/detail.tsx');
 
@@ -92,14 +93,28 @@ function extractHandleActionBlock(source: string): string {
 }
 
 function extractHandleSlotPressBlock(source: string): string {
-	const callbackStart = source.indexOf('const handleSlotPress = useCallback');
-	assert.notEqual(callbackStart, -1);
-	const callbackEnd = source.indexOf(
-		'const [keyboardResumeDismissScheduler]',
-		callbackStart,
+	const sourceFile = ts.createSourceFile(
+		detailSourcePath,
+		source,
+		ts.ScriptTarget.Latest,
+		true,
+		ts.ScriptKind.TSX,
 	);
-	assert.notEqual(callbackEnd, -1);
-	return source.slice(callbackStart, callbackEnd);
+	let initializer: ts.Expression | undefined;
+	const visit = (node: ts.Node): void => {
+		if (
+			ts.isVariableDeclaration(node) &&
+			ts.isIdentifier(node.name) &&
+			node.name.text === 'handleSlotPress'
+		) {
+			initializer = node.initializer;
+			return;
+		}
+		ts.forEachChild(node, visit);
+	};
+	visit(sourceFile);
+	assert.ok(initializer, 'handleSlotPress initializer was not found');
+	return initializer.getText(sourceFile);
 }
 
 void describe('shell detail Workmux control channel wiring', () => {

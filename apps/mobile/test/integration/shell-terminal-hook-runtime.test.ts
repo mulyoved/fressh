@@ -260,6 +260,66 @@ void test('hook runtime creates cores once and behaviorally delegates layout, at
 	assert.ok(fixture.calls.includes('resize:80x24'));
 });
 
+void test('same-key shell replacement stales delayed transport work before redirecting sends', async () => {
+	const shellAFirstSend = deferred<void>();
+	const shellACalls: number[][] = [];
+	const shellBCalls: number[][] = [];
+	const shellA = {
+		sendData: async (buffer: ArrayBuffer) => {
+			shellACalls.push(Array.from(new Uint8Array(buffer)));
+			if (shellACalls.length === 1) await shellAFirstSend.promise;
+		},
+		resizePty: async () => {},
+	} as unknown as SshShell;
+	const shellB = {
+		sendData: async (buffer: ArrayBuffer) => {
+			shellBCalls.push(Array.from(new Uint8Array(buffer)));
+		},
+		resizePty: async () => {},
+	} as unknown as SshShell;
+	const runtime = createShellTerminalHookRuntime({
+		xtermRef: { current: null },
+		platformOS: 'android',
+		dependencies: {
+			logger: { info: () => {}, warn: () => {} },
+			router: { back: () => {} },
+			onRuntimeChanged: () => {},
+		},
+	});
+	const key = createShellTransportKey('connection-a', 7);
+	runtime.updateShell(key, shellA);
+	runtime.transport.setRuntimeInstance('runtime-1');
+	const staleLease = runtime.transport.captureLease();
+	assert.ok(staleLease);
+	const staleBatch = runtime.transport.sendBatch(
+		staleLease,
+		[new Uint8Array([1]), new Uint8Array([2])],
+		{ interSegmentDelayMs: 1 },
+	);
+	await Promise.resolve();
+	assert.deepEqual(shellACalls, [[1]]);
+
+	runtime.updateShell(key, shellB);
+	assert.equal(runtime.transport.isLeaseCurrent(staleLease), false);
+	shellAFirstSend.resolve();
+	await staleBatch;
+	assert.deepEqual(shellACalls, [[1]]);
+	assert.deepEqual(shellBCalls, []);
+
+	const replacementLease = runtime.transport.captureLease();
+	assert.ok(replacementLease);
+	await runtime.transport.sendBatch(replacementLease, [new Uint8Array([3])]);
+	assert.deepEqual(shellBCalls, [[3]]);
+
+	const sameObjectLease = runtime.transport.captureLease();
+	assert.ok(sameObjectLease);
+	runtime.updateShell(key, shellB);
+	assert.equal(runtime.transport.isLeaseCurrent(sameObjectLease), true);
+	runtime.lifecycle.dispose();
+	runtime.size.dispose();
+	runtime.transport.dispose();
+});
+
 void test('hook runtime ordinary and Strict Mode cleanup attempts every disposer despite failure', () => {
 	const error = new Error('lifecycle dispose failed');
 	const ordinary = createFixture({ lifecycleDisposeError: error });

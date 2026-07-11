@@ -127,6 +127,7 @@ export function createShellTerminalHookRuntime(input: {
 	const factories = input.factories ?? defaultFactories;
 	let dependencies = input.dependencies;
 	let shell: SshShell | null = null;
+	let currentTransportKey: ShellTransportKey | null = null;
 	const observedAttachPromises = new WeakSet<Promise<void>>();
 	const currentLogger: TerminalLifecycleLogger = {
 		info: (message, details) => dependencies.logger.info(message, details),
@@ -218,10 +219,17 @@ export function createShellTerminalHookRuntime(input: {
 			dependencies = nextDependencies;
 		},
 		updateShell: (transportKey, nextShell) => {
-			shell = nextShell ?? null;
+			const normalizedShell = nextShell ?? null;
+			if (shell === normalizedShell && currentTransportKey === transportKey) {
+				return;
+			}
+			const clearedForReplacement = shell !== null && shell !== normalizedShell;
+			if (clearedForReplacement) transport.clearShell();
+			shell = normalizedShell;
+			currentTransportKey = transportKey;
 			if (shell && transportKey) {
 				transport.setShell(transportKey, sendCurrentShell);
-			} else {
+			} else if (!clearedForReplacement) {
 				transport.clearShell();
 			}
 			lifecycle.setShell(transportKey, shell);

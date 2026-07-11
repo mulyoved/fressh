@@ -98,6 +98,7 @@ import { createGenerationRequestGate } from '@/lib/shell-controllers/generation-
 import { createShellModalArbiter } from '@/lib/shell-controllers/modal-arbiter';
 import { useShellNotificationsController } from '@/lib/shell-controllers/notifications';
 import { syncShellCommandLifecycle } from '@/lib/shell-controllers/shell-command-lifecycle';
+import { createShellTerminalLiveInputRequest } from '@/lib/shell-controllers/shell-terminal-live-input';
 import { useShellSimpleModals } from '@/lib/shell-controllers/simple-modals';
 import { useSkillSelectorController } from '@/lib/shell-controllers/skill-selector';
 import {
@@ -168,7 +169,6 @@ import {
 import {
 	buildWorkmuxScrollbackLiveInputSendPlan,
 	createWorkmuxScrollbackLiveInputCleanupBarrier,
-	isWorkmuxScrollbackLiveInputRequestCurrent,
 	runWorkmuxScrollbackLiveInputSendPlan,
 } from '@/lib/workmux-scrollback-live-input';
 import { BrowserActionsModal } from './components/BrowserActionsModal';
@@ -867,6 +867,8 @@ function ShellDetail() {
 		router,
 		onRuntimeChanged: handleTerminalRuntimeChanged,
 	});
+	const terminalSizeSnapshotRef = useRef(terminal.lastSize);
+	terminalSizeSnapshotRef.current = terminal.lastSize;
 	const exitSelectionMode = useCallback(() => {
 		setSelectionModeEnabled(false);
 		terminal.view.setSelectionModeEnabled(false);
@@ -1064,23 +1066,14 @@ function ShellDetail() {
 				interSegmentDelayMs: opts?.interSegmentDelayMs,
 				scrollbackExitDelayMs,
 			});
-			const requestInstanceId = currentInstanceIdRef.current;
-			const requestLease = terminal.transport.captureLease();
-			const requestLiveInputGeneration = liveInputGenerationRef.current;
-			const isLiveInputRequestCurrent = () =>
-				isWorkmuxScrollbackLiveInputRequestCurrent({
-					requestInstanceId,
-					requestWriter: requestLease,
-					currentInstanceId: currentInstanceIdRef.current,
-					currentWriter:
-						requestLease && terminal.transport.isLeaseCurrent(requestLease)
-							? requestLease
-							: null,
-					isFocused: getActivitySnapshot().focused,
-					isAppActive: getActivitySnapshot().appActive,
-					requestGeneration: requestLiveInputGeneration,
-					currentGeneration: liveInputGenerationRef.current,
-				});
+			const request = createShellTerminalLiveInputRequest({
+				transport: terminal.transport,
+				requestInstanceId: currentInstanceIdRef.current,
+				getCurrentInstanceId: () => currentInstanceIdRef.current,
+				requestGeneration: liveInputGenerationRef.current,
+				getCurrentGeneration: () => liveInputGenerationRef.current,
+				getActivitySnapshot,
+			});
 
 			const remoteCopyModeActive =
 				tmuxRemoteScrollbackCopyModeActiveRef.current;
@@ -1089,14 +1082,8 @@ function ShellDetail() {
 				currentCleanup: scrollbackCleanupBarrierRef.current.current(),
 				startCleanup: clearScrollbackState,
 				remoteCopyModeActive,
-				isRequestCurrent: isLiveInputRequestCurrent,
-				sendSegments: (segments, options) =>
-					requestLease
-						? terminal.transport.sendBatch(requestLease, segments, {
-								interSegmentDelayMs: options?.interSegmentDelayMs,
-								isCurrent: isLiveInputRequestCurrent,
-							})
-						: undefined,
+				isRequestCurrent: request.isCurrent,
+				sendSegments: request.sendSegments,
 				onPayloadAccepted: opts?.onAccepted,
 			});
 		},
@@ -2044,7 +2031,7 @@ function ShellDetail() {
 			createManualTerminalFitRunner({
 				getConnection: () => connection ?? null,
 				isTmuxEnabled: () => tmuxEnabled,
-				getTerminalSize: () => terminal.lastSize,
+				getTerminalSize: () => terminalSizeSnapshotRef.current,
 				getXterm: () => terminal.view,
 				getTargetName: () => tmuxTarget.trim() || 'main',
 				waitForTerminalSizeAfterFit: terminal.waitForSizeAfterFit,
@@ -2060,7 +2047,14 @@ function ShellDetail() {
 				},
 				getErrorMessage,
 			}),
-		[connection, shell, terminal, tmuxEnabled, tmuxTarget],
+		[
+			connection,
+			shell,
+			terminal.view,
+			terminal.waitForSizeAfterFit,
+			tmuxEnabled,
+			tmuxTarget,
+		],
 	);
 	const workmuxKeyboardTmuxEnabledRef = useRef(tmuxEnabled);
 	const workmuxKeyboardTmuxTargetRef = useRef(tmuxTarget);
