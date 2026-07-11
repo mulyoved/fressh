@@ -103,7 +103,16 @@ void test('all shell input adapters use the scrollback input port', () => {
 		/interSegmentDelayMs:\s*opts\?\.interSegmentDelayMs/,
 	);
 	assert.match(segmentsAdapter, /onAccepted:\s*opts\?\.onAccepted/);
+	assert.match(
+		webViewAdapter,
+		/scrollback\.state\.runtimeInstanceId === null\s*\|\|\s*input\.instanceId !== scrollback\.state\.runtimeInstanceId/,
+	);
 	assert.match(webViewAdapter, /sendBytesRaw\(bytes\)/);
+	assert.ok(
+		webViewAdapter.indexOf('scrollback.state.runtimeInstanceId === null') <
+			webViewAdapter.indexOf('sendBytesRaw(bytes)'),
+		'stale/null runtime guard must run before terminal input send',
+	);
 	assert.doesNotMatch(
 		source,
 		/createShellTerminalLiveInputRequest|runWorkmuxScrollbackLiveInputSendPlan|terminal\.transport\.send|shell\.sendData|new OrderedWriter/,

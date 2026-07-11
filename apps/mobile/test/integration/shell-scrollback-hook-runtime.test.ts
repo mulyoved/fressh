@@ -5,10 +5,9 @@ import {
 	createShellScrollbackHookRuntime,
 	type ShellScrollbackHookRuntimeFactories,
 } from '../../src/lib/shell-controllers/scrollback';
-import {
-	disposeWorkmuxControlChannelAfterCleanup,
-	reportWorkmuxScrollbackCleanupTeardownError,
-} from '../../src/lib/workmux-control-channel';
+import { reportShellScrollbackChannelCleanupError } from '../../src/lib/shell-controllers/scrollback-channel-teardown';
+import { createShellTargetKey } from '../../src/lib/shell-controllers/source-keys';
+import { disposeWorkmuxControlChannelAfterCleanup } from '../../src/lib/workmux-control-channel';
 import {
 	createDeferred,
 	createScrollbackHarness,
@@ -129,9 +128,14 @@ void test('Strict Mode replay performs neither rollback nor channel teardown', (
 });
 
 void test('channel replacement releases old authority through only the old teardown callback', async () => {
-	const oldCalls: (Promise<boolean> | null)[] = [];
-	const newCalls: (Promise<boolean> | null)[] = [];
-	const fixture = createFixture((cleanup) => oldCalls.push(cleanup));
+	const oldCalls: {
+		cleanup: Promise<boolean> | null;
+		reason: 'channel-replaced' | 'unmount';
+	}[] = [];
+	const newCalls: typeof oldCalls = [];
+	const fixture = createFixture((cleanup, reason) =>
+		oldCalls.push({ cleanup, reason }),
+	);
 	fixture.runtime.onTerminalRuntimeChanged('instance-1');
 	fixture.harness.remoteCopyModeActive.current = true;
 	const rollback = createDeferred<boolean>();
@@ -150,20 +154,49 @@ void test('channel replacement releases old authority through only the old teard
 			...fixture.runtime.getInput().context,
 			workmuxScroll: replacementScroll,
 		},
-		onTeardownCleanup: (cleanup) => newCalls.push(cleanup),
+		onTeardownCleanup: (cleanup, reason) => newCalls.push({ cleanup, reason }),
 	});
 	assert.equal(oldCalls.length, 1);
 	assert.equal(newCalls.length, 0);
-	assert.ok(oldCalls[0]);
+	assert.equal(oldCalls[0]?.reason, 'channel-replaced');
+	assert.ok(oldCalls[0]?.cleanup);
 	let settled = false;
-	void oldCalls[0]?.then(() => {
+	void oldCalls[0]?.cleanup?.then(() => {
 		settled = true;
 	});
 	await flushPromises();
 	assert.equal(settled, false);
 	rollback.resolve(true);
-	assert.equal(await oldCalls[0], true);
+	assert.equal(await oldCalls[0]?.cleanup, true);
 	assert.equal(newCalls.length, 0);
+});
+
+void test('hook target replacement immediately hides active scrollback without replacing the channel', () => {
+	const teardownReasons: string[] = [];
+	const fixture = createFixture((_cleanup, reason) =>
+		teardownReasons.push(reason),
+	);
+	fixture.runtime.onTerminalRuntimeChanged('instance-1');
+	fixture.runtime.xtermProps.onScrollbackModeChange({
+		active: true,
+		phase: 'active',
+		instanceId: 'instance-1',
+	});
+	assert.equal(fixture.runtime.core.getSnapshot().active, true);
+	fixture.runtime.commit({
+		...fixture.runtime.getInput(),
+		context: {
+			...fixture.runtime.getInput().context,
+			targetKey: createShellTargetKey('transport' as never, 'target-b'),
+			targetName: 'target-b',
+		},
+	});
+	assert.deepEqual(fixture.runtime.core.getSnapshot(), {
+		active: false,
+		phase: 'active',
+		runtimeInstanceId: 'instance-1',
+	});
+	assert.deepEqual(teardownReasons, []);
 });
 
 void test('channel teardown waits for rejected rollback before disposing and leaves cleanup logging to its owner', async () => {
@@ -177,8 +210,9 @@ void test('channel teardown waits for rejected rollback before disposing and lea
 				events.push('dispose');
 			},
 			onCleanupError: (error) =>
-				reportWorkmuxScrollbackCleanupTeardownError(error, (message) => {
-					teardownWarnings.push(message);
+				reportShellScrollbackChannelCleanupError({
+					error,
+					logger: { warn: (message) => teardownWarnings.push(message) },
 				}),
 		});
 	});
@@ -247,8 +281,9 @@ void test('channel teardown timeout disposes while an exact rollback remains pen
 				events.push('dispose');
 			},
 			onCleanupError: (error) =>
-				reportWorkmuxScrollbackCleanupTeardownError(error, (message) => {
-					warnings.push(message);
+				reportShellScrollbackChannelCleanupError({
+					error,
+					logger: { warn: (message) => warnings.push(message) },
 				}),
 		});
 	});
@@ -270,6 +305,92 @@ void test('channel teardown timeout disposes while an exact rollback remains pen
 	fireTimeout();
 	assert.deepEqual(events, ['prepare', 'dispose']);
 	assert.equal(warnings.length, 1);
+});
+
+void test('cleanup capture failure hands null to the old owner and later replacement remains usable', () => {
+	const handoffs: {
+		cleanup: Promise<boolean> | null;
+		reason: string;
+	}[] = [];
+	const fixture = createFixture((cleanup, reason) =>
+		handoffs.push({ cleanup, reason }),
+	);
+	const originalGetCleanup = fixture.harness.core.getCurrentCleanup;
+	let throwCapture = true;
+	fixture.harness.core.getCurrentCleanup = () => {
+		if (throwCapture) {
+			throwCapture = false;
+			throw new Error('capture failed');
+		}
+		return originalGetCleanup();
+	};
+	const secondHandoffs: typeof handoffs = [];
+	assert.doesNotThrow(() =>
+		fixture.runtime.commit({
+			...fixture.runtime.getInput(),
+			context: {
+				...fixture.runtime.getInput().context,
+				workmuxScroll: { ...fixture.harness.scroll },
+			},
+			onTeardownCleanup: (cleanup, reason) =>
+				secondHandoffs.push({ cleanup, reason }),
+		}),
+	);
+	assert.deepEqual(handoffs, [{ cleanup: null, reason: 'channel-replaced' }]);
+	assert.equal(
+		fixture.harness.warnings.filter(
+			(message) => message === 'Failed to hand off scrollback channel cleanup',
+		).length,
+		1,
+	);
+	assert.doesNotThrow(() =>
+		fixture.runtime.commit({
+			...fixture.runtime.getInput(),
+			context: {
+				...fixture.runtime.getInput().context,
+				workmuxScroll: { ...fixture.harness.scroll },
+			},
+		}),
+	);
+	assert.equal(secondHandoffs.length, 1);
+	assert.equal(secondHandoffs[0]?.reason, 'channel-replaced');
+});
+
+void test('throwing teardown callback is contained and later replacement and unmount use the new owner', () => {
+	const laterReasons: string[] = [];
+	const fixture = createFixture(() => {
+		throw new Error('old teardown failed');
+	});
+	assert.doesNotThrow(() =>
+		fixture.runtime.commit({
+			...fixture.runtime.getInput(),
+			context: {
+				...fixture.runtime.getInput().context,
+				workmuxScroll: { ...fixture.harness.scroll },
+			},
+			onTeardownCleanup: (_cleanup, reason) => laterReasons.push(reason),
+		}),
+	);
+	assert.equal(
+		fixture.harness.warnings.filter(
+			(message) => message === 'Failed to hand off scrollback channel cleanup',
+		).length,
+		1,
+	);
+	assert.doesNotThrow(() =>
+		fixture.runtime.commit({
+			...fixture.runtime.getInput(),
+			context: {
+				...fixture.runtime.getInput().context,
+				workmuxScroll: { ...fixture.harness.scroll },
+			},
+			onTeardownCleanup: (_cleanup, reason) => laterReasons.push(reason),
+		}),
+	);
+	const cleanupEffect = fixture.runtime.setupDisposal();
+	cleanupEffect();
+	assert.doesNotThrow(() => fixture.deferredTasks.shift()?.());
+	assert.deepEqual(laterReasons, ['channel-replaced', 'unmount']);
 });
 
 void test('hook runtime owns one core and keeps input and xterm ports stable across current context updates', async () => {

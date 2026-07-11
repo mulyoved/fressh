@@ -107,6 +107,20 @@ export function createShellScrollbackHookRuntime({
 		}
 		return firstError;
 	};
+	const reportHandoffError = (
+		ownerInput: UseShellScrollbackControllerInput,
+		error: unknown,
+	): void => {
+		if (error === undefined) return;
+		try {
+			ownerInput.context.logger.warn(
+				'Failed to hand off scrollback channel cleanup',
+				error,
+			);
+		} catch {
+			// Teardown recovery must not depend on diagnostics.
+		}
+	};
 	const disposeCore = (): void => {
 		const ownerInput = committedInput;
 		let firstError: unknown;
@@ -121,7 +135,7 @@ export function createShellScrollbackHookRuntime({
 			}
 		}
 		const handoffError = safelyHandOffCleanup(ownerInput, 'unmount');
-		firstError ??= handoffError;
+		reportHandoffError(ownerInput, handoffError);
 		if (firstError === undefined) return;
 		try {
 			ownerInput.context.logger.warn(
@@ -179,7 +193,7 @@ export function createShellScrollbackHookRuntime({
 					previousInput,
 					'channel-replaced',
 				);
-				firstError ??= handoffError;
+				reportHandoffError(previousInput, handoffError);
 			}
 			if (firstError !== undefined) throw firstError;
 		},

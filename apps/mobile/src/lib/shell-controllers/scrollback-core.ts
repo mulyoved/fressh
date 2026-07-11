@@ -370,7 +370,10 @@ export function createShellScrollbackControllerCore(
 		const restoreRemoteOnFailure = previousContext !== null && !targetChanged;
 		const previousSafeWarn = createSafeWarn(previousContext?.logger);
 		clearLocalState();
-		if (targetChanged) remoteCopyModeActive.current = false;
+		if (targetChanged) {
+			remoteCopyModeActive.current = false;
+			safelyPublish({ ...initialState, runtimeInstanceId });
+		}
 		if (previousExecutor) {
 			let cleanup: Promise<boolean> | null = null;
 			try {

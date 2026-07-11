@@ -155,11 +155,11 @@ void describe('shell detail Workmux control channel wiring', () => {
 		);
 		assert.match(
 			composition,
-			/onCleanupError:\s*\(error\)\s*=>\s*reportWorkmuxScrollbackCleanupTeardownError\(/,
+			/onCleanupError:\s*\(error\)\s*=>\s*reportShellScrollbackChannelCleanupError\(\{/,
 		);
 		assert.match(
 			composition,
-			/reportWorkmuxScrollbackCleanupTeardownError\([\s\S]*?logger\.warn\(message, warningError\)/,
+			/reportShellScrollbackChannelCleanupError\(\{[\s\S]*?^\s*logger,/m,
 		);
 		assert.equal(
 			composition.match(/onCleanupError:/g)?.length,

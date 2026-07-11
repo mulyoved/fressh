@@ -81,21 +81,6 @@ export class WorkmuxControlChannelCleanupTimeoutError extends Error {
 	}
 }
 
-export function reportWorkmuxScrollbackCleanupTeardownError(
-	error: unknown,
-	warn: (message: string, error: unknown) => void,
-): void {
-	if (!(error instanceof WorkmuxControlChannelCleanupTimeoutError)) return;
-	try {
-		warn(
-			'Workmux scrollback cleanup timed out before control channel disposal',
-			error,
-		);
-	} catch {
-		// Channel teardown must not depend on diagnostics.
-	}
-}
-
 const DEFAULT_WORKMUX_CONTROL_COMMAND_TIMEOUT_MS = 10_000;
 const DEFAULT_WORKMUX_CONTROL_CLEANUP_TIMEOUT_MS = 5_000;
 
@@ -279,7 +264,11 @@ export function disposeWorkmuxControlChannelAfterCleanup({
 			cleanupTimer = null;
 		}
 		void dispose().catch((error: unknown) => {
-			onDisposeError?.(error);
+			try {
+				onDisposeError?.(error);
+			} catch {
+				// Teardown completion must not depend on diagnostics.
+			}
 		});
 	};
 

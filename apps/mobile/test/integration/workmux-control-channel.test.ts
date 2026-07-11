@@ -10,8 +10,6 @@ import { WORKMUX_REQUIRED_MDEV_BRIDGE_OPERATIONS } from '../../src/lib/workmux-b
 import {
 	createWorkmuxControlChannel,
 	disposeWorkmuxControlChannelAfterCleanup,
-	reportWorkmuxScrollbackCleanupTeardownError,
-	WorkmuxControlChannelCleanupTimeoutError,
 	type WorkmuxControlConnection,
 	type WorkmuxControlCommandResult,
 } from '../../src/lib/workmux-control-channel';
@@ -794,26 +792,20 @@ void test('disposeWorkmuxControlChannelAfterCleanup disposes after failed cleanu
 	assert.deepEqual(events, ['cleanup:exit failed', 'dispose']);
 });
 
-void test('scrollback teardown reports timeout once, ignores core-owned rejection, and contains logger failure', () => {
-	const warnings: { message: string; error: unknown }[] = [];
-	const timeout = new WorkmuxControlChannelCleanupTimeoutError();
-	reportWorkmuxScrollbackCleanupTeardownError(timeout, (message, error) => {
-		warnings.push({ message, error });
-	});
-	reportWorkmuxScrollbackCleanupTeardownError(
-		new Error('core-owned rollback rejection'),
-		(message, error) => warnings.push({ message, error }),
-	);
-	assert.deepEqual(warnings, [
-		{
-			message:
-				'Workmux scrollback cleanup timed out before control channel disposal',
-			error: timeout,
+void test('disposeWorkmuxControlChannelAfterCleanup observes rejected channel disposal once and contains diagnostics', async () => {
+	let attempts = 0;
+	let diagnostics = 0;
+	disposeWorkmuxControlChannelAfterCleanup({
+		dispose: async () => {
+			attempts += 1;
+			throw new Error('channel dispose failed');
 		},
-	]);
-	assert.doesNotThrow(() =>
-		reportWorkmuxScrollbackCleanupTeardownError(timeout, () => {
+		onDisposeError: () => {
+			diagnostics += 1;
 			throw new Error('logger failed');
-		}),
-	);
+		},
+	});
+	await settle();
+	assert.equal(attempts, 1);
+	assert.equal(diagnostics, 1);
 });

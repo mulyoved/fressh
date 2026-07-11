@@ -98,6 +98,7 @@ import { createGenerationRequestGate } from '@/lib/shell-controllers/generation-
 import { createShellModalArbiter } from '@/lib/shell-controllers/modal-arbiter';
 import { useShellNotificationsController } from '@/lib/shell-controllers/notifications';
 import { useShellScrollbackController } from '@/lib/shell-controllers/scrollback';
+import { reportShellScrollbackChannelCleanupError } from '@/lib/shell-controllers/scrollback-channel-teardown';
 import { syncShellCommandLifecycle } from '@/lib/shell-controllers/shell-command-lifecycle';
 import { useShellSimpleModals } from '@/lib/shell-controllers/simple-modals';
 import { useSkillSelectorController } from '@/lib/shell-controllers/skill-selector';
@@ -146,7 +147,6 @@ import { wisprAutomationNative } from '@/lib/wispr-automation-native';
 import {
 	createWorkmuxControlChannel,
 	disposeWorkmuxControlChannelAfterCleanup,
-	reportWorkmuxScrollbackCleanupTeardownError,
 	type WorkmuxControlChannel,
 } from '@/lib/workmux-control-channel';
 import { getWorkmuxAttachErrorCopy } from '@/lib/workmux-copy';
@@ -838,10 +838,10 @@ function ShellDetail() {
 					workmuxControlChannel.prepareDispose({ reason: disposeReason }),
 				dispose: () => workmuxControlChannel.dispose({ reason: disposeReason }),
 				onCleanupError: (error) =>
-					reportWorkmuxScrollbackCleanupTeardownError(
+					reportShellScrollbackChannelCleanupError({
 						error,
-						(message, warningError) => logger.warn(message, warningError),
-					),
+						logger,
+					}),
 				onDisposeError: (error) => {
 					try {
 						logger.warn('Workmux control channel dispose failed', error);
@@ -2570,7 +2570,7 @@ function ShellDetail() {
 		(input: { str: string; instanceId: string }) => {
 			if (!shell) return;
 			if (
-				scrollback.state.runtimeInstanceId &&
+				scrollback.state.runtimeInstanceId === null ||
 				input.instanceId !== scrollback.state.runtimeInstanceId
 			) {
 				return;

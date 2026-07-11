@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createShellScrollbackControllerCore } from '../../src/lib/shell-controllers/scrollback-core';
 import { createShellTargetKey } from '../../src/lib/shell-controllers/source-keys';
+import { type TerminalRuntimeKey } from '../../src/lib/shell-controllers/terminal-transport';
 import { createTmuxScrollbackLineAccumulator } from '../../src/lib/workmux-scrollback-batch';
 import { createScrollbackHarness } from './shell-scrollback-controller-test-support';
 
@@ -77,6 +78,120 @@ void test('scrollback replaces executor only for semantic target or command-port
 	});
 	assert.deepEqual(harness.events.slice(-1), ['dispose:2']);
 	assert.equal(harness.executors.length, 3);
+});
+
+void test('same-target command-port replacement retains active scrollback state', () => {
+	const harness = createScrollbackHarness();
+	harness.core.onTerminalRuntimeChanged('instance-1');
+	harness.core.onScrollbackModeChange({
+		active: true,
+		phase: 'dragging',
+		instanceId: 'instance-1',
+	});
+	harness.remoteCopyModeActive.current = true;
+	harness.core.setContext({
+		...harness.context,
+		workmuxScroll: { ...harness.scroll },
+	});
+	assert.deepEqual(harness.core.getSnapshot(), {
+		active: true,
+		phase: 'dragging',
+		runtimeInstanceId: 'instance-1',
+	});
+	assert.equal(harness.remoteCopyModeActive.current, true);
+});
+
+void test('active target replacement publishes inactive state and first new-target input sends without stale exit', async () => {
+	const harness = createScrollbackHarness();
+	const sent: number[][][] = [];
+	const lease = {
+		runtimeKey: 'runtime-1' as TerminalRuntimeKey,
+		writerGeneration: 1,
+	};
+	Object.assign(harness.context.terminalView, {
+		getRuntimeInstanceId: () => 'instance-1',
+		getRuntimeKey: () => lease.runtimeKey,
+	});
+	Object.assign(harness.context.terminalTransport, {
+		captureLease: () => lease,
+		isLeaseCurrent: () => true,
+		sendBatch: async (
+			_lease: typeof lease,
+			segments: readonly Uint8Array<ArrayBufferLike>[],
+		) => sent.push(segments.map((segment) => Array.from(segment))),
+	});
+	harness.core.onTerminalRuntimeChanged('instance-1');
+	harness.core.onScrollbackModeChange({
+		active: true,
+		phase: 'active',
+		instanceId: 'instance-1',
+	});
+	harness.remoteCopyModeActive.current = true;
+	const targetB = createShellTargetKey('transport' as never, 'target-b');
+	harness.core.setContext({
+		...harness.context,
+		targetKey: targetB,
+		targetName: 'target-b',
+	});
+	assert.deepEqual(harness.core.getSnapshot(), {
+		active: false,
+		phase: 'active',
+		runtimeInstanceId: 'instance-1',
+	});
+	assert.equal(harness.remoteCopyModeActive.current, false);
+	const targetBExecutor = harness.executors[1];
+	assert.ok(targetBExecutor);
+	let targetBExits = 0;
+	targetBExecutor.reset = () => {
+		targetBExits += 1;
+		return null;
+	};
+	assert.deepEqual(await harness.core.sendSegments([new Uint8Array([0x62])]), {
+		status: 'completed',
+	});
+	assert.equal(targetBExits, 0);
+	assert.deepEqual(sent, [[[0x62]]]);
+});
+
+void test('target reset publication cannot overwrite a reentrant newer target and runtime', () => {
+	const harness = createScrollbackHarness();
+	harness.core.onTerminalRuntimeChanged('instance-1');
+	harness.core.onScrollbackModeChange({
+		active: true,
+		phase: 'active',
+		instanceId: 'instance-1',
+	});
+	const targetB = createShellTargetKey('transport' as never, 'target-b');
+	const targetC = createShellTargetKey('transport' as never, 'target-c');
+	let reentered = false;
+	harness.core.subscribe(() => {
+		if (reentered || harness.core.getSnapshot().active) return;
+		reentered = true;
+		harness.core.setContext({
+			...harness.context,
+			targetKey: targetC,
+			targetName: 'target-c',
+		});
+		harness.core.onTerminalRuntimeChanged('instance-3');
+	});
+	harness.core.setContext({
+		...harness.context,
+		targetKey: targetB,
+		targetName: 'target-b',
+	});
+	assert.equal(reentered, true);
+	assert.deepEqual(harness.core.getSnapshot(), {
+		active: false,
+		phase: 'active',
+		runtimeInstanceId: 'instance-3',
+	});
+	const executorCount = harness.executors.length;
+	harness.core.setContext({
+		...harness.context,
+		targetKey: targetC,
+		targetName: 'target-c',
+	});
+	assert.equal(harness.executors.length, executorCount);
 });
 
 void test('scrollback runtime cleanup completes before publishing replacement', () => {
