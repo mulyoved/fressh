@@ -178,7 +178,7 @@ void test('fit waiter fallback can resolve null before the first resize', async 
 void test('a resize settles all fit waiters once and clears their independent timers', async () => {
 	const clock = createFakeClock();
 	const core = createTerminalSizeController(createSizeDeps(clock));
-	const settlements: Array<{ cols: number; rows: number } | null> = [];
+	const settlements: ({ cols: number; rows: number } | null)[] = [];
 	const first = core.waitForSizeAfterFit().then((size) => {
 		settlements.push(size);
 		return size;
@@ -262,7 +262,7 @@ void test('disposal without a size settles waiters, is idempotent, and rejects l
 void test('subscribers see every resize event and no publication after disposal', () => {
 	const clock = createFakeClock();
 	const core = createTerminalSizeController(createSizeDeps(clock));
-	const seen: Array<{ cols: number; rows: number } | null> = [];
+	const seen: ({ cols: number; rows: number } | null)[] = [];
 	core.subscribe(() => {
 		seen.push(core.getSnapshot().lastSize);
 	});
@@ -285,7 +285,7 @@ void test('subscribers see every resize event and no publication after disposal'
 void test('synchronous resize failure warns once and a later resize recovers', async () => {
 	const clock = createFakeClock();
 	const firstError = new Error('sync failure');
-	const warnings: Array<[string, unknown]> = [];
+	const warnings: [string, unknown][] = [];
 	const resized: string[] = [];
 	let calls = 0;
 	const core = createTerminalSizeController({
@@ -415,4 +415,31 @@ void test('newer reentrant resize wins over stale outer resize scheduling', asyn
 		lastSize: { cols: 100, rows: 30 },
 	});
 	assert.deepEqual(resized, ['100x30']);
+});
+
+void test('same-size reentrant first resize retains one exact debounce', async () => {
+	const clock = createFakeClock();
+	const resized: string[] = [];
+	const core = createTerminalSizeController({
+		...createSizeDeps(clock),
+		resizePty: async (cols, rows) => {
+			resized.push(`${cols}x${rows}`);
+		},
+	});
+	let shouldEcho = true;
+	core.subscribe(() => {
+		if (!shouldEcho) return;
+		shouldEcho = false;
+		core.handleResize(80, 24);
+	});
+
+	core.handleResize(80, 24);
+	assert.equal(clock.pending().length, 1);
+	clock.advanceBy(99);
+	assert.deepEqual(resized, []);
+	clock.advanceBy(1);
+	await clock.settled();
+
+	assert.deepEqual(resized, ['80x24']);
+	assert.deepEqual(clock.pending(), []);
 });

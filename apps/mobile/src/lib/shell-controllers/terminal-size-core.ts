@@ -40,6 +40,7 @@ export function createTerminalSizeController({
 	});
 	const waiters = new Set<FitWaiter>();
 	let resizeTimer: unknown | null = null;
+	let lastRequestedPtySize: TerminalFitSize | null = null;
 	let operationRevision = 0;
 	let disposed = false;
 
@@ -76,17 +77,20 @@ export function createTerminalSizeController({
 	const handleResize = (cols: number, rows: number): void => {
 		if (disposed) return;
 		const revision = ++operationRevision;
-		const previousSize = publisher.getSnapshot().lastSize;
 		const size = { cols, rows };
 		publisher.publish({ lastSize: size });
 		if (disposed || revision !== operationRevision) return;
 		settleWaiters(size);
 
-		if (previousSize?.cols === size.cols && previousSize.rows === size.rows) {
+		if (
+			lastRequestedPtySize?.cols === size.cols &&
+			lastRequestedPtySize.rows === size.rows
+		) {
 			return;
 		}
 
 		clearResizeTimer();
+		lastRequestedPtySize = size;
 		resizeTimer = setTimeout(() => {
 			resizeTimer = null;
 			if (disposed) return;
@@ -113,6 +117,7 @@ export function createTerminalSizeController({
 		if (disposed) return;
 		operationRevision += 1;
 		clearResizeTimer();
+		lastRequestedPtySize = null;
 		settleWaiters(publisher.getSnapshot().lastSize);
 		publisher.publish({ lastSize: null });
 	};
