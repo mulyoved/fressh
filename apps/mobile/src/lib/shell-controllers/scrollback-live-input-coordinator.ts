@@ -296,7 +296,10 @@ export function createScrollbackLiveInputCoordinator({
 			const exactCleanup = startCleanup();
 			const current = getCurrentState();
 			const expectedLocalRevision =
-				previousLocalModeRevision + (planState.scrollbackActive ? 1 : 0);
+				previousLocalModeRevision +
+				(planState.scrollbackActive || planState.scrollbackPhase !== 'active'
+					? 1
+					: 0);
 			if (
 				isTokenAuthorityCurrent(token) &&
 				current.localModeRevision === expectedLocalRevision

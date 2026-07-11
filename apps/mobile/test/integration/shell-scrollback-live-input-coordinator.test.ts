@@ -327,6 +327,31 @@ void test('the cleanup-owned local exit advances the captured mode revision with
 	assert.deepEqual(fixture.sent, [[[1]]]);
 });
 
+void test('remote cleanup adopts its owned inactive dragging normalization before sending', async () => {
+	const fixture = createFixture();
+	const cleanup = createDeferred<boolean>();
+	fixture.remote(true);
+	fixture.setScrollbackPhase('dragging');
+	fixture.setStartCleanup(() => {
+		fixture.setScrollbackPhase('active');
+		return cleanup.promise;
+	});
+	const outcome = fixture.coordinator.sendSegments([new Uint8Array([1])]);
+	assert.deepEqual(fixture.sent, []);
+	cleanup.resolve(true);
+	assert.deepEqual(await outcome, { status: 'completed' });
+	assert.deepEqual(fixture.sent, [[[1]]]);
+});
+
+void test('inactive active-phase input requires no owned local revision adoption', async () => {
+	const fixture = createFixture();
+	assert.deepEqual(
+		await fixture.coordinator.sendSegments([new Uint8Array([1])]),
+		{ status: 'completed' },
+	);
+	assert.deepEqual(fixture.sent, [[[1]]]);
+});
+
 void test('onAccepted reentry advances freshness before transport invocation', async () => {
 	const fixture = createFixture();
 	const outcome = fixture.coordinator.sendSegments([new Uint8Array([1])], {
