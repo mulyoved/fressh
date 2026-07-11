@@ -296,6 +296,8 @@ void test('system keyboard and selection modes publish only semantic changes', (
 	core.setSystemKeyboardEnabled(false);
 	core.setSelectionModeEnabled(true);
 	assert.equal(publishes, 2);
+	assert.equal(core.getSnapshot().systemKeyboardEnabled, false);
+	assert.equal(core.getSnapshot().selectionModeEnabled, true);
 });
 
 void test('accepted paste and history mutations refresh authoritative sections and cycle order', async () => {
@@ -329,6 +331,12 @@ void test('accepted paste and history mutations refresh authoritative sections a
 		.getState()
 		.entries.find((entry) => entry.text === 'second')!.id;
 	core.deleteHistoryEntry(secondId);
+	assert.equal(
+		core
+			.getSnapshot()
+			.history.cycleEntries.some((entry) => entry.id === secondId),
+		false,
+	);
 	core.clearRecentHistory();
 	await Promise.resolve();
 	assert.deepEqual(

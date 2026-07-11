@@ -2,6 +2,7 @@ import {
 	getActiveKeyboardIds,
 	getKeyboardsById,
 	resolveActiveOneShotReturnKeyboardId,
+	resolveSelectedKeyboardId,
 	type KeyboardDefinition,
 	type MacroDef,
 	type ModifierKey,
@@ -208,11 +209,11 @@ function createHistorySnapshot(
 ): ShellKeyboardHistorySnapshot {
 	const frozenState = cloneAndFreeze(state);
 	const sections = getTextEntryHistorySections(frozenState);
-	return cloneAndFreeze({
+	return Object.freeze({
 		state: frozenState,
-		pinned: sections.pinned,
-		recent: sections.recent,
-		cycleEntries: getTextEntryHistoryCycleEntries(frozenState),
+		pinned: Object.freeze(sections.pinned),
+		recent: Object.freeze(sections.recent),
+		cycleEntries: Object.freeze(getTextEntryHistoryCycleEntries(frozenState)),
 	});
 }
 
@@ -223,55 +224,59 @@ function getAvailableKeyboardIds(state: ShellConfigState): string[] {
 	);
 }
 
-function resolveAvailableKeyboardId(
-	state: ShellConfigState,
-	availableIds: readonly string[],
-	preferredId: string | null | undefined,
-): string {
-	if (preferredId && availableIds.includes(preferredId)) return preferredId;
-	if (availableIds.includes(state.config.defaultKeyboardId)) {
-		return state.config.defaultKeyboardId;
-	}
-	return availableIds[0] ?? '';
-}
-
-function buildSnapshot({
+function createSnapshot({
 	shellConfigState,
+	activeKeyboardIds,
 	preferredKeyboardId,
+	selectedKeyboardId,
+	keyboard,
+	macros,
 	modifierKeysActive,
 	systemKeyboardEnabled,
 	selectionModeEnabled,
 	history,
 }: {
 	shellConfigState: ShellConfigState;
+	activeKeyboardIds: readonly string[];
 	preferredKeyboardId: string;
+	selectedKeyboardId: string;
+	keyboard: KeyboardDefinition | null;
+	macros: readonly MacroDef[];
 	modifierKeysActive: readonly ModifierKey[];
 	systemKeyboardEnabled: boolean;
 	selectionModeEnabled: boolean;
 	history: ShellKeyboardHistorySnapshot;
 }): ShellKeyboardStateSnapshot {
-	const activeKeyboardIds = getAvailableKeyboardIds(shellConfigState);
-	const selectedKeyboardId = resolveAvailableKeyboardId(
+	return Object.freeze({
 		shellConfigState,
 		activeKeyboardIds,
 		preferredKeyboardId,
-	);
-	const keyboard =
-		getKeyboardsById(shellConfigState.config)[selectedKeyboardId] ?? null;
-	return cloneAndFreeze({
-		shellConfigState,
-		activeKeyboardIds,
-		preferredKeyboardId: selectedKeyboardId,
 		selectedKeyboardId,
 		keyboard,
-		macros: keyboard
-			? (shellConfigState.config.macrosByKeyboardId[keyboard.id] ?? [])
-			: [],
+		macros,
 		modifierKeysActive,
 		systemKeyboardEnabled,
 		selectionModeEnabled,
 		history,
 	});
+}
+
+function deriveKeyboardSelection(
+	shellConfigState: ShellConfigState,
+	activeKeyboardIds: readonly string[],
+	preferredKeyboardId: string,
+) {
+	const selectedKeyboardId = resolveSelectedKeyboardId(
+		shellConfigState.config,
+		preferredKeyboardId,
+		new Set(activeKeyboardIds),
+	);
+	const keyboard =
+		getKeyboardsById(shellConfigState.config)[selectedKeyboardId] ?? null;
+	const macros = keyboard
+		? (shellConfigState.config.macrosByKeyboardId[keyboard.id] ?? [])
+		: [];
+	return { selectedKeyboardId, keyboard, macros };
 }
 
 function isPromiseLike<Value>(value: unknown): value is PromiseLike<Value> {
@@ -290,9 +295,11 @@ export function createShellKeyboardStateCore({
 	logger,
 }: CreateShellKeyboardStateCoreOptions): ShellKeyboardStateCore {
 	let disposed = false;
-	let historyGeneration = 0;
+	let nextHistoryGeneration = 0;
+	let lastSuccessfulHistoryGeneration = -1;
 	let pendingInitialHistory: PromiseLike<TextEntryHistoryState> | null = null;
 	let initialHistory = createEmptyTextEntryHistoryState();
+	const initialHistoryGeneration = ++nextHistoryGeneration;
 
 	const safeWarn = (message: string, error: unknown) => {
 		try {
@@ -308,17 +315,29 @@ export function createShellKeyboardStateCore({
 			pendingInitialHistory = loaded;
 		} else {
 			initialHistory = loaded;
+			lastSuccessfulHistoryGeneration = initialHistoryGeneration;
 		}
 	} catch (error) {
 		safeWarn('Failed to load text entry history', error);
 	}
 
 	const frozenConfigState = cloneAndFreeze(initialShellConfigState);
+	const initialActiveKeyboardIds = Object.freeze(
+		getAvailableKeyboardIds(frozenConfigState),
+	);
+	const initialPreferredKeyboardId = frozenConfigState.config.defaultKeyboardId;
+	const initialSelection = deriveKeyboardSelection(
+		frozenConfigState,
+		initialActiveKeyboardIds,
+		initialPreferredKeyboardId,
+	);
 	const publisher = createControllerPublisher(
-		buildSnapshot({
+		createSnapshot({
 			shellConfigState: frozenConfigState,
-			preferredKeyboardId: frozenConfigState.config.defaultKeyboardId,
-			modifierKeysActive: [],
+			activeKeyboardIds: initialActiveKeyboardIds,
+			preferredKeyboardId: initialPreferredKeyboardId,
+			...initialSelection,
+			modifierKeysActive: Object.freeze([]),
 			systemKeyboardEnabled: initialSystemKeyboardEnabled,
 			selectionModeEnabled: false,
 			history: createHistorySnapshot(initialHistory),
@@ -346,11 +365,31 @@ export function createShellKeyboardStateCore({
 	) => {
 		if (disposed) return;
 		const current = publisher.getSnapshot();
+		const shellConfigState =
+			changes.shellConfigState ?? current.shellConfigState;
+		const activeKeyboardIds = changes.shellConfigState
+			? Object.freeze(getAvailableKeyboardIds(shellConfigState))
+			: current.activeKeyboardIds;
+		const preferredKeyboardId =
+			changes.preferredKeyboardId ?? current.preferredKeyboardId;
+		const selection =
+			changes.shellConfigState || changes.preferredKeyboardId !== undefined
+				? deriveKeyboardSelection(
+						shellConfigState,
+						activeKeyboardIds,
+						preferredKeyboardId,
+					)
+				: {
+						selectedKeyboardId: current.selectedKeyboardId,
+						keyboard: current.keyboard,
+						macros: current.macros,
+					};
 		safePublish(
-			buildSnapshot({
-				shellConfigState: changes.shellConfigState ?? current.shellConfigState,
-				preferredKeyboardId:
-					changes.preferredKeyboardId ?? current.preferredKeyboardId,
+			createSnapshot({
+				shellConfigState,
+				activeKeyboardIds,
+				preferredKeyboardId,
+				...selection,
 				modifierKeysActive:
 					changes.modifierKeysActive ?? current.modifierKeysActive,
 				systemKeyboardEnabled:
@@ -363,7 +402,8 @@ export function createShellKeyboardStateCore({
 	};
 
 	const commitHistory = (generation: number, state: TextEntryHistoryState) => {
-		if (disposed || historyGeneration !== generation) return;
+		if (disposed || generation <= lastSuccessfulHistoryGeneration) return;
+		lastSuccessfulHistoryGeneration = generation;
 		const history = createHistorySnapshot(state);
 		if (
 			semanticallyEqual(history.state, publisher.getSnapshot().history.state)
@@ -377,7 +417,7 @@ export function createShellKeyboardStateCore({
 		operation: () => TextEntryHistoryState | PromiseLike<TextEntryHistoryState>,
 	) => {
 		if (disposed) return;
-		const generation = ++historyGeneration;
+		const generation = ++nextHistoryGeneration;
 		let result: TextEntryHistoryState | PromiseLike<TextEntryHistoryState>;
 		try {
 			result = operation();
@@ -391,16 +431,18 @@ export function createShellKeyboardStateCore({
 		}
 		void Promise.resolve(result).then(
 			(state) => commitHistory(generation, state),
-			(error: unknown) =>
-				safeWarn('Failed to mutate text entry history', error),
+			(error: unknown) => {
+				if (!disposed) safeWarn('Failed to mutate text entry history', error);
+			},
 		);
 	};
 
 	if (pendingInitialHistory) {
-		const initialGeneration = ++historyGeneration;
 		void Promise.resolve(pendingInitialHistory).then(
-			(state) => commitHistory(initialGeneration, state),
-			(error: unknown) => safeWarn('Failed to load text entry history', error),
+			(state) => commitHistory(initialHistoryGeneration, state),
+			(error: unknown) => {
+				if (!disposed) safeWarn('Failed to load text entry history', error);
+			},
 		);
 	}
 
@@ -464,7 +506,7 @@ export function createShellKeyboardStateCore({
 			const next = current.modifierKeysActive.includes(modifier)
 				? current.modifierKeysActive.filter((entry) => entry !== modifier)
 				: [...current.modifierKeysActive, modifier];
-			updateSnapshot({ modifierKeysActive: next });
+			updateSnapshot({ modifierKeysActive: Object.freeze(next) });
 		},
 		applyModifiers: (bytes) => {
 			let next = new Uint8Array(bytes);
@@ -515,7 +557,6 @@ export function createShellKeyboardStateCore({
 		dispose: () => {
 			if (disposed) return;
 			disposed = true;
-			historyGeneration += 1;
 			publisher.disposePublisher();
 		},
 	};
