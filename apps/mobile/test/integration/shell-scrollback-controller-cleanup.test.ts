@@ -339,6 +339,48 @@ void test('scrollback coalesces repeated same-executor resets while cleanup is p
 	assert.equal(harness.remoteCopyModeActive.current, false);
 });
 
+void test('scrollback retries a coalesced reset after its observed rejection settles', async () => {
+	const recording = createRecordingCleanupBarrier();
+	const harness = createScrollbackHarness({
+		cleanupBarrier: recording.barrier,
+	});
+	const rejectedCleanup = createDeferred<boolean>();
+	const retryCleanup = createDeferred<boolean>();
+	const executor = harness.executors[0];
+	assert.ok(executor);
+	let resetCount = 0;
+	executor.reset = () => {
+		resetCount += 1;
+		return resetCount === 1 ? rejectedCleanup.promise : retryCleanup.promise;
+	};
+	harness.remoteCopyModeActive.current = true;
+	harness.core.invalidate('focus-lost');
+	const rejectedBarrier = recording.barrier.current();
+	assert.ok(rejectedBarrier);
+	for (let index = 0; index < 20; index += 1) {
+		harness.core.invalidate('app-inactive');
+	}
+	assert.equal(resetCount, 1);
+	assert.deepEqual(recording.trackedInputs, [rejectedCleanup.promise]);
+	rejectedCleanup.reject(new Error('coalesced reset failed'));
+	await assert.rejects(rejectedBarrier, /coalesced reset failed/);
+	await flushPromises();
+	assert.equal(recording.barrier.current(), null);
+	assert.equal(harness.remoteCopyModeActive.current, true);
+	harness.core.invalidate('focus-lost');
+	assert.equal(resetCount, 2);
+	assert.deepEqual(recording.trackedInputs, [
+		rejectedCleanup.promise,
+		retryCleanup.promise,
+	]);
+	const retryBarrier = recording.barrier.current();
+	assert.ok(retryBarrier);
+	retryCleanup.resolve(true);
+	assert.equal(await retryBarrier, true);
+	await flushPromises();
+	assert.equal(harness.remoteCopyModeActive.current, false);
+});
+
 void test('scrollback starts an exit-capable reset after acquisition during a pending no-exit reset', async () => {
 	const recording = createRecordingCleanupBarrier();
 	const harness = createScrollbackHarness({
@@ -492,7 +534,7 @@ void test('scrollback composes pending cleanup from independent executors', asyn
 	assert.equal(recording.barrier.current(), null);
 });
 
-void test('scrollback still disposes an executor with a pending reset', async () => {
+void test('scrollback tracks dispose separately from a pending reset', async () => {
 	const recording = createRecordingCleanupBarrier();
 	const harness = createScrollbackHarness({
 		cleanupBarrier: recording.barrier,
