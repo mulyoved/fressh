@@ -104,17 +104,14 @@ export function createShellKeyboardInputCore({
 	const createToken = (): TokenCreation => {
 		if (disposed) return { outcome: { status: 'unavailable' } };
 		const tokenGeneration = advanceGeneration();
-		const token = snapshotKeyboardInputAuthority(
+		const snapshot = snapshotKeyboardInputAuthority(
 			tokenGeneration,
+			() => !disposed && generation === tokenGeneration,
 			authorityDependencies,
 		);
-		if (token) return { token };
-		return {
-			outcome:
-				!disposed && generation === tokenGeneration
-					? { status: 'unavailable' }
-					: { status: 'superseded' },
-		};
+		return 'token' in snapshot
+			? snapshot
+			: { outcome: { status: snapshot.status } };
 	};
 
 	const isCurrent = (token: KeyboardInputRequestToken): boolean => {
@@ -385,10 +382,10 @@ export function createShellKeyboardInputCore({
 			const created = createToken();
 			if ('outcome' in created) return created.outcome;
 			const { token } = created;
+			if (!isCurrent(token)) return { status: 'superseded' };
 			if (token.runtimeInstanceId !== copiedInstanceId) {
 				return { status: 'unavailable' };
 			}
-			if (!isCurrent(token)) return { status: 'superseded' };
 			const selectionOutcome = exitSelection(token);
 			if (!isCompletedKeyboardInput(selectionOutcome)) return selectionOutcome;
 			return sendSegments(token, [encoder.encode(copiedValue)]);

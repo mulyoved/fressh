@@ -34,33 +34,44 @@ type KeyboardInputAuthorityDependencies = {
 
 export function snapshotKeyboardInputAuthority(
 	generation: number,
+	ownsGeneration: () => boolean,
 	dependencies: KeyboardInputAuthorityDependencies,
-): KeyboardInputRequestToken | null {
+):
+	| { token: KeyboardInputRequestToken }
+	| { status: 'unavailable' | 'superseded' } {
+	if (!ownsGeneration()) return { status: 'superseded' };
 	try {
 		const activity = dependencies.getActivitySnapshot();
+		if (!ownsGeneration()) return { status: 'superseded' };
+		if (!activity.interactive) return { status: 'unavailable' };
 		const runtimeKey = dependencies.terminalView.getRuntimeKey();
+		if (!ownsGeneration()) return { status: 'superseded' };
+		if (runtimeKey === null) return { status: 'unavailable' };
 		const runtimeInstanceId = dependencies.terminalView.getRuntimeInstanceId();
+		if (!ownsGeneration()) return { status: 'superseded' };
+		if (runtimeInstanceId === null) return { status: 'unavailable' };
 		const sourceKey = dependencies.getSourceKey();
-		if (
-			!activity.interactive ||
-			runtimeKey === null ||
-			runtimeInstanceId === null ||
-			sourceKey === null ||
-			sourceKey === undefined
-		) {
-			return null;
+		if (!ownsGeneration()) return { status: 'superseded' };
+		if (sourceKey === null || sourceKey === undefined) {
+			return { status: 'unavailable' };
 		}
-		return Object.freeze({
-			generation,
-			sourceKey,
-			activityGeneration: activity.generation,
-			runtimeKey,
-			runtimeInstanceId,
-			configState: dependencies.getConfigState(),
-		});
+		const configState = dependencies.getConfigState();
+		if (!ownsGeneration()) return { status: 'superseded' };
+		return {
+			token: Object.freeze({
+				generation,
+				sourceKey,
+				activityGeneration: activity.generation,
+				runtimeKey,
+				runtimeInstanceId,
+				configState,
+			}),
+		};
 	} catch (error) {
 		dependencies.warn('Failed to snapshot keyboard input authority', error);
-		return null;
+		return {
+			status: ownsGeneration() ? 'unavailable' : 'superseded',
+		};
 	}
 }
 

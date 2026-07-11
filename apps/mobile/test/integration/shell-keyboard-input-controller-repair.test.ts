@@ -461,6 +461,92 @@ void test('initial authority logger reentry supersedes the failed snapshot', asy
 	assert.deepEqual(harness.sent, [[[0x6e, 0x65, 0x77]]]);
 });
 
+void test('successful initial getter reentry stops before every later stale getter', async () => {
+	const cases = [
+		{
+			setCurrent: (
+				harness: ReturnType<typeof createKeyboardInputHarness>,
+				hook: (() => void) | null,
+			) => harness.setActivityReadHook(hook),
+			setNext: (
+				harness: ReturnType<typeof createKeyboardInputHarness>,
+				hook: (() => void) | null,
+			) => harness.setRuntimeKeyReadHook(hook),
+		},
+		{
+			setCurrent: (
+				harness: ReturnType<typeof createKeyboardInputHarness>,
+				hook: (() => void) | null,
+			) => harness.setRuntimeKeyReadHook(hook),
+			setNext: (
+				harness: ReturnType<typeof createKeyboardInputHarness>,
+				hook: (() => void) | null,
+			) => harness.setRuntimeInstanceReadHook(hook),
+		},
+		{
+			setCurrent: (
+				harness: ReturnType<typeof createKeyboardInputHarness>,
+				hook: (() => void) | null,
+			) => harness.setRuntimeInstanceReadHook(hook),
+			setNext: (
+				harness: ReturnType<typeof createKeyboardInputHarness>,
+				hook: (() => void) | null,
+			) => harness.setSourceReadHook(hook),
+		},
+		{
+			setCurrent: (
+				harness: ReturnType<typeof createKeyboardInputHarness>,
+				hook: (() => void) | null,
+			) => harness.setSourceReadHook(hook),
+			setNext: (
+				harness: ReturnType<typeof createKeyboardInputHarness>,
+				hook: (() => void) | null,
+			) => harness.setStateSnapshotHook(hook ? () => hook() : null),
+		},
+	];
+	for (const boundary of cases) {
+		const harness = createKeyboardInputHarness();
+		let inReplacement = false;
+		let staleGetterCalls = 0;
+		let replacement: Promise<ControllerOutcome<{ message: string }>> | null =
+			null;
+		boundary.setNext(harness, () => {
+			if (!inReplacement) staleGetterCalls += 1;
+		});
+		boundary.setCurrent(harness, () => {
+			boundary.setCurrent(harness, null);
+			inReplacement = true;
+			replacement = harness.core.sendTextRaw('new');
+			inReplacement = false;
+		});
+		const old = harness.core.sendTextRaw('old');
+		boundary.setNext(harness, null);
+		assert.deepEqual(await old, {
+			status: 'superseded',
+		});
+		assert.deepEqual(await replacement, { status: 'completed' });
+		assert.equal(staleGetterCalls, 0);
+		assert.deepEqual(harness.sent, [[[0x6e, 0x65, 0x77]]]);
+	}
+});
+
+void test('successful final config reentry supersedes even a mismatched WebView instance', async () => {
+	const harness = createKeyboardInputHarness();
+	let replacement: Promise<ControllerOutcome<{ message: string }>> | null =
+		null;
+	harness.setStateSnapshotHook((call) => {
+		if (call !== 1) return;
+		harness.setStateSnapshotHook(null);
+		replacement = harness.core.sendTextRaw('new');
+	});
+	assert.deepEqual(
+		await harness.core.onWebViewInput({ str: 'old', instanceId: 'wrong' }),
+		{ status: 'superseded' },
+	);
+	assert.deepEqual(await replacement, { status: 'completed' });
+	assert.deepEqual(harness.sent, [[[0x6e, 0x65, 0x77]]]);
+});
+
 void test('modifier toggle and macro collection failures revalidate after callbacks and logging', async () => {
 	const modifierSlot = {
 		type: 'modifier',
