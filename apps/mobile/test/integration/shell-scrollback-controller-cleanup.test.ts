@@ -339,6 +339,85 @@ void test('scrollback coalesces repeated same-executor resets while cleanup is p
 	assert.equal(harness.remoteCopyModeActive.current, false);
 });
 
+void test('scrollback starts an exit-capable reset after acquisition during a pending no-exit reset', async () => {
+	const recording = createRecordingCleanupBarrier();
+	const harness = createScrollbackHarness({
+		cleanupBarrier: recording.barrier,
+	});
+	const noExitCleanup = createDeferred<boolean>();
+	const exitCleanup = createDeferred<boolean>();
+	const resetOptions: Parameters<
+		NonNullable<(typeof harness.executors)[number]>['reset']
+	>[0][] = [];
+	const executor = harness.executors[0];
+	assert.ok(executor);
+	executor.reset = (options) => {
+		resetOptions.push(options);
+		return resetOptions.length === 1
+			? noExitCleanup.promise
+			: exitCleanup.promise;
+	};
+	harness.core.invalidate('focus-lost');
+	assert.equal(resetOptions[0]?.targetName, undefined);
+	harness.remoteCopyModeGeneration.current += 1;
+	harness.remoteCopyModeActive.current = true;
+	harness.core.invalidate('app-inactive');
+	assert.equal(resetOptions.length, 2);
+	assert.equal(resetOptions[1]?.targetName, 'main');
+	assert.deepEqual(recording.trackedInputs, [
+		noExitCleanup.promise,
+		exitCleanup.promise,
+	]);
+	const composedBarrier = recording.barrier.current();
+	assert.notEqual(composedBarrier, null);
+	noExitCleanup.resolve(true);
+	await flushPromises();
+	assert.equal(harness.remoteCopyModeActive.current, true);
+	assert.equal(recording.barrier.current(), composedBarrier);
+	exitCleanup.resolve(true);
+	await flushPromises();
+	assert.equal(harness.remoteCopyModeActive.current, false);
+	assert.equal(recording.barrier.current(), null);
+});
+
+void test('scrollback starts a new exit reset after reacquiring a newer remote generation', async () => {
+	const recording = createRecordingCleanupBarrier();
+	const harness = createScrollbackHarness({
+		cleanupBarrier: recording.barrier,
+	});
+	const olderCleanup = createDeferred<boolean>();
+	const newerCleanup = createDeferred<boolean>();
+	const resetTargetNames: (string | undefined)[] = [];
+	const executor = harness.executors[0];
+	assert.ok(executor);
+	executor.reset = (options) => {
+		resetTargetNames.push(options?.targetName);
+		return resetTargetNames.length === 1
+			? olderCleanup.promise
+			: newerCleanup.promise;
+	};
+	harness.remoteCopyModeActive.current = true;
+	harness.core.invalidate('focus-lost');
+	harness.remoteCopyModeGeneration.current += 1;
+	harness.remoteCopyModeActive.current = true;
+	harness.core.onTerminalRuntimeChanged('instance-after-reacquire');
+	assert.deepEqual(resetTargetNames, ['main', 'main']);
+	assert.deepEqual(recording.trackedInputs, [
+		olderCleanup.promise,
+		newerCleanup.promise,
+	]);
+	const composedBarrier = recording.barrier.current();
+	assert.notEqual(composedBarrier, null);
+	olderCleanup.resolve(true);
+	await flushPromises();
+	assert.equal(harness.remoteCopyModeActive.current, true);
+	assert.equal(recording.barrier.current(), composedBarrier);
+	newerCleanup.resolve(true);
+	await flushPromises();
+	assert.equal(harness.remoteCopyModeActive.current, false);
+	assert.equal(recording.barrier.current(), null);
+});
+
 void test('scrollback composes pending cleanup from independent executors', async () => {
 	const recording = createRecordingCleanupBarrier();
 	const harness = createScrollbackHarness({

@@ -165,6 +165,8 @@ export function createShellScrollbackControllerCore(
 	type CleanupOperation = 'dispose' | 'reset';
 	type PendingCleanupOperation = Readonly<{
 		cleanup: Promise<boolean>;
+		remoteCopyModeGeneration: number;
+		requiresDurableTargetExit: boolean;
 		targetOwnershipRevision: number;
 	}>;
 	const pendingCleanupOperations = new WeakMap<
@@ -215,9 +217,12 @@ export function createShellScrollbackControllerCore(
 	const getPendingCleanupOperation = (
 		ownerExecutor: WorkmuxScrollbackCommandExecutor,
 		operation: CleanupOperation,
+		requiresDurableTargetExit: boolean,
 	): Promise<boolean> | null => {
 		const pending = pendingCleanupOperations.get(ownerExecutor)?.get(operation);
-		return pending?.targetOwnershipRevision === targetOwnershipRevision
+		return pending?.targetOwnershipRevision === targetOwnershipRevision &&
+			pending.remoteCopyModeGeneration === remoteCopyModeGeneration.current &&
+			pending.requiresDurableTargetExit === requiresDurableTargetExit
 			? pending.cleanup
 			: null;
 	};
@@ -226,6 +231,7 @@ export function createShellScrollbackControllerCore(
 		ownerExecutor: WorkmuxScrollbackCommandExecutor,
 		operation: CleanupOperation,
 		cleanup: Promise<boolean> | null,
+		requiresDurableTargetExit: boolean,
 	): void => {
 		if (!cleanup) return;
 		let operations = pendingCleanupOperations.get(ownerExecutor);
@@ -233,7 +239,12 @@ export function createShellScrollbackControllerCore(
 			operations = new Map();
 			pendingCleanupOperations.set(ownerExecutor, operations);
 		}
-		const pending = { cleanup, targetOwnershipRevision };
+		const pending = {
+			cleanup,
+			remoteCopyModeGeneration: remoteCopyModeGeneration.current,
+			requiresDurableTargetExit,
+			targetOwnershipRevision,
+		};
 		operations.set(operation, pending);
 		const clearIfCurrent = () => {
 			if (operations?.get(operation) !== pending) return;
@@ -345,7 +356,9 @@ export function createShellScrollbackControllerCore(
 	}): void => {
 		const activeExecutor = executor;
 		if (!activeExecutor) return;
-		if (getPendingCleanupOperation(activeExecutor, 'reset')) return;
+		if (getPendingCleanupOperation(activeExecutor, 'reset', remoteWasActive)) {
+			return;
+		}
 		remoteCopyModeGeneration.current += 1;
 		const ownership = captureCleanupOwnership(ownerContext);
 		let cleanup: Promise<boolean> | null = null;
@@ -366,7 +379,12 @@ export function createShellScrollbackControllerCore(
 			}
 			return;
 		}
-		recordPendingCleanupOperation(activeExecutor, 'reset', cleanup);
+		recordPendingCleanupOperation(
+			activeExecutor,
+			'reset',
+			cleanup,
+			remoteWasActive,
+		);
 		void registerCleanup({
 			cleanup,
 			failureMessage: 'Workmux scrollback reset failed',
@@ -426,7 +444,7 @@ export function createShellScrollbackControllerCore(
 				safeWarn('Stale Workmux scrollback executor disposal failed', error);
 				return;
 			}
-			recordPendingCleanupOperation(createdExecutor, 'dispose', cleanup);
+			recordPendingCleanupOperation(createdExecutor, 'dispose', cleanup, false);
 			void registerCleanup({
 				cleanup,
 				failureMessage: 'Stale Workmux scrollback executor disposal failed',
@@ -478,7 +496,12 @@ export function createShellScrollbackControllerCore(
 					remoteCopyModeActive.current = true;
 				}
 			}
-			recordPendingCleanupOperation(previousExecutor, 'dispose', cleanup);
+			recordPendingCleanupOperation(
+				previousExecutor,
+				'dispose',
+				cleanup,
+				remoteWasActive,
+			);
 			void registerCleanup({
 				cleanup,
 				failureMessage: 'Workmux scrollback executor disposal failed',
@@ -582,7 +605,12 @@ export function createShellScrollbackControllerCore(
 				} catch (error) {
 					disposeSafeWarn('Workmux scrollback executor disposal failed', error);
 				}
-				recordPendingCleanupOperation(activeExecutor, 'dispose', cleanup);
+				recordPendingCleanupOperation(
+					activeExecutor,
+					'dispose',
+					cleanup,
+					remoteWasActive,
+				);
 				void registerCleanup({
 					cleanup,
 					failureMessage: 'Workmux scrollback executor disposal failed',
