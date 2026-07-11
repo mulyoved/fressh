@@ -149,6 +149,11 @@ export type ShellDetailKeyboardAuthorityIdentity = {
 	workmuxControlChannel: unknown;
 };
 
+type ShellDetailKeyboardRuntimeIdentity = {
+	runtimeKey: unknown;
+	instanceId: string | null;
+};
+
 export type ShellDetailKeyboardAuthorityRuntime = {
 	replaceHandle(handle: {
 		invalidate(reason: ControllerInvalidationReason): void;
@@ -164,7 +169,7 @@ export type ShellDetailKeyboardAuthorityRuntime = {
 		instanceId: string | null,
 		notify: () => void,
 	): void;
-	getRuntimeIdentity(): { runtimeKey: unknown; instanceId: string | null };
+	getRuntimeIdentity(): ShellDetailKeyboardRuntimeIdentity;
 	setup(): () => void;
 };
 
@@ -180,9 +185,9 @@ export function createShellDetailKeyboardAuthorityRuntime(
 	let handle: {
 		invalidate(reason: ControllerInvalidationReason): void;
 	} | null = null;
-	let runtimeIdentity = {
-		runtimeKey: null as unknown,
-		instanceId: null as string | null,
+	let runtimeIdentity: ShellDetailKeyboardRuntimeIdentity = {
+		runtimeKey: null,
+		instanceId: null,
 	};
 	let closed = false;
 	const invalidate = (reason: ControllerInvalidationReason) => {

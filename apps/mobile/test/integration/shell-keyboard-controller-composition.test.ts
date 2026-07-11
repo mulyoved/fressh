@@ -12,6 +12,10 @@ import {
 } from '../../src/app/shell/shell-keyboard-composition';
 
 const detailSourcePath = join(process.cwd(), 'src/app/shell/detail.tsx');
+const compositionSourcePath = join(
+	process.cwd(),
+	'src/app/shell/shell-keyboard-composition.ts',
+);
 
 void describe('shell keyboard controller composition', () => {
 	void test('shell detail delegates keyboard command workflow', () => {
@@ -581,5 +585,12 @@ void describe('shell keyboard controller composition', () => {
 			source,
 			/keyboardLateBindings\.replace(?:SkillSelector|Wispr)\(/,
 		);
+	});
+
+	void test('production composition seam uses no runtime identity assertion casts', () => {
+		const source = readFileSync(compositionSourcePath, 'utf8');
+
+		assert.doesNotMatch(source, /\bas unknown\b/);
+		assert.doesNotMatch(source, /\bas string\s*\|\s*null\b/);
 	});
 });
