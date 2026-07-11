@@ -74,6 +74,28 @@ export type WorkmuxControlChannelCleanupOptions = {
 	setTimeout?: (callback: () => void, delayMs: number) => unknown;
 };
 
+export class WorkmuxControlChannelCleanupTimeoutError extends Error {
+	constructor() {
+		super('Workmux control channel cleanup timed out.');
+		this.name = 'WorkmuxControlChannelCleanupTimeoutError';
+	}
+}
+
+export function reportWorkmuxScrollbackCleanupTeardownError(
+	error: unknown,
+	warn: (message: string, error: unknown) => void,
+): void {
+	if (!(error instanceof WorkmuxControlChannelCleanupTimeoutError)) return;
+	try {
+		warn(
+			'Workmux scrollback cleanup timed out before control channel disposal',
+			error,
+		);
+	} catch {
+		// Channel teardown must not depend on diagnostics.
+	}
+}
+
 const DEFAULT_WORKMUX_CONTROL_COMMAND_TIMEOUT_MS = 10_000;
 const DEFAULT_WORKMUX_CONTROL_CLEANUP_TIMEOUT_MS = 5_000;
 
@@ -85,7 +107,9 @@ function failureResult(error: string): WorkmuxControlCommandResult {
 	return { success: false, output: '', error };
 }
 
-function isUnrecognizedScopeError(result: WorkmuxControlCommandResult): boolean {
+function isUnrecognizedScopeError(
+	result: WorkmuxControlCommandResult,
+): boolean {
 	return (
 		!result.success &&
 		typeof result.error === 'string' &&
@@ -96,7 +120,8 @@ function isUnrecognizedScopeError(result: WorkmuxControlCommandResult): boolean 
 function buildLegacyScopedNavFallback(
 	request: MdevBridgeOperationRequest,
 ): MdevBridgeOperationRequest | null {
-	if (request.operation !== WORKMUX_REQUIRED_MDEV_BRIDGE_OPERATIONS[3]) return null;
+	if (request.operation !== WORKMUX_REQUIRED_MDEV_BRIDGE_OPERATIONS[3])
+		return null;
 	const { action, session, scope } = request.params;
 	if (
 		(action !== 'next' && action !== 'prev') ||
@@ -177,7 +202,8 @@ export function createWorkmuxControlChannel({
 		return resolvedBridgeClient.runOperation({
 			operation: request.operation,
 			params: request.params,
-			timeoutMs: options?.timeoutMs ?? DEFAULT_WORKMUX_CONTROL_COMMAND_TIMEOUT_MS,
+			timeoutMs:
+				options?.timeoutMs ?? DEFAULT_WORKMUX_CONTROL_COMMAND_TIMEOUT_MS,
 		});
 	};
 
@@ -264,9 +290,9 @@ export function disposeWorkmuxControlChannelAfterCleanup({
 
 	if (cleanupTimeoutMs > 0) {
 		cleanupTimer = setTimeout(() => {
-			if (cleanupSettled) return;
+			if (cleanupSettled || cleanupTimedOut) return;
 			cleanupTimedOut = true;
-			onCleanupError?.(new Error('Workmux control channel cleanup timed out.'));
+			onCleanupError?.(new WorkmuxControlChannelCleanupTimeoutError());
 			disposeChannel();
 		}, cleanupTimeoutMs);
 		const maybeNodeTimer = cleanupTimer as { unref?: () => void };

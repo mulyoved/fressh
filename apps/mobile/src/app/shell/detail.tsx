@@ -146,6 +146,7 @@ import { wisprAutomationNative } from '@/lib/wispr-automation-native';
 import {
 	createWorkmuxControlChannel,
 	disposeWorkmuxControlChannelAfterCleanup,
+	reportWorkmuxScrollbackCleanupTeardownError,
 	type WorkmuxControlChannel,
 } from '@/lib/workmux-control-channel';
 import { getWorkmuxAttachErrorCopy } from '@/lib/workmux-copy';
@@ -836,6 +837,11 @@ function ShellDetail() {
 				prepareDispose: () =>
 					workmuxControlChannel.prepareDispose({ reason: disposeReason }),
 				dispose: () => workmuxControlChannel.dispose({ reason: disposeReason }),
+				onCleanupError: (error) =>
+					reportWorkmuxScrollbackCleanupTeardownError(
+						error,
+						(message, warningError) => logger.warn(message, warningError),
+					),
 				onDisposeError: (error) => {
 					try {
 						logger.warn('Workmux control channel dispose failed', error);

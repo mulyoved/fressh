@@ -5,7 +5,10 @@ import {
 	createShellScrollbackHookRuntime,
 	type ShellScrollbackHookRuntimeFactories,
 } from '../../src/lib/shell-controllers/scrollback';
-import { disposeWorkmuxControlChannelAfterCleanup } from '../../src/lib/workmux-control-channel';
+import {
+	disposeWorkmuxControlChannelAfterCleanup,
+	reportWorkmuxScrollbackCleanupTeardownError,
+} from '../../src/lib/workmux-control-channel';
 import {
 	createDeferred,
 	createScrollbackHarness,
@@ -165,6 +168,7 @@ void test('channel replacement releases old authority through only the old teard
 
 void test('channel teardown waits for rejected rollback before disposing and leaves cleanup logging to its owner', async () => {
 	const events: string[] = [];
+	const teardownWarnings: string[] = [];
 	const fixture = createFixture((cleanup) => {
 		disposeWorkmuxControlChannelAfterCleanup({
 			cleanup,
@@ -172,6 +176,10 @@ void test('channel teardown waits for rejected rollback before disposing and lea
 			dispose: async () => {
 				events.push('dispose');
 			},
+			onCleanupError: (error) =>
+				reportWorkmuxScrollbackCleanupTeardownError(error, (message) => {
+					teardownWarnings.push(message);
+				}),
 		});
 	});
 	const warningCount = fixture.harness.warnings.length;
@@ -190,6 +198,7 @@ void test('channel teardown waits for rejected rollback before disposing and lea
 	await flushPromises();
 	assert.deepEqual(events, ['prepare', 'dispose']);
 	assert.equal(fixture.harness.warnings.length, warningCount + 1);
+	assert.deepEqual(teardownWarnings, []);
 });
 
 void test('channel teardown waits for false rollback and logs exactly once through the cleanup owner', async () => {
@@ -222,6 +231,7 @@ void test('channel teardown waits for false rollback and logs exactly once throu
 
 void test('channel teardown timeout disposes while an exact rollback remains pending', () => {
 	const events: string[] = [];
+	const warnings: string[] = [];
 	let fireTimeout: (() => void) | undefined;
 	const fixture = createFixture((cleanup) => {
 		disposeWorkmuxControlChannelAfterCleanup({
@@ -236,6 +246,10 @@ void test('channel teardown timeout disposes while an exact rollback remains pen
 			dispose: async () => {
 				events.push('dispose');
 			},
+			onCleanupError: (error) =>
+				reportWorkmuxScrollbackCleanupTeardownError(error, (message) => {
+					warnings.push(message);
+				}),
 		});
 	});
 	fixture.runtime.onTerminalRuntimeChanged('instance-1');
@@ -250,6 +264,12 @@ void test('channel teardown timeout disposes while an exact rollback remains pen
 	assert.ok(fireTimeout);
 	fireTimeout();
 	assert.deepEqual(events, ['prepare', 'dispose']);
+	assert.deepEqual(warnings, [
+		'Workmux scrollback cleanup timed out before control channel disposal',
+	]);
+	fireTimeout();
+	assert.deepEqual(events, ['prepare', 'dispose']);
+	assert.equal(warnings.length, 1);
 });
 
 void test('hook runtime owns one core and keeps input and xterm ports stable across current context updates', async () => {

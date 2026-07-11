@@ -153,6 +153,19 @@ void describe('shell detail Workmux control channel wiring', () => {
 			composition,
 			/disposeWorkmuxControlChannelAfterCleanup\(\{[\s\S]*?^\s*cleanup,/m,
 		);
+		assert.match(
+			composition,
+			/onCleanupError:\s*\(error\)\s*=>\s*reportWorkmuxScrollbackCleanupTeardownError\(/,
+		);
+		assert.match(
+			composition,
+			/reportWorkmuxScrollbackCleanupTeardownError\([\s\S]*?logger\.warn\(message, warningError\)/,
+		);
+		assert.equal(
+			composition.match(/onCleanupError:/g)?.length,
+			1,
+			'cleanup timeout/error observer must be mapped exactly once',
+		);
 		assert.doesNotMatch(
 			source.slice(compositionEnd),
 			/disposeWorkmuxControlChannelAfterCleanup/,
