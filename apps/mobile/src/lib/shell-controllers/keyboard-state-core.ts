@@ -481,7 +481,7 @@ export function createShellKeyboardStateCore({
 			if (disposed) return;
 			const current = publisher.getSnapshot();
 			if (
-				id === current.selectedKeyboardId ||
+				id === current.preferredKeyboardId ||
 				!current.activeKeyboardIds.includes(id)
 			) {
 				return;

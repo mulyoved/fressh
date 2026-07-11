@@ -251,6 +251,35 @@ void test('temporary unavailability falls back without losing preferred keyboard
 	assert.equal(core.getSnapshot().selectedKeyboardId, 'advanced');
 });
 
+void test('explicitly selecting a fallback replaces an unavailable preference', () => {
+	const core = createShellKeyboardStateCore({
+		initialShellConfigState: configState(),
+		historyStore: emptyStore(),
+	});
+	core.selectKeyboardIfExists('advanced');
+	const removed = config();
+	removed.activeKeyboardIds = ['main', 'one-shot'];
+	core.setShellConfigState(configState(removed));
+	assert.equal(core.getSnapshot().preferredKeyboardId, 'advanced');
+	assert.equal(core.getSnapshot().selectedKeyboardId, 'main');
+
+	let publishes = 0;
+	core.subscribe(() => {
+		publishes += 1;
+	});
+	core.selectKeyboardIfExists('main');
+	assert.equal(core.getSnapshot().preferredKeyboardId, 'main');
+	assert.equal(core.getSnapshot().selectedKeyboardId, 'main');
+	assert.equal(publishes, 1);
+
+	core.selectKeyboardIfExists('main');
+	core.selectKeyboardIfExists('absent');
+	assert.equal(publishes, 1);
+	core.setShellConfigState(configState(config()));
+	assert.equal(core.getSnapshot().preferredKeyboardId, 'main');
+	assert.equal(core.getSnapshot().selectedKeyboardId, 'main');
+});
+
 void test('one-shot completion updates preference using the latest routing config', () => {
 	const core = createShellKeyboardStateCore({
 		initialShellConfigState: configState(),
