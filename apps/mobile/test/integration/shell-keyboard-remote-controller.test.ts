@@ -189,6 +189,197 @@ void test('keyboard remote core instruments failed Workmux command results', asy
 	]);
 });
 
+void test('keyboard remote core contains a throwing start clock', async () => {
+	const harness = createKeyboardRemoteHarness();
+	const warnings: string[] = [];
+	const core = createShellKeyboardRemoteCore({
+		initialTargetContext: harness.initialTarget,
+		getActivitySnapshot: () => ({
+			focused: true,
+			appActive: true,
+			interactive: true,
+			generation: 0,
+		}),
+		getNavScope: () => 'visible',
+		keyboardState: {
+			getSnapshot: () =>
+				({ shellConfigState: configState('current') }) as never,
+			setShellConfigState: () => {},
+		},
+		reloadRuntimeShellConfig: async () => configState('remote'),
+		closeCommandMenu: () => {},
+		showAlert: () => {},
+		invalidateShellTransport: () => {},
+		now: () => {
+			throw new Error('clock failed');
+		},
+		logger: { info: () => {}, warn: (message) => warnings.push(message) },
+	});
+	const pending = core.runWorkmuxCommand({ type: 'status-cycle' });
+	harness.command.resolve({ success: true, output: 'cycled' });
+	assert.deepEqual(await pending, { status: 'handled' });
+	assert.equal(warnings.includes('Failed to read keyboard remote clock'), true);
+});
+
+void test('keyboard remote core preserves transport failure when error clock throws', async () => {
+	const command = deferred<{
+		success: boolean;
+		output: string;
+		error?: string;
+	}>();
+	const alerts: { title: string; message: string }[] = [];
+	let clockReads = 0;
+	const target = createKeyboardRemoteHarness().target('main');
+	target.workmuxControlChannel = {
+		...target.workmuxControlChannel,
+		command: () => command.promise,
+	};
+	const core = createShellKeyboardRemoteCore({
+		initialTargetContext: target,
+		getActivitySnapshot: () => ({
+			focused: true,
+			appActive: true,
+			interactive: true,
+			generation: 0,
+		}),
+		getNavScope: () => 'visible',
+		keyboardState: {
+			getSnapshot: () =>
+				({ shellConfigState: configState('current') }) as never,
+			setShellConfigState: () => {},
+		},
+		reloadRuntimeShellConfig: async () => configState('remote'),
+		closeCommandMenu: () => {},
+		showAlert: (title, message) => alerts.push({ title, message }),
+		invalidateShellTransport: () => {},
+		now: () => {
+			clockReads += 1;
+			if (clockReads > 1) throw new Error('clock failed');
+			return 10;
+		},
+	});
+	const pending = core.runWorkmuxCommand({ type: 'status-cycle' });
+	command.reject(new Error('transport failed'));
+	assert.deepEqual(await pending, { status: 'handled' });
+	assert.equal(alerts.length, 1);
+	assert.match(alerts[0]?.message ?? '', /transport failed/);
+	assert.doesNotMatch(alerts[0]?.message ?? '', /clock failed/);
+});
+
+void test('keyboard remote core contains a throwing result clock', async () => {
+	const harness = createKeyboardRemoteHarness();
+	let clockReads = 0;
+	const warnings: string[] = [];
+	const core = createShellKeyboardRemoteCore({
+		initialTargetContext: harness.initialTarget,
+		getActivitySnapshot: () => ({
+			focused: true,
+			appActive: true,
+			interactive: true,
+			generation: 0,
+		}),
+		getNavScope: () => 'visible',
+		keyboardState: {
+			getSnapshot: () =>
+				({ shellConfigState: configState('current') }) as never,
+			setShellConfigState: () => {},
+		},
+		reloadRuntimeShellConfig: async () => configState('remote'),
+		closeCommandMenu: () => {},
+		showAlert: () => {},
+		invalidateShellTransport: () => {},
+		now: () => {
+			clockReads += 1;
+			if (clockReads > 1) throw new Error('result clock failed');
+			return 10;
+		},
+		logger: { info: () => {}, warn: (message) => warnings.push(message) },
+	});
+	const pending = core.runWorkmuxCommand({ type: 'status-cycle' });
+	harness.command.resolve({ success: true, output: 'cycled' });
+	assert.deepEqual(await pending, { status: 'handled' });
+	assert.equal(warnings.includes('Failed to read keyboard remote clock'), true);
+});
+
+void test('keyboard remote core suppresses result logging after clock reentry', async () => {
+	const harness = createKeyboardRemoteHarness();
+	const info: string[] = [];
+	let clockReads = 0;
+	let core!: ReturnType<typeof createShellKeyboardRemoteCore>;
+	core = createShellKeyboardRemoteCore({
+		initialTargetContext: harness.initialTarget,
+		getActivitySnapshot: () => ({
+			focused: true,
+			appActive: true,
+			interactive: true,
+			generation: 0,
+		}),
+		getNavScope: () => 'visible',
+		keyboardState: {
+			getSnapshot: () =>
+				({ shellConfigState: configState('current') }) as never,
+			setShellConfigState: () => {},
+		},
+		reloadRuntimeShellConfig: async () => configState('remote'),
+		closeCommandMenu: () => {},
+		showAlert: () => {},
+		invalidateShellTransport: () => {},
+		now: () => {
+			clockReads += 1;
+			if (clockReads === 2) core.invalidate('focus-lost');
+			return clockReads;
+		},
+		logger: { info: (message) => info.push(message), warn: () => {} },
+	});
+	const pending = core.runWorkmuxCommand({ type: 'status-cycle' });
+	harness.command.resolve({ success: true, output: 'cycled' });
+	assert.deepEqual(await pending, { status: 'superseded' });
+	assert.deepEqual(info, ['Workmux keyboard command start']);
+});
+
+void test('keyboard remote core revalidates after clock reentry before logging', async () => {
+	let commandCalls = 0;
+	let infoCalls = 0;
+	let core!: ReturnType<typeof createShellKeyboardRemoteCore>;
+	const target = createKeyboardRemoteHarness().target('main');
+	target.workmuxControlChannel = {
+		...target.workmuxControlChannel,
+		command: async () => {
+			commandCalls += 1;
+			return { success: true, output: '' };
+		},
+	};
+	core = createShellKeyboardRemoteCore({
+		initialTargetContext: target,
+		getActivitySnapshot: () => ({
+			focused: true,
+			appActive: true,
+			interactive: true,
+			generation: 0,
+		}),
+		getNavScope: () => 'visible',
+		keyboardState: {
+			getSnapshot: () =>
+				({ shellConfigState: configState('current') }) as never,
+			setShellConfigState: () => {},
+		},
+		reloadRuntimeShellConfig: async () => configState('remote'),
+		closeCommandMenu: () => {},
+		showAlert: () => {},
+		invalidateShellTransport: () => {},
+		now: () => {
+			core.invalidate('focus-lost');
+			return 10;
+		},
+		logger: { info: () => (infoCalls += 1), warn: () => {} },
+	});
+	assert.deepEqual(await core.runWorkmuxCommand({ type: 'status-cycle' }), {
+		status: 'superseded',
+	});
+	assert.equal(infoCalls, 0);
+	assert.equal(commandCalls, 0);
+});
+
 void test('keyboard remote core routes current transport failure to invalidation', async () => {
 	const command = deferred<{
 		success: boolean;
@@ -232,6 +423,116 @@ void test('keyboard remote core routes current transport failure to invalidation
 	});
 	assert.deepEqual(await pending, { status: 'handled' });
 	assert.deepEqual(invalidations, [['connection:main', 1]]);
+	assert.deepEqual(alerts, []);
+});
+
+void test('keyboard remote core contains throwing transport invalidation', async () => {
+	const command = deferred<{
+		success: boolean;
+		output: string;
+		error?: string;
+		failureClass?: 'timeout';
+	}>();
+	const warnings: string[] = [];
+	const target = createKeyboardRemoteHarness().target('main');
+	target.workmuxControlChannel = {
+		...target.workmuxControlChannel,
+		command: () => command.promise,
+	};
+	const core = createShellKeyboardRemoteCore({
+		initialTargetContext: target,
+		getActivitySnapshot: () => ({
+			focused: true,
+			appActive: true,
+			interactive: true,
+			generation: 0,
+		}),
+		getNavScope: () => 'visible',
+		keyboardState: {
+			getSnapshot: () =>
+				({ shellConfigState: configState('current') }) as never,
+			setShellConfigState: () => {},
+		},
+		reloadRuntimeShellConfig: async () => configState('remote'),
+		closeCommandMenu: () => {},
+		showAlert: () => assert.fail('transport failure must not alert'),
+		invalidateShellTransport: () => {
+			throw new Error('invalidation failed');
+		},
+		logger: {
+			info: () => {},
+			warn: (message) => warnings.push(message),
+		},
+	});
+	const pending = core.runWorkmuxCommand({ type: 'status-cycle' });
+	command.resolve({
+		success: false,
+		output: '',
+		error: 'timed out',
+		failureClass: 'timeout',
+	});
+	assert.deepEqual(
+		await Promise.race([
+			pending,
+			new Promise((_, reject) =>
+				setTimeout(
+					() => reject(new Error('public command did not settle')),
+					50,
+				),
+			),
+		]),
+		{ status: 'handled' },
+	);
+	assert.equal(
+		warnings.includes('Failed to invalidate unhealthy Workmux transport'),
+		true,
+	);
+});
+
+void test('keyboard remote core suppresses reentrant throwing transport feedback', async () => {
+	const command = deferred<{
+		success: boolean;
+		output: string;
+		error?: string;
+		failureClass?: 'timeout';
+	}>();
+	const alerts: unknown[] = [];
+	let core!: ReturnType<typeof createShellKeyboardRemoteCore>;
+	const target = createKeyboardRemoteHarness().target('main');
+	target.workmuxControlChannel = {
+		...target.workmuxControlChannel,
+		command: () => command.promise,
+	};
+	core = createShellKeyboardRemoteCore({
+		initialTargetContext: target,
+		getActivitySnapshot: () => ({
+			focused: true,
+			appActive: true,
+			interactive: true,
+			generation: 0,
+		}),
+		getNavScope: () => 'visible',
+		keyboardState: {
+			getSnapshot: () =>
+				({ shellConfigState: configState('current') }) as never,
+			setShellConfigState: () => {},
+		},
+		reloadRuntimeShellConfig: async () => configState('remote'),
+		closeCommandMenu: () => {},
+		showAlert: (...args) => alerts.push(args),
+		invalidateShellTransport: () => {
+			core.invalidate('app-inactive');
+			throw new Error('reentrant invalidation failed');
+		},
+	});
+	const pending = core.runWorkmuxCommand({ type: 'status-cycle' });
+	command.resolve({
+		success: false,
+		output: '',
+		error: 'timed out',
+		failureClass: 'timeout',
+	});
+	assert.deepEqual(await pending, { status: 'superseded' });
 	assert.deepEqual(alerts, []);
 });
 
@@ -647,6 +948,49 @@ void test('keyboard remote core dispose is idempotent and permanently inert', as
 		status: 'unavailable',
 	});
 	assert.equal(harness.commandCalls.length, 0);
+});
+
+void test('keyboard remote core bridge handling is inert after dispose', async () => {
+	let warningCount = 0;
+	const target = createKeyboardRemoteHarness().target('main');
+	const core = createShellKeyboardRemoteCore({
+		initialTargetContext: target,
+		getActivitySnapshot: () => assert.fail('disposed bridge read activity'),
+		getNavScope: () => assert.fail('disposed bridge read nav scope'),
+		keyboardState: {
+			getSnapshot: () => assert.fail('disposed bridge read state'),
+			setShellConfigState: () => assert.fail('disposed bridge set state'),
+		},
+		reloadRuntimeShellConfig: () =>
+			Promise.reject(new Error('disposed bridge reload')),
+		closeCommandMenu: () => assert.fail('disposed bridge closed menu'),
+		showAlert: () => assert.fail('disposed bridge alerted'),
+		invalidateShellTransport: () => assert.fail('disposed bridge invalidated'),
+		logger: {
+			info: () => assert.fail('disposed bridge logged info'),
+			warn: () => {
+				warningCount += 1;
+			},
+		},
+	});
+	core.dispose();
+	assert.deepEqual(
+		await core.handleCommandBridgeEntry({
+			type: 'bridge',
+			label: 'Restart',
+			operation: 'codex.restart',
+		}),
+		{ status: 'unavailable' },
+	);
+	assert.deepEqual(
+		await core.handleCommandBridgeEntry({
+			type: 'bridge',
+			label: 'Unknown',
+			operation: 'unknown.operation',
+		} as never),
+		{ status: 'unavailable' },
+	);
+	assert.equal(warningCount, 0);
 });
 
 void test('keyboard remote core ignores config completion after target replacement', async () => {

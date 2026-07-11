@@ -152,6 +152,14 @@ export function createShellKeyboardRemoteCore({
 			safeWarn('Failed to show keyboard remote command alert', error);
 		}
 	};
+	const readClock = (): number | null => {
+		try {
+			return now();
+		} catch (error) {
+			safeWarn('Failed to read keyboard remote clock', error);
+			return null;
+		}
+	};
 	const readActivity = (): ShellKeyboardRemoteActivitySnapshot | null => {
 		try {
 			return { ...getActivitySnapshot() };
@@ -217,7 +225,8 @@ export function createShellKeyboardRemoteCore({
 			runWorkmuxCommand: async (argv, timeoutMs) => {
 				if (!commandIsCurrent()) throw new Error('Workmux command superseded.');
 				const commandArgv = [...argv];
-				const startedAtMs = now();
+				const startedAtMs = readClock();
+				if (!commandIsCurrent()) throw new Error('Workmux command superseded.');
 				safeInfo('Workmux keyboard command start', {
 					connectionId: runnerTarget.connectionId,
 					channelId: runnerTarget.channelId,
@@ -234,12 +243,16 @@ export function createShellKeyboardRemoteCore({
 								options,
 							);
 							if (commandIsCurrent()) {
+								const finishedAtMs = readClock();
+								if (!commandIsCurrent()) return result;
 								safeInfo('Workmux keyboard command result', {
 									connectionId: runnerTarget.connectionId,
 									channelId: runnerTarget.channelId,
 									argv: [...nextArgv],
 									timeoutMs: options.timeoutMs,
-									elapsedMs: now() - startedAtMs,
+									...(startedAtMs === null || finishedAtMs === null
+										? {}
+										: { elapsedMs: finishedAtMs - startedAtMs }),
 									success: result.success,
 									failureClass: result.failureClass,
 									error: result.error,
@@ -249,12 +262,16 @@ export function createShellKeyboardRemoteCore({
 							return result;
 						} catch (error) {
 							if (commandIsCurrent()) {
+								const failedAtMs = readClock();
+								if (!commandIsCurrent()) throw error;
 								safeWarn('Workmux keyboard command threw', {
 									connectionId: runnerTarget.connectionId,
 									channelId: runnerTarget.channelId,
 									argv: [...nextArgv],
 									timeoutMs: options.timeoutMs,
-									elapsedMs: now() - startedAtMs,
+									...(startedAtMs === null || failedAtMs === null
+										? {}
+										: { elapsedMs: failedAtMs - startedAtMs }),
 									error: errorMessage(error),
 								});
 							}
@@ -275,24 +292,35 @@ export function createShellKeyboardRemoteCore({
 					message,
 				});
 				if (!commandIsCurrent()) return;
-				showShellWorkmuxKeyboardFailure({
-					failureClass,
-					isFocused: activity.focused,
-					isAppActive: activity.appActive,
-					message,
-					onTransportUnhealthy: () => {
-						if (!commandIsCurrent()) return;
-						const currentActivity = readActivity();
-						if (!currentActivity?.interactive || !commandIsCurrent()) return;
-						invalidateShellTransport(
-							runnerTarget.connectionId,
-							runnerTarget.channelId,
-						);
-					},
-					showAlert: (title, alertMessage) => {
-						if (commandIsCurrent()) safeAlert(title, alertMessage);
-					},
-				});
+				try {
+					showShellWorkmuxKeyboardFailure({
+						failureClass,
+						isFocused: activity.focused,
+						isAppActive: activity.appActive,
+						message,
+						onTransportUnhealthy: () => {
+							if (!commandIsCurrent()) return;
+							const currentActivity = readActivity();
+							if (!currentActivity?.interactive || !commandIsCurrent()) return;
+							try {
+								invalidateShellTransport(
+									runnerTarget.connectionId,
+									runnerTarget.channelId,
+								);
+							} catch (error) {
+								safeWarn(
+									'Failed to invalidate unhealthy Workmux transport',
+									error,
+								);
+							}
+						},
+						showAlert: (title, alertMessage) => {
+							if (commandIsCurrent()) safeAlert(title, alertMessage);
+						},
+					});
+				} catch (error) {
+					safeWarn('Failed to show Workmux keyboard command failure', error);
+				}
 			},
 			getErrorMessage: errorMessage,
 		});
@@ -319,9 +347,17 @@ export function createShellKeyboardRemoteCore({
 		try {
 			while (current) {
 				activeWorkmuxAuthority = current.authority;
-				const result = isCurrent(current.authority)
-					? await runner.run(current.command)
-					: { status: 'superseded' as const };
+				let result: WorkmuxKeyboardCommandRunResult;
+				try {
+					result = isCurrent(current.authority)
+						? await runner.run(current.command)
+						: { status: 'superseded' };
+				} catch (error) {
+					safeWarn('Workmux keyboard command runner failed', error);
+					result = isCurrent(current.authority)
+						? { status: 'handled' }
+						: { status: 'superseded' };
+				}
 				current.resolve(
 					isCurrent(current.authority) ? result : { status: 'superseded' },
 				);
@@ -521,6 +557,7 @@ export function createShellKeyboardRemoteCore({
 					? {}
 					: { timeoutMs: entry.timeoutMs }),
 			};
+			if (disposed) return Promise.resolve({ status: 'unavailable' });
 			if (copied.operation === 'codex.restart') {
 				return restartCodexCommand(
 					copied.timeoutMs === undefined
