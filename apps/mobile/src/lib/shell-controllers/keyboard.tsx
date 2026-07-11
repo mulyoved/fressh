@@ -23,7 +23,6 @@ import { type TerminalCommanderModalProps } from '../../app/shell/components/Ter
 import { type TerminalKeyboardProps } from '../../app/shell/components/TerminalKeyboard';
 import { type TextEntryHistoryModalProps } from '../../app/shell/components/TextEntryModal';
 import { type WorkmuxNavScope } from '../workmux-app-commands';
-import { type ShellActivitySnapshot } from './activity-core';
 import { createShellActivityKeyboardActions } from './activity-keyboard-actions';
 import { createShellKeyboardResumeDismissScheduler } from './activity-retained-domain-bridge';
 import {
@@ -32,10 +31,9 @@ import {
 } from './controller-core';
 import {
 	createShellKeyboardControllerAdapter,
-	type ShellKeyboardBrowserCommands,
 	type ShellKeyboardControllerAdapter,
-	type ShellKeyboardModalCommands,
 } from './keyboard-controller-adapter';
+import { type UseShellKeyboardControllerInput } from './keyboard-hook-contracts';
 import {
 	createKeyboardActivityTransitionController,
 	createKeyboardAnimationController,
@@ -45,35 +43,25 @@ import {
 	subscribeKeyboardVisibility,
 	type KeyboardAnimationController,
 } from './keyboard-hook-runtime';
-import {
-	type ShellKeyboardInputLogger,
-	type ShellKeyboardInputCore,
-} from './keyboard-input-contracts';
+import { type ShellKeyboardInputCore } from './keyboard-input-contracts';
 import { createShellKeyboardInputCore } from './keyboard-input-core';
 import {
 	createShellCommanderProps,
 	createShellCommandMenuProps,
 	createShellTerminalKeyboardProps,
 } from './keyboard-props';
-import {
-	type ShellKeyboardRemoteCore,
-	type ShellKeyboardRemoteLogger,
-	type ShellKeyboardRemoteTargetContext,
-} from './keyboard-remote-contracts';
+import { type ShellKeyboardRemoteCore } from './keyboard-remote-contracts';
 import { createShellKeyboardRemoteCore } from './keyboard-remote-core';
 import {
 	createShellKeyboardStateCore,
-	type ShellKeyboardHistoryStore,
 	type ShellKeyboardStateCore,
-	type ShellKeyboardStateLogger,
 } from './keyboard-state-core';
-import { type ShellScrollbackInputPort } from './scrollback-contracts';
-import { type ShellTerminalRuntimeView } from './terminal-hook-runtime';
 
 export type {
 	ShellKeyboardBrowserCommands,
 	ShellKeyboardModalCommands,
 } from './keyboard-controller-adapter';
+export type { UseShellKeyboardControllerInput } from './keyboard-hook-contracts';
 
 export type ShellKeyboardControllerHandle = {
 	keyboard: KeyboardDefinition | null;
@@ -107,42 +95,6 @@ export type ShellKeyboardControllerHandle = {
 	onSelectionModeChange(enabled: boolean): void;
 	onCommandBridgeEntry(entry: CommandBridgeEntry): void;
 	invalidate(reason: ControllerInvalidationReason): void;
-};
-
-type ShellKeyboardControllerLogger = ShellKeyboardInputLogger &
-	ShellKeyboardRemoteLogger &
-	ShellKeyboardStateLogger;
-
-export type UseShellKeyboardControllerInput = {
-	initialShellConfigState: ShellConfigState;
-	historyStore?: ShellKeyboardHistoryStore;
-	activity: {
-		snapshot: ShellActivitySnapshot;
-		getSnapshot(): ShellActivitySnapshot;
-	};
-	sourceKey: unknown;
-	scrollbackInput: ShellScrollbackInputPort;
-	terminalView: ShellTerminalRuntimeView;
-	remoteTarget: ShellKeyboardRemoteTargetContext;
-	navScope: WorkmuxNavScope;
-	setNavScope(scope: WorkmuxNavScope): void;
-	modalCommands: ShellKeyboardModalCommands;
-	browserCommands: ShellKeyboardBrowserCommands;
-	fitTerminalToDevice(): void | Promise<void>;
-	debugConnectionInCodex(): void | Promise<void>;
-	reloadRuntimeShellConfig(): PromiseLike<ShellConfigState>;
-	showAlert(title: string, message: string): void;
-	invalidateShellTransport(connectionId: string, channelId: number): void;
-	configureCommands: Pick<
-		ShellKeyboardControllerHandle['configureProps'],
-		| 'onDevServer'
-		| 'onHostConfig'
-		| 'onRequestFeature'
-		| 'onOpenGitHubIssues'
-		| 'onOpenShellConfigDocs'
-	>;
-	logger?: ShellKeyboardControllerLogger;
-	platformOS?: string;
 };
 
 export function useShellKeyboardController(

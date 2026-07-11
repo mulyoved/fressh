@@ -111,8 +111,8 @@ void test('shell detail consumes terminal size, view, and transport ports', () =
 	const keyboardCall = extractBalancedCall(
 		'createShellDetailKeyboardControllerInput',
 	);
-	assert.match(keyboardCall, /scrollbackInput: scrollback\.input/);
-	assert.match(keyboardCall, /terminalView: terminal\.view/);
+	assert.match(keyboardCall, /^\s*scrollback,\s*$/m);
+	assert.match(keyboardCall, /^\s*terminal,\s*$/m);
 	assert.doesNotMatch(
 		source,
 		/createShellTerminalLiveInputRequest|runWorkmuxScrollbackLiveInputSendPlan/,

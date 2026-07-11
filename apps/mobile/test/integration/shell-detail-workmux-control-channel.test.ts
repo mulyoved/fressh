@@ -268,7 +268,10 @@ void describe('shell detail Workmux control channel wiring', () => {
 		);
 
 		assert.match(source, /^\s*workmuxControlChannel,\s*$/m);
-		assert.match(source, /^\s*remoteTarget,\s*$/m);
+		assert.match(
+			source,
+			/remote:\s*\{[\s\S]*?workmuxControlChannel,[\s\S]*?source: connection,/,
+		);
 		assert.match(remoteCore, /restartCodex\(\{/);
 		assert.match(
 			remoteCore,
@@ -320,7 +323,7 @@ void describe('shell detail Workmux control channel wiring', () => {
 		);
 
 		assert.match(remoteCore, /copied\.operation === 'codex\.restart'/);
-		assert.match(source, /\{\.\.\.keyboardView\.commandMenuProps\}/);
+		assert.match(source, /\{\.\.\.keyboard\.commandMenuProps\}/);
 		assert.doesNotMatch(source, /handleCommandBridgeEntry/);
 	});
 
@@ -332,7 +335,7 @@ void describe('shell detail Workmux control channel wiring', () => {
 		);
 
 		assert.match(inputCore, /runKeyboardActionSlot\(copiedSlot,/);
-		assert.match(source, /\{\.\.\.keyboardView\.terminalKeyboardProps\}/);
+		assert.match(source, /\{\.\.\.keyboard\.terminalKeyboardProps\}/);
 		assert.doesNotMatch(source, /runKeyboardActionSlot|handleSlotPress/);
 	});
 });

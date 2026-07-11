@@ -29,7 +29,7 @@ void test('shell detail composes focused modal controllers without shell-modals'
 	const skillBlock = extractBlock(
 		source,
 		'const skillSelector = useSkillSelectorController',
-		'keyboardLateBindings.replaceSkillSelector(skillSelector)',
+		'const pendingKeyboardLatePublication',
 	);
 	assert.match(source, /shell-controllers\/browser-actions/);
 	assert.match(source, /shell-controllers\/feature-request/);
@@ -47,7 +47,7 @@ void test('shell detail composes focused modal controllers without shell-modals'
 	assert.match(skillBlock, /arbiter: modalArbiter/);
 	assert.match(
 		skillBlock,
-		/sendTextRaw: keyboardView\.commanderProps\.onPasteText/,
+		/sendTextRaw: keyboard\.commanderProps\.onPasteText/,
 	);
 	assert.match(
 		source,
@@ -56,7 +56,7 @@ void test('shell detail composes focused modal controllers without shell-modals'
 	assert.doesNotMatch(source, /from '@\/lib\/shell-modals'/);
 	assert.match(
 		source,
-		/keyboardLateBindings\.replaceSkillSelector\(skillSelector\)/,
+		/keyboardPublication\.prepareLateBindings\(\{\s*skillSelector,/,
 	);
 	assert.doesNotMatch(
 		source,
@@ -94,14 +94,10 @@ void test('shell detail tracks tmux-only lifecycle changes separately from targe
 		source,
 		/markFeatureRequestSourceStale\(\);\s*\}, \[connection, markFeatureRequestSourceStale, targetKey, tmuxEnabled\]\)/,
 	);
-	assert.match(
-		source,
-		/const remoteTarget = useMemo<ShellKeyboardRemoteTargetContext>/,
-	);
 	assert.match(source, /^\s*targetKey,\s*$/m);
 	assert.match(source, /^\s*tmuxEnabled,\s*$/m);
 	assert.match(source, /^\s*source: connection,\s*$/m);
-	assert.match(source, /^\s*remoteTarget,\s*$/m);
+	assert.match(source, /remote:\s*\{[\s\S]*?source: connection,/);
 	assert.doesNotMatch(
 		source,
 		/syncShellCommandLifecycle|workmuxKeyboardCommandRunner/,

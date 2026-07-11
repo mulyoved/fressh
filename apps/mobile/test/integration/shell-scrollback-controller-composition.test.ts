@@ -91,10 +91,10 @@ void test('terminal runtime and WebView delegate raw scrollback events', () => {
 
 void test('all shell input adapters use the scrollback input port', () => {
 	const keyboardCall = variableInitializer('keyboardControllerInput');
-	assert.match(keyboardCall, /scrollbackInput:\s*scrollback\.input/);
-	assert.match(keyboardCall, /terminalView:\s*terminal\.view/);
+	assert.match(keyboardCall, /^\s*scrollback,\s*$/m);
+	assert.match(keyboardCall, /^\s*terminal,\s*$/m);
 	const xterm = xtermElement();
-	assert.match(xterm, /onInput=\{keyboardView\.onWebViewInput\}/);
+	assert.match(xterm, /onInput=\{keyboard\.onWebViewInput\}/);
 	assert.doesNotMatch(
 		source,
 		/createShellTerminalLiveInputRequest|runWorkmuxScrollbackLiveInputSendPlan|terminal\.transport\.send|shell\.sendData|new OrderedWriter/,

@@ -2,39 +2,38 @@ import {
 	createReplaySafeDisposer,
 	type ControllerInvalidationReason,
 } from '@/lib/shell-controllers/controller-core';
-type ShellDetailKeyboardControllerInput = {
-	initialShellConfigState: unknown;
-	historyStore?: unknown;
-	activity: unknown;
-	sourceKey: unknown;
-	scrollbackInput: unknown;
-	terminalView: unknown;
-	remoteTarget: unknown;
-	navScope: unknown;
-	setNavScope: unknown;
-	modalCommands: unknown;
-	browserCommands: unknown;
-	fitTerminalToDevice: unknown;
-	debugConnectionInCodex: unknown;
-	reloadRuntimeShellConfig: unknown;
-	showAlert: unknown;
-	invalidateShellTransport: unknown;
-	configureCommands: unknown;
-	logger?: unknown;
-	platformOS?: unknown;
+import { type UseShellKeyboardControllerInput } from '@/lib/shell-controllers/keyboard-hook-contracts';
+import { type ShellKeyboardRemoteTargetContext } from '@/lib/shell-controllers/keyboard-remote-contracts';
+
+export type ShellDetailKeyboardCompositionInput = Omit<
+	UseShellKeyboardControllerInput,
+	'sourceKey' | 'scrollbackInput' | 'terminalView' | 'remoteTarget'
+> & {
+	targetKey: ShellKeyboardRemoteTargetContext['targetKey'];
+	scrollback: { input: UseShellKeyboardControllerInput['scrollbackInput'] };
+	terminal: { view: UseShellKeyboardControllerInput['terminalView'] };
+	remote: Omit<ShellKeyboardRemoteTargetContext, 'targetKey'>;
 };
 
-export function createShellDetailKeyboardControllerInput<
-	Input extends ShellDetailKeyboardControllerInput,
->(input: Input): Input {
+export function createShellDetailKeyboardControllerInput(
+	input: ShellDetailKeyboardCompositionInput,
+): UseShellKeyboardControllerInput {
 	return {
 		initialShellConfigState: input.initialShellConfigState,
 		historyStore: input.historyStore,
 		activity: input.activity,
-		sourceKey: input.sourceKey,
-		scrollbackInput: input.scrollbackInput,
-		terminalView: input.terminalView,
-		remoteTarget: input.remoteTarget,
+		sourceKey: input.targetKey,
+		scrollbackInput: input.scrollback.input,
+		terminalView: input.terminal.view,
+		remoteTarget: {
+			targetKey: input.targetKey,
+			tmuxEnabled: input.remote.tmuxEnabled,
+			sessionName: input.remote.sessionName,
+			connectionId: input.remote.connectionId,
+			channelId: input.remote.channelId,
+			workmuxControlChannel: input.remote.workmuxControlChannel,
+			source: input.remote.source,
+		},
 		navScope: input.navScope,
 		setNavScope: input.setNavScope,
 		modalCommands: input.modalCommands,
@@ -47,7 +46,7 @@ export function createShellDetailKeyboardControllerInput<
 		configureCommands: input.configureCommands,
 		logger: input.logger,
 		platformOS: input.platformOS,
-	} as Input;
+	} satisfies UseShellKeyboardControllerInput;
 }
 
 export type ShellDetailKeyboardLateBindings = {
@@ -146,6 +145,7 @@ export function createShellDetailKeyboardModalCommands(
 export type ShellDetailKeyboardAuthorityIdentity = {
 	targetKey: unknown;
 	activityGeneration: number;
+	tmuxEnabled: boolean;
 	workmuxControlChannel: unknown;
 };
 
@@ -212,6 +212,7 @@ export function createShellDetailKeyboardAuthorityRuntime(
 			if (
 				identity.targetKey === nextIdentity.targetKey &&
 				identity.activityGeneration === nextIdentity.activityGeneration &&
+				identity.tmuxEnabled === nextIdentity.tmuxEnabled &&
 				identity.workmuxControlChannel === nextIdentity.workmuxControlChannel
 			) {
 				return;
@@ -235,32 +236,71 @@ export function createShellDetailKeyboardAuthorityRuntime(
 	};
 }
 
-type ShellDetailKeyboardViewSource = {
-	terminalKeyboardProps: unknown;
-	commandMenuProps: unknown;
-	commanderProps: unknown;
-	textEntryProps: unknown;
-	configureProps: unknown;
-	onWebViewInput: unknown;
-	onSelectionChanged: unknown;
-	onSelectionModeChange: unknown;
+type ShellDetailKeyboardPublishedHandle = {
+	invalidate(reason: ControllerInvalidationReason): void;
 };
 
-export type ShellDetailKeyboardViewBindings<
-	Source extends ShellDetailKeyboardViewSource,
-> = Pick<Source, keyof ShellDetailKeyboardViewSource>;
+export type ShellDetailKeyboardCommitPublication = {
+	prepareKeyboard(input: {
+		handle: ShellDetailKeyboardPublishedHandle;
+		selectionModeEnabled: boolean;
+	}): { commit(): () => void };
+	prepareLateBindings(input: {
+		skillSelector: { open(): void; close(): void };
+		openWispr(): void;
+	}): { commit(): () => void };
+	getSnapshot(): {
+		keyboardHandle: ShellDetailKeyboardPublishedHandle | null;
+		selectionModeEnabled: boolean;
+	};
+};
 
-export function createShellDetailKeyboardViewBindings<
-	Source extends ShellDetailKeyboardViewSource,
->(handle: Source): ShellDetailKeyboardViewBindings<Source> {
+export function createShellDetailKeyboardCommitPublication(input: {
+	authority: Pick<ShellDetailKeyboardAuthorityRuntime, 'replaceHandle'>;
+	late: ShellDetailKeyboardLateBindings;
+	publishSelectionMode(enabled: boolean): void;
+	defer?: (task: () => void) => void;
+}): ShellDetailKeyboardCommitPublication {
+	const defer = input.defer ?? queueMicrotask;
+	let currentKeyboardOwner: symbol | null = null;
+	let currentLateOwner: symbol | null = null;
+	let keyboardHandle: ShellDetailKeyboardPublishedHandle | null = null;
+	let selectionModeEnabled = false;
 	return {
-		terminalKeyboardProps: handle.terminalKeyboardProps,
-		commandMenuProps: handle.commandMenuProps,
-		commanderProps: handle.commanderProps,
-		textEntryProps: handle.textEntryProps,
-		configureProps: handle.configureProps,
-		onWebViewInput: handle.onWebViewInput,
-		onSelectionChanged: handle.onSelectionChanged,
-		onSelectionModeChange: handle.onSelectionModeChange,
+		prepareKeyboard: (next) => ({
+			commit: () => {
+				const owner = Symbol('shell-detail-keyboard-publication');
+				currentKeyboardOwner = owner;
+				keyboardHandle = next.handle;
+				selectionModeEnabled = next.selectionModeEnabled;
+				input.authority.replaceHandle(next.handle);
+				input.publishSelectionMode(next.selectionModeEnabled);
+				return () => {
+					defer(() => {
+						if (currentKeyboardOwner !== owner) return;
+						currentKeyboardOwner = null;
+						keyboardHandle = null;
+						selectionModeEnabled = false;
+						input.publishSelectionMode(false);
+					});
+				};
+			},
+		}),
+		prepareLateBindings: (next) => ({
+			commit: () => {
+				const owner = Symbol('shell-detail-keyboard-late-publication');
+				currentLateOwner = owner;
+				input.late.replaceSkillSelector(next.skillSelector);
+				input.late.replaceWispr(next.openWispr);
+				return () => {
+					defer(() => {
+						if (currentLateOwner !== owner) return;
+						currentLateOwner = null;
+						input.late.clear();
+					});
+				};
+			},
+		}),
+		getSnapshot: () => ({ keyboardHandle, selectionModeEnabled }),
 	};
 }

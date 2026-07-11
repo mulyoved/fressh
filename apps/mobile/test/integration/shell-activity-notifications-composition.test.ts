@@ -104,7 +104,7 @@ void test('shell detail delegates activity and notification lifecycle', () => {
 		'createShellDetailKeyboardControllerInput({',
 	);
 	assert.match(keyboardComposition, /^\s*activity,\s*$/m);
-	assert.match(keyboardComposition, /^\s*sourceKey:\s*targetKey,\s*$/m);
+	assert.match(keyboardComposition, /^\s*targetKey,\s*$/m);
 	assert.match(source, /useShellScrollbackController\(\{/);
 	assert.doesNotMatch(source, /createShellActivityRetainedDomainBridge/);
 	assert.doesNotMatch(source, /createShellActivityKeyboardActions/);

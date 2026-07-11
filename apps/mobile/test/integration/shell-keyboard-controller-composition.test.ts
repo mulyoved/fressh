@@ -4,10 +4,11 @@ import { join } from 'node:path';
 import { describe, test } from 'node:test';
 import {
 	createShellDetailKeyboardAuthorityRuntime,
+	createShellDetailKeyboardCommitPublication,
 	createShellDetailKeyboardControllerInput,
 	createShellDetailKeyboardLateBindings,
 	createShellDetailKeyboardModalCommands,
-	createShellDetailKeyboardViewBindings,
+	type ShellDetailKeyboardCompositionInput,
 } from '../../src/app/shell/shell-keyboard-composition';
 
 const detailSourcePath = join(process.cwd(), 'src/app/shell/detail.tsx');
@@ -39,49 +40,84 @@ void describe('shell keyboard controller composition', () => {
 	});
 
 	void test('composition input preserves exact current authority ports and replacements', () => {
+		const firstActivity = {
+			focused: true,
+			appState: 'active' as const,
+			appActive: true,
+			interactive: true,
+			generation: 1,
+		};
+		const secondActivity = { ...firstActivity, generation: 2 };
+		const shellConfigState =
+			{} as ShellDetailKeyboardCompositionInput['initialShellConfigState'];
 		const first = {
-			activity: { snapshot: { generation: 1 }, getSnapshot: () => ({}) },
-			sourceKey: Symbol('source-1'),
-			scrollbackInput: { sendSegments() {} },
-			terminalView: { getRuntimeKey: () => 'runtime-1' },
-			remoteTarget: {
-				targetKey: 'target-1',
+			activity: {
+				snapshot: firstActivity,
+				getSnapshot: () => firstActivity,
+			},
+			targetKey: 'target-1',
+			scrollback: {
+				input: {
+					sendSegments() {},
+				} as unknown as ShellDetailKeyboardCompositionInput['scrollback']['input'],
+			},
+			terminal: {
+				view: {
+					getRuntimeKey: () => 'runtime-1',
+				} as unknown as ShellDetailKeyboardCompositionInput['terminal']['view'],
+			},
+			remote: {
 				source: 'connection-1',
 				tmuxEnabled: true,
 				sessionName: 'main',
 				connectionId: 'connection-1',
 				channelId: 1,
-				workmuxControlChannel: { id: 1 },
+				workmuxControlChannel: {
+					id: 1,
+				} as unknown as ShellDetailKeyboardCompositionInput['remote']['workmuxControlChannel'],
 			},
 		};
 		const second = {
-			activity: { snapshot: { generation: 2 }, getSnapshot: () => ({}) },
-			sourceKey: Symbol('source-2'),
-			scrollbackInput: { sendSegments() {} },
-			terminalView: { getRuntimeKey: () => 'runtime-2' },
-			remoteTarget: {
-				targetKey: 'target-2',
+			activity: {
+				snapshot: secondActivity,
+				getSnapshot: () => secondActivity,
+			},
+			targetKey: 'target-2',
+			scrollback: {
+				input: {
+					sendSegments() {},
+				} as unknown as ShellDetailKeyboardCompositionInput['scrollback']['input'],
+			},
+			terminal: {
+				view: {
+					getRuntimeKey: () => 'runtime-2',
+				} as unknown as ShellDetailKeyboardCompositionInput['terminal']['view'],
+			},
+			remote: {
 				source: 'connection-2',
 				tmuxEnabled: true,
 				sessionName: 'main',
 				connectionId: 'connection-2',
 				channelId: 2,
-				workmuxControlChannel: { id: 2 },
+				workmuxControlChannel: {
+					id: 2,
+				} as unknown as ShellDetailKeyboardCompositionInput['remote']['workmuxControlChannel'],
 			},
 		};
 		const stable = {
-			initialShellConfigState: {},
-			navScope: 'window',
+			initialShellConfigState: shellConfigState,
+			navScope: 'active' as const,
 			setNavScope() {},
-			modalCommands: {},
-			browserCommands: {},
+			modalCommands: {} as ShellDetailKeyboardCompositionInput['modalCommands'],
+			browserCommands:
+				{} as ShellDetailKeyboardCompositionInput['browserCommands'],
 			fitTerminalToDevice() {},
 			debugConnectionInCodex() {},
-			reloadRuntimeShellConfig: async () => ({}),
+			reloadRuntimeShellConfig: async () => shellConfigState,
 			showAlert() {},
 			invalidateShellTransport() {},
-			configureCommands: {},
-			logger: {},
+			configureCommands:
+				{} as ShellDetailKeyboardCompositionInput['configureCommands'],
 			platformOS: 'android',
 		};
 
@@ -95,21 +131,20 @@ void describe('shell keyboard controller composition', () => {
 		});
 
 		assert.equal(firstInput.activity, first.activity);
-		assert.equal(firstInput.sourceKey, first.sourceKey);
-		assert.equal(firstInput.scrollbackInput, first.scrollbackInput);
-		assert.equal(firstInput.terminalView, first.terminalView);
-		assert.equal(firstInput.remoteTarget, first.remoteTarget);
+		assert.equal(firstInput.sourceKey, first.targetKey);
+		assert.equal(firstInput.scrollbackInput, first.scrollback.input);
+		assert.equal(firstInput.terminalView, first.terminal.view);
+		assert.notEqual(firstInput.remoteTarget, first.remote);
 		assert.equal(secondInput.activity, second.activity);
-		assert.equal(secondInput.sourceKey, second.sourceKey);
-		assert.equal(secondInput.scrollbackInput, second.scrollbackInput);
-		assert.equal(secondInput.terminalView, second.terminalView);
-		assert.equal(secondInput.remoteTarget, second.remoteTarget);
-		assert.equal(secondInput.remoteTarget.targetKey, 'target-2');
+		assert.equal(secondInput.sourceKey, second.targetKey);
+		assert.equal(secondInput.scrollbackInput, second.scrollback.input);
+		assert.equal(secondInput.terminalView, second.terminal.view);
+		assert.equal(secondInput.remoteTarget.targetKey, second.targetKey);
 		assert.equal(secondInput.remoteTarget.source, 'connection-2');
 		assert.equal(secondInput.remoteTarget.channelId, 2);
 		assert.equal(
 			secondInput.remoteTarget.workmuxControlChannel,
-			second.remoteTarget.workmuxControlChannel,
+			second.remote.workmuxControlChannel,
 		);
 		for (const key of Object.keys(stable)) {
 			assert.equal(
@@ -163,11 +198,80 @@ void describe('shell keyboard controller composition', () => {
 		]);
 	});
 
+	void test('modal commands preserve closure ordering and forward every destination once', () => {
+		const events: string[] = [];
+		let menuOpen = false;
+		const late = createShellDetailKeyboardLateBindings();
+		late.replaceSkillSelector({
+			open: () => events.push('open-skill'),
+			close: () => events.push('close-skill'),
+		});
+		late.replaceWispr(() => events.push('open-wispr'));
+		const commands = createShellDetailKeyboardModalCommands({
+			late,
+			invalidateBrowserReads: () => events.push('invalidate-browser'),
+			closeCommander: () => events.push('close-commander'),
+			closeBrowser: () => events.push('close-browser'),
+			closeTextEntry: () => events.push('close-text'),
+			isCommandMenuOpen: () => menuOpen,
+			openCommandMenu: () => events.push('open-menu'),
+			closeCommandMenu: () => events.push('close-menu'),
+			openCommander: () => events.push('open-commander'),
+			openBrowserActions: () => events.push('open-browser'),
+			openFeatureRequest: () => events.push('open-feature'),
+			openConfigurator: () => events.push('open-config'),
+		});
+
+		commands.toggleCommandMenu();
+		assert.deepEqual(events.splice(0), [
+			'invalidate-browser',
+			'close-commander',
+			'close-browser',
+			'close-skill',
+			'close-text',
+			'open-menu',
+		]);
+		menuOpen = true;
+		commands.toggleCommandMenu();
+		assert.deepEqual(events.splice(0), [
+			'invalidate-browser',
+			'close-commander',
+			'close-browser',
+			'close-skill',
+			'close-text',
+			'close-menu',
+		]);
+		commands.openCommander();
+		assert.deepEqual(events.splice(0), [
+			'invalidate-browser',
+			'close-menu',
+			'close-browser',
+			'close-skill',
+			'close-text',
+			'open-commander',
+		]);
+		commands.openSkillSelector();
+		commands.openBrowserActions();
+		commands.openFeatureRequest();
+		commands.openWisprTextEditor();
+		commands.openConfigurator();
+		commands.closeCommandMenu();
+		assert.deepEqual(events, [
+			'open-skill',
+			'open-browser',
+			'open-feature',
+			'open-wispr',
+			'open-config',
+			'close-menu',
+		]);
+	});
+
 	void test('authority runtime invalidates transitions and runtime before mutation', () => {
 		const events: string[] = [];
 		const runtime = createShellDetailKeyboardAuthorityRuntime({
 			targetKey: 'target-1',
 			activityGeneration: 1,
+			tmuxEnabled: true,
 			workmuxControlChannel: { id: 1 },
 		});
 		runtime.replaceHandle({
@@ -177,6 +281,7 @@ void describe('shell keyboard controller composition', () => {
 		runtime.reconcile({
 			targetKey: 'target-2',
 			activityGeneration: 1,
+			tmuxEnabled: true,
 			workmuxControlChannel: { id: 2 },
 			appActive: true,
 			focused: true,
@@ -198,6 +303,227 @@ void describe('shell keyboard controller composition', () => {
 		});
 	});
 
+	void test('commit publication keeps abandoned render staged and old cleanup cannot clear new', async () => {
+		const events: string[] = [];
+		const authority = createShellDetailKeyboardAuthorityRuntime({
+			targetKey: 'target',
+			activityGeneration: 1,
+			tmuxEnabled: true,
+			workmuxControlChannel: {},
+		});
+		const late = createShellDetailKeyboardLateBindings();
+		const publication = createShellDetailKeyboardCommitPublication({
+			authority,
+			late,
+			publishSelectionMode: (enabled) =>
+				events.push(`selection:${String(enabled)}`),
+		});
+		const oldHandle = { invalidate: () => events.push('invalidate:old') };
+		const newHandle = { invalidate: () => events.push('invalidate:new') };
+		const oldKeyboard = publication.prepareKeyboard({
+			handle: oldHandle,
+			selectionModeEnabled: false,
+		});
+		const cleanupOld = oldKeyboard.commit();
+		const abandoned = publication.prepareKeyboard({
+			handle: newHandle,
+			selectionModeEnabled: true,
+		});
+
+		assert.equal(publication.getSnapshot().keyboardHandle, oldHandle);
+		assert.equal(publication.getSnapshot().selectionModeEnabled, false);
+		void abandoned;
+		authority.reconcile({
+			targetKey: 'target',
+			activityGeneration: 1,
+			tmuxEnabled: false,
+			workmuxControlChannel: publication,
+			appActive: true,
+			focused: true,
+		});
+		const committedNew = publication.prepareKeyboard({
+			handle: newHandle,
+			selectionModeEnabled: true,
+		});
+		const cleanupNew = committedNew.commit();
+		cleanupOld();
+		await Promise.resolve();
+		assert.equal(publication.getSnapshot().keyboardHandle, newHandle);
+		assert.equal(publication.getSnapshot().selectionModeEnabled, true);
+		assert.deepEqual(events, [
+			'selection:false',
+			'invalidate:old',
+			'selection:true',
+		]);
+
+		cleanupNew();
+		await Promise.resolve();
+		assert.equal(publication.getSnapshot().keyboardHandle, null);
+	});
+
+	void test('late binding publication changes only at commit and ignores old cleanup', async () => {
+		const events: string[] = [];
+		const authority = createShellDetailKeyboardAuthorityRuntime({
+			targetKey: 'target',
+			activityGeneration: 1,
+			tmuxEnabled: true,
+			workmuxControlChannel: {},
+		});
+		const late = createShellDetailKeyboardLateBindings();
+		const publication = createShellDetailKeyboardCommitPublication({
+			authority,
+			late,
+			publishSelectionMode() {},
+		});
+		const old = publication.prepareLateBindings({
+			skillSelector: {
+				open: () => events.push('skill-old'),
+				close: () => {},
+			},
+			openWispr: () => events.push('wispr-old'),
+		});
+		const cleanupOld = old.commit();
+		publication.prepareLateBindings({
+			skillSelector: {
+				open: () => events.push('skill-abandoned'),
+				close: () => {},
+			},
+			openWispr: () => events.push('wispr-abandoned'),
+		});
+		late.openSkillSelector();
+		late.openWisprTextEditor();
+		const current = publication.prepareLateBindings({
+			skillSelector: {
+				open: () => events.push('skill-current'),
+				close: () => {},
+			},
+			openWispr: () => events.push('wispr-current'),
+		});
+		current.commit();
+		cleanupOld();
+		await Promise.resolve();
+		late.openSkillSelector();
+		late.openWisprTextEditor();
+
+		assert.deepEqual(events, [
+			'skill-old',
+			'wispr-old',
+			'skill-current',
+			'wispr-current',
+		]);
+	});
+
+	void test('tmux-only authority change invalidates before sibling mutation', () => {
+		const events: string[] = [];
+		const channel = {};
+		const runtime = createShellDetailKeyboardAuthorityRuntime({
+			targetKey: 'target',
+			activityGeneration: 1,
+			tmuxEnabled: false,
+			workmuxControlChannel: channel,
+		});
+		runtime.replaceHandle({
+			invalidate: () => events.push('invalidate'),
+		});
+		runtime.reconcile({
+			targetKey: 'target',
+			activityGeneration: 1,
+			tmuxEnabled: true,
+			workmuxControlChannel: channel,
+			appActive: true,
+			focused: true,
+		});
+		events.push('sibling-mutation');
+
+		assert.deepEqual(events, ['invalidate', 'sibling-mutation']);
+	});
+
+	void test('authority identity rows invalidate independently with exact reasons', () => {
+		const channel = {};
+		const rows = [
+			{
+				name: 'unchanged',
+				next: {},
+				expected: [] as string[],
+			},
+			{
+				name: 'target',
+				next: { targetKey: 'target-2' },
+				expected: ['source-change'],
+			},
+			{
+				name: 'activity',
+				next: { activityGeneration: 2 },
+				expected: ['source-change'],
+			},
+			{
+				name: 'channel',
+				next: { workmuxControlChannel: {} },
+				expected: ['source-change'],
+			},
+			{
+				name: 'tmux',
+				next: { tmuxEnabled: true },
+				expected: ['source-change'],
+			},
+			{
+				name: 'inactive',
+				next: { activityGeneration: 2, appActive: false },
+				expected: ['app-inactive'],
+			},
+			{
+				name: 'unfocused',
+				next: { activityGeneration: 2, focused: false },
+				expected: ['focus-lost'],
+			},
+		];
+		for (const row of rows) {
+			const events: string[] = [];
+			const runtime = createShellDetailKeyboardAuthorityRuntime({
+				targetKey: 'target',
+				activityGeneration: 1,
+				tmuxEnabled: false,
+				workmuxControlChannel: channel,
+			});
+			runtime.replaceHandle({
+				invalidate: (reason) => events.push(reason),
+			});
+			runtime.reconcile({
+				targetKey: 'target',
+				activityGeneration: 1,
+				tmuxEnabled: false,
+				workmuxControlChannel: channel,
+				appActive: true,
+				focused: true,
+				...row.next,
+			});
+			assert.deepEqual(events, row.expected, row.name);
+		}
+	});
+
+	void test('authority invalidation failure still reports and notifies runtime mutation', () => {
+		const events: string[] = [];
+		const runtime = createShellDetailKeyboardAuthorityRuntime(
+			{
+				targetKey: 'target',
+				activityGeneration: 1,
+				tmuxEnabled: true,
+				workmuxControlChannel: {},
+			},
+			{ onInvalidationError: () => events.push('observed') },
+		);
+		runtime.replaceHandle({
+			invalidate: () => {
+				throw new Error('boom');
+			},
+		});
+		runtime.onRuntimeChanged('runtime', 'instance', () => {
+			events.push('notified');
+		});
+
+		assert.deepEqual(events, ['observed', 'notified']);
+	});
+
 	void test('authority lifecycle survives Strict replay and closes real unmount once', async () => {
 		const events: string[] = [];
 		const late = createShellDetailKeyboardLateBindings();
@@ -209,6 +535,7 @@ void describe('shell keyboard controller composition', () => {
 			{
 				targetKey: 'target',
 				activityGeneration: 1,
+				tmuxEnabled: true,
 				workmuxControlChannel: {},
 			},
 			{ onClose: () => events.push('close'), late },
@@ -217,49 +544,25 @@ void describe('shell keyboard controller composition', () => {
 		replayCleanup();
 		const realCleanup = runtime.setup();
 		await Promise.resolve();
-		assert.deepEqual(events, []);
+		assert.equal(events.length, 0);
 		realCleanup();
 		await Promise.resolve();
 		await Promise.resolve();
 		late.openSkillSelector();
+		late.replaceSkillSelector({
+			open: () => events.push('reopened'),
+			close: () => events.push('reclosed'),
+		});
+		late.openSkillSelector();
 		runtime.reconcile({
 			targetKey: 'closed-target',
 			activityGeneration: 2,
+			tmuxEnabled: true,
 			workmuxControlChannel: {},
 			appActive: true,
 			focused: true,
 		});
 		assert.deepEqual(events, ['close']);
-	});
-
-	void test('view bindings delegate each controller callback and bundle exactly once', () => {
-		const events: string[] = [];
-		const handle = {
-			terminalKeyboardProps: { id: 'terminal' },
-			commandMenuProps: {
-				id: 'menu',
-				onBridge: (_entry: unknown) => events.push('bridge'),
-			},
-			commanderProps: { id: 'commander' },
-			textEntryProps: { id: 'text' },
-			configureProps: { id: 'configure' },
-			onWebViewInput: (_input: { str: string; instanceId: string }) =>
-				events.push('input'),
-			onSelectionChanged: (_text: string) => events.push('selection'),
-			onSelectionModeChange: (_enabled: boolean) => events.push('mode'),
-		};
-		const view = createShellDetailKeyboardViewBindings(handle);
-
-		assert.equal(view.terminalKeyboardProps, handle.terminalKeyboardProps);
-		assert.equal(view.commandMenuProps, handle.commandMenuProps);
-		assert.equal(view.commanderProps, handle.commanderProps);
-		assert.equal(view.textEntryProps, handle.textEntryProps);
-		assert.equal(view.configureProps, handle.configureProps);
-		view.onWebViewInput({ str: 'x', instanceId: 'i' });
-		view.onSelectionChanged('x');
-		view.onSelectionModeChange(true);
-		view.commandMenuProps.onBridge({} as never);
-		assert.deepEqual(events, ['input', 'selection', 'mode', 'bridge']);
 	});
 
 	void test('shell detail remains an explicit composition root', () => {
@@ -269,5 +572,14 @@ void describe('shell keyboard controller composition', () => {
 		assert.match(source, /useShellTerminalController\(/);
 		assert.match(source, /useShellScrollbackController\(/);
 		assert.match(source, /useShellKeyboardController\(/);
+		assert.doesNotMatch(
+			source,
+			/keyboardSelectionModeRef\.current\s*=\s*keyboard\.selectionModeEnabled/,
+		);
+		assert.doesNotMatch(source, /keyboardAuthority\.replaceHandle\(keyboard\)/);
+		assert.doesNotMatch(
+			source,
+			/keyboardLateBindings\.replace(?:SkillSelector|Wispr)\(/,
+		);
 	});
 });

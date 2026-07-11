@@ -4,9 +4,9 @@ import Constants from 'expo-constants';
 import * as Linking from 'expo-linking';
 import {
 	Stack,
+	useFocusEffect,
 	useLocalSearchParams,
 	useRouter,
-	useFocusEffect,
 } from 'expo-router';
 import React, {
 	startTransition,
@@ -18,8 +18,8 @@ import React, {
 	useState,
 } from 'react';
 import {
-	Alert,
 	ActivityIndicator,
+	Alert,
 	Animated,
 	KeyboardAvoidingView,
 	PixelRatio,
@@ -56,10 +56,9 @@ import { useShellActivityController } from '@/lib/shell-controllers/activity';
 import { useBrowserActionsController } from '@/lib/shell-controllers/browser-actions';
 import { useFeatureRequestController } from '@/lib/shell-controllers/feature-request';
 import {
-	type ShellKeyboardBrowserCommands,
 	useShellKeyboardController,
+	type ShellKeyboardBrowserCommands,
 } from '@/lib/shell-controllers/keyboard';
-import { type ShellKeyboardRemoteTargetContext } from '@/lib/shell-controllers/keyboard-remote-contracts';
 import { createShellModalArbiter } from '@/lib/shell-controllers/modal-arbiter';
 import { useShellNotificationsController } from '@/lib/shell-controllers/notifications';
 import { useShellScrollbackController } from '@/lib/shell-controllers/scrollback';
@@ -118,10 +117,10 @@ import {
 } from './components/TextEntryModal';
 import {
 	createShellDetailKeyboardAuthorityRuntime,
+	createShellDetailKeyboardCommitPublication,
 	createShellDetailKeyboardControllerInput,
 	createShellDetailKeyboardLateBindings,
 	createShellDetailKeyboardModalCommands,
-	createShellDetailKeyboardViewBindings,
 } from './shell-keyboard-composition';
 import { resolveShellTouchScrollPolicy } from './shell-touch-scroll';
 
@@ -473,11 +472,13 @@ function ShellDetail() {
 	const [keyboardLateBindings] = useState(
 		createShellDetailKeyboardLateBindings,
 	);
+	const keyboardSelectionModeRef = useRef(false);
 	const [keyboardAuthority] = useState(() =>
 		createShellDetailKeyboardAuthorityRuntime(
 			{
 				targetKey,
 				activityGeneration: activity.snapshot.generation,
+				tmuxEnabled,
 				workmuxControlChannel,
 			},
 			{
@@ -487,10 +488,20 @@ function ShellDetail() {
 			},
 		),
 	);
+	const [keyboardPublication] = useState(() =>
+		createShellDetailKeyboardCommitPublication({
+			authority: keyboardAuthority,
+			late: keyboardLateBindings,
+			publishSelectionMode: (enabled) => {
+				keyboardSelectionModeRef.current = enabled;
+			},
+		}),
+	);
 	useLayoutEffect(() => {
 		keyboardAuthority.reconcile({
 			targetKey,
 			activityGeneration: activity.snapshot.generation,
+			tmuxEnabled,
 			workmuxControlChannel,
 			appActive: activity.snapshot.appActive,
 			focused: activity.snapshot.focused,
@@ -501,6 +512,7 @@ function ShellDetail() {
 		activity.snapshot.generation,
 		keyboardAuthority,
 		targetKey,
+		tmuxEnabled,
 		workmuxControlChannel,
 	]);
 	useEffect(() => keyboardAuthority.setup(), [keyboardAuthority]);
@@ -662,7 +674,6 @@ function ShellDetail() {
 		router,
 		onRuntimeChanged: handleTerminalRuntimeChanged,
 	});
-	const keyboardSelectionModeRef = useRef(false);
 	const scrollback = useShellScrollbackController({
 		activity,
 		context: {
@@ -1671,33 +1682,20 @@ function ShellDetail() {
 			handleOpenShellConfigDocs,
 		],
 	);
-	const remoteTarget = useMemo<ShellKeyboardRemoteTargetContext>(
-		() => ({
-			targetKey,
+	const keyboardControllerInput = createShellDetailKeyboardControllerInput({
+		initialShellConfigState: shellConfigState,
+		activity,
+		targetKey,
+		scrollback,
+		terminal,
+		remote: {
 			tmuxEnabled,
 			sessionName: activeTmuxSessionName,
 			connectionId,
 			channelId,
 			workmuxControlChannel,
 			source: connection,
-		}),
-		[
-			activeTmuxSessionName,
-			channelId,
-			connection,
-			connectionId,
-			targetKey,
-			tmuxEnabled,
-			workmuxControlChannel,
-		],
-	);
-	const keyboardControllerInput = createShellDetailKeyboardControllerInput({
-		initialShellConfigState: shellConfigState,
-		activity,
-		sourceKey: targetKey,
-		scrollbackInput: scrollback.input,
-		terminalView: terminal.view,
-		remoteTarget,
+		},
 		navScope,
 		setNavScope: (scope: WorkmuxNavScope) =>
 			preferences.workmuxNavScope.set(scope),
@@ -1719,24 +1717,36 @@ function ShellDetail() {
 		platformOS: Platform.OS,
 	});
 	const keyboard = useShellKeyboardController(keyboardControllerInput);
-	const keyboardView = createShellDetailKeyboardViewBindings(keyboard);
-	keyboardSelectionModeRef.current = keyboard.selectionModeEnabled;
-	keyboardAuthority.replaceHandle(keyboard);
+	const pendingKeyboardPublication = keyboardPublication.prepareKeyboard({
+		handle: keyboard,
+		selectionModeEnabled: keyboard.selectionModeEnabled,
+	});
+	useLayoutEffect(
+		() => pendingKeyboardPublication.commit(),
+		[pendingKeyboardPublication],
+	);
 
 	const skillSelector = useSkillSelectorController({
 		connection,
 		tmuxEnabled,
 		runHostBrowserCommand: browserActions.runHostBrowserCommand,
 		resolveHostBrowserWorkspace: browserActions.resolveHostBrowserWorkspace,
-		sendTextRaw: keyboardView.commanderProps.onPasteText,
+		sendTextRaw: keyboard.commanderProps.onPasteText,
 		sourceKey: targetKey,
 		stableConnectionId: connectionStoredConnectionId ?? connectionId,
 		tmuxTarget: activeTmuxSessionName,
 		getErrorMessage,
 		arbiter: modalArbiter,
 	});
-	keyboardLateBindings.replaceSkillSelector(skillSelector);
-	keyboardLateBindings.replaceWispr(handleOpenWisprTextEditor);
+	const pendingKeyboardLatePublication =
+		keyboardPublication.prepareLateBindings({
+			skillSelector,
+			openWispr: handleOpenWisprTextEditor,
+		});
+	useLayoutEffect(
+		() => pendingKeyboardLatePublication.commit(),
+		[pendingKeyboardLatePublication],
+	);
 	const wisprMode = isWisprAutomationBusy(wisprAutomationState);
 	const wisprControl = useMemo(
 		() =>
@@ -1829,10 +1839,10 @@ function ShellDetail() {
 							}}
 							touchScrollConfig={remoteTouchScrollPolicy.touchScrollConfig}
 							onResize={terminal.onResize}
-							onSelection={keyboardView.onSelectionChanged}
-							onSelectionModeChange={keyboardView.onSelectionModeChange}
+							onSelection={keyboard.onSelectionChanged}
+							onSelectionModeChange={keyboard.onSelectionModeChange}
 							onInitialized={terminal.onInitialized}
-							onInput={keyboardView.onWebViewInput}
+							onInput={keyboard.onWebViewInput}
 							{...scrollback.xtermProps}
 						/>
 						{scrollback.visible && (
@@ -1859,12 +1869,12 @@ function ShellDetail() {
 						)}
 					</View>
 				</TerminalErrorBoundary>
-				<TerminalKeyboard {...keyboardView.terminalKeyboardProps} />
+				<TerminalKeyboard {...keyboard.terminalKeyboardProps} />
 				<CommandMenuModal
 					open={commandMenuModal.open}
 					bottomOffset={Platform.OS === 'android' ? insets.bottom + 24 : 24}
 					onClose={commandMenuModal.onClose}
-					{...keyboardView.commandMenuProps}
+					{...keyboard.commandMenuProps}
 				/>
 				<BrowserActionsModal
 					bottomOffset={Platform.OS === 'android' ? insets.bottom + 24 : 24}
@@ -1878,7 +1888,7 @@ function ShellDetail() {
 					open={commanderModal.open}
 					bottomOffset={Platform.OS === 'android' ? insets.bottom + 24 : 24}
 					onClose={commanderModal.onClose}
-					{...keyboardView.commanderProps}
+					{...keyboard.commanderProps}
 				/>
 				<SkillSelectorModal
 					bottomOffset={Platform.OS === 'android' ? insets.bottom + 24 : 24}
@@ -1889,7 +1899,7 @@ function ShellDetail() {
 					bottomOffset={Platform.OS === 'android' ? insets.bottom + 24 : 24}
 					wisprMode={wisprMode}
 					wisprControl={wisprControl}
-					{...keyboardView.textEntryProps}
+					{...keyboard.textEntryProps}
 					onWisprSetup={handleOpenWisprAutomationSettings}
 					onWisprAutoStartChange={handleWisprAutoStartChange}
 					onClose={handleCloseTextEntry}
@@ -1911,7 +1921,7 @@ function ShellDetail() {
 					open={configureModal.open}
 					bottomOffset={Platform.OS === 'android' ? insets.bottom + 24 : 24}
 					onClose={configureModal.onClose}
-					{...keyboardView.configureProps}
+					{...keyboard.configureProps}
 				/>
 				<FeatureRequestModal
 					bottomOffset={Platform.OS === 'android' ? insets.bottom + 24 : 24}
