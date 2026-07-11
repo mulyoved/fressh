@@ -188,6 +188,78 @@ void test('config replacement snapshots caller data and equivalent state does no
 	assert.equal(Object.isFrozen(core.getSnapshot().macros), true);
 });
 
+void test('changed config replacement publishes reconciled values and isolates its exact argument', () => {
+	const core = createShellKeyboardStateCore({
+		initialShellConfigState: configState(),
+		historyStore: createMemoryHistoryStore(),
+	});
+	const replacement = configState();
+	replacement.config.version = '2';
+	replacement.config.updatedAt = '2026-07-11T00:00:00.000Z';
+	replacement.config.activeKeyboardIds = ['advanced', 'main'];
+	replacement.config.keyboards[0]!.name = 'Main remote';
+	replacement.config.macrosByKeyboardId.main = [
+		{
+			id: 'remote-macro',
+			name: 'Remote macro',
+			label: 'remote',
+			category: 'test',
+			script: '{}',
+		},
+	];
+	replacement.source = 'remote';
+	replacement.lastLoadedAt = '2026-07-11T00:01:00.000Z';
+	replacement.lastError = 'previous network failure';
+	let publishes = 0;
+	core.subscribe(() => {
+		publishes += 1;
+	});
+
+	core.setShellConfigState(replacement);
+	const published = core.getSnapshot();
+	assert.equal(publishes, 1);
+	assert.equal(published.shellConfigState.config.version, '2');
+	assert.equal(
+		published.shellConfigState.config.updatedAt,
+		'2026-07-11T00:00:00.000Z',
+	);
+	assert.deepEqual(published.activeKeyboardIds, ['advanced', 'main']);
+	assert.equal(published.selectedKeyboardId, 'main');
+	assert.equal(published.keyboard?.name, 'Main remote');
+	assert.equal(published.macros[0]?.label, 'remote');
+	assert.equal(published.shellConfigState.source, 'remote');
+	assert.equal(
+		published.shellConfigState.lastLoadedAt,
+		'2026-07-11T00:01:00.000Z',
+	);
+	assert.equal(
+		published.shellConfigState.lastError,
+		'previous network failure',
+	);
+
+	replacement.config.keyboards[0]!.name = 'Mutated after publish';
+	replacement.config.macrosByKeyboardId.main![0]!.label = 'mutated';
+	replacement.config.activeKeyboardIds[0] = 'one-shot';
+	replacement.source = 'cache';
+	replacement.lastLoadedAt = null;
+	replacement.lastError = null;
+	assert.equal(core.getSnapshot().keyboard?.name, 'Main remote');
+	assert.equal(core.getSnapshot().macros[0]?.label, 'remote');
+	assert.deepEqual(core.getSnapshot().activeKeyboardIds, ['advanced', 'main']);
+	assert.equal(core.getSnapshot().shellConfigState.source, 'remote');
+	assert.equal(
+		core.getSnapshot().shellConfigState.lastLoadedAt,
+		'2026-07-11T00:01:00.000Z',
+	);
+	assert.equal(
+		core.getSnapshot().shellConfigState.lastError,
+		'previous network failure',
+	);
+	assert.equal(Object.isFrozen(published.shellConfigState), true);
+	assert.equal(Object.isFrozen(published.keyboard), true);
+	assert.equal(Object.isFrozen(published.macros[0]), true);
+});
+
 void test('modifier order matches existing SHIFT CTRL ALT CMD byte semantics without mutating input', () => {
 	const core = createShellKeyboardStateCore({
 		initialShellConfigState: configState(),
