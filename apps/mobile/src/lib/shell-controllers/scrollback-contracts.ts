@@ -3,7 +3,8 @@ import { type WorkmuxControlChannel } from '../workmux-control-channel';
 import { type ShellActivitySnapshot } from './activity-core';
 import { type ControllerOutcome } from './controller-core';
 import { type ShellTargetKey } from './source-keys';
-import { type ShellTerminalViewPort } from './terminal';
+// eslint-disable-next-line import/consistent-type-specifier-style -- A pure type import keeps React Native out of Node controller tests.
+import type { ShellTerminalViewPort } from './terminal';
 import { type ShellTerminalTransportPort } from './terminal-transport';
 
 export type ShellScrollbackState = {

@@ -68,12 +68,43 @@ void test('scrollback contains throwing exit and later clear remains usable', ()
 	assert.doesNotThrow(() => {
 		void harness.core.clear();
 	});
+	assert.deepEqual(Array.from(harness.localExitRequestIds), []);
 	harness.context.terminalView.exitScrollback = (message) =>
 		harness.localExitMessages.push(message);
 	void harness.core.clear();
 	assert.deepEqual(harness.localExitMessages, [
 		{ requestId: 2, instanceId: 'instance-1' },
 	]);
+});
+
+void test('scrollback stale outer exit cleanup preserves nested newer request', () => {
+	const harness = createScrollbackHarness();
+	harness.core.onTerminalRuntimeChanged('instance-1');
+	let reentered = false;
+	harness.context.terminalView.exitScrollback = (message) => {
+		harness.localExitMessages.push(message);
+		if (reentered) return;
+		reentered = true;
+		replaceAuthority(harness);
+		void harness.core.clear();
+	};
+
+	void harness.core.clear();
+
+	assert.deepEqual(harness.localExitMessages, [
+		{ requestId: 1, instanceId: 'instance-1' },
+		{ requestId: 2, instanceId: 'instance-2' },
+	]);
+	assert.deepEqual(Array.from(harness.localExitRequestIds), [2]);
+	const resetsBeforeConsumption = harness.resetCalls.length;
+	harness.core.onScrollbackModeChange({
+		active: false,
+		phase: 'active',
+		instanceId: 'instance-2',
+		requestId: 2,
+	});
+	assert.deepEqual(Array.from(harness.localExitRequestIds), []);
+	assert.equal(harness.resetCalls.length, resetsBeforeConsumption);
 });
 
 void test('scrollback exit reentry removes stale local ID and later clear works', () => {

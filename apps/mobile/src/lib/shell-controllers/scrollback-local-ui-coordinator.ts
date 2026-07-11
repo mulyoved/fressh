@@ -70,18 +70,20 @@ export function createScrollbackLocalUiCoordinator({
 		}
 		if (token && !token.isCurrent()) return;
 		nextRequestId += 1;
+		const allocatedRequestId = nextRequestId;
 		const exitRequest = createTmuxScrollbackLocalExitRequest({
 			requestIds: localExitRequestIds,
-			requestId: nextRequestId,
+			requestId: allocatedRequestId,
 			instanceId,
 		});
 		try {
 			context.terminalView.exitScrollback(exitRequest.message);
 		} catch (error) {
+			localExitRequestIds.delete(allocatedRequestId);
 			warn(context, 'Scrollback local exit failed', error);
 		}
 		if (token && !token.isCurrent()) {
-			localExitRequestIds.delete(nextRequestId);
+			localExitRequestIds.delete(allocatedRequestId);
 		}
 	};
 }
