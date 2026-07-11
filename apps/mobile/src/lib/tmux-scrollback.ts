@@ -82,7 +82,7 @@ export function registerTmuxScrollbackRemoteCopyModeExitCleanup({
 		barrier,
 		cleanup,
 	);
-	void trackedCleanup?.then(
+	void cleanup?.then(
 		(exited) => {
 			if (!isCurrent()) return;
 			if (exited) {

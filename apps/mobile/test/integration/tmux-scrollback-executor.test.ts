@@ -896,6 +896,101 @@ void test('stale failed remote copy mode cleanup cannot mark a newer generation 
 	assert.equal(remoteCopyModeActiveRef.current, false);
 });
 
+for (const staleSettlement of ['false', 'reject'] as const) {
+	void test(`mixed-target ${staleSettlement} cleanup affects admission but not newer ownership`, async () => {
+		const barrier = createWorkmuxScrollbackLiveInputCleanupBarrier();
+		const remoteCopyModeActiveRef = { current: true };
+		const cleanupA = deferred<boolean>();
+		const cleanupB = deferred<boolean>();
+		const failuresA: unknown[] = [];
+		const failuresB: unknown[] = [];
+		let targetACurrent = true;
+		const aggregateA = registerTmuxScrollbackRemoteCopyModeExitCleanup({
+			barrier,
+			cleanup: cleanupA.promise,
+			remoteCopyModeActiveRef,
+			remoteCopyModeWasActive: true,
+			restoreRemoteCopyModeOnFailedCleanup: true,
+			isCleanupCurrent: () => targetACurrent,
+			onCleanupFailure: (error) => failuresA.push(error),
+		});
+		assert.notEqual(aggregateA, null);
+		targetACurrent = false;
+		remoteCopyModeActiveRef.current = true;
+		const aggregateB = registerTmuxScrollbackRemoteCopyModeExitCleanup({
+			barrier,
+			cleanup: cleanupB.promise,
+			remoteCopyModeActiveRef,
+			remoteCopyModeWasActive: true,
+			restoreRemoteCopyModeOnFailedCleanup: true,
+			isCleanupCurrent: () => true,
+			onCleanupFailure: (error) => failuresB.push(error),
+		});
+		assert.equal(aggregateB, aggregateA);
+		cleanupB.resolve(true);
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		assert.equal(remoteCopyModeActiveRef.current, false);
+		assert.equal(barrier.current(), aggregateA);
+		if (staleSettlement === 'false') {
+			cleanupA.resolve(false);
+			assert.equal(await aggregateA, false);
+		} else {
+			const failure = new Error('target A cleanup failed');
+			cleanupA.reject(failure);
+			await assert.rejects(aggregateA!, failure);
+		}
+		assert.equal(remoteCopyModeActiveRef.current, false);
+		assert.deepEqual(failuresA, []);
+		assert.deepEqual(failuresB, []);
+	});
+}
+
+for (const failedSettlement of ['false', 'reject'] as const) {
+	void test(`same-target ${failedSettlement} cleanup owns its mutation and logs once`, async () => {
+		const barrier = createWorkmuxScrollbackLiveInputCleanupBarrier();
+		const remoteCopyModeActiveRef = { current: true };
+		const failedCleanup = deferred<boolean>();
+		const successfulCleanup = deferred<boolean>();
+		const failures: unknown[] = [];
+		const aggregate = registerTmuxScrollbackRemoteCopyModeExitCleanup({
+			barrier,
+			cleanup: failedCleanup.promise,
+			remoteCopyModeActiveRef,
+			remoteCopyModeWasActive: true,
+			restoreRemoteCopyModeOnFailedCleanup: true,
+			isCleanupCurrent: () => true,
+			onCleanupFailure: (error) => failures.push(error),
+		});
+		assert.notEqual(aggregate, null);
+		assert.equal(
+			registerTmuxScrollbackRemoteCopyModeExitCleanup({
+				barrier,
+				cleanup: successfulCleanup.promise,
+				remoteCopyModeActiveRef,
+				remoteCopyModeWasActive: true,
+				restoreRemoteCopyModeOnFailedCleanup: true,
+				isCleanupCurrent: () => true,
+				onCleanupFailure: (error) => failures.push(error),
+			}),
+			aggregate,
+		);
+		successfulCleanup.resolve(true);
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		assert.equal(remoteCopyModeActiveRef.current, false);
+		if (failedSettlement === 'false') {
+			failedCleanup.resolve(false);
+			assert.equal(await aggregate, false);
+			assert.deepEqual(failures, [undefined]);
+		} else {
+			const failure = new Error('same target cleanup failed');
+			failedCleanup.reject(failure);
+			await assert.rejects(aggregate!, failure);
+			assert.deepEqual(failures, [failure]);
+		}
+		assert.equal(remoteCopyModeActiveRef.current, true);
+	});
+}
+
 void test('resetTmuxScrollbackRuntimeState returns a cleanup barrier for inactive in-flight app scroll enter before remote copy mode ack', async () => {
 	const commandBlock = deferred<void>();
 	const commands: string[] = [];
