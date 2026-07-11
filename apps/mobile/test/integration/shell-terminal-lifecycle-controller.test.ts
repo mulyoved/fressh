@@ -24,7 +24,13 @@ function deferred<T>(): Deferred<T> {
 	return { promise, resolve, reject };
 }
 
-function createHarness(platformOS: 'android' | 'ios' = 'android') {
+function createHarness(
+	platformOS: 'android' | 'ios' = 'android',
+	logHooks: {
+		onInfo?(message: string): void;
+		onWarn?(message: string): void;
+	} = {},
+) {
 	const writes: number[][][] = [];
 	const calls: string[] = [];
 	const runtimeChanges: (string | null)[] = [];
@@ -116,8 +122,14 @@ function createHarness(platformOS: 'android' | 'ios' = 'android') {
 		size,
 		platformOS,
 		logger: {
-			info: (message) => calls.push(`info:${message}`),
-			warn: (message) => calls.push(`warn:${message}`),
+			info: (message) => {
+				calls.push(`info:${message}`);
+				logHooks.onInfo?.(message);
+			},
+			warn: (message) => {
+				calls.push(`warn:${message}`);
+				logHooks.onWarn?.(message);
+			},
 		},
 		onRuntimeChanged: (runtimeKey) => runtimeChanges.push(runtimeKey),
 	});
@@ -247,6 +259,57 @@ void test('duplicate attach requests share one listener attempt', async () => {
 	lateId.resolve(20n);
 	await Promise.all([first, duplicate]);
 	assert.equal(addCalls, 1);
+});
+
+void test('same-key shell replacement starts a new attach while the old owner is in flight', async () => {
+	const harness = createHarness();
+	const key = createShellTransportKey('connection-a', 7);
+	const lateOldId = deferred<bigint>();
+	harness.shellA.addListener = () => lateOldId.promise;
+	harness.core.setShell(key, harness.shellA);
+	harness.core.handleInitialized('instance-1');
+	const oldAttach = harness.core.attach();
+	await Promise.resolve();
+
+	harness.core.setShell(key, harness.shellB);
+	const newAttach = harness.core.attach();
+	lateOldId.resolve(81n);
+	await Promise.all([oldAttach, newAttach]);
+
+	assert.equal(harness.core.isAttached(), true);
+	assert.equal(harness.shellB.listenerCursors.length, 1);
+	assert.deepEqual(harness.shellA.removedListenerIds, [81n]);
+	assert.deepEqual(harness.shellB.removedListenerIds, []);
+});
+
+void test('same-instance reload starts a new attach while the old runtime attach is in flight', async () => {
+	const harness = createHarness();
+	const lateOldId = deferred<bigint>();
+	let addCalls = 0;
+	harness.shellA.addListener = (listener, options) => {
+		addCalls += 1;
+		harness.shellA.listenerCursors.push(options.cursor);
+		if (addCalls === 1) return lateOldId.promise;
+		harness.shellA.listeners.set(82n, listener);
+		return 82n;
+	};
+	harness.core.setShell(
+		createShellTransportKey('connection-a', 7),
+		harness.shellA,
+	);
+	harness.core.handleInitialized('instance-1');
+	const oldAttach = harness.core.attach();
+	await Promise.resolve();
+
+	harness.core.handleLoadStart();
+	harness.core.handleInitialized('instance-1');
+	const newAttach = harness.core.attach();
+	lateOldId.resolve(83n);
+	await Promise.all([oldAttach, newAttach]);
+
+	assert.equal(addCalls, 2);
+	assert.equal(harness.core.isAttached(), true);
+	assert.deepEqual(harness.shellA.removedListenerIds, [83n]);
 });
 
 void test('load start invalidates runtime before detach and readiness publication', async () => {
@@ -388,6 +451,42 @@ void test('listener writes output and contains dropped-event logger errors', asy
 		bytes: new Uint8Array([8]).buffer,
 	});
 	assert.ok(harness.calls.includes('write:8'));
+});
+
+void test('head-read logging invalidation suppresses stale replay and listener creation', async () => {
+	let harness!: ReturnType<typeof createHarness>;
+	harness = createHarness('android', {
+		onInfo: (message) => {
+			if (message === 'readBuffer(head)') harness.core.handleLoadStart();
+		},
+	});
+	harness.core.setShell(
+		createShellTransportKey('connection-a', 7),
+		harness.shellA,
+	);
+	harness.core.handleInitialized('instance-1');
+	await harness.core.attach();
+	assert.deepEqual(harness.writes, []);
+	assert.deepEqual(harness.shellA.listenerCursors, []);
+	assert.equal(harness.core.isAttached(), false);
+});
+
+void test('attachment logging invalidation suppresses stale iOS focus and leaves no owner', async () => {
+	let harness!: ReturnType<typeof createHarness>;
+	harness = createHarness('ios', {
+		onInfo: (message) => {
+			if (message === 'shell listener attached') harness.core.handleLoadStart();
+		},
+	});
+	harness.core.setShell(
+		createShellTransportKey('connection-a', 7),
+		harness.shellA,
+	);
+	harness.core.handleInitialized('instance-1');
+	await harness.core.attach();
+	assert.equal(harness.calls.includes('focus'), false);
+	assert.deepEqual(harness.shellA.removedListenerIds, [1n]);
+	assert.equal(harness.core.isAttached(), false);
 });
 
 void test('same transport key avoids rebuild while owner replacement detaches safely', async () => {

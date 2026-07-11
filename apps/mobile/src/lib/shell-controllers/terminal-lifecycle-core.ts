@@ -124,7 +124,12 @@ export function createTerminalLifecycleController({
 		selectionModeEnabled: false,
 	};
 	let attachment: Attachment | null = null;
-	let attachAttempt: { identity: string; promise: Promise<void> } | null = null;
+	let attachAttempt: {
+		identity: string;
+		owner: TerminalLifecycleShell;
+		generation: number;
+		promise: Promise<void>;
+	} | null = null;
 	let firstAttachedIdentity: string | null = null;
 	let generation = 0;
 	let disposed = false;
@@ -196,7 +201,13 @@ export function createTerminalLifecycleController({
 		) {
 			return Promise.resolve();
 		}
-		if (attachAttempt?.identity === identity) return attachAttempt.promise;
+		if (
+			attachAttempt?.identity === identity &&
+			attachAttempt.owner === attemptShell &&
+			attachAttempt.generation === generation
+		) {
+			return attachAttempt.promise;
+		}
 
 		generation += 1;
 		const attemptGeneration = generation;
@@ -219,6 +230,8 @@ export function createTerminalLifecycleController({
 					nextSeq: result.nextSeq,
 					dropped: result.dropped,
 				});
+				if (!isAttemptCurrent(attemptGeneration, attemptShell, identity))
+					return;
 				if (result.chunks.length > 0) {
 					xterm.writeMany(
 						result.chunks.map((chunk) => new Uint8Array(chunk.bytes)),
@@ -257,6 +270,7 @@ export function createTerminalLifecycleController({
 				useHead ? 'shell listener attached' : 'shell listener attached (live)',
 				id.toString(),
 			);
+			if (!isAttemptCurrent(attemptGeneration, attemptShell, identity)) return;
 			if (platformOS === 'ios') {
 				try {
 					xterm.focus();
@@ -266,7 +280,12 @@ export function createTerminalLifecycleController({
 			}
 		})();
 
-		attachAttempt = { identity, promise };
+		attachAttempt = {
+			identity,
+			owner: attemptShell,
+			generation: attemptGeneration,
+			promise,
+		};
 		void promise.then(
 			() => {
 				if (attachAttempt?.promise === promise) attachAttempt = null;
