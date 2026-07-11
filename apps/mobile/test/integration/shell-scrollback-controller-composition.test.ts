@@ -61,7 +61,7 @@ void test('shell detail composes scrollback from semantic controller ports', () 
 		/shellAvailable:\s*Boolean\(shell\)/,
 		/^\s*tmuxEnabled,\s*$/m,
 		/getActivitySnapshot/,
-		/getSelectionModeEnabled:\s*\(\)\s*=>\s*selectionModeEnabled/,
+		/getSelectionModeEnabled:\s*\(\)\s*=>\s*keyboardSelectionModeRef\.current/,
 		/terminalTransport:\s*terminal\.transport/,
 		/terminalView:\s*terminal\.view/,
 		/workmuxScroll:\s*workmuxControlChannel\.scroll/,
@@ -90,46 +90,41 @@ void test('terminal runtime and WebView delegate raw scrollback events', () => {
 });
 
 void test('all shell input adapters use the scrollback input port', () => {
-	const bytesAdapter = variableInitializer('sendBytesRaw');
-	const segmentsAdapter = variableInitializer('sendLiteralInputSegments');
-	const webViewAdapter = variableInitializer('handleWebViewInput');
-	assert.match(bytesAdapter, /scrollback\.input\.sendSegments\(\[bytes\]\)/);
-	assert.match(
-		segmentsAdapter,
-		/scrollback\.input\.sendSegments\(payloadSegments,\s*\{/,
-	);
-	assert.match(
-		segmentsAdapter,
-		/interSegmentDelayMs:\s*opts\?\.interSegmentDelayMs/,
-	);
-	assert.match(segmentsAdapter, /onAccepted:\s*opts\?\.onAccepted/);
-	assert.match(
-		webViewAdapter,
-		/scrollback\.state\.runtimeInstanceId === null\s*\|\|\s*input\.instanceId !== scrollback\.state\.runtimeInstanceId/,
-	);
-	assert.match(webViewAdapter, /sendBytesRaw\(bytes\)/);
-	assert.ok(
-		webViewAdapter.indexOf('scrollback.state.runtimeInstanceId === null') <
-			webViewAdapter.indexOf('sendBytesRaw(bytes)'),
-		'stale/null runtime guard must run before terminal input send',
-	);
+	const keyboardCall = variableInitializer('keyboard');
+	assert.match(keyboardCall, /scrollbackInput:\s*scrollback\.input/);
+	assert.match(keyboardCall, /terminalView:\s*terminal\.view/);
+	const xterm = xtermElement();
+	assert.match(xterm, /onInput=\{keyboard\.onWebViewInput\}/);
 	assert.doesNotMatch(
 		source,
 		/createShellTerminalLiveInputRequest|runWorkmuxScrollbackLiveInputSendPlan|terminal\.transport\.send|shell\.sendData|new OrderedWriter/,
 	);
 });
 
-void test('shell detail retains payload construction but no scrollback ownership', () => {
-	for (const retained of [
+void test('keyboard core owns payload construction while detail owns no input policy', () => {
+	const inputCore = readFileSync(
+		join(process.cwd(), 'src/lib/shell-controllers/keyboard-input-core.ts'),
+		'utf8',
+	);
+	for (const delegated of [
 		'buildClipboardPasteSegments',
 		'buildCommanderExecuteSegments',
 		'buildTextEntryPastePayload',
 		'runCommandSteps',
-		'runMacro',
-		'modifierKeysActive',
 	]) {
-		assert.match(source, new RegExp(`\\b${retained}\\b`));
+		assert.doesNotMatch(source, new RegExp(`\\b${delegated}\\b`));
+		assert.match(inputCore, new RegExp(`\\b${delegated}\\b`));
 	}
+	assert.doesNotMatch(source, /\brunMacro\b/);
+	assert.match(inputCore, /\brunMacroWithToken\b/);
+	assert.doesNotMatch(source, /\bmodifierKeysActive\b/);
+	assert.match(
+		readFileSync(
+			join(process.cwd(), 'src/lib/shell-controllers/keyboard.tsx'),
+			'utf8',
+		),
+		/\bmodifierKeysActive\b/,
+	);
 	for (const legacy of [
 		'workmuxScrollbackCommandExecutorRef',
 		'scrollbackActiveRef',

@@ -24,12 +24,12 @@ void test('shell detail composes focused modal controllers without shell-modals'
 	const featureBlock = extractBlock(
 		source,
 		'const featureRequest = useFeatureRequestController',
-		'const skillSelector = useSkillSelectorController',
+		'const markFeatureRequestSourceStale',
 	);
 	const skillBlock = extractBlock(
 		source,
 		'const skillSelector = useSkillSelectorController',
-		'const markFeatureRequestSourceStale',
+		'skillSelectorOpenRef.current = skillSelector.open',
 	);
 	assert.match(source, /shell-controllers\/browser-actions/);
 	assert.match(source, /shell-controllers\/feature-request/);
@@ -46,13 +46,18 @@ void test('shell detail composes focused modal controllers without shell-modals'
 	assert.match(skillBlock, /sourceKey: targetKey/);
 	assert.match(skillBlock, /arbiter: modalArbiter/);
 	assert.match(
+		skillBlock,
+		/sendTextRaw: keyboard\.commanderProps\.onPasteText/,
+	);
+	assert.match(
 		source,
 		/\(\) => modalArbiter\.register\('text-entry', handleCloseTextEntry\)/,
 	);
 	assert.doesNotMatch(source, /from '@\/lib\/shell-modals'/);
+	assert.match(source, /skillSelectorCloseRef\.current = skillSelector\.close/);
 	assert.doesNotMatch(
 		source,
-		/skillSelectorCloseRef|featureRequestCloseRef|close\w+OtherModals|sourceKeyChangeTrackerRef|skillSelectorSourceKey/,
+		/featureRequestCloseRef|close\w+OtherModals|sourceKeyChangeTrackerRef|skillSelectorSourceKey/,
 	);
 	assert.equal(
 		existsSync(join(process.cwd(), 'src/lib/shell-modals.tsx')),
@@ -88,15 +93,15 @@ void test('shell detail tracks tmux-only lifecycle changes separately from targe
 	);
 	assert.match(
 		source,
-		/const workmuxKeyboardSourceRef = useRef\(\{\s*targetKey,\s*tmuxEnabled,\s*connection,\s*\}\)/,
+		/const remoteTarget = useMemo<ShellKeyboardRemoteTargetContext>/,
 	);
-	assert.match(
+	assert.match(source, /^\s*targetKey,\s*$/m);
+	assert.match(source, /^\s*tmuxEnabled,\s*$/m);
+	assert.match(source, /^\s*source: connection,\s*$/m);
+	assert.match(source, /^\s*remoteTarget,\s*$/m);
+	assert.doesNotMatch(
 		source,
-		/syncShellCommandLifecycle\(\{[\s\S]*?trackedSource: workmuxKeyboardSourceRef,[\s\S]*?nextSource: \{ targetKey, tmuxEnabled, connection \},[\s\S]*?invalidateWorkmux:[\s\S]*?invalidateCodex:/,
-	);
-	assert.match(
-		source,
-		/\[\s*connection,\s*invalidateCodexRestartRequests,\s*targetKey,\s*tmuxEnabled,\s*workmuxKeyboardCommandRunner,?\s*\]/,
+		/syncShellCommandLifecycle|workmuxKeyboardCommandRunner/,
 	);
 	assert.equal(
 		existsSync(

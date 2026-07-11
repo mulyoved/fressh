@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, test } from 'node:test';
-import ts from 'typescript';
 
 const detailSourcePath = join(process.cwd(), 'src/app/shell/detail.tsx');
 
@@ -42,79 +41,6 @@ function extractRunBrowserActionsWorkmuxCommandBlock(source: string): string {
 	);
 	assert.notEqual(callbackEnd, -1);
 	return source.slice(callbackStart, callbackEnd);
-}
-
-function extractHandleRestartCodexBlock(source: string): string {
-	const callbackStart = source.indexOf(
-		'const handleRestartCodex = useCallback',
-	);
-	assert.notEqual(callbackStart, -1);
-	const callbackEnd = source.indexOf(
-		'const actionContext = useMemo',
-		callbackStart,
-	);
-	assert.notEqual(callbackEnd, -1);
-	return source.slice(callbackStart, callbackEnd);
-}
-
-function extractActionContextBlock(source: string): string {
-	const contextStart = source.indexOf('const actionContext = useMemo');
-	assert.notEqual(contextStart, -1);
-	const contextEnd = source.indexOf(
-		'const handleAction = useCallback',
-		contextStart,
-	);
-	assert.notEqual(contextEnd, -1);
-	return source.slice(contextStart, contextEnd);
-}
-
-function extractHandleCommandBridgeEntryBlock(source: string): string {
-	const callbackStart = source.indexOf(
-		'const handleCommandBridgeEntry = useCallback',
-	);
-	assert.notEqual(callbackStart, -1);
-	const callbackEnd = source.indexOf(
-		'const handleAction = useCallback',
-		callbackStart,
-	);
-	assert.notEqual(callbackEnd, -1);
-	return source.slice(callbackStart, callbackEnd);
-}
-
-function extractHandleActionBlock(source: string): string {
-	const callbackStart = source.indexOf('const handleAction = useCallback');
-	assert.notEqual(callbackStart, -1);
-	const callbackEnd = source.indexOf(
-		'const handleSlotPress = useCallback',
-		callbackStart,
-	);
-	assert.notEqual(callbackEnd, -1);
-	return source.slice(callbackStart, callbackEnd);
-}
-
-function extractHandleSlotPressBlock(source: string): string {
-	const sourceFile = ts.createSourceFile(
-		detailSourcePath,
-		source,
-		ts.ScriptTarget.Latest,
-		true,
-		ts.ScriptKind.TSX,
-	);
-	let initializer: ts.Expression | undefined;
-	const visit = (node: ts.Node): void => {
-		if (
-			ts.isVariableDeclaration(node) &&
-			ts.isIdentifier(node.name) &&
-			node.name.text === 'handleSlotPress'
-		) {
-			initializer = node.initializer;
-			return;
-		}
-		ts.forEachChild(node, visit);
-	};
-	visit(sourceFile);
-	assert.ok(initializer, 'handleSlotPress initializer was not found');
-	return initializer.getText(sourceFile);
 }
 
 void describe('shell detail Workmux control channel wiring', () => {
@@ -263,14 +189,19 @@ void describe('shell detail Workmux control channel wiring', () => {
 
 	void test('routes Workmux transport failures into shell transport invalidation', () => {
 		const source = readFileSync(detailSourcePath, 'utf8');
+		const remoteCore = readFileSync(
+			join(process.cwd(), 'src/lib/shell-controllers/keyboard-remote-core.ts'),
+			'utf8',
+		);
 
 		assert.match(source, /import \{ useSshStore \} from '@\/lib\/ssh-store'/);
-		assert.match(source, /onTransportUnhealthy:\s*\(failure\)\s*=>/);
-		assert.match(source, /Workmux transport unhealthy, triggering reconnect/);
+		assert.match(source, /invalidateShellTransport:\s*\(nextConnectionId/);
 		assert.match(
 			source,
-			/useSshStore\s*\.\s*getState\(\)\s*\.\s*invalidateShellTransport\(connectionId,\s*channelId\)/,
+			/invalidateShellTransport\(nextConnectionId, nextChannelId\)/,
 		);
+		assert.match(remoteCore, /onTransportUnhealthy:\s*\(\)\s*=>/);
+		assert.match(remoteCore, /invalidateShellTransport\(/);
 	});
 
 	void test('passes only the connection into WorkmuxControlChannel for Workmux control commands', () => {
@@ -331,55 +262,33 @@ void describe('shell detail Workmux control channel wiring', () => {
 
 	void test('wires bridge-backed Codex restart through WorkmuxControlChannel operation', () => {
 		const source = readFileSync(detailSourcePath, 'utf8');
-		const block = extractHandleRestartCodexBlock(source);
-		const actionContextBlock = extractActionContextBlock(source);
+		const remoteCore = readFileSync(
+			join(process.cwd(), 'src/lib/shell-controllers/keyboard-remote-core.ts'),
+			'utf8',
+		);
 
+		assert.match(source, /^\s*workmuxControlChannel,\s*$/m);
+		assert.match(source, /^\s*remoteTarget,\s*$/m);
+		assert.match(remoteCore, /restartCodex\(\{/);
 		assert.match(
-			source,
-			/import \{ restartCodexWithBridge \} from '@\/lib\/codex-restart'/,
+			remoteCore,
+			/authority\.target\.workmuxControlChannel\.(?:command|operation)/,
 		);
-		assert.match(actionContextBlock, /restartCodex:\s*handleRestartCodex/);
-		assert.match(block, /restartCodexWithBridge\(\{/);
-		assert.match(
-			block,
-			/const workmuxControlChannelSnapshot\s*=\s*workmuxControlChannelRef\.current/,
-		);
-		assert.match(block, /workmuxControlChannelSnapshot\.command/);
-		assert.match(block, /workmuxControlChannelSnapshot\.operation/);
-		assert.doesNotMatch(
-			block,
-			/workmuxControlChannelRef\.current\.(?:command|operation)/,
-		);
-		assert.doesNotMatch(
-			block,
-			/sendBytesRaw|pasteClipboard|runCommandPreset|TextEncoder|sendTextRaw|sendCommandStep/,
-		);
-		assert.doesNotMatch(block, /mdev codex restart/);
+		assert.doesNotMatch(source, /restartCodexWithBridge|handleRestartCodex/);
 	});
 
 	void test('guards Codex restart against duplicate and stale UI requests', () => {
 		const source = readFileSync(detailSourcePath, 'utf8');
-		const block = extractHandleRestartCodexBlock(source);
+		const remoteCore = readFileSync(
+			join(process.cwd(), 'src/lib/shell-controllers/keyboard-remote-core.ts'),
+			'utf8',
+		);
 
-		assert.match(
-			source,
-			/const invalidateCodexRestartRequests\s*=\s*useCallback/,
-		);
-		assert.match(source, /createGenerationRequestGate\(\)/);
-		assert.match(source, /codexRestartGate\.invalidate\(\)/);
-		assert.match(block, /const restartToken = codexRestartGate\.begin\(\)/);
-		assert.match(block, /if \(restartToken === null\) return/);
-		assert.match(
-			block,
-			/finally\s*\{\s*codexRestartGate\.finish\(restartToken\);\s*\}/,
-		);
-		assert.match(
-			block,
-			/const isCurrentRestart\s*=\s*\(\) =>\s*codexRestartGate\.isCurrent\(restartToken\)/,
-		);
-		assert.match(block, /Codex restart superseded/);
-		assert.match(block, /Codex restart failed after becoming stale/);
-		assert.match(source, /invalidateCodexRestartRequests\(\);/);
+		assert.match(remoteCore, /restartInFlight/);
+		assert.match(remoteCore, /restartGeneration/);
+		assert.match(remoteCore, /restartCancellation/);
+		assert.match(remoteCore, /isCurrent\(authority\)/);
+		assert.doesNotMatch(source, /createGenerationRequestGate|codexRestartGate/);
 		assert.doesNotMatch(
 			source,
 			/codexRestartGenerationRef|codexRestartInFlightRef/,
@@ -405,35 +314,25 @@ void describe('shell detail Workmux control channel wiring', () => {
 
 	void test('passes bridge handler into CommandMenuModal', () => {
 		const source = readFileSync(detailSourcePath, 'utf8');
-		const block = extractHandleCommandBridgeEntryBlock(source);
-
-		assert.match(source, /const handleCommandBridgeEntry\s*=\s*useCallback/);
-		assert.match(block, /case 'codex\.restart':/);
-		assert.match(
-			block,
-			/void handleRestartCodex\(\{ timeoutMs: entry\.timeoutMs \}\)/,
+		const remoteCore = readFileSync(
+			join(process.cwd(), 'src/lib/shell-controllers/keyboard-remote-core.ts'),
+			'utf8',
 		);
-		assert.match(block, /logger\.warn\('Unhandled command bridge operation'/);
-		assert.match(source, /onBridge=\{handleCommandBridgeEntry\}/);
+
+		assert.match(remoteCore, /copied\.operation === 'codex\.restart'/);
+		assert.match(source, /\{\.\.\.keyboard\.commandMenuProps\}/);
+		assert.doesNotMatch(source, /handleCommandBridgeEntry/);
 	});
 
 	void test('routes action slot presses through action run options helper', () => {
 		const source = readFileSync(detailSourcePath, 'utf8');
-		const actionBlock = extractHandleActionBlock(source);
-		const block = extractHandleSlotPressBlock(source);
+		const inputCore = readFileSync(
+			join(process.cwd(), 'src/lib/shell-controllers/keyboard-input-core.ts'),
+			'utf8',
+		);
 
-		assert.match(
-			source,
-			/import \{ runKeyboardActionSlot \} from '@\/lib\/keyboard-action-run-options'/,
-		);
-		assert.match(
-			actionBlock,
-			/\(actionId: ActionId, options\?: RunActionOptions\)/,
-		);
-		assert.match(actionBlock, /runAction\(actionId, actionContext, options\)/);
-		assert.match(
-			block,
-			/case 'action':\s*runKeyboardActionSlot\(slot, handleAction\);/,
-		);
+		assert.match(inputCore, /runKeyboardActionSlot\(copiedSlot,/);
+		assert.match(source, /\{\.\.\.keyboard\.terminalKeyboardProps\}/);
+		assert.doesNotMatch(source, /runKeyboardActionSlot|handleSlotPress/);
 	});
 });

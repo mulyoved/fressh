@@ -23,20 +23,6 @@ function extractBalancedCall(callee: string, from = 0): string {
 	assert.fail(`${callee} call was not closed`);
 }
 
-function extractBalancedBlock(blockStart: number): string {
-	const open = source.indexOf('{', blockStart);
-	assert.notEqual(open, -1);
-	let depth = 0;
-	for (let index = open; index < source.length; index += 1) {
-		if (source[index] === '{') depth += 1;
-		if (source[index] === '}') {
-			depth -= 1;
-			if (depth === 0) return source.slice(blockStart, index + 1);
-		}
-	}
-	assert.fail('block was not closed');
-}
-
 void test('shell detail delegates terminal refs and lifecycle', () => {
 	assert.match(source, /useShellTerminalController\(\{/);
 	assert.match(source, /ref=\{terminal\.xtermRef\}/);
@@ -78,8 +64,8 @@ void test('shell detail composes the terminal with transport identity and raw ru
 		/\bshell,/,
 		/\btransportKey,/,
 		/platformOS: Platform\.OS/,
-		/\bsystemKeyboardEnabled,/,
-		/\bselectionModeEnabled,/,
+		/systemKeyboardEnabled: Platform\.OS === 'android'/,
+		/selectionModeEnabled: false/,
 		/\blogger,/,
 		/\brouter,/,
 		/onRuntimeChanged: handleTerminalRuntimeChanged/,
@@ -90,22 +76,11 @@ void test('shell detail composes the terminal with transport identity and raw ru
 		runtimeCallback,
 		/\(_runtimeKey: TerminalRuntimeKey \| null, instanceId: string \| null\)/,
 	);
-	const nullBranchStart = runtimeCallback.indexOf('if (instanceId === null)');
-	assert.notEqual(nullBranchStart, -1);
-	const sharedRuntimeReset = runtimeCallback.slice(0, nullBranchStart);
-	const absoluteNullBranchStart = runtimeCallbackStart + nullBranchStart;
-	const nullRuntimeReset = extractBalancedBlock(absoluteNullBranchStart);
-	const sharedRuntimeSuffix = runtimeCallback.slice(
-		nullBranchStart + nullRuntimeReset.length,
-	);
-	assert.doesNotMatch(sharedRuntimeReset, /commandTimeoutsRef/);
-	assert.match(nullRuntimeReset, /commandTimeoutsRef\.current\.forEach/);
-	assert.match(nullRuntimeReset, /commandTimeoutsRef\.current = \[\]/);
 	assert.match(
-		sharedRuntimeSuffix,
+		runtimeCallback,
 		/scrollbackRuntimeChangedRef\.current\(instanceId\)/,
 	);
-	assert.doesNotMatch(sharedRuntimeSuffix, /commandTimeoutsRef/);
+	assert.doesNotMatch(runtimeCallback, /commandTimeoutsRef/);
 	assert.doesNotMatch(runtimeCallback, /JSON\.parse|\.split\(/);
 	assert.doesNotMatch(terminalCall, /targetKey|tmuxTarget/);
 });
@@ -113,7 +88,7 @@ void test('shell detail composes the terminal with transport identity and raw ru
 void test('shell detail consumes terminal size, view, and transport ports', () => {
 	const manualFitStart = source.indexOf('const manualTerminalFitRunner');
 	const manualFitEnd = source.indexOf(
-		'const workmuxKeyboardTmuxEnabledRef',
+		'const skillSelectorOpenRef',
 		manualFitStart,
 	);
 	assert.notEqual(manualFitStart, -1);
@@ -133,7 +108,9 @@ void test('shell detail consumes terminal size, view, and transport ports', () =
 	const scrollbackAdapter = extractBalancedCall('useShellScrollbackController');
 	assert.match(scrollbackAdapter, /terminalTransport: terminal\.transport/);
 	assert.match(scrollbackAdapter, /terminalView: terminal\.view/);
-	assert.match(source, /scrollback\.input\.sendSegments/);
+	const keyboardCall = extractBalancedCall('useShellKeyboardController');
+	assert.match(keyboardCall, /scrollbackInput: scrollback\.input/);
+	assert.match(keyboardCall, /terminalView: terminal\.view/);
 	assert.doesNotMatch(
 		source,
 		/createShellTerminalLiveInputRequest|runWorkmuxScrollbackLiveInputSendPlan/,

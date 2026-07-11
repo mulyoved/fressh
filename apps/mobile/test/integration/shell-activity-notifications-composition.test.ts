@@ -98,53 +98,15 @@ void test('shell detail delegates activity and notification lifecycle', () => {
 		/storedConnectionId:\s*(?:searchParams\.)?storedConnectionId\b/,
 	);
 
-	const activityBridge = extractBlock(
-		source,
-		'const [retainedDomainBridge] = useState',
-		'const enableSystemKeyboard',
-	);
-	const retainedDomainActions = extractBlock(
-		source,
-		'const retainedDomainActions:',
-		'const retainedDomainActionsRef',
-	);
-	assert.match(source, /createShellActivityRetainedDomainBridge/);
-	assert.match(source, /createShellActivityKeyboardActions/);
-	assert.match(
-		source,
-		/setupInitialKeyboard:\s*keyboardActivityActions\.setupInitialKeyboard/,
-	);
-	assert.match(
-		source,
-		/resumeFromAppState:\s*keyboardActivityActions\.resumeFromAppState/,
-	);
-	assert.match(activityBridge, /activity\.snapshot\.generation/);
-	assert.match(activityBridge, /activity\.snapshot\.focused/);
-	assert.match(activityBridge, /activity\.snapshot\.appState/);
-	assert.match(activityBridge, /activity\.snapshot\.appActive/);
 	assert.match(source, /const getActivitySnapshot = activity\.getSnapshot/);
-	assert.match(
-		activityBridge,
-		/retainedDomainBridge\.reconcile\(getActivitySnapshot\(\)\)/,
+	const keyboardComposition = extractObjectBlock(
+		source.slice(source.indexOf('useShellKeyboardController({')),
+		'useShellKeyboardController({',
 	);
-	assert.match(activityBridge, /retainedDomainBridge\.setup\(\)/);
-	assert.match(source, /invalidateKeyboardRunner/);
+	assert.match(keyboardComposition, /^\s*activity,\s*$/m);
+	assert.match(keyboardComposition, /^\s*sourceKey:\s*targetKey,\s*$/m);
 	assert.match(source, /useShellScrollbackController\(\{/);
-	assert.match(
-		retainedDomainActions,
-		/invalidateScrollbackRequests:\s*\(\)\s*=>\s*\{\}/,
-	);
-	assert.match(
-		retainedDomainActions,
-		/runInactiveScrollbackCleanup:\s*\(\)\s*=>\s*\{\}/,
-	);
-	assert.doesNotMatch(
-		retainedDomainActions,
-		/scrollback\.(?:clear|invalidate)/,
-	);
-	assert.doesNotMatch(
-		activityBridge,
-		/return retainedDomainBridge\.reconcile|return invalidateRetainedDomains/,
-	);
-	assert.doesNotMatch(activityBridge, /addEventListener|Notification/);
+	assert.doesNotMatch(source, /createShellActivityRetainedDomainBridge/);
+	assert.doesNotMatch(source, /createShellActivityKeyboardActions/);
+	assert.doesNotMatch(source, /invalidateKeyboardRunner/);
 });
