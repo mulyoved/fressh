@@ -74,7 +74,7 @@ void test('shell detail composes the terminal with transport identity and raw ru
 	}
 	assert.match(
 		runtimeCallback,
-		/\(_runtimeKey: TerminalRuntimeKey \| null, instanceId: string \| null\)/,
+		/\(runtimeKey: TerminalRuntimeKey \| null, instanceId: string \| null\)/,
 	);
 	assert.match(
 		runtimeCallback,
@@ -88,7 +88,7 @@ void test('shell detail composes the terminal with transport identity and raw ru
 void test('shell detail consumes terminal size, view, and transport ports', () => {
 	const manualFitStart = source.indexOf('const manualTerminalFitRunner');
 	const manualFitEnd = source.indexOf(
-		'const skillSelectorOpenRef',
+		'const featureRequest = useFeatureRequestController',
 		manualFitStart,
 	);
 	assert.notEqual(manualFitStart, -1);
@@ -108,7 +108,9 @@ void test('shell detail consumes terminal size, view, and transport ports', () =
 	const scrollbackAdapter = extractBalancedCall('useShellScrollbackController');
 	assert.match(scrollbackAdapter, /terminalTransport: terminal\.transport/);
 	assert.match(scrollbackAdapter, /terminalView: terminal\.view/);
-	const keyboardCall = extractBalancedCall('useShellKeyboardController');
+	const keyboardCall = extractBalancedCall(
+		'createShellDetailKeyboardControllerInput',
+	);
 	assert.match(keyboardCall, /scrollbackInput: scrollback\.input/);
 	assert.match(keyboardCall, /terminalView: terminal\.view/);
 	assert.doesNotMatch(

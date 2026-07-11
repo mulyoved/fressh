@@ -57,8 +57,6 @@ import { useBrowserActionsController } from '@/lib/shell-controllers/browser-act
 import { useFeatureRequestController } from '@/lib/shell-controllers/feature-request';
 import {
 	type ShellKeyboardBrowserCommands,
-	type ShellKeyboardControllerHandle,
-	type ShellKeyboardModalCommands,
 	useShellKeyboardController,
 } from '@/lib/shell-controllers/keyboard';
 import { type ShellKeyboardRemoteTargetContext } from '@/lib/shell-controllers/keyboard-remote-contracts';
@@ -98,6 +96,7 @@ import {
 	type WisprTextEditorAvailability,
 } from '@/lib/wispr-automation';
 import { wisprAutomationNative } from '@/lib/wispr-automation-native';
+import { type WorkmuxNavScope } from '@/lib/workmux-app-commands';
 import {
 	createWorkmuxControlChannel,
 	disposeWorkmuxControlChannelAfterCleanup,
@@ -117,6 +116,13 @@ import {
 	TextEntryModal,
 	type TextInputScreenBounds,
 } from './components/TextEntryModal';
+import {
+	createShellDetailKeyboardAuthorityRuntime,
+	createShellDetailKeyboardControllerInput,
+	createShellDetailKeyboardLateBindings,
+	createShellDetailKeyboardModalCommands,
+	createShellDetailKeyboardViewBindings,
+} from './shell-keyboard-composition';
 import { resolveShellTouchScrollPolicy } from './shell-touch-scroll';
 
 const logger = rootLogger.extend('TabsShellDetail');
@@ -464,45 +470,40 @@ function ShellDetail() {
 			trace: workmuxDiagnosticTrace,
 		});
 	}, [connection, normalizedTmuxTarget, workmuxDiagnosticTrace]);
-	const workmuxControlChannelRef = useRef(workmuxControlChannel);
-	useLayoutEffect(() => {
-		workmuxControlChannelRef.current = workmuxControlChannel;
-	}, [workmuxControlChannel]);
-	const keyboardAuthorityRef = useRef<ShellKeyboardControllerHandle | null>(
-		null,
+	const [keyboardLateBindings] = useState(
+		createShellDetailKeyboardLateBindings,
 	);
-	const keyboardAuthoritySourceRef = useRef({
-		targetKey,
-		activityGeneration: activity.snapshot.generation,
-		workmuxControlChannel,
-	});
+	const [keyboardAuthority] = useState(() =>
+		createShellDetailKeyboardAuthorityRuntime(
+			{
+				targetKey,
+				activityGeneration: activity.snapshot.generation,
+				workmuxControlChannel,
+			},
+			{
+				late: keyboardLateBindings,
+				onInvalidationError: (error) =>
+					logger.warn('Keyboard authority invalidation failed', error),
+			},
+		),
+	);
 	useLayoutEffect(() => {
-		const previous = keyboardAuthoritySourceRef.current;
-		if (
-			previous.targetKey === targetKey &&
-			previous.activityGeneration === activity.snapshot.generation &&
-			previous.workmuxControlChannel === workmuxControlChannel
-		) {
-			return;
-		}
-		const reason = !activity.snapshot.appActive
-			? 'app-inactive'
-			: !activity.snapshot.focused
-				? 'focus-lost'
-				: 'source-change';
-		keyboardAuthorityRef.current?.invalidate(reason);
-		keyboardAuthoritySourceRef.current = {
+		keyboardAuthority.reconcile({
 			targetKey,
 			activityGeneration: activity.snapshot.generation,
 			workmuxControlChannel,
-		};
+			appActive: activity.snapshot.appActive,
+			focused: activity.snapshot.focused,
+		});
 	}, [
 		activity.snapshot.appActive,
 		activity.snapshot.focused,
 		activity.snapshot.generation,
+		keyboardAuthority,
 		targetKey,
 		workmuxControlChannel,
 	]);
+	useEffect(() => keyboardAuthority.setup(), [keyboardAuthority]);
 
 	useEffect(() => {
 		if (hasTmuxAttachError) return;
@@ -644,11 +645,12 @@ function ShellDetail() {
 		(instanceId: string | null) => void
 	>(() => {});
 	const handleTerminalRuntimeChanged = useCallback(
-		(_runtimeKey: TerminalRuntimeKey | null, instanceId: string | null) => {
-			keyboardAuthorityRef.current?.invalidate('runtime-reset');
-			scrollbackRuntimeChangedRef.current(instanceId);
+		(runtimeKey: TerminalRuntimeKey | null, instanceId: string | null) => {
+			keyboardAuthority.onRuntimeChanged(runtimeKey, instanceId, () => {
+				scrollbackRuntimeChangedRef.current(instanceId);
+			});
 		},
-		[],
+		[keyboardAuthority],
 	);
 	const terminal = useShellTerminalController({
 		shell,
@@ -1434,10 +1436,6 @@ function ShellDetail() {
 			tmuxTarget,
 		],
 	);
-	const skillSelectorOpenRef = useRef<() => void>(() => {});
-	const skillSelectorCloseRef = useRef<() => void>(() => {});
-	const openWisprTextEditorRef = useRef<() => void>(() => {});
-
 	const featureRequest = useFeatureRequestController({
 		connection: connection ?? null,
 		resolveCurrentGitHubRepository:
@@ -1463,7 +1461,7 @@ function ShellDetail() {
 			});
 			return;
 		}
-		skillSelectorCloseRef.current();
+		keyboardLateBindings.closeSkillSelector();
 		browserActions.close();
 		if (Platform.OS !== 'android') {
 			commanderModal.onClose();
@@ -1534,6 +1532,7 @@ function ShellDetail() {
 		commandMenuModal,
 		failWisprAutomation,
 		isWisprAutomationRequestActive,
+		keyboardLateBindings,
 		startWisprTextEntryAutomation,
 		textEntryModal,
 	]);
@@ -1578,10 +1577,10 @@ function ShellDetail() {
 
 	const openConfigDialog = useCallback(() => {
 		browserActions.invalidateHostUrlReads();
-		skillSelectorCloseRef.current();
+		keyboardLateBindings.closeSkillSelector();
 		browserActions.close();
 		configureModal.onOpen();
-	}, [browserActions, configureModal]);
+	}, [browserActions, configureModal, keyboardLateBindings]);
 
 	const handleDevServer = useCallback(() => {
 		configureModal.onClose();
@@ -1620,41 +1619,29 @@ function ShellDetail() {
 		pasteIntoTerminal: ignoreDiagnosticTerminalPaste,
 	});
 
-	const modalCommands = useMemo<ShellKeyboardModalCommands>(
-		() => ({
-			toggleCommandMenu: () => {
-				browserActions.invalidateHostUrlReads();
-				commanderModal.onClose();
-				browserActions.close();
-				skillSelectorCloseRef.current();
-				handleCloseTextEntry();
-				if (commandMenuModal.open) {
-					commandMenuModal.onClose();
-				} else {
-					commandMenuModal.onOpen();
-				}
-			},
-			openCommander: () => {
-				browserActions.invalidateHostUrlReads();
-				commandMenuModal.onClose();
-				browserActions.close();
-				skillSelectorCloseRef.current();
-				handleCloseTextEntry();
-				commanderModal.onOpen();
-			},
-			openSkillSelector: () => skillSelectorOpenRef.current(),
-			openBrowserActions: browserActions.open,
-			openFeatureRequest: featureRequest.open,
-			openWisprTextEditor: () => openWisprTextEditorRef.current(),
-			openConfigurator: openConfigDialog,
-			closeCommandMenu: commandMenuModal.onClose,
-		}),
+	const modalCommands = useMemo(
+		() =>
+			createShellDetailKeyboardModalCommands({
+				late: keyboardLateBindings,
+				invalidateBrowserReads: browserActions.invalidateHostUrlReads,
+				closeCommander: commanderModal.onClose,
+				closeBrowser: browserActions.close,
+				closeTextEntry: handleCloseTextEntry,
+				isCommandMenuOpen: () => commandMenuModal.open,
+				openCommandMenu: commandMenuModal.onOpen,
+				closeCommandMenu: commandMenuModal.onClose,
+				openCommander: commanderModal.onOpen,
+				openBrowserActions: browserActions.open,
+				openFeatureRequest: featureRequest.open,
+				openConfigurator: openConfigDialog,
+			}),
 		[
 			browserActions,
 			commandMenuModal,
 			commanderModal,
 			featureRequest.open,
 			handleCloseTextEntry,
+			keyboardLateBindings,
 			openConfigDialog,
 		],
 	);
@@ -1704,7 +1691,7 @@ function ShellDetail() {
 			workmuxControlChannel,
 		],
 	);
-	const keyboard = useShellKeyboardController({
+	const keyboardControllerInput = createShellDetailKeyboardControllerInput({
 		initialShellConfigState: shellConfigState,
 		activity,
 		sourceKey: targetKey,
@@ -1712,14 +1699,18 @@ function ShellDetail() {
 		terminalView: terminal.view,
 		remoteTarget,
 		navScope,
-		setNavScope: preferences.workmuxNavScope.set,
+		setNavScope: (scope: WorkmuxNavScope) =>
+			preferences.workmuxNavScope.set(scope),
 		modalCommands,
 		browserCommands,
 		fitTerminalToDevice: handleFitTerminalToDevice,
 		debugConnectionInCodex,
 		reloadRuntimeShellConfig: reloadRuntimeShellConfigFromRemote,
-		showAlert: Alert.alert,
-		invalidateShellTransport: (nextConnectionId, nextChannelId) =>
+		showAlert: (title: string, message: string) => Alert.alert(title, message),
+		invalidateShellTransport: (
+			nextConnectionId: string,
+			nextChannelId: number,
+		) =>
 			useSshStore
 				.getState()
 				.invalidateShellTransport(nextConnectionId, nextChannelId),
@@ -1727,24 +1718,25 @@ function ShellDetail() {
 		logger,
 		platformOS: Platform.OS,
 	});
+	const keyboard = useShellKeyboardController(keyboardControllerInput);
+	const keyboardView = createShellDetailKeyboardViewBindings(keyboard);
 	keyboardSelectionModeRef.current = keyboard.selectionModeEnabled;
-	keyboardAuthorityRef.current = keyboard;
+	keyboardAuthority.replaceHandle(keyboard);
 
 	const skillSelector = useSkillSelectorController({
 		connection,
 		tmuxEnabled,
 		runHostBrowserCommand: browserActions.runHostBrowserCommand,
 		resolveHostBrowserWorkspace: browserActions.resolveHostBrowserWorkspace,
-		sendTextRaw: keyboard.commanderProps.onPasteText,
+		sendTextRaw: keyboardView.commanderProps.onPasteText,
 		sourceKey: targetKey,
 		stableConnectionId: connectionStoredConnectionId ?? connectionId,
 		tmuxTarget: activeTmuxSessionName,
 		getErrorMessage,
 		arbiter: modalArbiter,
 	});
-	skillSelectorOpenRef.current = skillSelector.open;
-	skillSelectorCloseRef.current = skillSelector.close;
-	openWisprTextEditorRef.current = handleOpenWisprTextEditor;
+	keyboardLateBindings.replaceSkillSelector(skillSelector);
+	keyboardLateBindings.replaceWispr(handleOpenWisprTextEditor);
 	const wisprMode = isWisprAutomationBusy(wisprAutomationState);
 	const wisprControl = useMemo(
 		() =>
@@ -1837,10 +1829,10 @@ function ShellDetail() {
 							}}
 							touchScrollConfig={remoteTouchScrollPolicy.touchScrollConfig}
 							onResize={terminal.onResize}
-							onSelection={keyboard.onSelectionChanged}
-							onSelectionModeChange={keyboard.onSelectionModeChange}
+							onSelection={keyboardView.onSelectionChanged}
+							onSelectionModeChange={keyboardView.onSelectionModeChange}
 							onInitialized={terminal.onInitialized}
-							onInput={keyboard.onWebViewInput}
+							onInput={keyboardView.onWebViewInput}
 							{...scrollback.xtermProps}
 						/>
 						{scrollback.visible && (
@@ -1867,12 +1859,12 @@ function ShellDetail() {
 						)}
 					</View>
 				</TerminalErrorBoundary>
-				<TerminalKeyboard {...keyboard.terminalKeyboardProps} />
+				<TerminalKeyboard {...keyboardView.terminalKeyboardProps} />
 				<CommandMenuModal
 					open={commandMenuModal.open}
 					bottomOffset={Platform.OS === 'android' ? insets.bottom + 24 : 24}
 					onClose={commandMenuModal.onClose}
-					{...keyboard.commandMenuProps}
+					{...keyboardView.commandMenuProps}
 				/>
 				<BrowserActionsModal
 					bottomOffset={Platform.OS === 'android' ? insets.bottom + 24 : 24}
@@ -1886,7 +1878,7 @@ function ShellDetail() {
 					open={commanderModal.open}
 					bottomOffset={Platform.OS === 'android' ? insets.bottom + 24 : 24}
 					onClose={commanderModal.onClose}
-					{...keyboard.commanderProps}
+					{...keyboardView.commanderProps}
 				/>
 				<SkillSelectorModal
 					bottomOffset={Platform.OS === 'android' ? insets.bottom + 24 : 24}
@@ -1897,7 +1889,7 @@ function ShellDetail() {
 					bottomOffset={Platform.OS === 'android' ? insets.bottom + 24 : 24}
 					wisprMode={wisprMode}
 					wisprControl={wisprControl}
-					{...keyboard.textEntryProps}
+					{...keyboardView.textEntryProps}
 					onWisprSetup={handleOpenWisprAutomationSettings}
 					onWisprAutoStartChange={handleWisprAutoStartChange}
 					onClose={handleCloseTextEntry}
@@ -1919,7 +1911,7 @@ function ShellDetail() {
 					open={configureModal.open}
 					bottomOffset={Platform.OS === 'android' ? insets.bottom + 24 : 24}
 					onClose={configureModal.onClose}
-					{...keyboard.configureProps}
+					{...keyboardView.configureProps}
 				/>
 				<FeatureRequestModal
 					bottomOffset={Platform.OS === 'android' ? insets.bottom + 24 : 24}

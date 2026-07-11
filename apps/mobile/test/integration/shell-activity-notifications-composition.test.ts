@@ -100,8 +100,8 @@ void test('shell detail delegates activity and notification lifecycle', () => {
 
 	assert.match(source, /const getActivitySnapshot = activity\.getSnapshot/);
 	const keyboardComposition = extractObjectBlock(
-		source.slice(source.indexOf('useShellKeyboardController({')),
-		'useShellKeyboardController({',
+		source.slice(source.indexOf('createShellDetailKeyboardControllerInput({')),
+		'createShellDetailKeyboardControllerInput({',
 	);
 	assert.match(keyboardComposition, /^\s*activity,\s*$/m);
 	assert.match(keyboardComposition, /^\s*sourceKey:\s*targetKey,\s*$/m);

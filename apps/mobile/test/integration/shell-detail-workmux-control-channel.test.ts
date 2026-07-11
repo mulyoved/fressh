@@ -25,7 +25,7 @@ function extractCreateWorkmuxControlChannelBlock(source: string): string {
 function extractWorkmuxControlChannelMemoBlock(source: string): string {
 	const memoStart = source.indexOf('const workmuxControlChannel = useMemo');
 	assert.notEqual(memoStart, -1);
-	const memoEnd = source.indexOf('const workmuxControlChannelRef', memoStart);
+	const memoEnd = source.indexOf('const [keyboardLateBindings]', memoStart);
 	assert.notEqual(memoEnd, -1);
 	return source.slice(memoStart, memoEnd);
 }
@@ -195,7 +195,7 @@ void describe('shell detail Workmux control channel wiring', () => {
 		);
 
 		assert.match(source, /import \{ useSshStore \} from '@\/lib\/ssh-store'/);
-		assert.match(source, /invalidateShellTransport:\s*\(nextConnectionId/);
+		assert.match(source, /invalidateShellTransport:\s*\(\s*nextConnectionId/);
 		assert.match(
 			source,
 			/invalidateShellTransport\(nextConnectionId, nextChannelId\)/,
@@ -320,7 +320,7 @@ void describe('shell detail Workmux control channel wiring', () => {
 		);
 
 		assert.match(remoteCore, /copied\.operation === 'codex\.restart'/);
-		assert.match(source, /\{\.\.\.keyboard\.commandMenuProps\}/);
+		assert.match(source, /\{\.\.\.keyboardView\.commandMenuProps\}/);
 		assert.doesNotMatch(source, /handleCommandBridgeEntry/);
 	});
 
@@ -332,7 +332,7 @@ void describe('shell detail Workmux control channel wiring', () => {
 		);
 
 		assert.match(inputCore, /runKeyboardActionSlot\(copiedSlot,/);
-		assert.match(source, /\{\.\.\.keyboard\.terminalKeyboardProps\}/);
+		assert.match(source, /\{\.\.\.keyboardView\.terminalKeyboardProps\}/);
 		assert.doesNotMatch(source, /runKeyboardActionSlot|handleSlotPress/);
 	});
 });

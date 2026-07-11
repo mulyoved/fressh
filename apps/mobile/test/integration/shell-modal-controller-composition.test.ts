@@ -29,7 +29,7 @@ void test('shell detail composes focused modal controllers without shell-modals'
 	const skillBlock = extractBlock(
 		source,
 		'const skillSelector = useSkillSelectorController',
-		'skillSelectorOpenRef.current = skillSelector.open',
+		'keyboardLateBindings.replaceSkillSelector(skillSelector)',
 	);
 	assert.match(source, /shell-controllers\/browser-actions/);
 	assert.match(source, /shell-controllers\/feature-request/);
@@ -47,14 +47,17 @@ void test('shell detail composes focused modal controllers without shell-modals'
 	assert.match(skillBlock, /arbiter: modalArbiter/);
 	assert.match(
 		skillBlock,
-		/sendTextRaw: keyboard\.commanderProps\.onPasteText/,
+		/sendTextRaw: keyboardView\.commanderProps\.onPasteText/,
 	);
 	assert.match(
 		source,
 		/\(\) => modalArbiter\.register\('text-entry', handleCloseTextEntry\)/,
 	);
 	assert.doesNotMatch(source, /from '@\/lib\/shell-modals'/);
-	assert.match(source, /skillSelectorCloseRef\.current = skillSelector\.close/);
+	assert.match(
+		source,
+		/keyboardLateBindings\.replaceSkillSelector\(skillSelector\)/,
+	);
 	assert.doesNotMatch(
 		source,
 		/featureRequestCloseRef|close\w+OtherModals|sourceKeyChangeTrackerRef|skillSelectorSourceKey/,
