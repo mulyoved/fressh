@@ -101,11 +101,23 @@ function createKeyboardRemoteHarness() {
 
 function configState(version: string): ShellConfigState {
 	return {
-		config: { version },
+		config: {
+			version,
+			updatedAt: '2026-07-10T00:00:00.000Z',
+			defaultKeyboardId: 'main',
+			activeKeyboardIds: ['main'],
+			keyboardRouting: {
+				actionTargets: {},
+				oneShotReturnByKeyboardId: {},
+			},
+			keyboards: [{ id: 'main', name: 'Main', grid: [] }],
+			macrosByKeyboardId: { main: [] },
+			commandMenus: [],
+		},
 		source: 'remote',
-		lastLoadedAt: 1,
+		lastLoadedAt: null,
 		lastError: null,
-	} as unknown as ShellConfigState;
+	} satisfies ShellConfigState;
 }
 
 function remoteStateSnapshot(version = 'current') {
