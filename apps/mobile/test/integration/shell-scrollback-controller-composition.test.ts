@@ -95,6 +95,11 @@ void test('all shell input adapters use the scrollback input port', () => {
 	assert.match(keyboardCall, /^\s*terminal,\s*$/m);
 	const xterm = xtermElement();
 	assert.match(xterm, /onInput=\{keyboard\.onWebViewInput\}/);
+	assert.match(xterm, /onSelection=\{keyboard\.onSelectionChanged\}/);
+	assert.match(
+		xterm,
+		/onSelectionModeChange=\{keyboard\.onSelectionModeChange\}/,
+	);
 	assert.doesNotMatch(
 		source,
 		/createShellTerminalLiveInputRequest|runWorkmuxScrollbackLiveInputSendPlan|terminal\.transport\.send|shell\.sendData|new OrderedWriter/,
