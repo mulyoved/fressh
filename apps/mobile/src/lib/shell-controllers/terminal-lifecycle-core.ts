@@ -465,9 +465,10 @@ export function createTerminalLifecycleController({
 			runtimeRevision += 1;
 			runtimeInstanceId = null;
 			runtimeKey = null;
-			detachOwned();
+			const oldAttachment = takeAttachment();
 			const captured: CapturedError = { present: false, value: undefined };
 			capture(captured, transport.clearRuntime);
+			if (oldAttachment) removeAttachment(oldAttachment);
 			capture(captured, () =>
 				publish({
 					ready: false,
