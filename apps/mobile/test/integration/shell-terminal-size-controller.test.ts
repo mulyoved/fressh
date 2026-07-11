@@ -99,6 +99,7 @@ void test('terminal size debounce fires at 100 ms and rapid changes keep only th
 
 	core.handleResize(80, 24);
 	const firstTimer = clock.pending();
+	clock.advanceBy(40);
 	core.handleResize(81, 25);
 	assert.equal(clock.pending().length, 1);
 	assert.notDeepEqual(clock.pending(), firstTimer);
@@ -434,6 +435,69 @@ void test('same-size reentrant first resize retains one exact debounce', async (
 	});
 
 	core.handleResize(80, 24);
+	assert.equal(clock.pending().length, 1);
+	clock.advanceBy(99);
+	assert.deepEqual(resized, []);
+	clock.advanceBy(1);
+	await clock.settled();
+
+	assert.deepEqual(resized, ['80x24']);
+	assert.deepEqual(clock.pending(), []);
+});
+
+void test('waiter registered during resize publication waits for a later event', async () => {
+	const clock = createFakeClock();
+	const core = createTerminalSizeController(createSizeDeps(clock));
+	let waiting: Promise<{ cols: number; rows: number } | null> | undefined;
+	let settled = false;
+	let shouldRegister = true;
+	core.subscribe(() => {
+		if (!shouldRegister) return;
+		shouldRegister = false;
+		waiting = core.waitForSizeAfterFit().then((size) => {
+			settled = true;
+			return size;
+		});
+	});
+
+	core.handleResize(80, 24);
+	await clock.settled();
+	assert.equal(settled, false);
+	assert.ok(waiting);
+
+	core.handleResize(100, 30);
+	assert.deepEqual(await waiting, { cols: 100, rows: 30 });
+});
+
+void test('throwing subscriber cannot prevent waiter settlement or PTY resize scheduling', async () => {
+	const clock = createFakeClock();
+	const resized: string[] = [];
+	const publishError = new Error('subscriber failure');
+	const core = createTerminalSizeController({
+		...createSizeDeps(clock),
+		resizePty: async (cols, rows) => {
+			resized.push(`${cols}x${rows}`);
+		},
+	});
+	let waiterSettled = false;
+	const waiting = core.waitForSizeAfterFit().then((size) => {
+		waiterSettled = true;
+		return size;
+	});
+	core.subscribe(() => {
+		throw publishError;
+	});
+
+	let thrown: unknown;
+	try {
+		core.handleResize(80, 24);
+	} catch (error) {
+		thrown = error;
+	}
+	assert.equal(thrown, publishError);
+	await clock.settled();
+	assert.equal(waiterSettled, true);
+	assert.deepEqual(await waiting, { cols: 80, rows: 24 });
 	assert.equal(clock.pending().length, 1);
 	clock.advanceBy(99);
 	assert.deepEqual(resized, []);

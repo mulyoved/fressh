@@ -50,12 +50,19 @@ export function createTerminalSizeController({
 		resizeTimer = null;
 	};
 
-	const settleWaiters = (size: TerminalFitSize | null): void => {
-		for (const waiter of [...waiters]) {
-			waiters.delete(waiter);
+	const settleWaiterCohort = (
+		cohort: readonly FitWaiter[],
+		size: TerminalFitSize | null,
+	): void => {
+		for (const waiter of cohort) {
+			if (!waiters.delete(waiter)) continue;
 			waiter.resolve(size);
 			clearTimeout(waiter.timer);
 		}
+	};
+
+	const settleAllWaiters = (size: TerminalFitSize | null): void => {
+		settleWaiterCohort([...waiters], size);
 	};
 
 	const reportResizeFailure = (error: unknown): void => {
@@ -77,25 +84,34 @@ export function createTerminalSizeController({
 	const handleResize = (cols: number, rows: number): void => {
 		if (disposed) return;
 		const revision = ++operationRevision;
+		const waiterCohort = [...waiters];
 		const size = { cols, rows };
-		publisher.publish({ lastSize: size });
-		if (disposed || revision !== operationRevision) return;
-		settleWaiters(size);
-
-		if (
-			lastRequestedPtySize?.cols === size.cols &&
-			lastRequestedPtySize.rows === size.rows
-		) {
-			return;
+		let publicationFailed = false;
+		let publicationError: unknown;
+		try {
+			publisher.publish({ lastSize: size });
+		} catch (error) {
+			publicationFailed = true;
+			publicationError = error;
 		}
 
-		clearResizeTimer();
-		lastRequestedPtySize = size;
-		resizeTimer = setTimeout(() => {
-			resizeTimer = null;
-			if (disposed) return;
-			runResize(size);
-		}, RESIZE_DEBOUNCE_MS);
+		if (!disposed && revision === operationRevision) {
+			settleWaiterCohort(waiterCohort, size);
+			if (
+				lastRequestedPtySize?.cols !== size.cols ||
+				lastRequestedPtySize.rows !== size.rows
+			) {
+				clearResizeTimer();
+				lastRequestedPtySize = size;
+				resizeTimer = setTimeout(() => {
+					resizeTimer = null;
+					if (disposed) return;
+					runResize(size);
+				}, RESIZE_DEBOUNCE_MS);
+			}
+		}
+
+		if (publicationFailed) throw publicationError;
 	};
 
 	const waitForSizeAfterFit = (): Promise<TerminalFitSize | null> => {
@@ -118,7 +134,7 @@ export function createTerminalSizeController({
 		operationRevision += 1;
 		clearResizeTimer();
 		lastRequestedPtySize = null;
-		settleWaiters(publisher.getSnapshot().lastSize);
+		settleAllWaiters(publisher.getSnapshot().lastSize);
 		publisher.publish({ lastSize: null });
 	};
 
@@ -127,7 +143,7 @@ export function createTerminalSizeController({
 		disposed = true;
 		operationRevision += 1;
 		clearResizeTimer();
-		settleWaiters(publisher.getSnapshot().lastSize);
+		settleAllWaiters(publisher.getSnapshot().lastSize);
 		publisher.disposePublisher();
 	};
 
