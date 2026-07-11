@@ -28,10 +28,12 @@ type LiveInputState = {
 	context: LiveInputContext | null;
 	disposed: boolean;
 	liveInputGeneration: number;
+	localModeRevision: number;
 	remoteCopyModeActive: boolean;
 	remoteCopyModeGeneration: number;
 	runtimeInstanceId: string | null;
 	scrollbackActive: boolean;
+	scrollbackPhase: 'dragging' | 'active';
 	targetOwnershipRevision: number;
 };
 
@@ -40,6 +42,13 @@ type LiveInputToken = Readonly<{
 	context: LiveInputContext;
 	lease: TerminalInputLease;
 	liveInputGeneration: number;
+	localModeRevision: { current: number };
+	localModeSnapshot: {
+		current: Readonly<{
+			active: boolean;
+			phase: 'dragging' | 'active';
+		}>;
+	};
 	remoteCopyModeGeneration: { current: number };
 	runtimeInstanceId: string;
 	runtimeKey: string;
@@ -68,6 +77,8 @@ export function createScrollbackLiveInputCoordinator({
 	startCleanup(): Promise<boolean> | null;
 }) {
 	let lastInteractive: boolean | null = null;
+	let activityInvocationEpoch = 0;
+	let lastActivityGeneration: number | null = null;
 	const warn = (
 		context: LiveInputContext,
 		message: string,
@@ -90,10 +101,17 @@ export function createScrollbackLiveInputCoordinator({
 			current.targetOwnershipRevision === token.targetOwnershipRevision
 		);
 	};
-	const isInternalTokenCurrent = (token: LiveInputToken): boolean =>
-		isTokenAuthorityCurrent(token) &&
-		getCurrentState().remoteCopyModeGeneration ===
-			token.remoteCopyModeGeneration.current;
+	const isInternalTokenCurrent = (token: LiveInputToken): boolean => {
+		const current = getCurrentState();
+		return (
+			isTokenAuthorityCurrent(token) &&
+			current.localModeRevision === token.localModeRevision.current &&
+			current.scrollbackActive === token.localModeSnapshot.current.active &&
+			current.scrollbackPhase === token.localModeSnapshot.current.phase &&
+			current.remoteCopyModeGeneration ===
+				token.remoteCopyModeGeneration.current
+		);
+	};
 
 	const isTokenCurrent = (token: LiveInputToken): boolean => {
 		if (!isInternalTokenCurrent(token)) return false;
@@ -204,13 +222,21 @@ export function createScrollbackLiveInputCoordinator({
 			return null;
 		}
 		if (lease === null || getCurrentState().context !== context) return null;
+		const validatedState = getCurrentState();
 		const token = {
 			activityGeneration: activity.generation,
 			context,
 			lease,
 			liveInputGeneration: state.liveInputGeneration,
+			localModeRevision: { current: validatedState.localModeRevision },
+			localModeSnapshot: {
+				current: {
+					active: validatedState.scrollbackActive,
+					phase: validatedState.scrollbackPhase,
+				},
+			},
 			remoteCopyModeGeneration: {
-				current: state.remoteCopyModeGeneration,
+				current: validatedState.remoteCopyModeGeneration,
 			},
 			runtimeInstanceId,
 			runtimeKey,
@@ -244,14 +270,15 @@ export function createScrollbackLiveInputCoordinator({
 		options?: ShellLiveInputOptions,
 	): Promise<ControllerOutcome<{ message: string }>> => {
 		const payloadSnapshot = segments.map((segment) => new Uint8Array(segment));
-		const initial = getCurrentState();
 		const token = captureToken();
 		if (token === null) return unavailable;
+		const planState = getCurrentState();
+		if (!isTokenCurrent(token)) return superseded;
 		const plan = buildWorkmuxScrollbackLiveInputSendPlan({
 			interSegmentDelayMs: options?.interSegmentDelayMs,
 			payloadSegments: payloadSnapshot,
 			scrollbackActive:
-				initial.scrollbackActive || initial.remoteCopyModeActive,
+				planState.scrollbackActive || planState.remoteCopyModeActive,
 			scrollbackExitDelayMs,
 			scrollbackExitKeyPayload,
 		});
@@ -264,9 +291,22 @@ export function createScrollbackLiveInputCoordinator({
 		}
 		if (!isTokenCurrent(token)) return superseded;
 		const startTokenCleanup = (): Promise<boolean> | null => {
+			const previousLocalModeRevision = token.localModeRevision.current;
 			const previousRemoteGeneration = token.remoteCopyModeGeneration.current;
-			const cleanup = startCleanup();
+			const exactCleanup = startCleanup();
 			const current = getCurrentState();
+			const expectedLocalRevision =
+				previousLocalModeRevision + (planState.scrollbackActive ? 1 : 0);
+			if (
+				isTokenAuthorityCurrent(token) &&
+				current.localModeRevision === expectedLocalRevision
+			) {
+				token.localModeRevision.current = current.localModeRevision;
+				token.localModeSnapshot.current = {
+					active: current.scrollbackActive,
+					phase: current.scrollbackPhase,
+				};
+			}
 			if (
 				isTokenAuthorityCurrent(token) &&
 				current.remoteCopyModeGeneration === previousRemoteGeneration + 1
@@ -274,7 +314,7 @@ export function createScrollbackLiveInputCoordinator({
 				token.remoteCopyModeGeneration.current =
 					current.remoteCopyModeGeneration;
 			}
-			return cleanup;
+			return getCurrentCleanup() ?? exactCleanup;
 		};
 
 		if (plan.segments.length === 0) {
@@ -285,7 +325,7 @@ export function createScrollbackLiveInputCoordinator({
 					isRequestCurrent: () => isTokenCurrent(token),
 					onPayloadAccepted: options?.onAccepted,
 					plan,
-					remoteCopyModeActive: initial.remoteCopyModeActive,
+					remoteCopyModeActive: planState.remoteCopyModeActive,
 					sendSegments: async () => {},
 					startCleanup: startTokenCleanup,
 				});
@@ -293,7 +333,8 @@ export function createScrollbackLiveInputCoordinator({
 				warn(token.context, 'Failed to start scrollback cleanup', error);
 				return isTokenCurrent(token) ? unavailable : superseded;
 			}
-			if (initial.remoteCopyModeActive && barrier === null) return unavailable;
+			if (planState.remoteCopyModeActive && barrier === null)
+				return unavailable;
 			if (barrier !== null) {
 				try {
 					if (!(await barrier)) {
@@ -332,7 +373,7 @@ export function createScrollbackLiveInputCoordinator({
 						}
 					},
 					plan,
-					remoteCopyModeActive: initial.remoteCopyModeActive,
+					remoteCopyModeActive: planState.remoteCopyModeActive,
 					sendSegments: async (acceptedSegments, sendOptions) => {
 						sendStarted = true;
 						if (!isTokenCurrent(token)) {
@@ -360,7 +401,7 @@ export function createScrollbackLiveInputCoordinator({
 				settle(isTokenCurrent(token) ? unavailable : superseded);
 				return;
 			}
-			if (initial.remoteCopyModeActive && barrier === null && !sendStarted) {
+			if (planState.remoteCopyModeActive && barrier === null && !sendStarted) {
 				settle(unavailable);
 				return;
 			}
@@ -383,20 +424,32 @@ export function createScrollbackLiveInputCoordinator({
 	};
 
 	const onActivityChanged = (): void => {
+		const invocationEpoch = ++activityInvocationEpoch;
 		const state = getCurrentState();
 		if (state.disposed || state.context === null) return;
-		let interactive: boolean;
+		let activity: ReturnType<LiveInputContext['getActivitySnapshot']>;
 		try {
-			interactive = state.context.getActivitySnapshot().interactive;
+			activity = state.context.getActivitySnapshot();
 		} catch (error) {
 			warn(state.context, 'Failed to read scrollback activity', error);
 			return;
 		}
-		if (getCurrentState().context !== state.context) return;
+		if (
+			activityInvocationEpoch !== invocationEpoch ||
+			getCurrentState().context !== state.context
+		)
+			return;
+		lastActivityGeneration = activity.generation;
 		const previous = lastInteractive;
-		lastInteractive = interactive;
-		if (previous !== true || interactive) return;
+		lastInteractive = activity.interactive;
+		if (previous !== true || activity.interactive) return;
 		advanceFreshness();
+		if (
+			activityInvocationEpoch !== invocationEpoch ||
+			getCurrentState().context !== state.context ||
+			lastActivityGeneration !== activity.generation
+		)
+			return;
 		let cleanup: Promise<boolean> | null;
 		try {
 			cleanup = clearInactive();

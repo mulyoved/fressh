@@ -5,7 +5,11 @@ import {
 	createShellScrollbackHookRuntime,
 	type ShellScrollbackHookRuntimeFactories,
 } from '../../src/lib/shell-controllers/scrollback';
-import { createScrollbackHarness } from './shell-scrollback-controller-test-support';
+import {
+	createDeferred,
+	createScrollbackHarness,
+	flushPromises,
+} from './shell-scrollback-controller-test-support';
 
 function createFixture() {
 	const harness = createScrollbackHarness();
@@ -113,12 +117,15 @@ void test('hook runtime ordinary and Strict Mode unmount invalidates synchronous
 	assert.equal(strict.calls.filter((call) => call === 'dispose').length, 1);
 });
 
-void test('jump-to-live cleanup rejection uses the latest logger once and contains logger failure', async () => {
+void test('jump-to-live has one canonical async rejection observer and contains synchronous logger failure', async () => {
 	const fixture = createFixture();
-	const failure = Promise.reject(new Error('cleanup failed'));
-	fixture.harness.core.jumpToLive = (() => failure) as never;
+	const cleanup = createDeferred<boolean>();
 	const oldWarnings: string[] = [];
 	const currentWarnings: string[] = [];
+	fixture.runtime.onTerminalRuntimeChanged('instance-1');
+	const executor = fixture.harness.executors[0];
+	assert.ok(executor);
+	executor.reset = () => cleanup.promise;
 	fixture.runtime.commit({
 		activity: {
 			getSnapshot: fixture.harness.context.getActivitySnapshot,
@@ -128,13 +135,21 @@ void test('jump-to-live cleanup rejection uses the latest logger once and contai
 		} as never,
 		context: {
 			...fixture.harness.context,
-			logger: { warn: (message) => currentWarnings.push(message) },
+			logger: { warn: (message) => oldWarnings.push(message) },
 		},
 	});
 	fixture.runtime.jumpToLive();
-	await Promise.resolve();
+	fixture.runtime.commit({
+		activity: fixture.runtime.getInput().activity,
+		context: {
+			...fixture.runtime.getInput().context,
+			logger: { warn: (message) => currentWarnings.push(message) },
+		},
+	});
+	cleanup.reject(new Error('cleanup failed'));
+	await flushPromises();
 	assert.deepEqual(oldWarnings, []);
-	assert.deepEqual(currentWarnings, ['Workmux scrollback jump-to-live failed']);
+	assert.deepEqual(currentWarnings, ['Workmux scrollback reset failed']);
 
 	fixture.runtime.commit({
 		activity: fixture.runtime.getInput().activity,
@@ -147,6 +162,9 @@ void test('jump-to-live cleanup rejection uses the latest logger once and contai
 			},
 		},
 	});
+	fixture.harness.core.jumpToLive = () => {
+		throw new Error('sync jump failure');
+	};
 	assert.doesNotThrow(() => fixture.runtime.jumpToLive());
 	await Promise.resolve();
 });

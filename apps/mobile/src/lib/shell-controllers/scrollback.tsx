@@ -98,11 +98,8 @@ export function createShellScrollbackHookRuntime({
 			core.onScrollbackBatch(event),
 	};
 	const jumpToLive = (): void => {
-		let cleanup: Promise<boolean> | null;
 		try {
-			// The core's public command remains void-shaped; its implementation
-			// returns the exact cleanup solely so this hook can observe rejection.
-			cleanup = core.jumpToLive() as unknown as Promise<boolean> | null;
+			core.jumpToLive();
 		} catch (error) {
 			try {
 				committedInput.context.logger.warn(
@@ -112,18 +109,7 @@ export function createShellScrollbackHookRuntime({
 			} catch {
 				// Shell interaction cannot depend on diagnostics.
 			}
-			return;
 		}
-		void cleanup?.catch((error) => {
-			try {
-				committedInput.context.logger.warn(
-					'Workmux scrollback jump-to-live failed',
-					error,
-				);
-			} catch {
-				// Deferred cleanup errors must not escape their microtask.
-			}
-		});
 	};
 
 	return {

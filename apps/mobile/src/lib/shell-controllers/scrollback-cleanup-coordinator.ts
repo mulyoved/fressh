@@ -124,7 +124,11 @@ export function createScrollbackCleanupCoordinator({
 					kind: 'report',
 					report: (error, failure) => {
 						if (failure.kind === 'rejected' || reportResolvedFalse) {
-							warn(logger, failureMessage, error);
+							const currentLogger =
+								ownership !== null && isFailureCurrent(ownership)
+									? getCurrentState().context?.logger
+									: logger;
+							warn(currentLogger, failureMessage, error);
 						}
 					},
 				},

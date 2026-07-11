@@ -6,6 +6,7 @@ import {
 	type TerminalInputLease,
 	type TerminalRuntimeKey,
 } from '../../src/lib/shell-controllers/terminal-transport';
+import { createWorkmuxScrollbackLiveInputCleanupBarrier } from '../../src/lib/workmux-scrollback-live-input';
 import {
 	createDeferred,
 	flushPromises,
@@ -23,6 +24,8 @@ function createFixture() {
 	let remoteGeneration = 1;
 	let remoteActive = false;
 	let scrollbackActive = false;
+	let scrollbackPhase: 'dragging' | 'active' = 'active';
+	let localModeRevision = 0;
 	let targetRevision = 1;
 	let disposed = false;
 	let instanceId: string | null = 'instance-1';
@@ -41,6 +44,8 @@ function createFixture() {
 	let leaseCurrent = true;
 	let sendError: unknown = null;
 	let inactiveClearCount = 0;
+	let currentCleanupGetter = () => currentCleanup;
+	let startCleanup = () => startedCleanup;
 	const context = {
 		targetKey,
 		targetName: 'main',
@@ -82,14 +87,16 @@ function createFixture() {
 			context,
 			disposed,
 			liveInputGeneration: generation,
+			localModeRevision,
 			remoteCopyModeActive: remoteActive,
 			remoteCopyModeGeneration: remoteGeneration,
 			runtimeInstanceId: instanceId,
 			scrollbackActive,
+			scrollbackPhase,
 			targetOwnershipRevision: targetRevision,
 		}),
-		getCurrentCleanup: () => currentCleanup,
-		startCleanup: () => startedCleanup,
+		getCurrentCleanup: () => currentCleanupGetter(),
+		startCleanup: () => startCleanup(),
 		scrollbackExitDelayMs: 10,
 		scrollbackExitKeyPayload: new Uint8Array([0x71]),
 	});
@@ -103,6 +110,7 @@ function createFixture() {
 		invalidate: () => (generation += 1),
 		inactiveClearCount: () => inactiveClearCount,
 		lease: (current: boolean) => (leaseCurrent = current),
+		liveGeneration: () => generation,
 		remote: (active: boolean) => {
 			remoteActive = active;
 			remoteGeneration += 1;
@@ -117,11 +125,24 @@ function createFixture() {
 		setCleanup: (value: Promise<boolean> | null) => {
 			currentCleanup = value;
 		},
+		setCurrentCleanupGetter: (getter: () => Promise<boolean> | null) => {
+			currentCleanupGetter = getter;
+		},
+		setStartCleanup: (start: () => Promise<boolean> | null) => {
+			startCleanup = start;
+		},
 		setStartedCleanup: (value: Promise<boolean> | null) => {
 			startedCleanup = value;
 		},
 		setSendError: (error: unknown) => (sendError = error),
-		setScrollbackActive: (active: boolean) => (scrollbackActive = active),
+		setScrollbackActive: (active: boolean) => {
+			if (scrollbackActive !== active) localModeRevision += 1;
+			scrollbackActive = active;
+		},
+		setScrollbackPhase: (phase: typeof scrollbackPhase) => {
+			if (scrollbackPhase !== phase) localModeRevision += 1;
+			scrollbackPhase = phase;
+		},
 		warnings,
 	};
 }
@@ -199,6 +220,113 @@ void test('remote copy mode starts cleanup, uses the exit delay, and fails close
 	);
 });
 
+void test('new cleanup waits for the post-registration composite in either settlement order', async () => {
+	for (const outerFirst of [true, false]) {
+		const fixture = createFixture();
+		const barrier = createWorkmuxScrollbackLiveInputCleanupBarrier();
+		const outer = createDeferred<boolean>();
+		const inner = createDeferred<boolean>();
+		fixture.remote(true);
+		fixture.setCurrentCleanupGetter(barrier.current);
+		fixture.setStartCleanup(() => {
+			void barrier.track(inner.promise);
+			void barrier.track(outer.promise);
+			return outer.promise;
+		});
+		const outcome = fixture.coordinator.sendSegments([new Uint8Array([1])]);
+		(outerFirst ? outer : inner).resolve(true);
+		await Promise.resolve();
+		assert.deepEqual(fixture.sent, []);
+		(outerFirst ? inner : outer).resolve(false);
+		assert.deepEqual(await outcome, { status: 'unavailable' });
+		assert.deepEqual(fixture.sent, []);
+	}
+});
+
+void test('new cleanup waits for a rejecting inner composite member in either settlement order', async () => {
+	for (const outerFirst of [true, false]) {
+		const fixture = createFixture();
+		const barrier = createWorkmuxScrollbackLiveInputCleanupBarrier();
+		const outer = createDeferred<boolean>();
+		const inner = createDeferred<boolean>();
+		fixture.remote(true);
+		fixture.setCurrentCleanupGetter(barrier.current);
+		fixture.setStartCleanup(() => {
+			void barrier.track(outer.promise);
+			void barrier.track(inner.promise);
+			return outer.promise;
+		});
+		const outcome = fixture.coordinator.sendSegments([new Uint8Array([1])]);
+		if (outerFirst) outer.resolve(true);
+		else inner.reject(new Error('inner cleanup failed'));
+		await Promise.resolve();
+		assert.deepEqual(fixture.sent, []);
+		if (outerFirst) inner.reject(new Error('inner cleanup failed'));
+		else outer.resolve(true);
+		assert.deepEqual(await outcome, { status: 'unavailable' });
+		assert.deepEqual(fixture.sent, []);
+	}
+});
+
+void test('mode activation during authenticated capture starts cleanup from the validated state', async () => {
+	const fixture = createFixture();
+	const cleanup = createDeferred<boolean>();
+	fixture.setStartedCleanup(cleanup.promise);
+	const getActivity = fixture.context.getActivitySnapshot;
+	let activate = true;
+	fixture.context.getActivitySnapshot = () => {
+		if (activate) {
+			activate = false;
+			fixture.setScrollbackActive(true);
+		}
+		return getActivity();
+	};
+	const outcome = fixture.coordinator.sendSegments([new Uint8Array([1])]);
+	assert.deepEqual(fixture.sent, []);
+	cleanup.resolve(true);
+	assert.deepEqual(await outcome, { status: 'completed' });
+	assert.deepEqual(fixture.sent, [[[1]]]);
+});
+
+void test('mode activation or deactivation during cleanup supersedes captured input', async () => {
+	for (const initialActive of [false, true]) {
+		const fixture = createFixture();
+		const cleanup = createDeferred<boolean>();
+		fixture.setScrollbackActive(initialActive);
+		fixture.setCleanup(cleanup.promise);
+		const outcome = fixture.coordinator.sendSegments([new Uint8Array([1])]);
+		fixture.setScrollbackActive(!initialActive);
+		cleanup.resolve(true);
+		assert.deepEqual(await outcome, { status: 'superseded' });
+		assert.deepEqual(fixture.sent, []);
+	}
+});
+
+void test('phase change during cleanup supersedes captured input', async () => {
+	const fixture = createFixture();
+	const cleanup = createDeferred<boolean>();
+	fixture.setCleanup(cleanup.promise);
+	const outcome = fixture.coordinator.sendSegments([new Uint8Array([1])]);
+	fixture.setScrollbackPhase('dragging');
+	cleanup.resolve(true);
+	assert.deepEqual(await outcome, { status: 'superseded' });
+	assert.deepEqual(fixture.sent, []);
+});
+
+void test('the cleanup-owned local exit advances the captured mode revision without superseding input', async () => {
+	const fixture = createFixture();
+	fixture.setScrollbackActive(true);
+	fixture.setStartCleanup(() => {
+		fixture.setScrollbackActive(false);
+		return null;
+	});
+	assert.deepEqual(
+		await fixture.coordinator.sendSegments([new Uint8Array([1])]),
+		{ status: 'completed' },
+	);
+	assert.deepEqual(fixture.sent, [[[1]]]);
+});
+
 void test('onAccepted reentry advances freshness before transport invocation', async () => {
 	const fixture = createFixture();
 	const outcome = fixture.coordinator.sendSegments([new Uint8Array([1])], {
@@ -206,6 +334,54 @@ void test('onAccepted reentry advances freshness before transport invocation', a
 	});
 	assert.deepEqual(await outcome, { status: 'superseded' });
 	assert.deepEqual(fixture.sent, []);
+});
+
+void test('stale outer inactivity notification cannot override reentrant newer activity', () => {
+	const fixture = createFixture();
+	fixture.coordinator.onActivityChanged();
+	const readActivity = fixture.context.getActivitySnapshot;
+	let reenter = true;
+	fixture.context.getActivitySnapshot = () => {
+		if (!reenter) return readActivity();
+		reenter = false;
+		const staleInactive = {
+			...readActivity(),
+			appActive: false,
+			focused: false,
+			interactive: false,
+			generation: 4,
+		};
+		fixture.activity({ generation: 5 });
+		fixture.coordinator.onActivityChanged();
+		return staleInactive;
+	};
+	fixture.coordinator.onActivityChanged();
+	assert.equal(fixture.inactiveClearCount(), 0);
+	assert.equal(fixture.liveGeneration(), 1);
+});
+
+void test('reentrant newer inactivity wins over a stale outer interactive notification once', () => {
+	const fixture = createFixture();
+	fixture.coordinator.onActivityChanged();
+	const readActivity = fixture.context.getActivitySnapshot;
+	let reenter = true;
+	fixture.context.getActivitySnapshot = () => {
+		if (!reenter) return readActivity();
+		reenter = false;
+		const staleInteractive = { ...readActivity(), generation: 4 };
+		fixture.activity({
+			appActive: false,
+			focused: false,
+			interactive: false,
+			generation: 5,
+		});
+		fixture.coordinator.onActivityChanged();
+		return staleInteractive;
+	};
+	fixture.coordinator.onActivityChanged();
+	fixture.coordinator.onActivityChanged();
+	assert.equal(fixture.inactiveClearCount(), 1);
+	assert.equal(fixture.liveGeneration(), 2);
 });
 
 void test('live input becomes superseded across runtime, activity, target, lease, and disposal replacement', async () => {

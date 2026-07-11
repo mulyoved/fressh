@@ -104,8 +104,9 @@ export function createShellScrollbackControllerCore(
 	let executorRevision = 0;
 	let targetOwnershipRevision = 0;
 	let nextTraceId = 0;
-	let activeTraceId = 'scroll-0';
-	let disposed = false;
+	let activeTraceId = 'scroll-0',
+		disposed = false,
+		localModeRevision = 0;
 	const warn = (message: string, error?: unknown): void => {
 		createSafeWarn(context?.logger)(message, error);
 	};
@@ -127,15 +128,17 @@ export function createShellScrollbackControllerCore(
 	const isCleanupFailureCurrent = cleanupCoordinator.isFailureCurrent;
 	const registerCleanup = cleanupCoordinator.register;
 	const resetExecutor = cleanupCoordinator.reset;
-
 	const safelyPublish = (snapshot: ShellScrollbackState): void => {
 		try {
+			const current = publisher.getSnapshot();
+			const modeChanged =
+				current.active !== snapshot.active || current.phase !== snapshot.phase;
+			localModeRevision += modeChanged ? 1 : 0;
 			publisher.publish(snapshot);
 		} catch (error) {
 			warn('Scrollback state subscriber failed', error);
 		}
 	};
-
 	const advanceRequestFreshness = (): void => {
 		requestGenerations.enter += 1;
 		requestGenerations.liveInput += 1;
@@ -232,10 +235,12 @@ export function createShellScrollbackControllerCore(
 			context,
 			disposed,
 			liveInputGeneration: requestGenerations.liveInput,
+			localModeRevision,
 			remoteCopyModeActive: remoteCopyModeActive.current,
 			remoteCopyModeGeneration: remoteCopyModeGeneration.current,
 			runtimeInstanceId,
 			scrollbackActive: publisher.getSnapshot().active,
+			scrollbackPhase: publisher.getSnapshot().phase,
 			targetOwnershipRevision,
 		}),
 		scrollbackExitDelayMs: 10,
