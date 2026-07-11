@@ -1,5 +1,8 @@
 import { type ScrollTraceSink } from '../scroll-trace';
-import { resetTmuxScrollbackRuntimeState } from '../tmux-scrollback';
+import {
+	registerTmuxScrollbackRemoteCopyModeExitCleanup,
+	resetTmuxScrollbackRuntimeState,
+} from '../tmux-scrollback';
 import { resetTmuxScrollbackLocalExitRequests } from '../tmux-scrollback-local-exit';
 import { type WorkmuxControlChannel } from '../workmux-control-channel';
 import {
@@ -53,6 +56,7 @@ export type ScrollbackBatchEvent = {
 	instanceId: string;
 	seq?: number;
 	ts?: number;
+	source?: 'touch-scroll' | 'selection-handle';
 };
 
 export type ShellLiveInputOptions = {
@@ -158,53 +162,87 @@ export function createShellScrollbackControllerCore(
 	let activeTraceId = 'scroll-0';
 	let disposed = false;
 
-	const warn = (message: string, error?: unknown): void => {
-		try {
-			context?.logger.warn(message, error);
-		} catch {
-			// Logging is best-effort and must not interrupt owned cleanup.
-		}
-	};
+	type CleanupOwnership = Readonly<{
+		generation: number;
+		executorRevision: number;
+		targetKey: ShellTargetKey;
+		targetName: string;
+	}>;
 
-	const observeCleanup = (
-		cleanup: Promise<boolean> | null | undefined,
-		failureMessage: string,
-		restoreRemoteOnFailure = false,
-		cleanupGeneration = remoteCopyModeGeneration.current,
-	): Promise<boolean> | null => {
-		if (!cleanup) return cleanup ?? null;
-		const restoreRemoteOwnership = (): void => {
-			if (
-				!disposed &&
-				restoreRemoteOnFailure &&
-				remoteCopyModeGeneration.current === cleanupGeneration
-			) {
-				remoteCopyModeActive.current = true;
+	const createSafeWarn =
+		(logger: ShellScrollbackLogger | undefined) =>
+		(message: string, error?: unknown): void => {
+			try {
+				logger?.warn(message, error);
+			} catch {
+				// Logging is best-effort and must not interrupt owned cleanup.
 			}
 		};
-		const observeResult = (result: Promise<boolean>): void => {
-			void result.then(
-				(exited) => {
-					if (!exited) restoreRemoteOwnership();
-				},
-				(error) => {
-					restoreRemoteOwnership();
-					if (remoteCopyModeGeneration.current === cleanupGeneration) {
-						warn(failureMessage, error);
-					}
-				},
-			);
-		};
-		let tracked: Promise<boolean>;
+
+	const warn = (message: string, error?: unknown): void => {
+		createSafeWarn(context?.logger)(message, error);
+	};
+
+	const captureCleanupOwnership = (
+		ownerContext: ShellScrollbackContext,
+	): CleanupOwnership => ({
+		generation: remoteCopyModeGeneration.current,
+		executorRevision,
+		targetKey: ownerContext.targetKey,
+		targetName: ownerContext.targetName,
+	});
+
+	const isCleanupOwnershipCurrent = (ownership: CleanupOwnership): boolean =>
+		!disposed &&
+		remoteCopyModeGeneration.current === ownership.generation &&
+		executorRevision === ownership.executorRevision &&
+		context?.targetKey === ownership.targetKey &&
+		context.targetName === ownership.targetName;
+
+	const registerCleanup = ({
+		cleanup,
+		failureMessage,
+		logger,
+		ownership,
+		remoteWasActive,
+		restoreRemoteOnFailure,
+		currentAfterDispose = false,
+		clearRemoteOnSuccess = true,
+	}: {
+		cleanup: Promise<boolean> | null | undefined;
+		failureMessage: string;
+		logger: ShellScrollbackLogger | undefined;
+		ownership: CleanupOwnership | null;
+		remoteWasActive: boolean;
+		restoreRemoteOnFailure: boolean;
+		currentAfterDispose?: boolean;
+		clearRemoteOnSuccess?: boolean;
+	}): Promise<boolean> | null => {
+		if (!cleanup) return null;
+		const safeWarn = createSafeWarn(logger);
+		const isCurrent = () =>
+			currentAfterDispose ||
+			(ownership !== null && isCleanupOwnershipCurrent(ownership));
+		const register = (barrier: WorkmuxScrollbackLiveInputCleanupBarrier) =>
+			registerTmuxScrollbackRemoteCopyModeExitCleanup({
+				barrier,
+				cleanup,
+				remoteCopyModeActiveRef: remoteCopyModeActive,
+				remoteCopyModeWasActive: remoteWasActive,
+				restoreRemoteCopyModeOnFailedCleanup: restoreRemoteOnFailure,
+				clearRemoteCopyModeOnSuccessfulCleanup: clearRemoteOnSuccess,
+				isCleanupCurrent: isCurrent,
+				onCleanupFailure: (error) => safeWarn(failureMessage, error),
+			});
 		try {
-			tracked = cleanupBarrier.track(cleanup) ?? cleanup;
+			return register(cleanupBarrier);
 		} catch (error) {
-			warn(failureMessage, error);
-			observeResult(cleanup);
-			return cleanup;
+			safeWarn(failureMessage, error);
+			if (restoreRemoteOnFailure && isCurrent()) {
+				remoteCopyModeActive.current = true;
+			}
+			return register({ current: () => null, track: (value) => value ?? null });
 		}
-		observeResult(tracked);
-		return tracked;
 	};
 
 	const safelyPublish = (snapshot: ShellScrollbackState): void => {
@@ -228,38 +266,66 @@ export function createShellScrollbackControllerCore(
 		activeTraceId = `scroll-${nextTraceId}`;
 	};
 
-	const resetExecutor = (failurePolicy: 'notify' | 'suppress'): void => {
+	const targetsEqual = (
+		left: ShellScrollbackContext,
+		right: ShellScrollbackContext,
+	): boolean =>
+		left.targetKey === right.targetKey && left.targetName === right.targetName;
+
+	const resetExecutor = ({
+		failurePolicy,
+		ownerContext,
+		ownership,
+		remoteWasActive,
+	}: {
+		failurePolicy: 'notify' | 'suppress';
+		ownerContext: ShellScrollbackContext;
+		ownership: CleanupOwnership;
+		remoteWasActive: boolean;
+	}): void => {
 		const activeExecutor = executor;
 		if (!activeExecutor) return;
-		const remoteWasActive = remoteCopyModeActive.current;
-		const cleanupGeneration = remoteCopyModeGeneration.current;
 		let cleanup: Promise<boolean> | null = null;
 		try {
 			cleanup = resetTmuxScrollbackRuntimeState({
 				lineAccumulator,
 				commandExecutor: activeExecutor,
-				targetName: remoteCopyModeActive.current
-					? context?.targetName
-					: undefined,
+				targetName: remoteWasActive ? ownerContext.targetName : undefined,
 				failurePolicy,
 			});
 		} catch (error) {
-			warn('Workmux scrollback reset failed', error);
+			createSafeWarn(ownerContext.logger)(
+				'Workmux scrollback reset failed',
+				error,
+			);
+			if (remoteWasActive && isCleanupOwnershipCurrent(ownership)) {
+				remoteCopyModeActive.current = true;
+			}
+			return;
 		}
-		void observeCleanup(
+		void registerCleanup({
 			cleanup,
-			'Workmux scrollback reset failed',
+			failureMessage: 'Workmux scrollback reset failed',
+			logger: ownerContext.logger,
+			ownership,
 			remoteWasActive,
-			cleanupGeneration,
-		);
+			restoreRemoteOnFailure: remoteWasActive,
+		});
 	};
 
 	const buildExecutor = (nextContext: ShellScrollbackContext): void => {
 		const capturedExecutorRevision = executorRevision;
+		const safeWarn = createSafeWarn(nextContext.logger);
+		const isBuildCurrent = () =>
+			!disposed &&
+			executorRevision === capturedExecutorRevision &&
+			context?.targetKey === nextContext.targetKey &&
+			context.targetName === nextContext.targetName &&
+			context.workmuxScroll === nextContext.workmuxScroll;
 		let createdExecutor: WorkmuxScrollbackCommandExecutor | null = null;
 		const isCurrentExecutor = () =>
-			!disposed &&
 			createdExecutor !== null &&
+			isBuildCurrent() &&
 			executor === createdExecutor &&
 			executorRevision === capturedExecutorRevision;
 		try {
@@ -280,11 +346,34 @@ export function createShellScrollbackControllerCore(
 					}
 				},
 			});
-			executor = createdExecutor;
 		} catch (error) {
-			executor = null;
-			warn('Workmux scrollback executor creation failed', error);
+			if (isBuildCurrent()) {
+				executor = null;
+				safeWarn('Workmux scrollback executor creation failed', error);
+			}
+			return;
 		}
+		if (!isBuildCurrent()) {
+			let cleanup: Promise<boolean> | null = null;
+			try {
+				cleanup = createdExecutor.dispose();
+			} catch (error) {
+				safeWarn('Stale Workmux scrollback executor disposal failed', error);
+				return;
+			}
+			void registerCleanup({
+				cleanup,
+				failureMessage: 'Stale Workmux scrollback executor disposal failed',
+				logger: nextContext.logger,
+				ownership: null,
+				remoteWasActive: false,
+				restoreRemoteOnFailure: false,
+				currentAfterDispose: true,
+				clearRemoteOnSuccess: false,
+			});
+			return;
+		}
+		executor = createdExecutor;
 	};
 
 	const replaceExecutor = (nextContext: ShellScrollbackContext): void => {
@@ -295,7 +384,12 @@ export function createShellScrollbackControllerCore(
 		const replacementRevision = executorRevision;
 		advanceFreshness();
 		const remoteWasActive = remoteCopyModeActive.current;
-		const cleanupGeneration = remoteCopyModeGeneration.current;
+		const ownership = previousContext
+			? captureCleanupOwnership(previousContext)
+			: null;
+		const restoreRemoteOnFailure =
+			previousContext !== null && targetsEqual(previousContext, nextContext);
+		const previousSafeWarn = createSafeWarn(previousContext?.logger);
 		clearOwnedState();
 		if (previousExecutor) {
 			let cleanup: Promise<boolean> | null = null;
@@ -304,14 +398,24 @@ export function createShellScrollbackControllerCore(
 					targetName: remoteWasActive ? previousContext?.targetName : undefined,
 				});
 			} catch (error) {
-				warn('Workmux scrollback executor disposal failed', error);
+				previousSafeWarn('Workmux scrollback executor disposal failed', error);
+				if (
+					remoteWasActive &&
+					restoreRemoteOnFailure &&
+					ownership !== null &&
+					isCleanupOwnershipCurrent(ownership)
+				) {
+					remoteCopyModeActive.current = true;
+				}
 			}
-			void observeCleanup(
+			void registerCleanup({
 				cleanup,
-				'Workmux scrollback executor disposal failed',
+				failureMessage: 'Workmux scrollback executor disposal failed',
+				logger: previousContext?.logger,
+				ownership,
 				remoteWasActive,
-				cleanupGeneration,
-			);
+				restoreRemoteOnFailure: remoteWasActive && restoreRemoteOnFailure,
+			});
 		}
 		if (disposed || executorRevision !== replacementRevision) return;
 		context = nextContext;
@@ -338,11 +442,21 @@ export function createShellScrollbackControllerCore(
 	};
 
 	const onTerminalRuntimeChanged = (instanceId: string | null): void => {
-		if (disposed || runtimeInstanceId === instanceId) return;
+		if (disposed || runtimeInstanceId === instanceId || context === null)
+			return;
 		runtimeInstanceId = instanceId;
 		advanceFreshness();
 		const transitionGeneration = requestGenerations.liveInput;
-		resetExecutor('suppress');
+		const ownerContext = context;
+		const remoteWasActive = remoteCopyModeActive.current;
+		const ownership = captureCleanupOwnership(ownerContext);
+		clearOwnedState();
+		resetExecutor({
+			failurePolicy: 'suppress',
+			ownerContext,
+			ownership,
+			remoteWasActive,
+		});
 		if (
 			disposed ||
 			runtimeInstanceId !== instanceId ||
@@ -350,19 +464,26 @@ export function createShellScrollbackControllerCore(
 		) {
 			return;
 		}
-		clearOwnedState();
 		safelyPublish({ ...initialState, runtimeInstanceId: instanceId });
 	};
 
 	const invalidate = (_reason: ControllerInvalidationReason): void => {
-		if (disposed) return;
+		if (disposed || context === null) return;
 		advanceFreshness();
 		const invalidationGeneration = requestGenerations.liveInput;
-		resetExecutor('suppress');
+		const ownerContext = context;
+		const remoteWasActive = remoteCopyModeActive.current;
+		const ownership = captureCleanupOwnership(ownerContext);
+		clearOwnedState();
+		resetExecutor({
+			failurePolicy: 'suppress',
+			ownerContext,
+			ownership,
+			remoteWasActive,
+		});
 		if (disposed || requestGenerations.liveInput !== invalidationGeneration) {
 			return;
 		}
-		clearOwnedState();
 		safelyPublish({ ...initialState, runtimeInstanceId });
 	};
 
@@ -372,6 +493,8 @@ export function createShellScrollbackControllerCore(
 		executorRevision += 1;
 		advanceFreshness();
 		const activeExecutor = executor;
+		const disposeContext = context;
+		const disposeSafeWarn = createSafeWarn(disposeContext?.logger);
 		executor = null;
 		const remoteWasActive = remoteCopyModeActive.current;
 		clearOwnedState();
@@ -384,12 +507,17 @@ export function createShellScrollbackControllerCore(
 						targetName: remoteWasActive ? context?.targetName : undefined,
 					});
 				} catch (error) {
-					warn('Workmux scrollback executor disposal failed', error);
+					disposeSafeWarn('Workmux scrollback executor disposal failed', error);
 				}
-				void observeCleanup(
+				void registerCleanup({
 					cleanup,
-					'Workmux scrollback executor disposal failed',
-				);
+					failureMessage: 'Workmux scrollback executor disposal failed',
+					logger: disposeContext?.logger,
+					ownership: null,
+					remoteWasActive,
+					restoreRemoteOnFailure: false,
+					currentAfterDispose: true,
+				});
 			}
 		} finally {
 			context = null;

@@ -29,11 +29,39 @@ async function flushPromises() {
 	await new Promise<void>((resolve) => setImmediate(resolve));
 }
 
-function createScrollbackHarness() {
+function createRecordingCleanupBarrier() {
+	let currentCleanup: Promise<boolean> | null = null;
+	const trackedInputs: Promise<boolean>[] = [];
+	return {
+		barrier: {
+			current: () => currentCleanup,
+			track: (cleanup?: Promise<boolean> | null) => {
+				if (!cleanup) return currentCleanup;
+				trackedInputs.push(cleanup);
+				const tracked = cleanup.finally(() => {
+					if (currentCleanup === tracked) currentCleanup = null;
+				});
+				currentCleanup = tracked;
+				return tracked;
+			},
+		},
+		trackedInputs,
+	};
+}
+
+function createScrollbackHarness(
+	options: {
+		cleanupBarrier?: ReturnType<
+			typeof createWorkmuxScrollbackLiveInputCleanupBarrier
+		>;
+		logger?: ShellScrollbackContext['logger'];
+	} = {},
+) {
 	const events: string[] = [];
 	const remoteCopyModeActive = { current: false };
 	const remoteCopyModeGeneration = { current: 0 };
 	const lineAccumulator = createTmuxScrollbackLineAccumulator();
+	const localExitRequestIds = new Set<number>();
 	const resetCalls: unknown[] = [];
 	const warnings: string[] = [];
 	const executorInputs: Parameters<
@@ -41,7 +69,13 @@ function createScrollbackHarness() {
 	>[0][] = [];
 	let executorNumber = 0;
 	const executors: WorkmuxScrollbackCommandExecutor[] = [];
-	const createExecutor = (
+	let executorFactoryOverride:
+		| ((
+				input: Parameters<typeof createWorkmuxScrollbackCommandExecutor>[0],
+				createDefault: () => WorkmuxScrollbackCommandExecutor,
+		  ) => WorkmuxScrollbackCommandExecutor)
+		| null = null;
+	const createDefaultExecutor = (
 		input: Parameters<typeof createWorkmuxScrollbackCommandExecutor>[0],
 	): WorkmuxScrollbackCommandExecutor => {
 		executorInputs.push(input);
@@ -63,6 +97,11 @@ function createScrollbackHarness() {
 		executors.push(executor);
 		return executor;
 	};
+	const createExecutor = (
+		input: Parameters<typeof createWorkmuxScrollbackCommandExecutor>[0],
+	): WorkmuxScrollbackCommandExecutor =>
+		executorFactoryOverride?.(input, () => createDefaultExecutor(input)) ??
+		createDefaultExecutor(input);
 
 	const terminalView = {
 		getRuntimeKey: () => null,
@@ -104,14 +143,19 @@ function createScrollbackHarness() {
 		workmuxScroll: scroll,
 		trace: () => {},
 		feedback: { alert: () => {}, copyMessage: () => {} },
-		logger: {
-			warn: (message) => warnings.push(message),
-		},
+		logger:
+			options.logger ??
+			({
+				warn: (message) => warnings.push(message),
+			} satisfies ShellScrollbackContext['logger']),
 	};
 	const core = createShellScrollbackControllerCore({
 		createExecutor,
 		lineAccumulator,
-		cleanupBarrier: createWorkmuxScrollbackLiveInputCleanupBarrier(),
+		cleanupBarrier:
+			options.cleanupBarrier ??
+			createWorkmuxScrollbackLiveInputCleanupBarrier(),
+		localExitRequestIds,
 		remoteCopyModeActive,
 		remoteCopyModeGeneration,
 	});
@@ -124,10 +168,14 @@ function createScrollbackHarness() {
 		executorInputs,
 		executors,
 		lineAccumulator,
+		localExitRequestIds,
 		remoteCopyModeActive,
 		remoteCopyModeGeneration,
 		resetCalls,
 		scroll,
+		setExecutorFactoryOverride: (override: typeof executorFactoryOverride) => {
+			executorFactoryOverride = override;
+		},
 		warnings,
 	};
 }
@@ -431,4 +479,411 @@ void test('scrollback reentrant context replacement keeps stale cleanup in its o
 	await flushPromises();
 	assert.equal(harness.executors.length, 2);
 	assert.equal(harness.remoteCopyModeActive.current, false);
+});
+
+for (const settlement of ['false', 'reject'] as const) {
+	void test(`scrollback target replacement ${settlement} cleanup cannot restore the old target`, async () => {
+		const harness = createScrollbackHarness();
+		const cleanup = createDeferred<boolean>();
+		const executor = harness.executors[0];
+		assert.ok(executor);
+		executor.dispose = () => cleanup.promise;
+		harness.remoteCopyModeActive.current = true;
+		harness.core.setContext({
+			...harness.context,
+			targetKey: createShellTargetKey('transport' as never, 'other'),
+			targetName: 'other',
+		});
+		if (settlement === 'false') cleanup.resolve(false);
+		else cleanup.reject(new Error('old target cleanup failed'));
+		await flushPromises();
+		assert.equal(harness.remoteCopyModeActive.current, false);
+	});
+}
+
+void test('scrollback old target cleanup cannot overwrite independently owned new target state', async () => {
+	const harness = createScrollbackHarness();
+	const cleanup = createDeferred<boolean>();
+	const executor = harness.executors[0];
+	assert.ok(executor);
+	executor.dispose = () => cleanup.promise;
+	harness.remoteCopyModeActive.current = true;
+	harness.core.setContext({
+		...harness.context,
+		targetKey: createShellTargetKey('transport' as never, 'other'),
+		targetName: 'other',
+	});
+	harness.remoteCopyModeActive.current = true;
+	cleanup.resolve(true);
+	await flushPromises();
+	assert.equal(harness.remoteCopyModeActive.current, true);
+});
+
+void test('scrollback synchronous runtime and invalidate cleanup failures remain blocking', () => {
+	const harness = createScrollbackHarness();
+	harness.core.onTerminalRuntimeChanged('instance-1');
+	const executor = harness.executors[0];
+	assert.ok(executor);
+	executor.reset = () => {
+		throw new Error('sync reset failed');
+	};
+	harness.remoteCopyModeActive.current = true;
+	assert.doesNotThrow(() =>
+		harness.core.onTerminalRuntimeChanged('instance-2'),
+	);
+	assert.equal(harness.remoteCopyModeActive.current, true);
+	harness.remoteCopyModeActive.current = true;
+	assert.doesNotThrow(() => harness.core.invalidate('focus-lost'));
+	assert.equal(harness.remoteCopyModeActive.current, true);
+});
+
+void test('scrollback synchronous same-target replacement failure remains blocking', () => {
+	const harness = createScrollbackHarness();
+	const executor = harness.executors[0];
+	assert.ok(executor);
+	executor.dispose = () => {
+		throw new Error('sync dispose failed');
+	};
+	harness.remoteCopyModeActive.current = true;
+	assert.doesNotThrow(() =>
+		harness.core.setContext({
+			...harness.context,
+			workmuxScroll: { ...harness.scroll },
+		}),
+	);
+	assert.equal(harness.remoteCopyModeActive.current, true);
+});
+
+void test('scrollback synchronous old-target replacement failure cannot block the new target', () => {
+	const harness = createScrollbackHarness();
+	const executor = harness.executors[0];
+	assert.ok(executor);
+	executor.dispose = () => {
+		throw new Error('sync old target dispose failed');
+	};
+	harness.remoteCopyModeActive.current = true;
+	harness.core.setContext({
+		...harness.context,
+		targetKey: createShellTargetKey('transport' as never, 'other'),
+		targetName: 'other',
+	});
+	assert.equal(harness.remoteCopyModeActive.current, false);
+});
+
+for (const settlement of ['false', 'reject'] as const) {
+	void test(`scrollback dispose logs ${settlement} cleanup after clearing context without reviving state`, async () => {
+		const harness = createScrollbackHarness();
+		const cleanup = createDeferred<boolean>();
+		const executor = harness.executors[0];
+		assert.ok(executor);
+		executor.dispose = () => cleanup.promise;
+		harness.remoteCopyModeActive.current = true;
+		harness.core.dispose();
+		if (settlement === 'false') cleanup.resolve(false);
+		else cleanup.reject(new Error('dispose cleanup failed'));
+		await flushPromises();
+		assert.equal(harness.remoteCopyModeActive.current, false);
+		assert.deepEqual(harness.warnings, [
+			'Workmux scrollback executor disposal failed',
+		]);
+	});
+}
+
+void test('scrollback dispose contains synchronous cleanup, logger, and subscriber throws', () => {
+	const harness = createScrollbackHarness({
+		logger: {
+			warn: () => {
+				throw new Error('logger failed');
+			},
+		},
+	});
+	const executor = harness.executors[0];
+	assert.ok(executor);
+	executor.dispose = () => {
+		throw new Error('dispose failed');
+	};
+	harness.core.subscribe(() => {
+		throw new Error('subscriber failed');
+	});
+	assert.doesNotThrow(() => harness.core.dispose());
+	assert.doesNotThrow(() => harness.core.dispose());
+	assert.doesNotThrow(() => harness.core.invalidate('unmount'));
+	assert.deepEqual(harness.core.getSnapshot(), {
+		active: false,
+		phase: 'active',
+		runtimeInstanceId: null,
+	});
+});
+
+void test('scrollback dispose logs a synchronous cleanup throw through captured logger', () => {
+	const harness = createScrollbackHarness();
+	const executor = harness.executors[0];
+	assert.ok(executor);
+	executor.dispose = () => {
+		throw new Error('synchronous dispose failed');
+	};
+	harness.core.dispose();
+	assert.deepEqual(harness.warnings, [
+		'Workmux scrollback executor disposal failed',
+	]);
+});
+
+void test('scrollback invalidation and disposal clear all owned local runtime state', () => {
+	const harness = createScrollbackHarness();
+	harness.core.onTerminalRuntimeChanged('instance-1');
+	harness.core.onScrollbackModeChange({
+		active: true,
+		phase: 'dragging',
+		instanceId: 'instance-1',
+	});
+	harness.lineAccumulator.lines = 8;
+	harness.localExitRequestIds.add(7);
+	harness.remoteCopyModeActive.current = true;
+	harness.core.invalidate('app-inactive');
+	assert.deepEqual(harness.core.getSnapshot(), {
+		active: false,
+		phase: 'active',
+		runtimeInstanceId: 'instance-1',
+	});
+	assert.equal(harness.lineAccumulator.lines, 0);
+	assert.equal(harness.localExitRequestIds.size, 0);
+	harness.core.dispose();
+	assert.equal(harness.remoteCopyModeActive.current, false);
+});
+
+void test('scrollback later-task commands are fail-closed and inert', async () => {
+	const harness = createScrollbackHarness();
+	const before = harness.core.getSnapshot();
+	const beforeEvents = [...harness.events];
+	await harness.core.onScrollbackEnterRequested({
+		instanceId: 'instance-1',
+		requestId: 1,
+	});
+	harness.core.onScrollbackBatch({
+		direction: 'up',
+		pages: 1,
+		lines: 0,
+		pageStep: 24,
+		instanceId: 'instance-1',
+		source: 'touch-scroll',
+	});
+	assert.deepEqual(await harness.core.sendSegments([new Uint8Array([0x61])]), {
+		status: 'unavailable',
+	});
+	assert.equal(harness.core.clear(), null);
+	harness.core.jumpToLive();
+	assert.deepEqual(harness.events, beforeEvents);
+	assert.deepEqual(harness.core.getSnapshot(), before);
+});
+
+void test('scrollback factory return after reentrant context is disposed without replacing newer executor', () => {
+	const harness = createScrollbackHarness();
+	const reentrantScroll = { ...harness.scroll };
+	const reentrantContext = {
+		...harness.context,
+		workmuxScroll: reentrantScroll,
+	};
+	const staleEvents: string[] = [];
+	harness.setExecutorFactoryOverride((_input, createDefault) => {
+		harness.setExecutorFactoryOverride(null);
+		harness.core.setContext(reentrantContext);
+		const stale = createDefault();
+		stale.dispose = () => {
+			staleEvents.push('disposed');
+			return null;
+		};
+		return stale;
+	});
+	harness.core.setContext({
+		...harness.context,
+		workmuxScroll: { ...harness.scroll },
+	});
+	assert.deepEqual(staleEvents, ['disposed']);
+	const executorCount = harness.executors.length;
+	harness.core.setContext(reentrantContext);
+	assert.equal(harness.executors.length, executorCount);
+});
+
+void test('scrollback factory throw after reentrant context does not null newer executor', () => {
+	const harness = createScrollbackHarness();
+	const reentrantScroll = { ...harness.scroll };
+	const reentrantContext = {
+		...harness.context,
+		workmuxScroll: reentrantScroll,
+	};
+	harness.setExecutorFactoryOverride(() => {
+		harness.setExecutorFactoryOverride(null);
+		harness.core.setContext(reentrantContext);
+		throw new Error('stale factory failed');
+	});
+	assert.doesNotThrow(() =>
+		harness.core.setContext({
+			...harness.context,
+			workmuxScroll: { ...harness.scroll },
+		}),
+	);
+	const executorCount = harness.executors.length;
+	harness.core.setContext(reentrantContext);
+	assert.equal(harness.executors.length, executorCount);
+});
+
+for (const completion of ['return', 'throw'] as const) {
+	void test(`scrollback factory ${completion} after reentrant dispose cannot install an executor`, () => {
+		const harness = createScrollbackHarness();
+		const staleEvents: string[] = [];
+		harness.setExecutorFactoryOverride((_input, createDefault) => {
+			harness.setExecutorFactoryOverride(null);
+			harness.core.dispose();
+			if (completion === 'throw')
+				throw new Error('factory failed after dispose');
+			const stale = createDefault();
+			stale.dispose = () => {
+				staleEvents.push('disposed');
+				return null;
+			};
+			return stale;
+		});
+		assert.doesNotThrow(() =>
+			harness.core.setContext({
+				...harness.context,
+				workmuxScroll: { ...harness.scroll },
+			}),
+		);
+		if (completion === 'return') assert.deepEqual(staleEvents, ['disposed']);
+		const executorCount = harness.executors.length;
+		harness.core.setContext({
+			...harness.context,
+			workmuxScroll: { ...harness.scroll },
+		});
+		assert.equal(harness.executors.length, executorCount);
+	});
+}
+
+void test('scrollback current executor factory failure stays contained and retryable', () => {
+	const harness = createScrollbackHarness();
+	harness.setExecutorFactoryOverride(() => {
+		throw new Error('current factory failed');
+	});
+	const replacementContext = {
+		...harness.context,
+		workmuxScroll: { ...harness.scroll },
+	};
+	assert.doesNotThrow(() => harness.core.setContext(replacementContext));
+	assert.deepEqual(harness.warnings, [
+		'Workmux scrollback executor creation failed',
+	]);
+	harness.setExecutorFactoryOverride(null);
+	const executorCount = harness.executors.length;
+	harness.core.setContext(replacementContext);
+	assert.equal(harness.executors.length, executorCount + 1);
+});
+
+for (const operation of [
+	'runtime',
+	'invalidate',
+	'context',
+	'dispose',
+] as const) {
+	void test(`scrollback ${operation} tracks the exact executor cleanup promise`, async () => {
+		const recording = createRecordingCleanupBarrier();
+		const harness = createScrollbackHarness({
+			cleanupBarrier: recording.barrier,
+		});
+		const cleanup = createDeferred<boolean>();
+		const executor = harness.executors[0];
+		assert.ok(executor);
+		if (operation === 'runtime' || operation === 'invalidate') {
+			executor.reset = () => cleanup.promise;
+		} else {
+			executor.dispose = () => cleanup.promise;
+		}
+		switch (operation) {
+			case 'runtime':
+				harness.core.onTerminalRuntimeChanged('instance-1');
+				break;
+			case 'invalidate':
+				harness.core.invalidate('focus-lost');
+				break;
+			case 'context':
+				harness.core.setContext({
+					...harness.context,
+					workmuxScroll: { ...harness.scroll },
+				});
+				break;
+			case 'dispose':
+				harness.core.dispose();
+				break;
+		}
+		assert.equal(recording.trackedInputs[0], cleanup.promise);
+		cleanup.resolve(true);
+		await flushPromises();
+	});
+}
+
+void test('scrollback stale cleanup settlement cannot clear the newer barrier', async () => {
+	const recording = createRecordingCleanupBarrier();
+	const harness = createScrollbackHarness({
+		cleanupBarrier: recording.barrier,
+	});
+	const staleCleanup = createDeferred<boolean>();
+	const currentCleanup = createDeferred<boolean>();
+	const executor = harness.executors[0];
+	assert.ok(executor);
+	let resetCount = 0;
+	executor.reset = () => {
+		resetCount += 1;
+		return resetCount === 1 ? staleCleanup.promise : currentCleanup.promise;
+	};
+	harness.core.onTerminalRuntimeChanged('instance-1');
+	harness.core.onTerminalRuntimeChanged('instance-2');
+	assert.deepEqual(recording.trackedInputs, [
+		staleCleanup.promise,
+		currentCleanup.promise,
+	]);
+	const newerBarrier = recording.barrier.current();
+	assert.notEqual(newerBarrier, null);
+	staleCleanup.resolve(true);
+	await flushPromises();
+	assert.equal(recording.barrier.current(), newerBarrier);
+	currentCleanup.resolve(true);
+	await flushPromises();
+	assert.equal(recording.barrier.current(), null);
+});
+
+void test('scrollback disposal publishes once and every later command is a no-op', async () => {
+	const harness = createScrollbackHarness();
+	let notifications = 0;
+	harness.core.subscribe(() => {
+		notifications += 1;
+	});
+	harness.core.onTerminalRuntimeChanged('instance-1');
+	const beforeDispose = notifications;
+	harness.core.dispose();
+	assert.equal(notifications, beforeDispose + 1);
+	harness.core.dispose();
+	harness.core.invalidate('unmount');
+	harness.core.onTerminalRuntimeChanged('instance-2');
+	harness.core.onScrollbackModeChange({
+		active: true,
+		phase: 'active',
+		instanceId: 'instance-2',
+	});
+	await harness.core.onScrollbackEnterRequested({
+		instanceId: 'instance-2',
+		requestId: 2,
+	});
+	harness.core.onScrollbackBatch({
+		direction: 'down',
+		pages: 0,
+		lines: 1,
+		pageStep: 24,
+		instanceId: 'instance-2',
+		source: 'selection-handle',
+	});
+	harness.core.jumpToLive();
+	assert.equal(harness.core.clear(), null);
+	assert.deepEqual(await harness.core.sendSegments([]), {
+		status: 'unavailable',
+	});
+	assert.equal(notifications, beforeDispose + 1);
 });
