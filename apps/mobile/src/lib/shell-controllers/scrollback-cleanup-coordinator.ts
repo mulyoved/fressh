@@ -19,6 +19,12 @@ type ResetOperationKey = Readonly<{
 	targetOwnershipRevision: number;
 }>;
 
+export type ScrollbackResetResult = Readonly<{
+	cleanup: Promise<boolean> | null;
+	remoteCopyModeGeneration: number;
+	targetOwnershipRevision: number;
+}>;
+
 export function createScrollbackCleanupCoordinator({
 	cleanupBarrier,
 	getCurrentState,
@@ -159,10 +165,15 @@ export function createScrollbackCleanupCoordinator({
 		failurePolicy: 'notify' | 'suppress';
 		ownerContext: ShellScrollbackContext;
 		remoteWasActive: boolean;
-	}): Promise<boolean> | null => {
+	}): ScrollbackResetResult => {
 		const current = getCurrentState();
 		const executor = current.executor;
-		if (!executor) return null;
+		if (!executor)
+			return {
+				cleanup: null,
+				remoteCopyModeGeneration: remoteCopyModeGeneration.current,
+				targetOwnershipRevision: current.targetOwnershipRevision,
+			};
 		const pending = pendingResetOperations.get(executor);
 		if (
 			pending?.targetOwnershipRevision === current.targetOwnershipRevision &&
@@ -170,7 +181,11 @@ export function createScrollbackCleanupCoordinator({
 			pending.requiresDurableTargetExit === remoteWasActive &&
 			pending.failurePolicy === failurePolicy
 		) {
-			return pending.cleanup;
+			return {
+				cleanup: pending.cleanup,
+				remoteCopyModeGeneration: pending.remoteCopyModeGeneration,
+				targetOwnershipRevision: pending.targetOwnershipRevision,
+			};
 		}
 		remoteCopyModeGeneration.current += 1;
 		const ownership = captureOwnership(ownerContext);
@@ -194,7 +209,11 @@ export function createScrollbackCleanupCoordinator({
 			if (remoteWasActive && isFailureCurrent(ownership)) {
 				remoteCopyModeActive.current = true;
 			}
-			return null;
+			return {
+				cleanup: null,
+				remoteCopyModeGeneration: operationKey.remoteCopyModeGeneration,
+				targetOwnershipRevision: operationKey.targetOwnershipRevision,
+			};
 		}
 		if (
 			cleanup &&
@@ -228,7 +247,11 @@ export function createScrollbackCleanupCoordinator({
 			restoreRemoteOnFailure: remoteWasActive,
 			reportResolvedFalse: false,
 		});
-		return cleanup;
+		return {
+			cleanup,
+			remoteCopyModeGeneration: operationKey.remoteCopyModeGeneration,
+			targetOwnershipRevision: operationKey.targetOwnershipRevision,
+		};
 	};
 
 	return { captureOwnership, isFailureCurrent, register, reset };

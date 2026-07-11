@@ -156,6 +156,62 @@ void test('genuine target and authority-port replacements supersede blocked inpu
 	}
 });
 
+void test('availability transitions in either direction supersede blocked input', async () => {
+	for (const field of [
+		'connectionAvailable',
+		'shellAvailable',
+		'tmuxEnabled',
+	] as const) {
+		for (const initial of [true, false]) {
+			const harness = createScrollbackHarness();
+			harness.core.setContext({ ...harness.context, [field]: initial });
+			const cleanup = createDeferred<boolean>();
+			const sent: number[][][] = [];
+			configureCurrentTerminal(harness, (segments) => {
+				sent.push(segments.map((segment) => Array.from(segment)));
+			});
+			harness.core.onTerminalRuntimeChanged('instance-1');
+			const executor = harness.executors[0];
+			assert.ok(executor);
+			executor.reset = () => cleanup.promise;
+			harness.remoteCopyModeActive.current = true;
+			harness.remoteCopyModeGeneration.current += 1;
+			const outcome = harness.core.sendSegments([new Uint8Array([1])]);
+			harness.core.setContext({
+				...harness.context,
+				[field]: !initial,
+			});
+			cleanup.resolve(true);
+			assert.deepEqual(
+				await outcome,
+				{ status: 'superseded' },
+				`${field}:${initial}`,
+			);
+			assert.deepEqual(sent, []);
+		}
+	}
+});
+
+void test('availability change supersedes a blocked enter without acknowledgement', async () => {
+	const harness = createScrollbackHarness();
+	const enter = createDeferred<boolean>();
+	harness.core.onTerminalRuntimeChanged('instance-1');
+	const executor = harness.executors[0];
+	assert.ok(executor);
+	executor.runEnterCommand = () => enter.promise;
+	const pending = harness.core.onScrollbackEnterRequested({
+		instanceId: 'instance-1',
+		requestId: 1,
+	});
+	harness.core.setContext({
+		...harness.context,
+		connectionAvailable: false,
+	});
+	enter.resolve(true);
+	await pending;
+	assert.deepEqual(harness.enterAcks, []);
+});
+
 void test('controller pins inactive-empty and active cleanup-only outcomes', async () => {
 	const harness = createScrollbackHarness();
 	const sent: number[][][] = [];
@@ -189,6 +245,43 @@ void test('controller pins inactive-empty and active cleanup-only outcomes', asy
 	cleanup.resolve(true);
 	assert.deepEqual(await outcome, { status: 'completed' });
 	assert.equal(accepted, 1);
+	assert.deepEqual(sent, []);
+});
+
+void test('cleanup callback reentry cannot adopt newer mode and remote acquisition', async () => {
+	const harness = createScrollbackHarness();
+	const cleanup = createDeferred<boolean>();
+	const sent: number[][][] = [];
+	let accepted = 0;
+	configureCurrentTerminal(harness, (segments) => {
+		sent.push(segments.map((segment) => Array.from(segment)));
+	});
+	harness.core.onTerminalRuntimeChanged('instance-1');
+	harness.core.onScrollbackModeChange({
+		active: true,
+		phase: 'active',
+		instanceId: 'instance-1',
+	});
+	const executor = harness.executors[0];
+	assert.ok(executor);
+	executor.reset = () => {
+		harness.remoteCopyModeGeneration.current += 1;
+		harness.remoteCopyModeActive.current = true;
+		harness.core.onScrollbackModeChange({
+			active: true,
+			phase: 'active',
+			instanceId: 'instance-1',
+		});
+		return cleanup.promise;
+	};
+	const outcome = harness.core.sendSegments([new Uint8Array([1])], {
+		onAccepted: () => {
+			accepted += 1;
+		},
+	});
+	cleanup.resolve(true);
+	assert.deepEqual(await outcome, { status: 'superseded' });
+	assert.equal(accepted, 0);
 	assert.deepEqual(sent, []);
 });
 

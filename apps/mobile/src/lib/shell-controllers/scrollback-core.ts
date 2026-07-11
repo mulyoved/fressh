@@ -26,11 +26,11 @@ import {
 	traceScrollbackSafely,
 } from './scrollback-callback-safety';
 import { createScrollbackCleanupCoordinator } from './scrollback-cleanup-coordinator';
+import { createScrollbackClearCoordinator } from './scrollback-clear-coordinator';
 import {
 	type ScrollbackBatchEvent,
 	type ScrollbackEnterRequestedEvent,
 	type ScrollbackModeChangeEvent,
-	type ScrollbackRequestAuthority,
 	type ShellLiveInputOptions,
 	type ShellScrollbackContext,
 	type ShellScrollbackState,
@@ -127,7 +127,10 @@ export function createShellScrollbackControllerCore(
 	const captureCleanupOwnership = cleanupCoordinator.captureOwnership;
 	const isCleanupFailureCurrent = cleanupCoordinator.isFailureCurrent;
 	const registerCleanup = cleanupCoordinator.register;
-	const resetExecutor = cleanupCoordinator.reset;
+	const resetExecutorWithAuthority = cleanupCoordinator.reset;
+	const resetExecutor = (
+		options: Parameters<typeof resetExecutorWithAuthority>[0],
+	): Promise<boolean> | null => resetExecutorWithAuthority(options).cleanup;
 	const safelyPublish = (snapshot: ShellScrollbackState): void => {
 		try {
 			const current = publisher.getSnapshot();
@@ -174,54 +177,23 @@ export function createShellScrollbackControllerCore(
 		warn: (ownerContext, message, error) =>
 			createSafeWarn(ownerContext.logger)(message, error),
 	});
-	const captureClearAuthority = (
-		ownerContext: ShellScrollbackContext,
-	):
-		| (ScrollbackRequestAuthority<WorkmuxScrollbackCommandExecutor> & {
-				isCurrent(): boolean;
-		  })
-		| null => {
-		const ownerExecutor = executor;
-		const instanceId = runtimeInstanceId;
-		const ownerTargetOwnershipRevision = targetOwnershipRevision;
-		if (disposed || context !== ownerContext || ownerExecutor === null)
-			return null;
-		return {
-			context: ownerContext,
-			executor: ownerExecutor,
-			instanceId,
-			targetOwnershipRevision: ownerTargetOwnershipRevision,
-			isCurrent: () =>
-				!disposed &&
-				context === ownerContext &&
-				executor === ownerExecutor &&
-				runtimeInstanceId === instanceId &&
-				targetOwnershipRevision === ownerTargetOwnershipRevision,
-		};
-	};
-	const clearLocalScrollbackUiState = (
-		ownerContext: ShellScrollbackContext,
-	): void => {
-		const authority = captureClearAuthority(ownerContext);
-		if (!authority) return;
-		runClearLocalScrollbackUiState(ownerContext, authority);
-	};
-
-	const clearScrollbackState = (
-		ownerContext: ShellScrollbackContext,
-		failurePolicy: 'notify' | 'suppress' = 'notify',
-		providedAuthority?: ReturnType<typeof captureClearAuthority>,
-	): Promise<boolean> | null => {
-		const authority = providedAuthority ?? captureClearAuthority(ownerContext);
-		if (!authority) return null;
-		runClearLocalScrollbackUiState(ownerContext, authority);
-		if (!authority.isCurrent()) return null;
-		return resetExecutor({
-			failurePolicy,
-			ownerContext,
-			remoteWasActive: remoteCopyModeActive.current,
-		});
-	};
+	const clearCoordinator = createScrollbackClearCoordinator({
+		getCurrentState: () => ({
+			context,
+			disposed,
+			executor,
+			localModeRevision,
+			remoteCopyModeActive: remoteCopyModeActive.current,
+			remoteCopyModeGeneration: remoteCopyModeGeneration.current,
+			runtimeInstanceId,
+			snapshot: publisher.getSnapshot(),
+			targetOwnershipRevision,
+		}),
+		reset: resetExecutorWithAuthority,
+		runClearLocal: runClearLocalScrollbackUiState,
+	});
+	const clearLocalScrollbackUiState = clearCoordinator.clearLocal;
+	const clearScrollbackState = clearCoordinator.clear;
 	const liveInputCoordinator = createScrollbackLiveInputCoordinator({
 		advanceFreshness: advanceRequestFreshness,
 		clearInactive: () => {
@@ -245,10 +217,7 @@ export function createShellScrollbackControllerCore(
 		}),
 		scrollbackExitDelayMs: 10,
 		scrollbackExitKeyPayload: new Uint8Array([0x71]),
-		startCleanup: () => {
-			const ownerContext = context;
-			return ownerContext === null ? null : clearScrollbackState(ownerContext);
-		},
+		startCleanup: clearCoordinator.startCurrent,
 	});
 
 	const entryCoordinator = createScrollbackEntryCoordinator({
@@ -448,6 +417,14 @@ export function createShellScrollbackControllerCore(
 		if (requiresExecutorReplacement) {
 			replaceExecutor(normalizedContext);
 			return;
+		}
+		if (
+			context !== null &&
+			(context.connectionAvailable !== normalizedContext.connectionAvailable ||
+				context.shellAvailable !== normalizedContext.shellAvailable ||
+				context.tmuxEnabled !== normalizedContext.tmuxEnabled)
+		) {
+			advanceRequestFreshness();
 		}
 		if (context !== null) Object.assign(context, normalizedContext);
 	};

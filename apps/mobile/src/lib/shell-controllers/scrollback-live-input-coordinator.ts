@@ -37,6 +37,21 @@ type LiveInputState = {
 	targetOwnershipRevision: number;
 };
 
+export type ScrollbackLiveInputAuthority = Readonly<{
+	localModeRevision: number;
+	localModeSnapshot: Readonly<{
+		active: boolean;
+		phase: 'dragging' | 'active';
+	}>;
+	remoteCopyModeGeneration: number;
+	targetOwnershipRevision: number;
+}>;
+
+export type ScrollbackLiveInputCleanupStart = Readonly<{
+	authority: ScrollbackLiveInputAuthority;
+	cleanup: Promise<boolean> | null;
+}>;
+
 type LiveInputToken = Readonly<{
 	activityGeneration: number;
 	context: LiveInputContext;
@@ -72,7 +87,7 @@ export function createScrollbackLiveInputCoordinator({
 	getCurrentState(): LiveInputState;
 	scrollbackExitDelayMs: number;
 	scrollbackExitKeyPayload?: Uint8Array<ArrayBuffer>;
-	startCleanup(): Promise<boolean> | null;
+	startCleanup(): ScrollbackLiveInputCleanupStart;
 }) {
 	let lastInteractive: boolean | null = null;
 	let activityInvocationEpoch = 0;
@@ -286,23 +301,20 @@ export function createScrollbackLiveInputCoordinator({
 		}
 		if (!isTokenCurrent(token)) return superseded;
 		const startTokenCleanup = (): Promise<boolean> | null => {
-			const exactCleanup = startCleanup();
-			const started = getCurrentState();
+			const started = startCleanup();
 			if (
 				isTokenAuthorityCurrent(token) &&
-				started.targetOwnershipRevision === token.targetOwnershipRevision
+				started.authority.targetOwnershipRevision ===
+					token.targetOwnershipRevision
 			) {
 				token = {
 					...token,
-					localModeRevision: started.localModeRevision,
-					localModeSnapshot: {
-						active: started.scrollbackActive,
-						phase: started.scrollbackPhase,
-					},
-					remoteCopyModeGeneration: started.remoteCopyModeGeneration,
+					localModeRevision: started.authority.localModeRevision,
+					localModeSnapshot: started.authority.localModeSnapshot,
+					remoteCopyModeGeneration: started.authority.remoteCopyModeGeneration,
 				};
 			}
-			return getCurrentCleanup() ?? exactCleanup;
+			return getCurrentCleanup() ?? started.cleanup;
 		};
 
 		if (plan.segments.length === 0) {
