@@ -1,4 +1,4 @@
-import { isWorkmuxScrollAlreadyInactiveFailureMessage } from '../../lib/workmux-app-commands';
+import { isWorkmuxScrollAlreadyInactiveFailureMessage } from '../workmux-app-commands';
 
 type ShellWorkmuxScrollbackFailureCommandKind = 'enter' | 'scroll' | 'exit';
 

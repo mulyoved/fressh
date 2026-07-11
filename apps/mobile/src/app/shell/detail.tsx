@@ -97,6 +97,12 @@ import { useFeatureRequestController } from '@/lib/shell-controllers/feature-req
 import { createGenerationRequestGate } from '@/lib/shell-controllers/generation-request-gate';
 import { createShellModalArbiter } from '@/lib/shell-controllers/modal-arbiter';
 import { useShellNotificationsController } from '@/lib/shell-controllers/notifications';
+import {
+	handleShellWorkmuxScrollbackCommandFailureActions,
+	handleShellWorkmuxScrollbackDisposeExitFailureActions,
+	runShellScrollbackInactiveCleanup,
+	shouldTreatShellWorkmuxScrollbackFailureAsAlreadyInactive,
+} from '@/lib/shell-controllers/scrollback-policy';
 import { syncShellCommandLifecycle } from '@/lib/shell-controllers/shell-command-lifecycle';
 import { createShellTerminalLiveInputRequest } from '@/lib/shell-controllers/shell-terminal-live-input';
 import { useShellSimpleModals } from '@/lib/shell-controllers/simple-modals';
@@ -184,12 +190,6 @@ import {
 	TextEntryModal,
 	type TextInputScreenBounds,
 } from './components/TextEntryModal';
-import {
-	handleShellWorkmuxScrollbackCommandFailureActions,
-	handleShellWorkmuxScrollbackDisposeExitFailureActions,
-	runShellScrollbackInactiveCleanup,
-	shouldTreatShellWorkmuxScrollbackFailureAsAlreadyInactive,
-} from './shell-scrollback-policy';
 import { resolveShellTouchScrollPolicy } from './shell-touch-scroll';
 import {
 	runShellWorkmuxKeyboardCommand,
