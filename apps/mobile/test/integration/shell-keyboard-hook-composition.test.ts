@@ -6,6 +6,7 @@ import {
 	createShellKeyboardControllerAdapter,
 	type ShellKeyboardControllerAdapter,
 	type ShellKeyboardControllerAdapterPorts,
+	type ShellKeyboardModalCommands,
 } from '../../src/lib/shell-controllers/keyboard-controller-adapter';
 import {
 	createKeyboardClipboardAuthority,
@@ -42,7 +43,23 @@ function createAdapterHarness() {
 	let clipboardWrite: (text: string) => Promise<void> = async (text) => {
 		events.push(`write:${text}`);
 	};
+	let selectionStateHook: (() => void) | null = null;
 	let adapter: ShellKeyboardControllerAdapter | null = null;
+	const createModalCommands = (
+		identity: string,
+	): ShellKeyboardModalCommands & { identity: string } => ({
+		identity,
+		toggleCommandMenu: () => events.push('menu'),
+		openCommander() {
+			events.push(`commander:${this.identity}`);
+		},
+		openSkillSelector: () => {},
+		openBrowserActions: () => {},
+		openFeatureRequest: () => {},
+		openWisprTextEditor: () => {},
+		openConfigurator: () => {},
+		closeCommandMenu: () => {},
+	});
 	const stateCore = {
 		getSnapshot: () => ({
 			activeKeyboardIds: ['main'],
@@ -50,8 +67,10 @@ function createAdapterHarness() {
 		}),
 		selectKeyboardIfExists: (id: string) => events.push(`select:${id}`),
 		rotateKeyboard: () => events.push('rotate'),
-		setSelectionModeEnabled: (enabled: boolean) =>
-			events.push(`state:${enabled}`),
+		setSelectionModeEnabled: (enabled: boolean) => {
+			events.push(`state:${enabled}`);
+			selectionStateHook?.();
+		},
 		setSystemKeyboardEnabled: (enabled: boolean) =>
 			events.push(`system:${enabled}`),
 	} as unknown as ShellKeyboardStateCore;
@@ -94,16 +113,7 @@ function createAdapterHarness() {
 			},
 			setSystemKeyboardEnabled: (enabled) => events.push(`terminal:${enabled}`),
 		},
-		modalCommands: {
-			toggleCommandMenu: () => events.push('menu'),
-			openCommander: () => events.push('commander:old'),
-			openSkillSelector: () => {},
-			openBrowserActions: () => {},
-			openFeatureRequest: () => {},
-			openWisprTextEditor: () => {},
-			openConfigurator: () => {},
-			closeCommandMenu: () => {},
-		},
+		modalCommands: createModalCommands('old'),
 		browserCommands: {
 			openDiff: () => {},
 			openUrlSlot: () => {},
@@ -152,11 +162,23 @@ function createAdapterHarness() {
 		replacePorts: () => {
 			ports = {
 				...ports,
-				modalCommands: {
-					...ports.modalCommands,
-					openCommander: () => events.push('commander:new'),
-				},
+				modalCommands: createModalCommands('new'),
 			};
+		},
+		replaceSelectionPorts: () => {
+			ports = {
+				...ports,
+				terminalView: {
+					...ports.terminalView,
+					setSystemKeyboardEnabled: (enabled) =>
+						events.push(`terminal:new:${enabled}`),
+				},
+				dismissKeyboard: () => events.push('dismiss:new'),
+				clearKeyboardVisibility: () => events.push('visible:new:false'),
+			};
+		},
+		setSelectionStateHook: (hook: (() => void) | null) => {
+			selectionStateHook = hook;
 		},
 		setInstance: (next: string) => {
 			instanceId = next;
@@ -244,6 +266,19 @@ void test('production adapter reads latest ports and guards deferred paste autho
 	await settleAdapter();
 	assert.deepEqual(harness.input.sent, [[[0x78]]]);
 	assert.equal(harness.events.at(-1), 'bridge');
+});
+
+void test('selection mode resolves latest ports after reentrant state publication', () => {
+	const harness = createAdapterHarness();
+	harness.setSelectionStateHook(harness.replaceSelectionPorts);
+	harness.adapter.onSelectionModeChange(true);
+	assert.deepEqual(harness.events, [
+		'state:true',
+		'terminal:new:false',
+		'dismiss:new',
+		'visible:new:false',
+		'system:false',
+	]);
 });
 
 void test('hook delegates callback policy to the pure production adapter', () => {

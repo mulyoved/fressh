@@ -123,25 +123,46 @@ export function createShellKeyboardControllerAdapter(input: {
 			captureAuthority: () => {
 				const generation = input.admission.getGeneration();
 				if (generation === null) return null;
-				const ports = input.getPorts();
+				const source = input.getPorts().sourceKey;
+				if (!input.admission.isCurrent(generation)) return null;
+				const runtime = input.getPorts().terminalView.getRuntimeKey();
+				if (!input.admission.isCurrent(generation)) return null;
+				const instance = input.getPorts().terminalView.getRuntimeInstanceId();
+				if (!input.admission.isCurrent(generation)) return null;
+				const activityGeneration = input
+					.getPorts()
+					.activity.getSnapshot().generation;
+				if (!input.admission.isCurrent(generation)) return null;
 				return {
 					generation,
-					source: ports.sourceKey,
-					runtime: ports.terminalView.getRuntimeKey(),
-					instance: ports.terminalView.getRuntimeInstanceId(),
-					activityGeneration: ports.activity.getSnapshot().generation,
+					source,
+					runtime,
+					instance,
+					activityGeneration,
 				};
 			},
 			isCurrent: (token) => {
-				const ports = input.getPorts();
+				if (!input.admission.isCurrent(token.generation)) return false;
+				if (!Object.is(token.source, input.getPorts().sourceKey)) return false;
+				if (!input.admission.isCurrent(token.generation)) return false;
+				if (token.runtime !== input.getPorts().terminalView.getRuntimeKey())
+					return false;
+				if (!input.admission.isCurrent(token.generation)) return false;
+				if (
+					token.instance !==
+					input.getPorts().terminalView.getRuntimeInstanceId()
+				)
+					return false;
+				if (!input.admission.isCurrent(token.generation)) return false;
+				if (
+					token.instance !== null &&
+					!input.getPorts().terminalView.isCurrentInstance(token.instance)
+				)
+					return false;
+				if (!input.admission.isCurrent(token.generation)) return false;
 				return (
-					input.admission.isCurrent(token.generation) &&
-					Object.is(token.source, ports.sourceKey) &&
-					token.runtime === ports.terminalView.getRuntimeKey() &&
-					token.instance === ports.terminalView.getRuntimeInstanceId() &&
-					(token.instance === null ||
-						ports.terminalView.isCurrentInstance(token.instance)) &&
-					token.activityGeneration === ports.activity.getSnapshot().generation
+					token.activityGeneration ===
+					input.getPorts().activity.getSnapshot().generation
 				);
 			},
 			readClipboard: () => input.getPorts().readClipboard(),
@@ -151,41 +172,49 @@ export function createShellKeyboardControllerAdapter(input: {
 		await command();
 	};
 	const createActionContext = (): ActionContext => {
-		const ports = input.getPorts();
 		return {
 			availableKeyboardIds: new Set(
 				input.stateCore.getSnapshot().activeKeyboardIds,
 			),
-			selectKeyboard: input.stateCore.selectKeyboardIfExists,
+			selectKeyboard: (id) => input.stateCore.selectKeyboardIfExists(id),
 			resolveKeyboardActionTarget: (actionId) =>
 				getKeyboardActionTarget(
 					input.stateCore.getSnapshot().shellConfigState.config,
 					actionId,
 				),
-			rotateKeyboard: input.stateCore.rotateKeyboard,
-			openConfigurator: ports.modalCommands.openConfigurator,
+			rotateKeyboard: () => input.stateCore.rotateKeyboard(),
+			openConfigurator: () => input.getPorts().modalCommands.openConfigurator(),
 			sendBytes: (bytes) => {
 				void input.inputCore.sendBytes(bytes);
 			},
 			pasteClipboard,
 			copySelection,
-			fitTerminalToDevice: ports.fitTerminalToDevice,
+			fitTerminalToDevice: () => input.getPorts().fitTerminalToDevice(),
 			restartCodex: async () => {
 				await input.remoteCore.restartCodex();
 			},
-			debugConnectionInCodex: ports.debugConnectionInCodex,
-			toggleCommandMenu: ports.modalCommands.toggleCommandMenu,
-			openCommander: ports.modalCommands.openCommander,
-			openSkillSelector: ports.modalCommands.openSkillSelector,
-			openBrowserActions: ports.modalCommands.openBrowserActions,
-			openRepoFeatureRequest: ports.modalCommands.openFeatureRequest,
-			openWisprTextEditor: ports.modalCommands.openWisprTextEditor,
-			openHostDiffity: ports.browserCommands.openDiff,
-			openHostUrlSlot: ports.browserCommands.openUrlSlot,
-			openHostDetected: ports.browserCommands.openDetected,
-			editHostUrlSlot: ports.browserCommands.editUrlSlot,
-			runWorkmuxKeyboardCommand: input.remoteCore.runWorkmuxCommand,
-			setNavScope: ports.setNavScope,
+			debugConnectionInCodex: () => input.getPorts().debugConnectionInCodex(),
+			toggleCommandMenu: () =>
+				input.getPorts().modalCommands.toggleCommandMenu(),
+			openCommander: () => input.getPorts().modalCommands.openCommander(),
+			openSkillSelector: () =>
+				input.getPorts().modalCommands.openSkillSelector(),
+			openBrowserActions: () =>
+				input.getPorts().modalCommands.openBrowserActions(),
+			openRepoFeatureRequest: () =>
+				input.getPorts().modalCommands.openFeatureRequest(),
+			openWisprTextEditor: () =>
+				input.getPorts().modalCommands.openWisprTextEditor(),
+			openHostDiffity: () => input.getPorts().browserCommands.openDiff(),
+			openHostUrlSlot: (slot) =>
+				input.getPorts().browserCommands.openUrlSlot(slot),
+			openHostDetected: (mode) =>
+				input.getPorts().browserCommands.openDetected(mode),
+			editHostUrlSlot: (slot) =>
+				input.getPorts().browserCommands.editUrlSlot(slot),
+			runWorkmuxKeyboardCommand: (command) =>
+				input.remoteCore.runWorkmuxCommand(command),
+			setNavScope: (scope) => input.getPorts().setNavScope(scope),
 		};
 	};
 	const runCanonicalAction = (actionId: ActionId, options?: RunActionOptions) =>
@@ -211,11 +240,15 @@ export function createShellKeyboardControllerAdapter(input: {
 				enabled,
 				platformOS: ports.platformOS,
 				isCurrent: () => input.admission.isCurrent(generation),
-				setSelectionMode: input.stateCore.setSelectionModeEnabled,
-				setTerminalSystemKeyboard: ports.terminalView.setSystemKeyboardEnabled,
-				dismissKeyboard: ports.dismissKeyboard,
-				clearKeyboardVisibility: ports.clearKeyboardVisibility,
-				setSystemKeyboard: input.stateCore.setSystemKeyboardEnabled,
+				setSelectionMode: (value) =>
+					input.stateCore.setSelectionModeEnabled(value),
+				setTerminalSystemKeyboard: (value) =>
+					input.getPorts().terminalView.setSystemKeyboardEnabled(value),
+				dismissKeyboard: () => input.getPorts().dismissKeyboard(),
+				clearKeyboardVisibility: () =>
+					input.getPorts().clearKeyboardVisibility(),
+				setSystemKeyboard: (value) =>
+					input.stateCore.setSystemKeyboardEnabled(value),
 				warn: input.warn,
 			});
 		},
@@ -265,6 +298,7 @@ export function createShellKeyboardControllerAdapter(input: {
 				input.warn('Failed to read selection change terminal instance', error);
 				return;
 			}
+			if (!admitted()) return;
 			input.clipboardAuthority.noteSelection(text, instanceId);
 		},
 	};
