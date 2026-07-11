@@ -86,13 +86,16 @@ export type CreateTerminalLifecycleControllerInput = {
 	size: LifecycleSize;
 	platformOS: string;
 	logger: TerminalLifecycleLogger;
-	onRuntimeChanged(runtimeKey: TerminalRuntimeKey | null): void;
+	onRuntimeChanged(
+		runtimeKey: TerminalRuntimeKey | null,
+		instanceId: string | null,
+	): void;
 };
 
 type Attachment = {
 	id: bigint;
 	owner: TerminalLifecycleShell;
-	identity: string;
+	runtimeRevision: number;
 };
 
 function createRuntimeKey(
@@ -125,14 +128,19 @@ export function createTerminalLifecycleController({
 	};
 	let attachment: Attachment | null = null;
 	let attachAttempt: {
-		identity: string;
 		owner: TerminalLifecycleShell;
 		generation: number;
+		runtimeRevision: number;
+		xterm: LifecycleXterm;
 		promise: Promise<void>;
 	} | null = null;
-	let firstAttachedIdentity: string | null = null;
+	let firstAttachedRevision: number | null = null;
+	let runtimeRevision = 0;
 	let generation = 0;
 	let disposed = false;
+	let hasNotifiedRuntime = false;
+	let lastNotifiedRuntimeKey: TerminalRuntimeKey | null = null;
+	let lastNotifiedInstanceId: string | null = null;
 
 	const safeInfo = (message: string, details?: unknown): void => {
 		try {
@@ -170,21 +178,26 @@ export function createTerminalLifecycleController({
 		detachOwned();
 	};
 
-	const currentIdentity = (): string | null => {
-		if (!shell || !transportKey || !runtimeKey) return null;
-		return JSON.stringify([transportKey, runtimeKey]);
+	const isCurrentXterm = (xterm: LifecycleXterm): boolean => {
+		try {
+			return getXterm() === xterm;
+		} catch {
+			return false;
+		}
 	};
 
 	const isAttemptCurrent = (
 		attemptGeneration: number,
 		attemptShell: TerminalLifecycleShell,
-		identity: string,
+		attemptRuntimeRevision: number,
+		attemptXterm: LifecycleXterm,
 	): boolean => {
 		return (
 			!disposed &&
 			generation === attemptGeneration &&
 			shell === attemptShell &&
-			currentIdentity() === identity &&
+			runtimeRevision === attemptRuntimeRevision &&
+			isCurrentXterm(attemptXterm) &&
 			publisher.getSnapshot().ready
 		);
 	};
@@ -193,18 +206,20 @@ export function createTerminalLifecycleController({
 		if (disposed || !publisher.getSnapshot().ready) return Promise.resolve();
 		const attemptShell = shell;
 		const xterm = getXterm();
-		const identity = currentIdentity();
-		if (!attemptShell || !xterm || !identity) return Promise.resolve();
+		if (!attemptShell || !xterm || !transportKey || !runtimeKey)
+			return Promise.resolve();
+		const attemptRuntimeRevision = runtimeRevision;
 		if (
-			attachment?.identity === identity &&
+			attachment?.runtimeRevision === attemptRuntimeRevision &&
 			attachment.owner === attemptShell
 		) {
 			return Promise.resolve();
 		}
 		if (
-			attachAttempt?.identity === identity &&
-			attachAttempt.owner === attemptShell &&
-			attachAttempt.generation === generation
+			attachAttempt?.owner === attemptShell &&
+			attachAttempt.generation === generation &&
+			attachAttempt.runtimeRevision === attemptRuntimeRevision &&
+			attachAttempt.xterm === xterm
 		) {
 			return attachAttempt.promise;
 		}
@@ -212,65 +227,76 @@ export function createTerminalLifecycleController({
 		generation += 1;
 		const attemptGeneration = generation;
 		detachOwned();
-		const useHead = firstAttachedIdentity !== identity;
+		if (generation !== attemptGeneration) return Promise.resolve();
+		const useHead = firstAttachedRevision !== attemptRuntimeRevision;
+		const isCurrent = (): boolean =>
+			isAttemptCurrent(
+				attemptGeneration,
+				attemptShell,
+				attemptRuntimeRevision,
+				xterm,
+			);
 
 		const promise = (async (): Promise<void> => {
 			xterm.setSystemKeyboardEnabled(viewModes.systemKeyboardEnabled);
-			if (!isAttemptCurrent(attemptGeneration, attemptShell, identity)) return;
+			if (!isCurrent()) return;
 			xterm.setSelectionModeEnabled(viewModes.selectionModeEnabled);
-			if (!isAttemptCurrent(attemptGeneration, attemptShell, identity)) return;
+			if (!isCurrent()) return;
 
 			let cursor: Cursor = { mode: 'live' };
 			if (useHead) {
 				const result = await attemptShell.readBuffer({ mode: 'head' });
-				if (!isAttemptCurrent(attemptGeneration, attemptShell, identity))
-					return;
+				if (!isCurrent()) return;
 				safeInfo('readBuffer(head)', {
 					chunks: result.chunks.length,
 					nextSeq: result.nextSeq,
 					dropped: result.dropped,
 				});
-				if (!isAttemptCurrent(attemptGeneration, attemptShell, identity))
-					return;
+				if (!isCurrent()) return;
 				if (result.chunks.length > 0) {
 					xterm.writeMany(
 						result.chunks.map((chunk) => new Uint8Array(chunk.bytes)),
 					);
-					if (!isAttemptCurrent(attemptGeneration, attemptShell, identity))
-						return;
+					if (!isCurrent()) return;
 					xterm.flush();
-					if (!isAttemptCurrent(attemptGeneration, attemptShell, identity))
-						return;
+					if (!isCurrent()) return;
 				}
 				cursor = { mode: 'seq', seq: result.nextSeq };
 			}
 
 			const listener = (event: ListenerEvent): void => {
-				if (!isAttemptCurrent(attemptGeneration, attemptShell, identity))
-					return;
+				if (!isCurrent()) return;
 				if ('kind' in event) {
 					safeWarn('listener.dropped', event);
 					return;
 				}
 				try {
-					getXterm()?.write(new Uint8Array(event.bytes));
+					xterm.write(new Uint8Array(event.bytes));
 				} catch (error) {
 					safeWarn('Failed to write shell output', error);
 				}
 			};
 			const id = await attemptShell.addListener(listener, { cursor });
-			if (!isAttemptCurrent(attemptGeneration, attemptShell, identity)) {
-				removeAttachment({ id, owner: attemptShell, identity });
+			if (!isCurrent()) {
+				removeAttachment({
+					id,
+					owner: attemptShell,
+					runtimeRevision: attemptRuntimeRevision,
+				});
 				return;
 			}
 
-			attachment = { id, owner: attemptShell, identity };
-			if (useHead) firstAttachedIdentity = identity;
+			attachment = {
+				id,
+				owner: attemptShell,
+				runtimeRevision: attemptRuntimeRevision,
+			};
+			if (useHead) firstAttachedRevision = attemptRuntimeRevision;
 			safeInfo(
 				useHead ? 'shell listener attached' : 'shell listener attached (live)',
 				id.toString(),
 			);
-			if (!isAttemptCurrent(attemptGeneration, attemptShell, identity)) return;
+			if (!isCurrent()) return;
 			if (platformOS === 'ios') {
 				try {
 					xterm.focus();
@@ -281,9 +307,10 @@ export function createTerminalLifecycleController({
 		})();
 
 		attachAttempt = {
-			identity,
 			owner: attemptShell,
 			generation: attemptGeneration,
+			runtimeRevision: attemptRuntimeRevision,
+			xterm,
 			promise,
 		};
 		void promise.then(
@@ -301,13 +328,60 @@ export function createTerminalLifecycleController({
 		publisher.publish(next);
 	};
 
+	type CapturedError = { present: boolean; value: unknown };
+	const capture = (captured: CapturedError, task: () => void): void => {
+		try {
+			task();
+		} catch (error) {
+			if (!captured.present) {
+				captured.present = true;
+				captured.value = error;
+			}
+		}
+	};
+
+	const notifyRuntime = (captured: CapturedError, force: boolean): void => {
+		if (
+			!force &&
+			hasNotifiedRuntime &&
+			lastNotifiedRuntimeKey === runtimeKey &&
+			lastNotifiedInstanceId === runtimeInstanceId
+		)
+			return;
+		const notifiedRuntimeKey = runtimeKey;
+		const notifiedInstanceId = runtimeInstanceId;
+		hasNotifiedRuntime = true;
+		lastNotifiedRuntimeKey = notifiedRuntimeKey;
+		lastNotifiedInstanceId = notifiedInstanceId;
+		capture(captured, () =>
+			onRuntimeChanged(notifiedRuntimeKey, notifiedInstanceId),
+		);
+	};
+
 	const invalidateRuntime = (reason: ControllerInvalidationReason): void => {
-		generation += 1;
-		transport.clearRuntime();
-		size.invalidate(reason);
+		const operationGeneration = ++generation;
+		runtimeRevision += 1;
 		runtimeInstanceId = null;
 		runtimeKey = null;
 		detachOwned();
+		const captured: CapturedError = { present: false, value: undefined };
+		if (generation === operationGeneration) {
+			capture(captured, transport.clearRuntime);
+		}
+		if (generation === operationGeneration) {
+			capture(captured, () =>
+				publish({
+					ready: false,
+					hasRendered: publisher.getSnapshot().hasRendered,
+					runtimeKey: null,
+				}),
+			);
+		}
+		if (generation === operationGeneration) notifyRuntime(captured, false);
+		if (generation === operationGeneration) {
+			capture(captured, () => size.invalidate(reason));
+		}
+		if (captured.present) throw captured.value;
 	};
 
 	return {
@@ -318,17 +392,25 @@ export function createTerminalLifecycleController({
 			const normalizedShell = nextShell ?? null;
 			if (transportKey === nextTransportKey && shell === normalizedShell)
 				return;
-			generation += 1;
-			detachOwned();
+			const operationGeneration = ++generation;
+			const transportChanged = transportKey !== nextTransportKey;
 			transportKey = nextTransportKey;
 			shell = normalizedShell;
+			if (transportChanged) runtimeRevision += 1;
 			if (runtimeInstanceId && nextTransportKey) {
 				runtimeKey = createRuntimeKey(nextTransportKey, runtimeInstanceId);
 			} else {
 				runtimeKey = null;
 			}
+			detachOwned();
+			if (generation !== operationGeneration) return;
 			const snapshot = publisher.getSnapshot();
-			publish({ ...snapshot, runtimeKey });
+			const captured: CapturedError = { present: false, value: undefined };
+			capture(captured, () => publish({ ...snapshot, runtimeKey }));
+			if (generation === operationGeneration && runtimeInstanceId !== null) {
+				notifyRuntime(captured, false);
+			}
+			if (captured.present) throw captured.value;
 		},
 		setViewModes: (nextViewModes) => {
 			if (disposed) return;
@@ -336,37 +418,29 @@ export function createTerminalLifecycleController({
 		},
 		handleInitialized: (instanceId) => {
 			if (disposed) return;
-			generation += 1;
-			detachOwned();
-			firstAttachedIdentity = null;
+			const operationGeneration = ++generation;
+			runtimeRevision += 1;
+			firstAttachedRevision = null;
 			runtimeInstanceId = instanceId;
-			transport.setRuntimeInstance(instanceId);
 			runtimeKey = transportKey
 				? createRuntimeKey(transportKey, instanceId)
 				: null;
-			let publicationError: unknown;
-			try {
-				publish({ ready: true, hasRendered: true, runtimeKey });
-			} catch (error) {
-				publicationError = error;
+			detachOwned();
+			const captured: CapturedError = { present: false, value: undefined };
+			if (generation === operationGeneration) {
+				capture(captured, () => transport.setRuntimeInstance(instanceId));
 			}
-			if (runtimeInstanceId === instanceId && runtimeKey !== null) {
-				try {
-					onRuntimeChanged(runtimeKey);
-				} catch (error) {
-					publicationError ??= error;
-				}
+			if (generation === operationGeneration) {
+				capture(captured, () =>
+					publish({ ready: true, hasRendered: true, runtimeKey }),
+				);
 			}
-			if (publicationError !== undefined) throw publicationError;
+			if (generation === operationGeneration) notifyRuntime(captured, true);
+			if (captured.present) throw captured.value;
 		},
 		handleLoadStart: () => {
 			if (disposed) return;
 			invalidateRuntime('runtime-reset');
-			publish({
-				ready: false,
-				hasRendered: publisher.getSnapshot().hasRendered,
-				runtimeKey: null,
-			});
 		},
 		attach,
 		detach,
@@ -377,22 +451,28 @@ export function createTerminalLifecycleController({
 		invalidate: (reason) => {
 			if (disposed) return;
 			invalidateRuntime(reason);
-			publish({
-				ready: false,
-				hasRendered: publisher.getSnapshot().hasRendered,
-				runtimeKey: null,
-			});
 		},
 		dispose: () => {
 			if (disposed) return;
 			disposed = true;
 			generation += 1;
-			transport.clearRuntime();
-			size.invalidate('unmount');
+			runtimeRevision += 1;
 			runtimeInstanceId = null;
 			runtimeKey = null;
 			detachOwned();
-			publisher.disposePublisher();
+			const captured: CapturedError = { present: false, value: undefined };
+			capture(captured, transport.clearRuntime);
+			capture(captured, () =>
+				publish({
+					ready: false,
+					hasRendered: publisher.getSnapshot().hasRendered,
+					runtimeKey: null,
+				}),
+			);
+			notifyRuntime(captured, false);
+			capture(captured, () => size.invalidate('unmount'));
+			capture(captured, publisher.disposePublisher);
+			if (captured.present) throw captured.value;
 		},
 	};
 }

@@ -10,31 +10,19 @@ import {
 	useSyncExternalStore,
 } from 'react';
 import { type TerminalFitSize } from '../terminal-fit-runner';
-import { createReplaySafeDisposer } from './controller-core';
 import { type ShellTransportKey } from './source-keys';
 import {
-	createTerminalLifecycleController,
-	type TerminalLifecycleLogger,
-} from './terminal-lifecycle-core';
-import { createTerminalSizeController } from './terminal-size-core';
+	createShellTerminalHookRuntime,
+	type ShellTerminalRuntimeRouter,
+	type ShellTerminalRuntimeView,
+} from './terminal-hook-runtime';
+import { type TerminalLifecycleLogger } from './terminal-lifecycle-core';
 import {
-	createShellTerminalTransport,
-	type ShellTerminalTransportController,
 	type ShellTerminalTransportPort,
 	type TerminalRuntimeKey,
 } from './terminal-transport';
 
-export type ShellTerminalViewPort = {
-	getRuntimeKey(): TerminalRuntimeKey | null;
-	getRuntimeInstanceId(): string | null;
-	isCurrentInstance(instanceId: string): boolean;
-	fit(): void;
-	setSystemKeyboardEnabled(enabled: boolean): void;
-	setSelectionModeEnabled(enabled: boolean): void;
-	getSelection(): Promise<string>;
-	exitScrollback(message: { requestId: number; instanceId?: string }): void;
-	sendScrollbackEnterAck(requestId: number, instanceId: string): void;
-};
+export type ShellTerminalViewPort = ShellTerminalRuntimeView;
 
 export type ShellTerminalControllerHandle = {
 	xtermRef: RefObject<XtermWebViewHandle | null>;
@@ -51,9 +39,7 @@ export type ShellTerminalControllerHandle = {
 	retry(): void;
 };
 
-export type ShellTerminalRouter = {
-	back(): void;
-};
+export type ShellTerminalRouter = ShellTerminalRuntimeRouter;
 
 export type UseShellTerminalControllerInput = {
 	shell: SshShell | null | undefined;
@@ -63,13 +49,11 @@ export type UseShellTerminalControllerInput = {
 	selectionModeEnabled: boolean;
 	logger: TerminalLifecycleLogger;
 	router: ShellTerminalRouter;
-	onRuntimeChanged(runtimeKey: TerminalRuntimeKey | null): void;
+	onRuntimeChanged(
+		runtimeKey: TerminalRuntimeKey | null,
+		instanceId: string | null,
+	): void;
 };
-
-type CurrentDependencies = Pick<
-	UseShellTerminalControllerInput,
-	'logger' | 'router' | 'onRuntimeChanged'
->;
 
 export function useShellTerminalController({
 	shell,
@@ -82,56 +66,14 @@ export function useShellTerminalController({
 	onRuntimeChanged,
 }: UseShellTerminalControllerInput): ShellTerminalControllerHandle {
 	const xtermRef = useRef<XtermWebViewHandle>(null);
-	const shellRef = useRef<SshShell | null>(shell ?? null);
-	const dependenciesRef = useRef<CurrentDependencies>({
-		logger,
-		router,
-		onRuntimeChanged,
-	});
-
-	const [controllers] = useState(() => {
-		const currentLogger: TerminalLifecycleLogger = {
-			info: (message, details) =>
-				dependenciesRef.current.logger.info(message, details),
-			warn: (message, error) =>
-				dependenciesRef.current.logger.warn(message, error),
-		};
-		const transport = createShellTerminalTransport({
-			onSendFailure: (error) => {
-				try {
-					dependenciesRef.current.logger.warn('sendData failed', error);
-				} finally {
-					dependenciesRef.current.router.back();
-				}
-			},
-		});
-		const size = createTerminalSizeController({
-			setTimeout: (task, delayMs) => setTimeout(task, delayMs),
-			clearTimeout: (timer) =>
-				clearTimeout(timer as ReturnType<typeof setTimeout>),
-			resizePty: async (cols, rows) => {
-				await shellRef.current?.resizePty(cols, rows);
-			},
-			warn: (message, error) => currentLogger.warn(message, error),
-		});
-		const lifecycle = createTerminalLifecycleController({
-			getXterm: () => xtermRef.current,
-			transport,
-			size,
+	const [runtime] = useState(() =>
+		createShellTerminalHookRuntime({
+			xtermRef,
 			platformOS,
-			logger: currentLogger,
-			onRuntimeChanged: (runtimeKey) =>
-				dependenciesRef.current.onRuntimeChanged(runtimeKey),
-		});
-		const lifecycleDisposer = createReplaySafeDisposer(() => {
-			lifecycle.dispose();
-			size.dispose();
-			transport.dispose();
-		});
-		return { transport, size, lifecycle, lifecycleDisposer };
-	});
-
-	const { transport, size, lifecycle, lifecycleDisposer } = controllers;
+			dependencies: { logger, router, onRuntimeChanged },
+		}),
+	);
+	const { transport, size, lifecycle } = runtime;
 	const lifecycleState = useSyncExternalStore(
 		lifecycle.subscribe,
 		lifecycle.getSnapshot,
@@ -144,64 +86,33 @@ export function useShellTerminalController({
 	);
 
 	useLayoutEffect(() => {
-		dependenciesRef.current = { logger, router, onRuntimeChanged };
-	}, [logger, onRuntimeChanged, router]);
+		runtime.updateDependencies({ logger, router, onRuntimeChanged });
+	}, [logger, onRuntimeChanged, router, runtime]);
 
 	useLayoutEffect(() => {
-		shellRef.current = shell ?? null;
-		if (shell && transportKey) {
-			transport.setShell(transportKey, async (bytes) => {
-				const currentShell = shellRef.current;
-				if (!currentShell) return;
-				const copied = new Uint8Array(bytes);
-				await currentShell.sendData(copied.buffer as ArrayBuffer);
-			});
-		} else {
-			transport.clearShell();
-		}
-		lifecycle.setShell(transportKey, shell);
-	}, [lifecycle, shell, transport, transportKey]);
+		runtime.updateShell(transportKey, shell);
+	}, [runtime, shell, transportKey]);
 
 	useLayoutEffect(() => {
-		lifecycle.setViewModes({
+		runtime.updateViewModes({
 			systemKeyboardEnabled,
 			selectionModeEnabled,
 		});
-	}, [lifecycle, selectionModeEnabled, systemKeyboardEnabled]);
+	}, [runtime, selectionModeEnabled, systemKeyboardEnabled]);
 
 	useEffect(() => {
-		void lifecycle.attach().catch((error) => {
-			try {
-				dependenciesRef.current.logger.warn(
-					'Failed to attach shell listener',
-					error,
-				);
-			} catch {
-				// An attach failure is already represented by the missing listener.
-			}
-		});
-	}, [lifecycle, lifecycleState.ready, shell]);
+		void runtime
+			.requestAttach(lifecycleState.ready, Boolean(shell))
+			.catch((error) => {
+				try {
+					logger.warn('Failed to attach shell listener', error);
+				} catch {
+					// An attach failure is already represented by the missing listener.
+				}
+			});
+	}, [lifecycleState.ready, logger, runtime, shell]);
 
-	useEffect(() => lifecycleDisposer.setup(), [lifecycleDisposer]);
-
-	const view = useMemo<ShellTerminalViewPort>(
-		() => ({
-			getRuntimeKey: lifecycle.getRuntimeKey,
-			getRuntimeInstanceId: lifecycle.getRuntimeInstanceId,
-			isCurrentInstance: lifecycle.isCurrentInstance,
-			fit: () => xtermRef.current?.fit(),
-			setSystemKeyboardEnabled: (enabled) =>
-				xtermRef.current?.setSystemKeyboardEnabled(enabled),
-			setSelectionModeEnabled: (enabled) =>
-				xtermRef.current?.setSelectionModeEnabled(enabled),
-			getSelection: () =>
-				xtermRef.current?.getSelection() ?? Promise.resolve(''),
-			exitScrollback: (message) => xtermRef.current?.exitScrollback(message),
-			sendScrollbackEnterAck: (requestId, instanceId) =>
-				xtermRef.current?.sendScrollbackEnterAck(requestId, instanceId),
-		}),
-		[lifecycle],
-	);
+	useEffect(() => runtime.setupDisposal(), [runtime]);
 
 	return useMemo(
 		() => ({
@@ -210,14 +121,14 @@ export function useShellTerminalController({
 			hasRendered: lifecycleState.hasRendered,
 			runtimeKey: lifecycleState.runtimeKey,
 			lastSize: sizeState.lastSize,
-			transport: transport as ShellTerminalTransportController,
-			view,
+			transport,
+			view: runtime.view,
 			onLoadStart: lifecycle.handleLoadStart,
 			onInitialized: lifecycle.handleInitialized,
 			onResize: size.handleResize,
 			waitForSizeAfterFit: size.waitForSizeAfterFit,
-			retry: () => dependenciesRef.current.router.back(),
+			retry: runtime.retry,
 		}),
-		[lifecycle, lifecycleState, size, sizeState, transport, view],
+		[lifecycle, lifecycleState, runtime, size, sizeState, transport],
 	);
 }
