@@ -5,7 +5,7 @@ import { type WorkmuxScrollbackCommandExecutor } from '../workmux-scrollback-exe
 import {
 	type ScrollbackBatchEvent,
 	type ShellScrollbackContext,
-} from './scrollback-core';
+} from './scrollback-contracts';
 
 export function handleScrollbackBatch({
 	context,

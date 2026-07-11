@@ -1,4 +1,5 @@
 import { type ScrollTraceSink } from './scroll-trace';
+import { type ScrollbackOperationOwner } from './shell-controllers/scrollback-operation-owner';
 import { type WorkmuxScrollDirection } from './workmux-app-commands';
 import {
 	accumulateWorkmuxScrollbackBatchCommands,
@@ -338,7 +339,7 @@ export async function handleTmuxScrollbackEnterRequested({
 	clearLocalScrollbackUiState: () => void;
 	sendScrollbackEnterAck: (requestId: number, instanceId: string) => void;
 	isRequestCurrent?: () => boolean;
-	operationOwner?: unknown;
+	operationOwner?: ScrollbackOperationOwner;
 	onEnterCommandSettled?: () => void;
 	rollbackEnteredCopyMode?: () => Promise<boolean> | null;
 	trace?: ScrollTraceSink;
@@ -602,12 +603,20 @@ export function handleTmuxScrollbackBatchEvent({
 	if (!traceBatch('rn.batch.accepted', { commandCount: commands.length })) {
 		return false;
 	}
-	void enqueueScrollBatch(commands).catch((error: unknown) => {
+	const reportEnqueueFailure = (error: unknown) => {
 		try {
 			onEnqueueFailure?.(error);
 		} catch {
 			// Failure observation cannot become an unhandled rejection.
 		}
-	});
+	};
+	let enqueue: Promise<boolean>;
+	try {
+		enqueue = enqueueScrollBatch(commands);
+	} catch (error) {
+		reportEnqueueFailure(error);
+		return true;
+	}
+	void enqueue.catch(reportEnqueueFailure);
 	return true;
 }

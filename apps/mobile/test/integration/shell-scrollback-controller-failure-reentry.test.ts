@@ -136,3 +136,108 @@ void test('scrollback batch rejection terminal reentry is stale and logger-safe'
 	await flushPromises();
 	assert.deepEqual(harness.alerts, []);
 });
+
+void test('scrollback observes synchronous current batch enqueue throw once', async () => {
+	const harness = createScrollbackHarness();
+	const executor = harness.executors[0];
+	assert.ok(executor);
+	executor.enqueueScrollBatch = () => {
+		throw new Error('sync batch failed');
+	};
+	harness.core.onTerminalRuntimeChanged('instance-1');
+	harness.core.onScrollbackModeChange({
+		active: true,
+		phase: 'active',
+		instanceId: 'instance-1',
+	});
+	harness.remoteCopyModeActive.current = true;
+	harness.core.onScrollbackBatch({
+		direction: 'up',
+		pages: 1,
+		lines: 0,
+		pageStep: 24,
+		instanceId: 'instance-1',
+	});
+	await flushPromises();
+	assert.deepEqual(harness.alerts, [
+		{ title: 'Workmux scroll unavailable', message: 'sync batch failed' },
+	]);
+});
+
+void test('scrollback synchronous stale batch throw is suppressed and logger-safe', () => {
+	const harness = createScrollbackHarness({
+		logger: {
+			warn: () => {
+				throw new Error('logger failed');
+			},
+		},
+	});
+	const executor = harness.executors[0];
+	assert.ok(executor);
+	executor.enqueueScrollBatch = () => {
+		harness.core.onTerminalRuntimeChanged('instance-2');
+		throw new Error('stale sync batch failed');
+	};
+	harness.core.onTerminalRuntimeChanged('instance-1');
+	harness.core.onScrollbackModeChange({
+		active: true,
+		phase: 'active',
+		instanceId: 'instance-1',
+	});
+	harness.remoteCopyModeActive.current = true;
+	assert.doesNotThrow(() =>
+		harness.core.onScrollbackBatch({
+			direction: 'up',
+			pages: 1,
+			lines: 0,
+			pageStep: 24,
+			instanceId: 'instance-1',
+		}),
+	);
+	assert.deepEqual(harness.alerts, []);
+});
+
+for (const boundary of ['selection', 'accepted-trace'] as const) {
+	void test(`scrollback batch ${boundary} reentry enqueues nothing stale`, () => {
+		const harness = createScrollbackHarness();
+		const executor = harness.executors[0];
+		assert.ok(executor);
+		let enqueues = 0;
+		executor.enqueueScrollBatch = async () => {
+			enqueues += 1;
+			return true;
+		};
+		harness.core.onTerminalRuntimeChanged('instance-1');
+		harness.core.onScrollbackModeChange({
+			active: true,
+			phase: 'active',
+			instanceId: 'instance-1',
+		});
+		harness.remoteCopyModeActive.current = true;
+		if (boundary === 'selection') {
+			harness.core.setContext({
+				...harness.context,
+				getSelectionModeEnabled: () => {
+					harness.core.onTerminalRuntimeChanged('instance-2');
+					return false;
+				},
+			});
+		} else {
+			harness.core.setContext({
+				...harness.context,
+				trace: (event) => {
+					if (event.event === 'rn.batch.accepted')
+						harness.core.onTerminalRuntimeChanged('instance-2');
+				},
+			});
+		}
+		harness.core.onScrollbackBatch({
+			direction: 'up',
+			pages: 1,
+			lines: 0,
+			pageStep: 24,
+			instanceId: 'instance-1',
+		});
+		assert.equal(enqueues, 0);
+	});
+}

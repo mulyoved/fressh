@@ -6,7 +6,7 @@ import {
 import {
 	type ShellScrollbackContext,
 	type ShellScrollbackState,
-} from './scrollback-core';
+} from './scrollback-contracts';
 
 export function createScrollbackLocalUiCoordinator({
 	getCurrentState,
@@ -33,9 +33,9 @@ export function createScrollbackLocalUiCoordinator({
 	let nextRequestId = 0;
 	return (
 		context: ShellScrollbackContext,
-		token?: { instanceId: string; isCurrent(): boolean },
+		token?: { instanceId: string | null; isCurrent(): boolean },
 	): void => {
-		const current = getCurrentState();
+		let current = getCurrentState();
 		if (
 			token &&
 			(!token.isCurrent() || current.runtimeInstanceId !== token.instanceId)
@@ -49,6 +49,7 @@ export function createScrollbackLocalUiCoordinator({
 				runtimeInstanceId: current.runtimeInstanceId,
 			});
 		}
+		current = getCurrentState();
 		clearTmuxScrollbackLineAccumulator(lineAccumulator);
 		if (token && !token.isCurrent()) return;
 		const instanceId = token?.instanceId ?? current.runtimeInstanceId;
@@ -56,6 +57,14 @@ export function createScrollbackLocalUiCoordinator({
 			instanceId === null ||
 			current.context !== context ||
 			!isTerminalInstanceCurrent(context, instanceId)
+		) {
+			return;
+		}
+		current = getCurrentState();
+		if (
+			current.context !== context ||
+			current.runtimeInstanceId !== instanceId ||
+			(token && !token.isCurrent())
 		) {
 			return;
 		}
@@ -70,6 +79,9 @@ export function createScrollbackLocalUiCoordinator({
 			context.terminalView.exitScrollback(exitRequest.message);
 		} catch (error) {
 			warn(context, 'Scrollback local exit failed', error);
+		}
+		if (token && !token.isCurrent()) {
+			localExitRequestIds.delete(nextRequestId);
 		}
 	};
 }

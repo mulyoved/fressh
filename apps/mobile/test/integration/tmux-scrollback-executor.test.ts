@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { createScrollbackOperationOwnerRegistry } from '../../src/lib/shell-controllers/scrollback-operation-owner';
 import {
 	registerTmuxScrollbackRemoteCopyModeExitCleanup,
 	resetTmuxScrollbackRuntimeState,
@@ -217,7 +218,10 @@ void test('workmux scrollback executor settles enter failure when callback throw
 });
 
 void test('workmux scrollback executor attributes enter failure to exact operation owner', async () => {
-	const owner = Object.freeze({ request: 7 });
+	const registry = createScrollbackOperationOwnerRegistry<{
+		request: number;
+	}>();
+	const owner = registry.create(Object.freeze({ request: 7 }));
 	const failures: unknown[] = [];
 	const executor = createWorkmuxScrollbackCommandExecutor({
 		executeCommand: async () => ({
@@ -229,6 +233,57 @@ void test('workmux scrollback executor attributes enter failure to exact operati
 	});
 	assert.equal(await executor.runEnterCommand('main', owner), false);
 	assert.deepEqual(failures, [owner]);
+});
+
+for (const [firstPolicy, laterPolicy] of [
+	['suppress', 'notify'],
+	['notify', 'suppress'],
+] as const) {
+	void test(`canceled enter keeps ${firstPolicy} policy after later ${laterPolicy} reset`, async () => {
+		const completion = deferred<WorkmuxScrollbackCommandResult>();
+		const events: string[] = [];
+		const executor = createWorkmuxScrollbackCommandExecutor({
+			executeCommand: () => completion.promise,
+			onFailure: () => events.push('notify'),
+			onDisposeExitFailure: () => events.push('suppress'),
+		});
+		const enter = executor.runEnterCommand('main');
+		await Promise.resolve();
+		void executor.reset({ failurePolicy: firstPolicy });
+		void executor.reset({ failurePolicy: laterPolicy });
+		completion.resolve({ success: false, output: '', error: 'failed' });
+		await enter;
+		assert.deepEqual(events, [firstPolicy]);
+	});
+}
+
+void test('concurrent canceled enter generations keep independent failure policies', async () => {
+	const first = deferred<WorkmuxScrollbackCommandResult>();
+	const second = deferred<WorkmuxScrollbackCommandResult>();
+	const secondStarted = deferred<void>();
+	const events: string[] = [];
+	let calls = 0;
+	const executor = createWorkmuxScrollbackCommandExecutor({
+		executeCommand: () => {
+			if (++calls === 1) return first.promise;
+			secondStarted.resolve();
+			return second.promise;
+		},
+		onFailure: () => events.push('notify'),
+		onDisposeExitFailure: () => events.push('suppress'),
+	});
+	const firstEnter = executor.runEnterCommand('main');
+	await Promise.resolve();
+	void executor.reset({ failurePolicy: 'suppress' });
+	first.resolve({ success: false, output: '', error: 'first failed' });
+	await firstEnter;
+
+	const secondEnter = executor.runEnterCommand('main');
+	await secondStarted.promise;
+	void executor.reset({ failurePolicy: 'notify' });
+	second.resolve({ success: false, output: '', error: 'second failed' });
+	await secondEnter;
+	assert.deepEqual(events, ['suppress', 'notify']);
 });
 
 void test('workmux scrollback executor settles scroll batch when failure callback throws', async () => {

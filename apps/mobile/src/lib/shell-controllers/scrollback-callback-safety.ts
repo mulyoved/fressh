@@ -2,7 +2,7 @@ import { type ScrollTraceSink } from '../scroll-trace';
 import {
 	type ShellScrollbackContext,
 	type ShellScrollbackLogger,
-} from './scrollback-core';
+} from './scrollback-contracts';
 
 export const createSafeScrollbackWarn =
 	(logger: ShellScrollbackLogger | undefined) =>

@@ -1,26 +1,25 @@
+import { type ScrollTraceSink } from '../scroll-trace';
+import { handleTmuxScrollbackEnterRequested } from '../tmux-scrollback';
 import { type WorkmuxScrollbackCommandExecutor } from '../workmux-scrollback-executor';
 import { type ShellActivitySnapshot } from './activity-core';
 import {
+	type ScrollbackCleanupOwnership,
+	type ScrollbackEnterRequestedEvent,
+	type ScrollbackRequestAuthority,
 	type ShellScrollbackContext,
 	type ShellScrollbackLogger,
-} from './scrollback-core';
+} from './scrollback-contracts';
+import { createScrollbackOperationOwnerRegistry } from './scrollback-operation-owner';
 
-export type ScrollbackCleanupOwnership = Readonly<{
-	targetOwnershipRevision: number;
-	remoteCopyModeGeneration: number;
-	targetKey: ShellScrollbackContext['targetKey'];
-	targetName: string;
-}>;
-
-export type ScrollbackEnterRequestToken = Readonly<{
-	activityGeneration: number;
-	context: ShellScrollbackContext;
-	executor: WorkmuxScrollbackCommandExecutor;
-	instanceId: string;
-	remoteCopyModeGeneration: number;
-	requestGeneration: number;
-	targetOwnershipRevision: number;
-}>;
+export type ScrollbackEnterRequestToken = ScrollbackRequestAuthority<
+	WorkmuxScrollbackCommandExecutor,
+	string
+> &
+	Readonly<{
+		activityGeneration: number;
+		remoteCopyModeGeneration: number;
+		requestGeneration: number;
+	}>;
 
 type CurrentState = Readonly<{
 	context: ShellScrollbackContext | null;
@@ -34,12 +33,16 @@ type CurrentState = Readonly<{
 
 export function createScrollbackEntryCoordinator({
 	getCurrentState,
+	clearLocalState,
 	isTerminalInstanceCurrent,
 	registerRollbackCleanup,
 	remoteCopyModeActive,
 	remoteCopyModeGeneration,
+	reserveRequestGeneration,
+	trace,
 	warn,
 }: {
+	clearLocalState(context: ShellScrollbackContext): void;
 	getCurrentState(): CurrentState;
 	isTerminalInstanceCurrent(
 		context: ShellScrollbackContext,
@@ -52,9 +55,15 @@ export function createScrollbackEntryCoordinator({
 	}): void;
 	remoteCopyModeActive: { current: boolean };
 	remoteCopyModeGeneration: { current: number };
+	reserveRequestGeneration(): number;
+	trace(
+		context: ShellScrollbackContext,
+		event: Parameters<ScrollTraceSink>[0],
+	): void;
 	warn(logger: ShellScrollbackLogger, message: string, error?: unknown): void;
 }) {
-	const attributedRequests = new WeakSet<object>();
+	const attributedRequests =
+		createScrollbackOperationOwnerRegistry<ScrollbackEnterRequestToken>();
 	const pendingRollbacks = new WeakMap<
 		WorkmuxScrollbackCommandExecutor,
 		Readonly<{
@@ -163,24 +172,107 @@ export function createScrollbackEntryCoordinator({
 		return cleanup;
 	};
 
+	const run = async (event: ScrollbackEnterRequestedEvent): Promise<void> => {
+		const requestGeneration = reserveRequestGeneration();
+		const initial = getCurrentState();
+		const context = initial.context;
+		const executor = initial.executor;
+		if (
+			initial.disposed ||
+			context === null ||
+			executor === null ||
+			initial.runtimeInstanceId !== event.instanceId
+		)
+			return;
+		const baseCurrent = () => {
+			const current = getCurrentState();
+			return (
+				!current.disposed &&
+				current.requestGeneration === requestGeneration &&
+				current.context === context &&
+				current.executor === executor &&
+				current.runtimeInstanceId === event.instanceId &&
+				current.targetOwnershipRevision === initial.targetOwnershipRevision
+			);
+		};
+		if (!isTerminalInstanceCurrent(context, event.instanceId) || !baseCurrent())
+			return;
+		let activity: ShellActivitySnapshot;
+		try {
+			activity = context.getActivitySnapshot();
+		} catch (error) {
+			warn(context.logger, 'Scrollback activity check failed', error);
+			return;
+		}
+		if (!baseCurrent()) return;
+		const token: ScrollbackEnterRequestToken = Object.freeze({
+			activityGeneration: activity.generation,
+			context,
+			executor,
+			instanceId: event.instanceId,
+			remoteCopyModeGeneration: remoteCopyModeGeneration.current,
+			requestGeneration,
+			targetOwnershipRevision: initial.targetOwnershipRevision,
+		});
+		if (!activity.interactive || !activity.appActive) {
+			if (isInternallyCurrent(token)) clearLocalState(context);
+			return;
+		}
+		if (!validate(token)) return;
+		let selectionModeEnabled: boolean;
+		try {
+			selectionModeEnabled = context.getSelectionModeEnabled();
+		} catch (error) {
+			warn(context.logger, 'Scrollback selection check failed', error);
+			return;
+		}
+		if (!validate(token)) return;
+		const operationOwner = attributedRequests.create(token);
+		try {
+			await handleTmuxScrollbackEnterRequested({
+				event,
+				isAppActive: activity.appActive,
+				currentInstanceId: event.instanceId,
+				shellAvailable: context.shellAvailable,
+				selectionModeEnabled,
+				tmuxEnabled: context.tmuxEnabled,
+				connectionAvailable: context.connectionAvailable,
+				targetName: context.targetName,
+				commandExecutor: executor,
+				remoteCopyModeActiveRef: remoteCopyModeActive,
+				remoteCopyModeGenerationRef: remoteCopyModeGeneration,
+				clearLocalScrollbackUiState: () => clearLocalState(context),
+				sendScrollbackEnterAck: (requestId, instanceId) =>
+					context.terminalView.sendScrollbackEnterAck(requestId, instanceId),
+				isRequestCurrent: () => validate(token),
+				operationOwner,
+				onEnterCommandSettled: () => attributedRequests.release(operationOwner),
+				rollbackEnteredCopyMode: () => rollback(token),
+				trace: (traceEvent) => trace(context, traceEvent),
+			});
+		} catch (error) {
+			warn(context.logger, 'Workmux scrollback enter failed', error);
+			if (validate(token)) clearLocalState(context);
+		} finally {
+			attributedRequests.release(operationOwner);
+		}
+	};
+
 	return {
-		isAttributedOwnerCurrent(owner: unknown): boolean | null {
-			if (
-				typeof owner !== 'object' ||
-				owner === null ||
-				!attributedRequests.has(owner)
-			) {
-				return null;
-			}
-			return isInternallyCurrent(owner as ScrollbackEnterRequestToken);
+		isAttributedOwnerCurrent(
+			owner: Parameters<typeof attributedRequests.resolve>[0],
+		): boolean | null {
+			const token = attributedRequests.resolve(owner);
+			return token ? isInternallyCurrent(token) : null;
 		},
 		isInternallyCurrent,
-		release(token: ScrollbackEnterRequestToken): void {
-			attributedRequests.delete(token);
+		release(owner: Parameters<typeof attributedRequests.release>[0]): void {
+			attributedRequests.release(owner);
 		},
 		rollback,
-		track(token: ScrollbackEnterRequestToken): void {
-			attributedRequests.add(token);
+		run,
+		track(token: ScrollbackEnterRequestToken) {
+			return attributedRequests.create(token);
 		},
 		validate,
 	};

@@ -3,7 +3,7 @@ import { type WorkmuxScrollbackFailureContext } from '../workmux-scrollback-exec
 import {
 	type ShellScrollbackContext,
 	type ShellScrollbackLogger,
-} from './scrollback-core';
+} from './scrollback-contracts';
 import {
 	handleShellWorkmuxScrollbackCommandFailureActions,
 	shouldTreatShellWorkmuxScrollbackFailureAsAlreadyInactive,

@@ -6,16 +6,10 @@ import { type TmuxScrollbackLineAccumulator } from '../workmux-scrollback-batch'
 import { type WorkmuxScrollbackCommandExecutor } from '../workmux-scrollback-executor';
 import { type WorkmuxScrollbackLiveInputCleanupBarrier } from '../workmux-scrollback-live-input';
 import {
+	type ScrollbackCleanupOwnership,
 	type ShellScrollbackContext,
 	type ShellScrollbackLogger,
-} from './scrollback-core';
-
-export type ScrollbackCleanupOwnership = Readonly<{
-	targetOwnershipRevision: number;
-	remoteCopyModeGeneration: number;
-	targetKey: ShellScrollbackContext['targetKey'];
-	targetName: string;
-}>;
+} from './scrollback-contracts';
 
 type ResetOperationKey = Readonly<{
 	failurePolicy: 'notify' | 'suppress';

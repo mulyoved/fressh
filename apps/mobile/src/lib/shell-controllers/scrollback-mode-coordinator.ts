@@ -3,7 +3,7 @@ import { shouldRunTmuxScrollbackRemoteResetForModeChange } from '../tmux-scrollb
 import {
 	type ScrollbackModeChangeEvent,
 	type ShellScrollbackState,
-} from './scrollback-core';
+} from './scrollback-contracts';
 
 export function createScrollbackModeCoordinator() {
 	let invocationGeneration = 0;
