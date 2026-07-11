@@ -97,7 +97,7 @@ void test('hook runtime owns one core and keeps input and xterm ports stable acr
 	assert.deepEqual(await inputPort.sendSegments([]), { status: 'unavailable' });
 });
 
-void test('hook runtime ordinary and Strict Mode unmount invalidates synchronously and disposes once', () => {
+void test('hook runtime defers ordinary unmount invalidation and disposal and suppresses Strict Mode replay', () => {
 	const ordinary = createFixture();
 	const ordinarySnapshot = ordinary.harness.core.getSnapshot();
 	const cleanup = ordinary.runtime.setupDisposal();
