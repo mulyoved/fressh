@@ -37,6 +37,7 @@ import {
 } from './scrollback-contracts';
 import { createScrollbackEntryCoordinator } from './scrollback-entry-coordinator';
 import { createScrollbackFailureCoordinator } from './scrollback-failure-coordinator';
+import { createScrollbackLiveInputCoordinator } from './scrollback-live-input-coordinator';
 import { createScrollbackLocalUiCoordinator } from './scrollback-local-ui-coordinator';
 import { createScrollbackModeCoordinator } from './scrollback-mode-coordinator';
 import { handleShellWorkmuxScrollbackDisposeExitFailureActions } from './scrollback-policy';
@@ -46,6 +47,7 @@ export type ShellScrollbackControllerCore =
 	ControllerCore<ShellScrollbackState> & {
 		setContext(context: ShellScrollbackContext): void;
 		onTerminalRuntimeChanged(instanceId: string | null): void;
+		onActivityChanged(): void;
 		onScrollbackModeChange(event: ScrollbackModeChangeEvent): void;
 		onScrollbackEnterRequested(
 			event: ScrollbackEnterRequestedEvent,
@@ -217,6 +219,32 @@ export function createShellScrollbackControllerCore(
 			remoteWasActive: remoteCopyModeActive.current,
 		});
 	};
+	const liveInputCoordinator = createScrollbackLiveInputCoordinator({
+		advanceFreshness: advanceRequestFreshness,
+		clearInactive: () => {
+			const ownerContext = context;
+			return ownerContext === null
+				? null
+				: clearScrollbackState(ownerContext, 'suppress');
+		},
+		getCurrentCleanup: cleanupBarrier.current,
+		getCurrentState: () => ({
+			context,
+			disposed,
+			liveInputGeneration: requestGenerations.liveInput,
+			remoteCopyModeActive: remoteCopyModeActive.current,
+			remoteCopyModeGeneration: remoteCopyModeGeneration.current,
+			runtimeInstanceId,
+			scrollbackActive: publisher.getSnapshot().active,
+			targetOwnershipRevision,
+		}),
+		scrollbackExitDelayMs: 10,
+		scrollbackExitKeyPayload: new Uint8Array([0x71]),
+		startCleanup: () => {
+			const ownerContext = context;
+			return ownerContext === null ? null : clearScrollbackState(ownerContext);
+		},
+	});
 
 	const entryCoordinator = createScrollbackEntryCoordinator({
 		clearLocalState: clearLocalScrollbackUiState,
@@ -504,10 +532,41 @@ export function createShellScrollbackControllerCore(
 		}
 	};
 
+	const requestJumpToLive = (): Promise<boolean> | null => {
+		const ownerContext = context;
+		const ownerExecutor = executor;
+		const instanceId = runtimeInstanceId;
+		const ownerTargetOwnershipRevision = targetOwnershipRevision;
+		if (
+			disposed ||
+			ownerContext === null ||
+			ownerExecutor === null ||
+			instanceId === null ||
+			runtimeInstanceId !== instanceId
+		)
+			return null;
+		const isCurrent = () =>
+			!disposed &&
+			context === ownerContext &&
+			executor === ownerExecutor &&
+			runtimeInstanceId === instanceId &&
+			targetOwnershipRevision === ownerTargetOwnershipRevision;
+		if (!isTerminalInstanceCurrent(ownerContext, instanceId) || !isCurrent())
+			return null;
+		return clearScrollbackState(ownerContext, 'notify', {
+			context: ownerContext,
+			executor: ownerExecutor,
+			instanceId,
+			targetOwnershipRevision: ownerTargetOwnershipRevision,
+			isCurrent,
+		});
+	};
+
 	return {
 		getSnapshot: publisher.getSnapshot,
 		subscribe: publisher.subscribe,
 		setContext,
+		onActivityChanged: liveInputCoordinator.onActivityChanged,
 		onTerminalRuntimeChanged,
 		onScrollbackModeChange: (event) => {
 			const ownerContext = context;
@@ -569,7 +628,7 @@ export function createShellScrollbackControllerCore(
 					createSafeWarn(ownerContext.logger)(message, error),
 			});
 		},
-		sendSegments: async () => ({ status: 'unavailable' }),
+		sendSegments: liveInputCoordinator.sendSegments,
 		clear: (options) => {
 			const ownerContext = context;
 			if (disposed || ownerContext === null || executor === null) return null;
@@ -578,36 +637,7 @@ export function createShellScrollbackControllerCore(
 				options?.failurePolicy ?? 'notify',
 			);
 		},
-		jumpToLive: () => {
-			const ownerContext = context;
-			const ownerExecutor = executor;
-			const instanceId = runtimeInstanceId;
-			const ownerTargetOwnershipRevision = targetOwnershipRevision;
-			if (
-				disposed ||
-				ownerContext === null ||
-				ownerExecutor === null ||
-				instanceId === null ||
-				runtimeInstanceId !== instanceId
-			) {
-				return;
-			}
-			const isCurrent = () =>
-				!disposed &&
-				context === ownerContext &&
-				executor === ownerExecutor &&
-				runtimeInstanceId === instanceId &&
-				targetOwnershipRevision === ownerTargetOwnershipRevision;
-			if (!isTerminalInstanceCurrent(ownerContext, instanceId)) return;
-			if (!isCurrent()) return;
-			void clearScrollbackState(ownerContext, 'notify', {
-				context: ownerContext,
-				executor: ownerExecutor,
-				instanceId,
-				targetOwnershipRevision: ownerTargetOwnershipRevision,
-				isCurrent,
-			});
-		},
+		jumpToLive: requestJumpToLive,
 		invalidate,
 		dispose,
 	};

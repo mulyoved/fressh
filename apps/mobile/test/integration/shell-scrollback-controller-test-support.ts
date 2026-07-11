@@ -156,6 +156,8 @@ export function createScrollbackHarness(
 			({
 				warn: (message) => warnings.push(message),
 			} satisfies ShellScrollbackContext['logger']),
+		getErrorMessage: (error) =>
+			error instanceof Error ? error.message : String(error),
 	};
 	const core = createShellScrollbackControllerCore({
 		createExecutor,

@@ -67,6 +67,7 @@ export type ShellScrollbackContext = {
 	trace: ScrollTraceSink;
 	feedback: ShellScrollbackFeedback;
 	logger: ShellScrollbackLogger;
+	getErrorMessage(error: unknown): string;
 };
 export type ScrollbackCleanupOwnership = Readonly<{
 	targetOwnershipRevision: number;
