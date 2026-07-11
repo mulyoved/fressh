@@ -142,6 +142,9 @@ export function createKeyboardInputHarness() {
 	let throwHistory = false;
 	let keyboardId = 'main';
 	let activityReadHook: (() => void) | null = null;
+	let runtimeKeyReadHook: (() => void) | null = null;
+	let runtimeInstanceReadHook: (() => void) | null = null;
+	let sourceReadHook: (() => void) | null = null;
 	let stateSnapshotHook: ((call: number) => void) | null = null;
 	let stateSnapshotCalls = 0;
 	let throwStateSnapshotCall: number | null = null;
@@ -153,6 +156,7 @@ export function createKeyboardInputHarness() {
 	let applyModifiersImplementation:
 		| ((bytes: Uint8Array<ArrayBuffer>) => Uint8Array<ArrayBuffer>)
 		| null = null;
+	let toggleModifierImplementation: (() => void) | null = null;
 	const closedCommandMenus: string[] = [];
 	const state: CreateShellKeyboardInputCoreOptions['state'] = {
 		getSnapshot: () => {
@@ -194,7 +198,10 @@ export function createKeyboardInputHarness() {
 			completedSlots.push('complete');
 			completeSlotImplementation?.();
 		},
-		toggleModifier: (modifier: ModifierKey) => modifierToggles.push(modifier),
+		toggleModifier: (modifier: ModifierKey) => {
+			modifierToggles.push(modifier);
+			toggleModifierImplementation?.();
+		},
 	};
 	const core = createShellKeyboardInputCore({
 		state,
@@ -208,8 +215,14 @@ export function createKeyboardInputHarness() {
 			},
 		},
 		terminalView: {
-			getRuntimeKey: () => runtimeKey,
-			getRuntimeInstanceId: () => instanceId,
+			getRuntimeKey: () => {
+				runtimeKeyReadHook?.();
+				return runtimeKey;
+			},
+			getRuntimeInstanceId: () => {
+				runtimeInstanceReadHook?.();
+				return instanceId;
+			},
 			isCurrentInstance: (candidate) =>
 				currentnessImplementation
 					? currentnessImplementation(candidate)
@@ -223,7 +236,10 @@ export function createKeyboardInputHarness() {
 			activityReadHook?.();
 			return activity;
 		},
-		getSourceKey: () => sourceKey,
+		getSourceKey: () => {
+			sourceReadHook?.();
+			return sourceKey;
+		},
 		runAction: (actionId, options) => {
 			actions.push({ actionId, options });
 			return actionImplementation?.(actionId, options);
@@ -305,6 +321,15 @@ export function createKeyboardInputHarness() {
 		setActivityReadHook: (hook: (() => void) | null) => {
 			activityReadHook = hook;
 		},
+		setRuntimeKeyReadHook: (hook: (() => void) | null) => {
+			runtimeKeyReadHook = hook;
+		},
+		setRuntimeInstanceReadHook: (hook: (() => void) | null) => {
+			runtimeInstanceReadHook = hook;
+		},
+		setSourceReadHook: (hook: (() => void) | null) => {
+			sourceReadHook = hook;
+		},
 		setStateSnapshotHook: (hook: ((call: number) => void) | null) => {
 			stateSnapshotCalls = 0;
 			stateSnapshotHook = hook;
@@ -335,6 +360,11 @@ export function createKeyboardInputHarness() {
 			implementation: typeof applyModifiersImplementation,
 		) => {
 			applyModifiersImplementation = implementation;
+		},
+		setToggleModifierImplementation: (
+			implementation: typeof toggleModifierImplementation,
+		) => {
+			toggleModifierImplementation = implementation;
 		},
 	};
 }

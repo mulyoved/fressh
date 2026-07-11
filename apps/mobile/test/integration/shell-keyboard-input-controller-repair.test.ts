@@ -386,6 +386,190 @@ for (const slot of [
 	});
 }
 
+void test('initial authority getter reentry is superseded while plain absence and throw stay unavailable', async () => {
+	const getterCases = [
+		(
+			harness: ReturnType<typeof createKeyboardInputHarness>,
+			hook: () => void,
+		) => harness.setActivityReadHook(hook),
+		(
+			harness: ReturnType<typeof createKeyboardInputHarness>,
+			hook: () => void,
+		) => harness.setRuntimeKeyReadHook(hook),
+		(
+			harness: ReturnType<typeof createKeyboardInputHarness>,
+			hook: () => void,
+		) => harness.setRuntimeInstanceReadHook(hook),
+		(
+			harness: ReturnType<typeof createKeyboardInputHarness>,
+			hook: () => void,
+		) => harness.setSourceReadHook(hook),
+		(
+			harness: ReturnType<typeof createKeyboardInputHarness>,
+			hook: () => void,
+		) =>
+			harness.setStateSnapshotHook((call) => {
+				if (call === 1) hook();
+			}),
+	];
+	for (const setHook of getterCases) {
+		const harness = createKeyboardInputHarness();
+		let replacement: Promise<ControllerOutcome<{ message: string }>> | null =
+			null;
+		setHook(harness, () => {
+			setHook(harness, () => undefined);
+			replacement = harness.core.sendTextRaw('new');
+			throw new Error('authority failed');
+		});
+		assert.deepEqual(await harness.core.sendTextRaw('old'), {
+			status: 'superseded',
+		});
+		assert.deepEqual(await replacement, { status: 'completed' });
+		assert.deepEqual(harness.sent, [[[0x6e, 0x65, 0x77]]]);
+	}
+
+	const missing = createKeyboardInputHarness();
+	missing.setInteractive(false);
+	assert.deepEqual(await missing.core.sendTextRaw('old'), {
+		status: 'unavailable',
+	});
+	const throwing = createKeyboardInputHarness();
+	throwing.setActivityReadHook(() => {
+		throw new Error('authority failed');
+	});
+	assert.deepEqual(await throwing.core.sendTextRaw('old'), {
+		status: 'unavailable',
+	});
+});
+
+void test('initial authority logger reentry supersedes the failed snapshot', async () => {
+	const harness = createKeyboardInputHarness();
+	harness.setActivityReadHook(() => {
+		throw new Error('authority failed');
+	});
+	let replacement: Promise<ControllerOutcome<{ message: string }>> | null =
+		null;
+	harness.setLoggerImplementation(() => {
+		harness.setLoggerImplementation(null);
+		harness.setActivityReadHook(null);
+		replacement = harness.core.sendTextRaw('new');
+	});
+	assert.deepEqual(await harness.core.sendTextRaw('old'), {
+		status: 'superseded',
+	});
+	assert.deepEqual(await replacement, { status: 'completed' });
+	assert.deepEqual(harness.sent, [[[0x6e, 0x65, 0x77]]]);
+});
+
+void test('modifier toggle and macro collection failures revalidate after callbacks and logging', async () => {
+	const modifierSlot = {
+		type: 'modifier',
+		modifier: 'CTRL',
+		label: 'Ctrl',
+		icon: null,
+	} as const;
+	const current = createKeyboardInputHarness();
+	current.setToggleModifierImplementation(() => {
+		throw new Error('toggle failed');
+	});
+	assert.equal(
+		(await current.core.handleSlotPress(modifierSlot)).status,
+		'failed',
+	);
+
+	for (const reenterFromLogger of [false, true]) {
+		const harness = createKeyboardInputHarness();
+		let replacement: Promise<ControllerOutcome<{ message: string }>> | null =
+			null;
+		harness.setToggleModifierImplementation(() => {
+			if (!reenterFromLogger) {
+				harness.setToggleModifierImplementation(null);
+				replacement = harness.core.sendTextRaw('new');
+			}
+			throw new Error('toggle failed');
+		});
+		if (reenterFromLogger) {
+			harness.setLoggerImplementation(() => {
+				harness.setLoggerImplementation(null);
+				harness.setToggleModifierImplementation(null);
+				replacement = harness.core.sendTextRaw('new');
+			});
+		}
+		assert.deepEqual(await harness.core.handleSlotPress(modifierSlot), {
+			status: 'superseded',
+		});
+		assert.deepEqual(await replacement, { status: 'completed' });
+		assert.deepEqual(harness.sent, [[[0x6e, 0x65, 0x77]]]);
+	}
+
+	const macroSlot = {
+		type: 'macro',
+		macroId: 'throwing',
+		label: 'Macro',
+		icon: null,
+	} as const;
+	const macroHarness = createKeyboardInputHarness();
+	macroHarness.setMacros([
+		{
+			id: 'throwing',
+			name: 'Throwing',
+			label: 'Throwing',
+			category: 'test',
+			script: Symbol('bad') as unknown as string,
+		},
+	]);
+	assert.equal(
+		(await macroHarness.core.handleSlotPress(macroSlot)).status,
+		'failed',
+	);
+
+	const macroReentrant = createKeyboardInputHarness();
+	let macroReplacement: Promise<ControllerOutcome<{ message: string }>> | null =
+		null;
+	const reentrantMacro = {
+		id: 'throwing',
+		name: 'Throwing',
+		label: 'Throwing',
+		category: 'test',
+		script: '',
+	};
+	Object.defineProperty(reentrantMacro, 'script', {
+		enumerable: true,
+		get: () => {
+			macroReplacement = macroReentrant.core.sendTextRaw('new');
+			throw new Error('macro failed');
+		},
+	});
+	macroReentrant.setMacros([reentrantMacro]);
+	assert.deepEqual(await macroReentrant.core.handleSlotPress(macroSlot), {
+		status: 'superseded',
+	});
+	assert.deepEqual(await macroReplacement, { status: 'completed' });
+	assert.deepEqual(macroReentrant.sent, [[[0x6e, 0x65, 0x77]]]);
+
+	const loggerStale = createKeyboardInputHarness();
+	loggerStale.setMacros([
+		{
+			id: 'throwing',
+			name: 'Throwing',
+			label: 'Throwing',
+			category: 'test',
+			script: Symbol('bad') as unknown as string,
+		},
+	]);
+	let replacement: Promise<ControllerOutcome<{ message: string }>> | null =
+		null;
+	loggerStale.setLoggerImplementation(() => {
+		loggerStale.setLoggerImplementation(null);
+		replacement = loggerStale.core.sendTextRaw('new');
+	});
+	assert.deepEqual(await loggerStale.core.handleSlotPress(macroSlot), {
+		status: 'superseded',
+	});
+	assert.deepEqual(await replacement, { status: 'completed' });
+	assert.deepEqual(loggerStale.sent, [[[0x6e, 0x65, 0x77]]]);
+});
+
 void test('duplicate acceptance records text history exactly once', async () => {
 	const harness = createKeyboardInputHarness();
 	harness.setSendImplementation((options) => {

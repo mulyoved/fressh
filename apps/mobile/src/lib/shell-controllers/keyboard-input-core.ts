@@ -41,6 +41,9 @@ const scrollbackExitDelayMs = 10;
 
 type InputOutcome = KeyboardInputOutcome;
 type TimerHandle = KeyboardInputTimerHandle;
+type TokenCreation =
+	| { token: KeyboardInputRequestToken }
+	| { outcome: InputOutcome };
 
 export function createShellKeyboardInputCore({
 	state,
@@ -98,13 +101,20 @@ export function createShellKeyboardInputCore({
 		warn: safeWarn,
 	};
 
-	const createToken = (): KeyboardInputRequestToken | null => {
-		if (disposed) return null;
+	const createToken = (): TokenCreation => {
+		if (disposed) return { outcome: { status: 'unavailable' } };
 		const tokenGeneration = advanceGeneration();
-		return snapshotKeyboardInputAuthority(
+		const token = snapshotKeyboardInputAuthority(
 			tokenGeneration,
 			authorityDependencies,
 		);
+		if (token) return { token };
+		return {
+			outcome:
+				!disposed && generation === tokenGeneration
+					? { status: 'unavailable' }
+					: { status: 'superseded' },
+		};
 	};
 
 	const isCurrent = (token: KeyboardInputRequestToken): boolean => {
@@ -192,8 +202,9 @@ export function createShellKeyboardInputCore({
 		segments: readonly Uint8Array<ArrayBuffer>[],
 		options?: { modifiers?: boolean; interSegmentDelayMs?: number },
 	): Promise<InputOutcome> => {
-		const token = createToken();
-		if (!token) return { status: 'unavailable' };
+		const created = createToken();
+		if ('outcome' in created) return created.outcome;
+		const { token } = created;
 		const selectionOutcome = exitSelection(token);
 		if (!isCompletedKeyboardInput(selectionOutcome)) return selectionOutcome;
 		let copied = copyKeyboardSegments(segments);
@@ -301,8 +312,9 @@ export function createShellKeyboardInputCore({
 
 	const runSteps = (steps: readonly CommandStep[]): Promise<InputOutcome> => {
 		const copiedSteps = steps.map(copyKeyboardCommandStep);
-		const token = createToken();
-		if (!token) return Promise.resolve({ status: 'unavailable' });
+		const created = createToken();
+		if ('outcome' in created) return Promise.resolve(created.outcome);
+		const { token } = created;
 		const selectionOutcome = exitSelection(token);
 		if (!isCompletedKeyboardInput(selectionOutcome))
 			return Promise.resolve(selectionOutcome);
@@ -325,10 +337,12 @@ export function createShellKeyboardInputCore({
 			operations = collectKeyboardMacroOperations(macro);
 		} catch (error) {
 			safeWarn('Keyboard macro failed', error);
-			return {
-				status: 'failed',
-				failure: { message: 'Keyboard macro failed.' },
-			};
+			return isCurrent(token)
+				? {
+						status: 'failed',
+						failure: { message: 'Keyboard macro failed.' },
+					}
+				: { status: 'superseded' };
 		}
 		for (const operation of operations) {
 			let outcome: InputOutcome;
@@ -368,8 +382,10 @@ export function createShellKeyboardInputCore({
 		onWebViewInput: async ({ str, instanceId }) => {
 			const copiedInstanceId = `${instanceId}`;
 			const copiedValue = `${str}`;
-			const token = createToken();
-			if (!token || token.runtimeInstanceId !== copiedInstanceId) {
+			const created = createToken();
+			if ('outcome' in created) return created.outcome;
+			const { token } = created;
+			if (token.runtimeInstanceId !== copiedInstanceId) {
 				return { status: 'unavailable' };
 			}
 			if (!isCurrent(token)) return { status: 'superseded' };
@@ -383,8 +399,9 @@ export function createShellKeyboardInputCore({
 			const payload = buildTextEntryPastePayload(`${value}`);
 			if (!payload.historyText) return { status: 'unavailable' };
 			const historyText = payload.historyText;
-			const token = createToken();
-			if (!token) return { status: 'unavailable' };
+			const created = createToken();
+			if ('outcome' in created) return created.outcome;
+			const { token } = created;
 			const selectionOutcome = exitSelection(token);
 			if (!isCompletedKeyboardInput(selectionOutcome)) return selectionOutcome;
 			const outcome = await sendSegments(
@@ -416,8 +433,9 @@ export function createShellKeyboardInputCore({
 			runSteps(preset.steps.map(copyKeyboardCommandStep)),
 		handleSlotPress: async (slot) => {
 			const copiedSlot = copyKeyboardExecutableItem(slot);
-			const token = createToken();
-			if (!token) return { status: 'unavailable' };
+			const created = createToken();
+			if ('outcome' in created) return created.outcome;
+			const { token } = created;
 			const explicitCopy =
 				copiedSlot.type === 'action' &&
 				copiedSlot.actionId === 'COPY_SELECTION';
@@ -441,10 +459,12 @@ export function createShellKeyboardInputCore({
 							: { status: 'superseded' };
 					} catch (error) {
 						safeWarn('Keyboard modifier action failed', error);
-						outcome = {
-							status: 'failed',
-							failure: { message: 'Keyboard modifier action failed.' },
-						};
+						outcome = isCurrent(token)
+							? {
+									status: 'failed',
+									failure: { message: 'Keyboard modifier action failed.' },
+								}
+							: { status: 'superseded' };
 					}
 					break;
 				case 'text': {
@@ -523,11 +543,7 @@ export function createShellKeyboardInputCore({
 							? { status: 'unavailable' }
 							: { status: 'superseded' };
 					}
-					outcome = await runMacroWithToken(
-						token,
-						{ ...macro },
-						completion.commit,
-					);
+					outcome = await runMacroWithToken(token, macro, completion.commit);
 					break;
 				}
 				case 'action': {
