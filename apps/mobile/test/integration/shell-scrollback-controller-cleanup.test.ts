@@ -298,34 +298,108 @@ for (const operation of [
 	});
 }
 
-void test('scrollback stale cleanup settlement cannot clear the newer barrier', async () => {
+void test('scrollback coalesces repeated same-executor resets while cleanup is pending', async () => {
 	const recording = createRecordingCleanupBarrier();
 	const harness = createScrollbackHarness({
 		cleanupBarrier: recording.barrier,
 	});
-	const staleCleanup = createDeferred<boolean>();
-	const currentCleanup = createDeferred<boolean>();
+	const firstCleanup = createDeferred<boolean>();
+	const secondCleanup = createDeferred<boolean>();
 	const executor = harness.executors[0];
 	assert.ok(executor);
 	let resetCount = 0;
 	executor.reset = () => {
 		resetCount += 1;
-		return resetCount === 1 ? staleCleanup.promise : currentCleanup.promise;
+		return resetCount === 1 ? firstCleanup.promise : secondCleanup.promise;
 	};
-	harness.core.onTerminalRuntimeChanged('instance-1');
-	harness.core.onTerminalRuntimeChanged('instance-2');
-	assert.deepEqual(recording.trackedInputs, [
-		staleCleanup.promise,
-		currentCleanup.promise,
-	]);
-	const newerBarrier = recording.barrier.current();
-	assert.notEqual(newerBarrier, null);
-	staleCleanup.resolve(true);
-	await flushPromises();
-	assert.equal(recording.barrier.current(), newerBarrier);
-	currentCleanup.resolve(true);
+	harness.remoteCopyModeActive.current = true;
+	harness.core.invalidate('focus-lost');
+	const stableBarrier = recording.barrier.current();
+	assert.notEqual(stableBarrier, null);
+	for (let index = 0; index < 50; index += 1) {
+		harness.core.invalidate('app-inactive');
+		harness.core.onTerminalRuntimeChanged(`instance-${index}`);
+		assert.equal(recording.barrier.current(), stableBarrier);
+	}
+	assert.equal(resetCount, 1);
+	assert.deepEqual(recording.trackedInputs, [firstCleanup.promise]);
+	firstCleanup.resolve(true);
 	await flushPromises();
 	assert.equal(recording.barrier.current(), null);
+	assert.equal(harness.remoteCopyModeActive.current, false);
+	harness.remoteCopyModeActive.current = true;
+	harness.core.invalidate('focus-lost');
+	assert.equal(resetCount, 2);
+	assert.deepEqual(recording.trackedInputs, [
+		firstCleanup.promise,
+		secondCleanup.promise,
+	]);
+	secondCleanup.resolve(true);
+	await flushPromises();
+	assert.equal(harness.remoteCopyModeActive.current, false);
+});
+
+void test('scrollback composes pending cleanup from independent executors', async () => {
+	const recording = createRecordingCleanupBarrier();
+	const harness = createScrollbackHarness({
+		cleanupBarrier: recording.barrier,
+	});
+	const firstCleanup = createDeferred<boolean>();
+	const secondCleanup = createDeferred<boolean>();
+	const firstExecutor = harness.executors[0];
+	assert.ok(firstExecutor);
+	firstExecutor.reset = () => firstCleanup.promise;
+	harness.core.invalidate('focus-lost');
+	harness.core.setContext({
+		...harness.context,
+		workmuxScroll: { ...harness.scroll },
+	});
+	const secondExecutor = harness.executors[1];
+	assert.ok(secondExecutor);
+	secondExecutor.reset = () => secondCleanup.promise;
+	harness.core.invalidate('app-inactive');
+	assert.deepEqual(recording.trackedInputs, [
+		firstCleanup.promise,
+		secondCleanup.promise,
+	]);
+	const composedBarrier = recording.barrier.current();
+	assert.notEqual(composedBarrier, null);
+	firstCleanup.resolve(true);
+	await flushPromises();
+	assert.equal(recording.barrier.current(), composedBarrier);
+	secondCleanup.resolve(true);
+	await flushPromises();
+	assert.equal(recording.barrier.current(), null);
+});
+
+void test('scrollback still disposes an executor with a pending reset', async () => {
+	const recording = createRecordingCleanupBarrier();
+	const harness = createScrollbackHarness({
+		cleanupBarrier: recording.barrier,
+	});
+	const resetCleanup = createDeferred<boolean>();
+	const disposeCleanup = createDeferred<boolean>();
+	const executor = harness.executors[0];
+	assert.ok(executor);
+	let disposeCount = 0;
+	executor.reset = () => resetCleanup.promise;
+	executor.dispose = () => {
+		disposeCount += 1;
+		return disposeCleanup.promise;
+	};
+	harness.core.invalidate('focus-lost');
+	harness.core.setContext({
+		...harness.context,
+		workmuxScroll: { ...harness.scroll },
+	});
+	assert.equal(disposeCount, 1);
+	assert.deepEqual(recording.trackedInputs, [
+		resetCleanup.promise,
+		disposeCleanup.promise,
+	]);
+	resetCleanup.resolve(true);
+	disposeCleanup.resolve(true);
+	await flushPromises();
 });
 
 void test('scrollback retains same-target remote ownership while runtime cleanup is pending', async () => {
