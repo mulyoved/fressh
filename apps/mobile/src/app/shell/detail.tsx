@@ -1,8 +1,4 @@
-import { type ListenerEvent } from '@fressh/react-native-uniffi-russh';
-import {
-	XtermJsWebView,
-	type XtermWebViewHandle,
-} from '@fressh/react-native-xtermjs-webview';
+import { XtermJsWebView } from '@fressh/react-native-xtermjs-webview';
 import * as Clipboard from 'expo-clipboard';
 import Constants from 'expo-constants';
 import * as Linking from 'expo-linking';
@@ -63,7 +59,6 @@ import {
 import { runMacro } from '@/lib/keyboard-runtime';
 import { rootLogger } from '@/lib/logger';
 import { resolveLucideIcon } from '@/lib/lucide-utils';
-import { OrderedWriter } from '@/lib/ordered-writer';
 import { preferences } from '@/lib/preferences';
 import {
 	configureScrollTraceEnabled,
@@ -109,18 +104,16 @@ import {
 	createShellTargetKey,
 	createShellTransportKey,
 } from '@/lib/shell-controllers/source-keys';
+import { useShellTerminalController } from '@/lib/shell-controllers/terminal';
+import { type TerminalRuntimeKey } from '@/lib/shell-controllers/terminal-transport';
 import { executeSideChannelCommand } from '@/lib/ssh-side-channel';
 import { useSshStore } from '@/lib/ssh-store';
-import {
-	createManualTerminalFitRunner,
-	type TerminalFitSize,
-} from '@/lib/terminal-fit-runner';
+import { createManualTerminalFitRunner } from '@/lib/terminal-fit-runner';
 import {
 	buildClipboardPasteSegments,
 	buildCommanderExecuteSegments,
 	buildTextEntryPastePayload,
 } from '@/lib/terminal-input-payloads';
-import { detachTerminalShellListener } from '@/lib/terminal-shell-listener';
 import {
 	getTextEntryHistoryCycleEntries,
 	getTextEntryHistorySections,
@@ -450,20 +443,8 @@ const scrollbackExitDelayMs = 10;
 const scrollbackExitKeyPayload = encoder.encode('q');
 
 function ShellDetail() {
-	const xtermRef = useRef<XtermWebViewHandle>(null);
-	const listenerIdRef = useRef<bigint | null>(null);
-	const listenerOwnerRef = useRef<{
-		removeListener: (id: bigint) => void;
-	} | null>(null);
-	const attachedShellKeyRef = useRef<string | null>(null);
-	const hasAttachedOnceRef = useRef(false);
 	const workmuxScrollbackCommandExecutorRef =
 		useRef<WorkmuxScrollbackCommandExecutor | null>(null);
-	const waitForTerminalSizeAfterFitRef = useRef<
-		() => Promise<TerminalFitSize | null>
-	>(async () => null);
-	const [terminalReady, setTerminalReady] = useState(false);
-	const [hasRenderedTerminal, setHasRenderedTerminal] = useState(false);
 	const [shellConfigState, setShellConfigState] = useState(() =>
 		loadRuntimeShellConfigState(),
 	);
@@ -643,22 +624,6 @@ function ShellDetail() {
 	}, [storedConnectionId]);
 
 	useEffect(() => {
-		const xterm = xtermRef.current;
-		return () => {
-			liveInputGenerationRef.current += 1;
-			if (listenerIdRef.current != null)
-				detachTerminalShellListener({
-					shell,
-					listenerOwnerRef,
-					listenerIdRef,
-					attachedShellKeyRef,
-					logger,
-				});
-			if (xterm) xterm.flush();
-		};
-	}, [shell]);
-
-	useEffect(() => {
 		return () => {
 			liveInputGenerationRef.current += 1;
 			commandTimeoutsRef.current.forEach((timeout) => {
@@ -798,7 +763,6 @@ function ShellDetail() {
 	const availableKeyboardIdsRef = useRef(availableKeyboardIds);
 	const selectedKeyboardIdRef = useRef(selectedKeyboardId);
 	const currentInstanceIdRef = useRef<string | null>(null);
-	const writerRef = useRef<OrderedWriter | null>(null);
 	const liveInputGenerationRef = useRef(0);
 	const codexRestartGate = useMemo(() => createGenerationRequestGate(), []);
 	const commandTimeoutsRef = useRef<ReturnType<typeof setTimeout>[]>([]);
@@ -854,32 +818,6 @@ function ShellDetail() {
 	const invalidateCodexRestartRequests = useCallback(() => {
 		codexRestartGate.invalidate();
 	}, [codexRestartGate]);
-	const exitSelectionMode = useCallback(() => {
-		setSelectionModeEnabled(false);
-		xtermRef.current?.setSelectionModeEnabled(false);
-	}, []);
-
-	const writeToShell = useCallback(
-		async (bytes: Uint8Array<ArrayBufferLike>) => {
-			if (!shell) return;
-			try {
-				await shell.sendData(bytes.buffer as ArrayBuffer);
-			} catch (e: unknown) {
-				logger.warn('sendData failed', e);
-				router.back();
-				throw e;
-			}
-		},
-		[shell, router],
-	);
-
-	useEffect(() => {
-		if (!shell) {
-			writerRef.current = null;
-			return;
-		}
-		writerRef.current = new OrderedWriter(writeToShell);
-	}, [shell, writeToShell]);
 
 	const resetTmuxScrollbackForUiReset = useCallback(
 		(options?: { failurePolicy?: 'notify' | 'suppress' }) => {
@@ -900,13 +838,44 @@ function ShellDetail() {
 		},
 		[tmuxTarget],
 	);
+	const handleTerminalRuntimeChanged = useCallback(
+		(_runtimeKey: TerminalRuntimeKey | null, instanceId: string | null) => {
+			liveInputGenerationRef.current += 1;
+			currentInstanceIdRef.current = instanceId;
+			scrollbackEnterRequestGenerationRef.current += 1;
+			resetTmuxScrollbackLocalExitRequests(
+				localScrollbackExitRequestIdsRef.current,
+			);
+			scrollbackActiveRef.current = false;
+			scrollbackPhaseRef.current = 'active';
+			setScrollbackActive(false);
+			if (instanceId === null) {
+				commandTimeoutsRef.current.forEach((timeout) => clearTimeout(timeout));
+				commandTimeoutsRef.current = [];
+			}
+			void resetTmuxScrollbackForUiReset();
+		},
+		[resetTmuxScrollbackForUiReset],
+	);
+	const terminal = useShellTerminalController({
+		shell,
+		transportKey,
+		platformOS: Platform.OS,
+		systemKeyboardEnabled,
+		selectionModeEnabled,
+		logger,
+		router,
+		onRuntimeChanged: handleTerminalRuntimeChanged,
+	});
+	const exitSelectionMode = useCallback(() => {
+		setSelectionModeEnabled(false);
+		terminal.view.setSelectionModeEnabled(false);
+	}, [terminal.view]);
 
 	const clearLocalScrollbackUiState = useCallback(() => {
 		scrollbackActiveRef.current = false;
 		scrollbackPhaseRef.current = 'active';
 		setScrollbackActive(false);
-		const xterm = xtermRef.current;
-		if (!xterm) return;
 		nextLocalScrollbackExitRequestIdRef.current += 1;
 		const requestId = nextLocalScrollbackExitRequestIdRef.current;
 		const exitRequest = createTmuxScrollbackLocalExitRequest({
@@ -914,8 +883,8 @@ function ShellDetail() {
 			requestId,
 			instanceId: currentInstanceIdRef.current,
 		});
-		xterm.exitScrollback(exitRequest.message);
-	}, []);
+		terminal.view.exitScrollback(exitRequest.message);
+	}, [terminal.view]);
 
 	const clearScrollbackState = useCallback(
 		(options?: { failurePolicy?: 'notify' | 'suppress' }) => {
@@ -1096,14 +1065,17 @@ function ShellDetail() {
 				scrollbackExitDelayMs,
 			});
 			const requestInstanceId = currentInstanceIdRef.current;
-			const requestWriter = writerRef.current;
+			const requestLease = terminal.transport.captureLease();
 			const requestLiveInputGeneration = liveInputGenerationRef.current;
 			const isLiveInputRequestCurrent = () =>
 				isWorkmuxScrollbackLiveInputRequestCurrent({
 					requestInstanceId,
-					requestWriter,
+					requestWriter: requestLease,
 					currentInstanceId: currentInstanceIdRef.current,
-					currentWriter: writerRef.current,
+					currentWriter:
+						requestLease && terminal.transport.isLeaseCurrent(requestLease)
+							? requestLease
+							: null,
 					isFocused: getActivitySnapshot().focused,
 					isAppActive: getActivitySnapshot().appActive,
 					requestGeneration: requestLiveInputGeneration,
@@ -1119,14 +1091,16 @@ function ShellDetail() {
 				remoteCopyModeActive,
 				isRequestCurrent: isLiveInputRequestCurrent,
 				sendSegments: (segments, options) =>
-					requestWriter?.sendBatch(segments, {
-						interSegmentDelayMs: options?.interSegmentDelayMs,
-						isCurrent: isLiveInputRequestCurrent,
-					}),
+					requestLease
+						? terminal.transport.sendBatch(requestLease, segments, {
+								interSegmentDelayMs: options?.interSegmentDelayMs,
+								isCurrent: isLiveInputRequestCurrent,
+							})
+						: undefined,
 				onPayloadAccepted: opts?.onAccepted,
 			});
 		},
-		[clearScrollbackState, getActivitySnapshot],
+		[clearScrollbackState, getActivitySnapshot, terminal.transport],
 	);
 
 	const sendBytesRaw = useCallback(
@@ -2070,11 +2044,10 @@ function ShellDetail() {
 			createManualTerminalFitRunner({
 				getConnection: () => connection ?? null,
 				isTmuxEnabled: () => tmuxEnabled,
-				getTerminalSize: () => lastSizeRef.current,
-				getXterm: () => xtermRef.current,
+				getTerminalSize: () => terminal.lastSize,
+				getXterm: () => terminal.view,
 				getTargetName: () => tmuxTarget.trim() || 'main',
-				waitForTerminalSizeAfterFit: () =>
-					waitForTerminalSizeAfterFitRef.current(),
+				waitForTerminalSizeAfterFit: terminal.waitForSizeAfterFit,
 				resizePty: async (cols, rows) => {
 					if (!shell) {
 						throw new Error('No shell is available.');
@@ -2087,7 +2060,7 @@ function ShellDetail() {
 				},
 				getErrorMessage,
 			}),
-		[connection, shell, tmuxEnabled, tmuxTarget],
+		[connection, shell, terminal, tmuxEnabled, tmuxTarget],
 	);
 	const workmuxKeyboardTmuxEnabledRef = useRef(tmuxEnabled);
 	const workmuxKeyboardTmuxTargetRef = useRef(tmuxTarget);
@@ -2250,10 +2223,8 @@ function ShellDetail() {
 	}, []);
 
 	const handleCopySelection = useCallback(() => {
-		const xr = xtermRef.current;
-		if (!xr) return;
 		void (async () => {
-			const selection = await xr.getSelection();
+			const selection = await terminal.view.getSelection();
 			if (!selection) {
 				logger.info('no selection to copy');
 				return;
@@ -2271,7 +2242,7 @@ function ShellDetail() {
 				setPreferredKeyboardId(returnKeyboardId);
 			}
 		})();
-	}, [exitSelectionMode]);
+	}, [exitSelectionMode, terminal.view]);
 
 	const handleSelectionChanged = useCallback((text: string) => {
 		if (!text) return;
@@ -2727,83 +2698,6 @@ function ShellDetail() {
 		],
 	);
 
-	// Debounced PTY resize handler
-	const resizeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-	const lastSizeRef = useRef<{ cols: number; rows: number } | null>(null);
-	const terminalFitSizeWaitersRef = useRef(
-		new Set<(size: TerminalFitSize) => void>(),
-	);
-
-	const waitForTerminalSizeAfterFit = useCallback(() => {
-		return new Promise<TerminalFitSize | null>((resolve) => {
-			let settled = false;
-			let timeoutId: ReturnType<typeof setTimeout> | null = null;
-			let waiter: ((size: TerminalFitSize) => void) | null = null;
-
-			const finish = (size: TerminalFitSize | null) => {
-				if (settled) return;
-				settled = true;
-				if (timeoutId) {
-					clearTimeout(timeoutId);
-				}
-				if (waiter) {
-					terminalFitSizeWaitersRef.current.delete(waiter);
-				}
-				resolve(size);
-			};
-			waiter = (size: TerminalFitSize) => finish(size);
-
-			terminalFitSizeWaitersRef.current.add(waiter);
-			timeoutId = setTimeout(() => {
-				finish(lastSizeRef.current);
-			}, 250);
-		});
-	}, []);
-	waitForTerminalSizeAfterFitRef.current = waitForTerminalSizeAfterFit;
-
-	const handleTerminalResize = useCallback(
-		(cols: number, rows: number) => {
-			const previousSize = lastSizeRef.current;
-			const nextSize = { cols, rows };
-			lastSizeRef.current = nextSize;
-			if (terminalFitSizeWaitersRef.current.size > 0) {
-				for (const waiter of terminalFitSizeWaitersRef.current) {
-					waiter(nextSize);
-				}
-				terminalFitSizeWaitersRef.current.clear();
-			}
-
-			// Skip if same size
-			if (previousSize?.cols === cols && previousSize?.rows === rows) {
-				return;
-			}
-
-			// Clear pending resize
-			if (resizeTimeoutRef.current) {
-				clearTimeout(resizeTimeoutRef.current);
-			}
-
-			// Debounce resize calls (100ms)
-			resizeTimeoutRef.current = setTimeout(() => {
-				if (!shell) return;
-				logger.info(`Resizing PTY to ${cols}x${rows}`);
-				shell.resizePty(cols, rows).catch((e: unknown) => {
-					logger.warn('resizePty failed', e);
-				});
-			}, 100);
-		},
-		[shell],
-	);
-
-	// Cleanup resize timeout on unmount
-	useEffect(() => {
-		return () => {
-			if (resizeTimeoutRef.current) {
-				clearTimeout(resizeTimeoutRef.current);
-			}
-		};
-	}, []);
-
 	useEffect(() => {
 		if (Platform.OS !== 'android') return;
 		const showSub = Keyboard.addListener('keyboardDidShow', () => {
@@ -2833,7 +2727,7 @@ function ShellDetail() {
 				systemKeyboardVisibleRef.current = visible;
 			},
 			setXtermSystemKeyboardEnabled: (enabled) => {
-				xtermRef.current?.setSystemKeyboardEnabled(enabled);
+				terminal.view.setSystemKeyboardEnabled(enabled);
 			},
 			dismissKeyboard: () => Keyboard.dismiss(),
 			scheduleDelayedDismiss: keyboardResumeDismissScheduler.schedule,
@@ -2894,17 +2788,17 @@ function ShellDetail() {
 
 	const enableSystemKeyboard = useCallback(() => {
 		if (Platform.OS !== 'android') return;
-		xtermRef.current?.setSystemKeyboardEnabled(true);
+		terminal.view.setSystemKeyboardEnabled(true);
 		setSystemKeyboardEnabled(true);
-	}, []);
+	}, [terminal.view]);
 
 	const disableSystemKeyboard = useCallback(() => {
 		if (Platform.OS !== 'android') return;
-		xtermRef.current?.setSystemKeyboardEnabled(false);
+		terminal.view.setSystemKeyboardEnabled(false);
 		Keyboard.dismiss();
 		systemKeyboardVisibleRef.current = false;
 		setSystemKeyboardEnabled(false);
-	}, []);
+	}, [terminal.view]);
 
 	const handleSelectionModeChange = useCallback(
 		(enabled: boolean) => {
@@ -2997,7 +2891,7 @@ function ShellDetail() {
 				remoteCopyModeGenerationRef: tmuxRemoteScrollbackCopyModeGenerationRef,
 				clearLocalScrollbackUiState,
 				sendScrollbackEnterAck: (requestId, instanceId) =>
-					xtermRef.current?.sendScrollbackEnterAck(requestId, instanceId),
+					terminal.view.sendScrollbackEnterAck(requestId, instanceId),
 				isRequestCurrent,
 				trace: traceScroll,
 			});
@@ -3012,6 +2906,7 @@ function ShellDetail() {
 			workmuxScrollbackCommandExecutor,
 			tmuxTarget,
 			traceScroll,
+			terminal.view,
 		],
 	);
 
@@ -3069,147 +2964,9 @@ function ShellDetail() {
 		[shell, sendBytesRaw, selectionModeEnabled, exitSelectionMode],
 	);
 
-	const handleTerminalCrashRetry = useCallback(() => {
-		// Navigate back to trigger auto-reconnect flow
-		router.back();
-	}, [router]);
-
 	const handleJumpToLive = useCallback(() => {
 		void clearScrollbackState();
 	}, [clearScrollbackState]);
-
-	const writeShellChunkToTerminal = useCallback((bytesBuffer: ArrayBuffer) => {
-		xtermRef.current?.write(new Uint8Array(bytesBuffer));
-	}, []);
-
-	const detachShellListener = useCallback(() => {
-		detachTerminalShellListener({
-			shell,
-			listenerOwnerRef,
-			listenerIdRef,
-			attachedShellKeyRef,
-			logger,
-		});
-	}, [shell]);
-
-	const handleTerminalLoadStart = useCallback(() => {
-		liveInputGenerationRef.current += 1;
-		clearCommandTimeouts();
-		detachShellListener();
-		currentInstanceIdRef.current = null;
-		hasAttachedOnceRef.current = false;
-		setTerminalReady(false);
-	}, [clearCommandTimeouts, detachShellListener]);
-
-	const attachShellToTerminal = useCallback(() => {
-		if (!terminalReady) return;
-		if (!shell) return;
-		const xterm = xtermRef.current;
-		if (!xterm) return;
-
-		const shellKey = `${shell.connectionId}-${shell.channelId}`;
-		if (attachedShellKeyRef.current !== shellKey) {
-			hasAttachedOnceRef.current = false;
-		}
-		if (
-			listenerIdRef.current != null &&
-			attachedShellKeyRef.current === shellKey
-		) {
-			return;
-		}
-
-		if (listenerIdRef.current != null) {
-			try {
-				shell.removeListener(listenerIdRef.current);
-			} catch (error) {
-				logger.warn('Failed to remove prior shell listener', error);
-			}
-			listenerIdRef.current = null;
-		}
-		attachedShellKeyRef.current = shellKey;
-
-		if (Platform.OS === 'android') {
-			xterm.setSystemKeyboardEnabled(true);
-			// eslint-disable-next-line @eslint-react/hooks-extra/no-direct-set-state-in-use-effect -- Called from an attach routine invoked in an effect; keep UI in sync.
-			setSystemKeyboardEnabled(true);
-		}
-		xterm.setSelectionModeEnabled(selectionModeEnabled);
-
-		void (async () => {
-			if (!hasAttachedOnceRef.current) {
-				const res = shell.readBuffer({ mode: 'head' });
-				logger.info('readBuffer(head)', {
-					chunks: res.chunks.length,
-					nextSeq: res.nextSeq,
-					dropped: res.dropped,
-				});
-				if (res.chunks.length) {
-					const chunks = res.chunks.map((c) => c.bytes);
-					xterm.writeMany(chunks.map((c) => new Uint8Array(c)));
-					xterm.flush();
-				}
-				const id = shell.addListener(
-					(ev: ListenerEvent) => {
-						if ('kind' in ev) {
-							logger.warn('listener.dropped', ev);
-							return;
-						}
-						const chunk = ev;
-						writeShellChunkToTerminal(chunk.bytes);
-					},
-					{ cursor: { mode: 'seq', seq: res.nextSeq } },
-				);
-				logger.info('shell listener attached', id.toString());
-				listenerIdRef.current = id;
-				listenerOwnerRef.current = shell;
-				hasAttachedOnceRef.current = true;
-				return;
-			}
-
-			const id = shell.addListener(
-				(ev: ListenerEvent) => {
-					if ('kind' in ev) {
-						logger.warn('listener.dropped', ev);
-						return;
-					}
-					const chunk = ev;
-					writeShellChunkToTerminal(chunk.bytes);
-				},
-				{ cursor: { mode: 'live' } },
-			);
-			logger.info('shell listener attached (live)', id.toString());
-			listenerIdRef.current = id;
-			listenerOwnerRef.current = shell;
-		})();
-
-		// Focus to pop the keyboard (iOS needs the prop we set).
-		if (Platform.OS === 'ios') xterm.focus();
-	}, [selectionModeEnabled, shell, terminalReady, writeShellChunkToTerminal]);
-
-	const handleTerminalInitialized = useCallback(
-		(instanceId: string) => {
-			currentInstanceIdRef.current = instanceId;
-			scrollbackEnterRequestGenerationRef.current += 1;
-			resetTmuxScrollbackLocalExitRequests(
-				localScrollbackExitRequestIdsRef.current,
-			);
-			scrollbackActiveRef.current = false;
-			scrollbackPhaseRef.current = 'active';
-			void resetTmuxScrollbackForUiReset();
-			setScrollbackActive(false);
-			hasAttachedOnceRef.current = false;
-
-			detachShellListener();
-
-			setTerminalReady(true);
-			setHasRenderedTerminal(true);
-		},
-		[detachShellListener, resetTmuxScrollbackForUiReset],
-	);
-
-	useEffect(() => {
-		attachShellToTerminal();
-	}, [attachShellToTerminal]);
 
 	const wisprMode = isWisprAutomationBusy(wisprAutomationState);
 	const wisprControl = useMemo(
@@ -3238,7 +2995,7 @@ function ShellDetail() {
 	}
 
 	const shouldRenderTerminal =
-		hasRenderedTerminal || Boolean(shell && connection);
+		terminal.hasRendered || Boolean(shell && connection);
 	const scrollbackVisible = scrollbackActive;
 	const showReconnectOverlay =
 		(isAutoConnecting || isReconnecting) && (!shell || !connection);
@@ -3264,18 +3021,18 @@ function ShellDetail() {
 					paddingBottom: Platform.OS === 'android' ? insets.bottom + 4 : 0,
 				}}
 			>
-				<TerminalErrorBoundary onRetry={handleTerminalCrashRetry}>
+				<TerminalErrorBoundary onRetry={terminal.retry}>
 					<View style={{ flex: 1 }}>
 						<XtermJsWebView
-							ref={xtermRef}
+							ref={terminal.xtermRef}
 							style={{ flex: 1 }}
 							webViewOptions={{
 								// Prevent iOS from adding automatic top inset inside WebView
 								contentInsetAdjustmentBehavior: 'never',
-								onLoadStart: handleTerminalLoadStart,
+								onLoadStart: terminal.onLoadStart,
 								onLayout: () => {
 									// Refit terminal when container size changes
-									xtermRef.current?.fit();
+									terminal.view.fit();
 								},
 							}}
 							logger={{
@@ -3303,10 +3060,10 @@ function ShellDetail() {
 								},
 							}}
 							touchScrollConfig={remoteTouchScrollPolicy.touchScrollConfig}
-							onResize={handleTerminalResize}
+							onResize={terminal.onResize}
 							onSelection={handleSelectionChanged}
 							onSelectionModeChange={handleSelectionModeChange}
-							onInitialized={handleTerminalInitialized}
+							onInitialized={terminal.onInitialized}
 							onInput={handleWebViewInput}
 							onScrollbackModeChange={handleScrollbackModeChange}
 							onScrollbackEnterRequested={handleScrollbackEnterRequested}

@@ -95,7 +95,7 @@ function extractHandleSlotPressBlock(source: string): string {
 	const callbackStart = source.indexOf('const handleSlotPress = useCallback');
 	assert.notEqual(callbackStart, -1);
 	const callbackEnd = source.indexOf(
-		'// Debounced PTY resize handler',
+		'const [keyboardResumeDismissScheduler]',
 		callbackStart,
 	);
 	assert.notEqual(callbackEnd, -1);
