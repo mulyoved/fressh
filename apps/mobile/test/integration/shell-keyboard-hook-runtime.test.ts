@@ -309,6 +309,94 @@ void test('clipboard invalidation prevents an old slow reader from inheriting a 
 	assert.deepEqual(await old, { status: 'superseded' });
 });
 
+void test('invalidated slow reader cannot join a newer active identical copy', async () => {
+	const authority = createKeyboardClipboardAuthority();
+	let resolveOldSelection!: (text: string) => void;
+	const oldSelection = new Promise<string>((resolve) => {
+		resolveOldSelection = resolve;
+	});
+	let releaseNewWrite!: () => void;
+	const newWrite = new Promise<void>((resolve) => {
+		releaseNewWrite = resolve;
+	});
+	const events: string[] = [];
+	const ports = (selection: Promise<string>, write: Promise<void>) => ({
+		isAdmitted: () => true,
+		getInstanceId: () => 'instance',
+		getSelection: () => selection,
+		isCurrentInstance: () => true,
+		writeClipboard: async () => {
+			events.push('write');
+			await write;
+		},
+		exitSelectionState: () => events.push('state'),
+		exitSelectionView: () => events.push('view'),
+		warn: () => {},
+	});
+	const old = authority.copy(ports(oldSelection, Promise.resolve()));
+	authority.invalidate();
+	const current = authority.copy(ports(Promise.resolve('same'), newWrite));
+	await Promise.resolve();
+	await Promise.resolve();
+	resolveOldSelection('same');
+	assert.deepEqual(await old, { status: 'superseded' });
+	assert.deepEqual(events, ['write']);
+	releaseNewWrite();
+	assert.deepEqual(await current, { status: 'completed' });
+	assert.deepEqual(events, ['write', 'state', 'view']);
+});
+
+void test('selection notes are instance-scoped while undefined retains wildcard cancellation', async () => {
+	for (const note of [
+		(authority: ReturnType<typeof createKeyboardClipboardAuthority>) =>
+			authority.noteSelection('other', 'stale-instance'),
+		(authority: ReturnType<typeof createKeyboardClipboardAuthority>) =>
+			authority.noteSelection('same', undefined),
+	]) {
+		const authority = createKeyboardClipboardAuthority();
+		let release!: () => void;
+		const write = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const pending = authority.copy({
+			isAdmitted: () => true,
+			getInstanceId: () => 'instance',
+			getSelection: async () => 'same',
+			isCurrentInstance: () => true,
+			writeClipboard: async () => write,
+			exitSelectionState: () => {},
+			exitSelectionView: () => {},
+			warn: () => {},
+		});
+		await Promise.resolve();
+		await Promise.resolve();
+		note(authority);
+		release();
+		assert.deepEqual(await pending, { status: 'completed' });
+	}
+
+	const authority = createKeyboardClipboardAuthority();
+	let release!: () => void;
+	const write = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	const pending = authority.copy({
+		isAdmitted: () => true,
+		getInstanceId: () => 'instance',
+		getSelection: async () => 'same',
+		isCurrentInstance: () => true,
+		writeClipboard: async () => write,
+		exitSelectionState: () => {},
+		exitSelectionView: () => {},
+		warn: () => {},
+	});
+	await Promise.resolve();
+	await Promise.resolve();
+	authority.noteSelection('different', undefined);
+	assert.deepEqual(await pending, { status: 'superseded' });
+	release();
+});
+
 void test('clipboard authority suppresses duplicate copy and completes despite view failure', async () => {
 	const authority = createKeyboardClipboardAuthority();
 	const calls: string[] = [];

@@ -258,15 +258,25 @@ export type KeyboardClipboardAuthority = {
 export function createKeyboardClipboardAuthority(): KeyboardClipboardAuthority {
 	let request = 0;
 	let operation = 0;
+	let lifecycleEpoch = 0;
 	let completedCopy = 0;
+	let unscopedSelectionRevision = 0;
+	let unscopedSelectionText: string | undefined;
+	const selectionRevisions = new Map<string, number>();
+	const selectionTexts = new Map<string, string>();
 	let lastCopied: {
 		instanceId: string;
 		text: string;
 		completion: number;
+		epoch: number;
 	} | null = null;
 	let activeWrite: {
 		instanceId: string;
 		text: string;
+		epoch: number;
+		selectionRevision: number;
+		unscopedSelectionRevision: number;
+		finalizing: boolean;
 		release(): void;
 		result: Promise<KeyboardClipboardOutcome>;
 	} | null = null;
@@ -288,9 +298,19 @@ export function createKeyboardClipboardAuthority(): KeyboardClipboardAuthority {
 	const safeCurrent = (
 		ports: KeyboardClipboardPorts,
 		id: number,
+		epoch: number,
 		instanceId: string,
+		selectionRevision: number,
+		broadcastRevision: number,
 	) => {
-		if (id !== operation || !ports.isAdmitted()) return false;
+		if (
+			id !== operation ||
+			epoch !== lifecycleEpoch ||
+			selectionRevision !== (selectionRevisions.get(instanceId) ?? 0) ||
+			broadcastRevision !== unscopedSelectionRevision ||
+			!ports.isAdmitted()
+		)
+			return false;
 		try {
 			return ports.isCurrentInstance(instanceId);
 		} catch (error) {
@@ -305,6 +325,7 @@ export function createKeyboardClipboardAuthority(): KeyboardClipboardAuthority {
 	return {
 		copy: async (ports) => {
 			const requestId = ++request;
+			const epoch = lifecycleEpoch;
 			const completedCopyAtStart = completedCopy;
 			if (!ports.isAdmitted()) return { status: 'unavailable' };
 			let instanceId: string | null;
@@ -322,6 +343,9 @@ export function createKeyboardClipboardAuthority(): KeyboardClipboardAuthority {
 				};
 			}
 			if (!instanceId) return { status: 'unavailable' };
+			const selectionRevisionBeforeRead =
+				selectionRevisions.get(instanceId) ?? 0;
+			const unscopedRevisionBeforeRead = unscopedSelectionRevision;
 			let text: string;
 			try {
 				text = await ports.getSelection();
@@ -333,16 +357,45 @@ export function createKeyboardClipboardAuthority(): KeyboardClipboardAuthority {
 				};
 			}
 			if (!text) return { status: 'unavailable' };
-			if (activeWrite?.instanceId === instanceId && activeWrite.text === text)
+			if (epoch !== lifecycleEpoch) return { status: 'superseded' };
+			const selectionRevision = selectionRevisions.get(instanceId) ?? 0;
+			const broadcastRevision = unscopedSelectionRevision;
+			if (
+				(selectionRevision !== selectionRevisionBeforeRead &&
+					selectionTexts.get(instanceId) !== text) ||
+				(broadcastRevision !== unscopedRevisionBeforeRead &&
+					unscopedSelectionText !== text)
+			)
+				return { status: 'superseded' };
+			selectionTexts.set(instanceId, text);
+			if (
+				activeWrite?.epoch === epoch &&
+				activeWrite.instanceId === instanceId &&
+				activeWrite.text === text
+			)
 				return activeWrite.result;
 			if (requestId !== request) return { status: 'superseded' };
-			if (lastCopied?.instanceId === instanceId && lastCopied.text === text)
+			if (
+				lastCopied?.epoch === epoch &&
+				lastCopied.instanceId === instanceId &&
+				lastCopied.text === text
+			)
 				return lastCopied.completion > completedCopyAtStart
 					? { status: 'completed' }
 					: { status: 'unavailable' };
 			detachWrite();
 			const id = ++operation;
-			if (!safeCurrent(ports, id, instanceId)) return { status: 'superseded' };
+			if (
+				!safeCurrent(
+					ports,
+					id,
+					epoch,
+					instanceId,
+					selectionRevision,
+					broadcastRevision,
+				)
+			)
+				return { status: 'superseded' };
 			let release = () => {};
 			const detached = new Promise<void>((resolve) => {
 				release = resolve;
@@ -364,14 +417,33 @@ export function createKeyboardClipboardAuthority(): KeyboardClipboardAuthority {
 						: { status: 'superseded' };
 				}
 				if (id !== operation) return { status: 'superseded' };
-				if (!safeCurrent(ports, id, instanceId))
+				if (
+					!safeCurrent(
+						ports,
+						id,
+						epoch,
+						instanceId,
+						selectionRevision,
+						broadcastRevision,
+					)
+				)
 					return { status: 'superseded' };
+				if (activeWrite?.release === release) activeWrite.finalizing = true;
 				try {
 					ports.exitSelectionState();
 				} catch (error) {
 					safeWarn(ports, 'Failed to exit selection state after copy', error);
 				}
-				if (!safeCurrent(ports, id, instanceId))
+				if (
+					!safeCurrent(
+						ports,
+						id,
+						epoch,
+						instanceId,
+						selectionRevision,
+						broadcastRevision,
+					)
+				)
 					return { status: 'superseded' };
 				try {
 					ports.exitSelectionView();
@@ -382,18 +454,71 @@ export function createKeyboardClipboardAuthority(): KeyboardClipboardAuthority {
 						error,
 					);
 				}
-				if (!safeCurrent(ports, id, instanceId))
+				if (
+					!safeCurrent(
+						ports,
+						id,
+						epoch,
+						instanceId,
+						selectionRevision,
+						broadcastRevision,
+					)
+				)
 					return { status: 'superseded' };
 				completedCopy += 1;
-				lastCopied = { instanceId, text, completion: completedCopy };
+				lastCopied = {
+					instanceId,
+					text,
+					completion: completedCopy,
+					epoch,
+				};
 				return { status: 'completed' };
 			})().finally(() => {
 				if (activeWrite?.release === release) activeWrite = null;
 			});
-			activeWrite = { instanceId, text, release, result };
+			activeWrite = {
+				instanceId,
+				text,
+				epoch,
+				selectionRevision,
+				unscopedSelectionRevision: broadcastRevision,
+				finalizing: false,
+				release,
+				result,
+			};
 			return result;
 		},
 		noteSelection: (text, instanceId) => {
+			if (instanceId === null) return;
+			const active = activeWrite;
+			const activeMatches =
+				active !== null &&
+				(instanceId === undefined || instanceId === active.instanceId);
+			if (activeMatches && active.finalizing && text === '') return;
+			if (instanceId === undefined) {
+				const prior = activeMatches
+					? active.text
+					: (lastCopied?.text ?? unscopedSelectionText);
+				if (prior === text) return;
+				unscopedSelectionText = text;
+				unscopedSelectionRevision += 1;
+			} else {
+				const prior = activeMatches
+					? active.text
+					: lastCopied?.instanceId === instanceId
+						? lastCopied.text
+						: selectionTexts.get(instanceId);
+				if (prior === text) return;
+				selectionTexts.set(instanceId, text);
+				selectionRevisions.set(
+					instanceId,
+					(selectionRevisions.get(instanceId) ?? 0) + 1,
+				);
+			}
+			if (activeMatches && text !== active.text) {
+				operation += 1;
+				detachWrite();
+			}
 			if (
 				lastCopied &&
 				(instanceId === undefined || instanceId === lastCopied.instanceId) &&
@@ -402,10 +527,14 @@ export function createKeyboardClipboardAuthority(): KeyboardClipboardAuthority {
 				lastCopied = null;
 		},
 		invalidate: () => {
+			lifecycleEpoch += 1;
 			request += 1;
 			operation += 1;
 			detachWrite();
 			lastCopied = null;
+			selectionRevisions.clear();
+			selectionTexts.clear();
+			unscopedSelectionText = undefined;
 		},
 	};
 }
