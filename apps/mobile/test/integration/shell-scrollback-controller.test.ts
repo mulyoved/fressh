@@ -977,3 +977,69 @@ void test('scrollback records runtime before context and accepts matching mode a
 	assert.equal(nullFirst.getSnapshot().runtimeInstanceId, null);
 	nullFirst.dispose();
 });
+
+void test('older same-target cleanup success cannot clear a newer remote acquisition', async () => {
+	const harness = createScrollbackHarness();
+	const cleanup = createDeferred<boolean>();
+	const executor = harness.executors[0];
+	assert.ok(executor);
+	executor.dispose = () => cleanup.promise;
+	harness.remoteCopyModeActive.current = true;
+	harness.core.setContext({
+		...harness.context,
+		workmuxScroll: { ...harness.scroll },
+	});
+	harness.remoteCopyModeGeneration.current += 1;
+	harness.remoteCopyModeActive.current = true;
+	cleanup.resolve(true);
+	await flushPromises();
+	assert.equal(harness.remoteCopyModeActive.current, true);
+});
+
+void test('older same-target cleanup failure remains blocking after newer acquisition', async () => {
+	const harness = createScrollbackHarness();
+	const cleanup = createDeferred<boolean>();
+	const executor = harness.executors[0];
+	assert.ok(executor);
+	executor.dispose = () => cleanup.promise;
+	harness.remoteCopyModeActive.current = true;
+	harness.core.setContext({
+		...harness.context,
+		workmuxScroll: { ...harness.scroll },
+	});
+	harness.remoteCopyModeGeneration.current += 1;
+	harness.remoteCopyModeActive.current = true;
+	cleanup.resolve(false);
+	await flushPromises();
+	assert.equal(harness.remoteCopyModeActive.current, true);
+});
+
+void test('real suppressed runtime reset failure logs exactly once', async () => {
+	const fixture = createScrollbackHarness();
+	const warnings: string[] = [];
+	const remoteCopyModeActive = { current: false };
+	const remoteCopyModeGeneration = { current: 0 };
+	const core = createShellScrollbackControllerCore({
+		remoteCopyModeActive,
+		remoteCopyModeGeneration,
+	});
+	core.setContext({
+		...fixture.context,
+		workmuxScroll: {
+			...fixture.scroll,
+			exit: async () => ({
+				success: false,
+				output: '',
+				error: 'suppressed exit failed',
+			}),
+		},
+		logger: { warn: (message) => warnings.push(message) },
+	});
+	core.onTerminalRuntimeChanged('instance-1');
+	remoteCopyModeActive.current = true;
+	core.onTerminalRuntimeChanged('instance-2');
+	await flushPromises();
+	assert.deepEqual(warnings, ['suppressed exit failed']);
+	assert.equal(remoteCopyModeActive.current, true);
+	core.dispose();
+});

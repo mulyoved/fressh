@@ -165,6 +165,7 @@ export function createShellScrollbackControllerCore(
 
 	type CleanupOwnership = Readonly<{
 		targetOwnershipRevision: number;
+		remoteCopyModeGeneration: number;
 		targetKey: ShellTargetKey;
 		targetName: string;
 	}>;
@@ -187,15 +188,20 @@ export function createShellScrollbackControllerCore(
 		ownerContext: ShellScrollbackContext,
 	): CleanupOwnership => ({
 		targetOwnershipRevision,
+		remoteCopyModeGeneration: remoteCopyModeGeneration.current,
 		targetKey: ownerContext.targetKey,
 		targetName: ownerContext.targetName,
 	});
 
-	const isCleanupOwnershipCurrent = (ownership: CleanupOwnership): boolean =>
+	const isCleanupFailureCurrent = (ownership: CleanupOwnership): boolean =>
 		!disposed &&
 		targetOwnershipRevision === ownership.targetOwnershipRevision &&
 		context?.targetKey === ownership.targetKey &&
 		context.targetName === ownership.targetName;
+
+	const isCleanupSuccessCurrent = (ownership: CleanupOwnership): boolean =>
+		isCleanupFailureCurrent(ownership) &&
+		remoteCopyModeGeneration.current === ownership.remoteCopyModeGeneration;
 
 	const registerCleanup = ({
 		cleanup,
@@ -206,6 +212,7 @@ export function createShellScrollbackControllerCore(
 		restoreRemoteOnFailure,
 		currentAfterDispose = false,
 		clearRemoteOnSuccess = true,
+		reportResolvedFalse = true,
 	}: {
 		cleanup: Promise<boolean> | null | undefined;
 		failureMessage: string;
@@ -215,12 +222,16 @@ export function createShellScrollbackControllerCore(
 		restoreRemoteOnFailure: boolean;
 		currentAfterDispose?: boolean;
 		clearRemoteOnSuccess?: boolean;
+		reportResolvedFalse?: boolean;
 	}): Promise<boolean> | null => {
 		if (!cleanup) return null;
 		const safeWarn = createSafeWarn(logger);
-		const isCurrent = () =>
+		const isSuccessCurrent = () =>
 			currentAfterDispose ||
-			(ownership !== null && isCleanupOwnershipCurrent(ownership));
+			(ownership !== null && isCleanupSuccessCurrent(ownership));
+		const isFailureCurrent = () =>
+			currentAfterDispose ||
+			(ownership !== null && isCleanupFailureCurrent(ownership));
 		const register = (barrier: WorkmuxScrollbackLiveInputCleanupBarrier) =>
 			registerTmuxScrollbackRemoteCopyModeExitCleanup({
 				barrier,
@@ -229,14 +240,19 @@ export function createShellScrollbackControllerCore(
 				remoteCopyModeWasActive: remoteWasActive,
 				restoreRemoteCopyModeOnFailedCleanup: restoreRemoteOnFailure,
 				clearRemoteCopyModeOnSuccessfulCleanup: clearRemoteOnSuccess,
-				isCleanupCurrent: isCurrent,
-				onCleanupFailure: (error) => safeWarn(failureMessage, error),
+				isCleanupSuccessCurrent: isSuccessCurrent,
+				isCleanupFailureCurrent: isFailureCurrent,
+				onCleanupFailure: (error, failure) => {
+					if (failure.kind === 'rejected' || reportResolvedFalse) {
+						safeWarn(failureMessage, error);
+					}
+				},
 			});
 		try {
 			return register(cleanupBarrier);
 		} catch (error) {
 			safeWarn(failureMessage, error);
-			if (restoreRemoteOnFailure && isCurrent()) {
+			if (restoreRemoteOnFailure && isFailureCurrent()) {
 				remoteCopyModeActive.current = true;
 			}
 			return register({ current: () => null, track: (value) => value ?? null });
@@ -295,7 +311,7 @@ export function createShellScrollbackControllerCore(
 				'Workmux scrollback reset failed',
 				error,
 			);
-			if (remoteWasActive && isCleanupOwnershipCurrent(ownership)) {
+			if (remoteWasActive && isCleanupFailureCurrent(ownership)) {
 				remoteCopyModeActive.current = true;
 			}
 			return;
@@ -307,6 +323,7 @@ export function createShellScrollbackControllerCore(
 			ownership,
 			remoteWasActive,
 			restoreRemoteOnFailure: remoteWasActive,
+			reportResolvedFalse: false,
 		});
 	};
 
@@ -378,14 +395,14 @@ export function createShellScrollbackControllerCore(
 		const previousContext = context;
 		const targetChanged =
 			previousContext !== null && !targetsEqual(previousContext, nextContext);
-		const ownership = previousContext
-			? captureCleanupOwnership(previousContext)
-			: null;
 		if (targetChanged) targetOwnershipRevision += 1;
 		executor = null;
 		executorRevision += 1;
 		const replacementRevision = executorRevision;
 		advanceFreshness();
+		const ownership = previousContext
+			? captureCleanupOwnership(previousContext)
+			: null;
 		const remoteWasActive = remoteCopyModeActive.current;
 		const restoreRemoteOnFailure = previousContext !== null && !targetChanged;
 		const previousSafeWarn = createSafeWarn(previousContext?.logger);
@@ -403,7 +420,7 @@ export function createShellScrollbackControllerCore(
 					remoteWasActive &&
 					restoreRemoteOnFailure &&
 					ownership !== null &&
-					isCleanupOwnershipCurrent(ownership)
+					isCleanupFailureCurrent(ownership)
 				) {
 					remoteCopyModeActive.current = true;
 				}
