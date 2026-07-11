@@ -85,7 +85,29 @@ export function createShellScrollbackHookRuntime({
 }): ShellScrollbackHookRuntime {
 	let committedInput = input;
 	const core = factories.createCore();
-	const disposer = factories.createDisposer(core.dispose, deferDisposal);
+	const disposeCore = (): void => {
+		let firstError: unknown;
+		for (const action of [
+			() => core.invalidate('unmount'),
+			() => core.dispose(),
+		]) {
+			try {
+				action();
+			} catch (error) {
+				firstError ??= error;
+			}
+		}
+		if (firstError === undefined) return;
+		try {
+			committedInput.context.logger.warn(
+				'Failed to dispose scrollback controller',
+				firstError,
+			);
+		} catch {
+			// Deferred unmount cleanup must never escape its microtask.
+		}
+	};
+	const disposer = factories.createDisposer(disposeCore, deferDisposal);
 	const inputPort: ShellScrollbackInputPort = {
 		sendSegments: (segments, options) => core.sendSegments(segments, options),
 	};
@@ -124,13 +146,7 @@ export function createShellScrollbackHookRuntime({
 		onActivityChanged: core.onActivityChanged,
 		onTerminalRuntimeChanged: core.onTerminalRuntimeChanged,
 		jumpToLive,
-		setupDisposal: () => {
-			const scheduleDispose = disposer.setup();
-			return () => {
-				core.invalidate('unmount');
-				scheduleDispose();
-			};
-		},
+		setupDisposal: disposer.setup,
 	};
 }
 

@@ -99,22 +99,77 @@ void test('hook runtime owns one core and keeps input and xterm ports stable acr
 
 void test('hook runtime ordinary and Strict Mode unmount invalidates synchronously and disposes once', () => {
 	const ordinary = createFixture();
+	const ordinarySnapshot = ordinary.harness.core.getSnapshot();
 	const cleanup = ordinary.runtime.setupDisposal();
 	cleanup();
-	assert.ok(ordinary.calls.includes('invalidate:unmount'));
+	assert.equal(ordinary.calls.includes('invalidate:unmount'), false);
 	assert.equal(ordinary.calls.includes('dispose'), false);
+	assert.equal(ordinary.harness.core.getSnapshot(), ordinarySnapshot);
 	ordinary.deferredTasks.shift()?.();
+	assert.equal(
+		ordinary.calls.filter((call) => call === 'invalidate:unmount').length,
+		1,
+	);
 	assert.equal(ordinary.calls.filter((call) => call === 'dispose').length, 1);
 
 	const strict = createFixture();
+	const strictEvents = strict.harness.events.length;
 	const first = strict.runtime.setupDisposal();
 	first();
 	const replay = strict.runtime.setupDisposal();
 	strict.deferredTasks.shift()?.();
+	assert.equal(
+		strict.calls.filter((call) => call === 'invalidate:unmount').length,
+		0,
+	);
 	assert.equal(strict.calls.includes('dispose'), false);
+	assert.equal(strict.harness.events.length, strictEvents);
 	replay();
 	strict.deferredTasks.shift()?.();
+	assert.equal(
+		strict.calls.filter((call) => call === 'invalidate:unmount').length,
+		1,
+	);
 	assert.equal(strict.calls.filter((call) => call === 'dispose').length, 1);
+});
+
+void test('deferred unmount attempts invalidate and dispose once and contains errors through the latest logger', () => {
+	const fixture = createFixture();
+	const oldWarnings: string[] = [];
+	const warnings: string[] = [];
+	let invalidations = 0;
+	let disposals = 0;
+	fixture.harness.core.invalidate = () => {
+		invalidations += 1;
+		throw new Error('invalidate failed');
+	};
+	fixture.harness.core.dispose = () => {
+		disposals += 1;
+		throw new Error('dispose failed');
+	};
+	fixture.runtime.commit({
+		...fixture.runtime.getInput(),
+		context: {
+			...fixture.runtime.getInput().context,
+			logger: { warn: (message) => oldWarnings.push(message) },
+		},
+	});
+	const cleanup = fixture.runtime.setupDisposal();
+	cleanup();
+	fixture.runtime.commit({
+		...fixture.runtime.getInput(),
+		context: {
+			...fixture.runtime.getInput().context,
+			logger: { warn: (message) => warnings.push(message) },
+		},
+	});
+	assert.equal(invalidations, 0);
+	assert.equal(disposals, 0);
+	assert.doesNotThrow(() => fixture.deferredTasks.shift()?.());
+	assert.equal(invalidations, 1);
+	assert.equal(disposals, 1);
+	assert.deepEqual(oldWarnings, []);
+	assert.deepEqual(warnings, ['Failed to dispose scrollback controller']);
 });
 
 void test('jump-to-live has one canonical async rejection observer and contains synchronous logger failure', async () => {
@@ -172,4 +227,37 @@ void test('jump-to-live has one canonical async rejection observer and contains 
 void test('scrollback hook module is Node-loadable without evaluating React Native', async () => {
 	const loaded = await import('../../src/lib/shell-controllers/scrollback');
 	assert.equal(typeof loaded.createShellScrollbackHookRuntime, 'function');
+});
+
+void test('stable xterm props forward every method after the current context commit', async () => {
+	const fixture = createFixture();
+	const xtermProps = fixture.runtime.xtermProps;
+	const events: string[] = [];
+	fixture.harness.core.onScrollbackModeChange = () => events.push('mode');
+	fixture.harness.core.onScrollbackEnterRequested = async () => {
+		events.push('enter');
+	};
+	fixture.harness.core.onScrollbackBatch = () => events.push('batch');
+	fixture.runtime.commit({
+		...fixture.runtime.getInput(),
+		context: { ...fixture.runtime.getInput().context, targetName: 'latest' },
+	});
+	xtermProps.onScrollbackModeChange({
+		active: true,
+		phase: 'active',
+		instanceId: 'instance-1',
+	});
+	await xtermProps.onScrollbackEnterRequested({
+		instanceId: 'instance-1',
+		requestId: 1,
+	});
+	xtermProps.onScrollbackBatch({
+		direction: 'up',
+		instanceId: 'instance-1',
+		lines: 1,
+		pages: 0,
+		pageStep: 24,
+	});
+	assert.equal(fixture.runtime.xtermProps, xtermProps);
+	assert.deepEqual(events, ['mode', 'enter', 'batch']);
 });

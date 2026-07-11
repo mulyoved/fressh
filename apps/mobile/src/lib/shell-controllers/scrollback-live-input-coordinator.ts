@@ -42,14 +42,12 @@ type LiveInputToken = Readonly<{
 	context: LiveInputContext;
 	lease: TerminalInputLease;
 	liveInputGeneration: number;
-	localModeRevision: { current: number };
-	localModeSnapshot: {
-		current: Readonly<{
-			active: boolean;
-			phase: 'dragging' | 'active';
-		}>;
-	};
-	remoteCopyModeGeneration: { current: number };
+	localModeRevision: number;
+	localModeSnapshot: Readonly<{
+		active: boolean;
+		phase: 'dragging' | 'active';
+	}>;
+	remoteCopyModeGeneration: number;
 	runtimeInstanceId: string;
 	runtimeKey: string;
 	targetOwnershipRevision: number;
@@ -105,11 +103,10 @@ export function createScrollbackLiveInputCoordinator({
 		const current = getCurrentState();
 		return (
 			isTokenAuthorityCurrent(token) &&
-			current.localModeRevision === token.localModeRevision.current &&
-			current.scrollbackActive === token.localModeSnapshot.current.active &&
-			current.scrollbackPhase === token.localModeSnapshot.current.phase &&
-			current.remoteCopyModeGeneration ===
-				token.remoteCopyModeGeneration.current
+			current.localModeRevision === token.localModeRevision &&
+			current.scrollbackActive === token.localModeSnapshot.active &&
+			current.scrollbackPhase === token.localModeSnapshot.phase &&
+			current.remoteCopyModeGeneration === token.remoteCopyModeGeneration
 		);
 	};
 
@@ -228,16 +225,12 @@ export function createScrollbackLiveInputCoordinator({
 			context,
 			lease,
 			liveInputGeneration: state.liveInputGeneration,
-			localModeRevision: { current: validatedState.localModeRevision },
+			localModeRevision: validatedState.localModeRevision,
 			localModeSnapshot: {
-				current: {
-					active: validatedState.scrollbackActive,
-					phase: validatedState.scrollbackPhase,
-				},
+				active: validatedState.scrollbackActive,
+				phase: validatedState.scrollbackPhase,
 			},
-			remoteCopyModeGeneration: {
-				current: validatedState.remoteCopyModeGeneration,
-			},
+			remoteCopyModeGeneration: validatedState.remoteCopyModeGeneration,
 			runtimeInstanceId,
 			runtimeKey,
 			targetOwnershipRevision: state.targetOwnershipRevision,
@@ -270,8 +263,9 @@ export function createScrollbackLiveInputCoordinator({
 		options?: ShellLiveInputOptions,
 	): Promise<ControllerOutcome<{ message: string }>> => {
 		const payloadSnapshot = segments.map((segment) => new Uint8Array(segment));
-		const token = captureToken();
-		if (token === null) return unavailable;
+		const capturedToken = captureToken();
+		if (capturedToken === null) return unavailable;
+		let token: LiveInputToken = capturedToken;
 		const planState = getCurrentState();
 		if (!isTokenCurrent(token)) return superseded;
 		const plan = buildWorkmuxScrollbackLiveInputSendPlan({
@@ -282,6 +276,7 @@ export function createScrollbackLiveInputCoordinator({
 			scrollbackExitDelayMs,
 			scrollbackExitKeyPayload,
 		});
+		if (plan.segments.length === 0 && !plan.clearScrollback) return unavailable;
 		let currentCleanup: Promise<boolean> | null;
 		try {
 			currentCleanup = getCurrentCleanup();
@@ -291,31 +286,21 @@ export function createScrollbackLiveInputCoordinator({
 		}
 		if (!isTokenCurrent(token)) return superseded;
 		const startTokenCleanup = (): Promise<boolean> | null => {
-			const previousLocalModeRevision = token.localModeRevision.current;
-			const previousRemoteGeneration = token.remoteCopyModeGeneration.current;
 			const exactCleanup = startCleanup();
-			const current = getCurrentState();
-			const expectedLocalRevision =
-				previousLocalModeRevision +
-				(planState.scrollbackActive || planState.scrollbackPhase !== 'active'
-					? 1
-					: 0);
+			const started = getCurrentState();
 			if (
 				isTokenAuthorityCurrent(token) &&
-				current.localModeRevision === expectedLocalRevision
+				started.targetOwnershipRevision === token.targetOwnershipRevision
 			) {
-				token.localModeRevision.current = current.localModeRevision;
-				token.localModeSnapshot.current = {
-					active: current.scrollbackActive,
-					phase: current.scrollbackPhase,
+				token = {
+					...token,
+					localModeRevision: started.localModeRevision,
+					localModeSnapshot: {
+						active: started.scrollbackActive,
+						phase: started.scrollbackPhase,
+					},
+					remoteCopyModeGeneration: started.remoteCopyModeGeneration,
 				};
-			}
-			if (
-				isTokenAuthorityCurrent(token) &&
-				current.remoteCopyModeGeneration === previousRemoteGeneration + 1
-			) {
-				token.remoteCopyModeGeneration.current =
-					current.remoteCopyModeGeneration;
 			}
 			return getCurrentCleanup() ?? exactCleanup;
 		};
@@ -326,7 +311,6 @@ export function createScrollbackLiveInputCoordinator({
 				barrier = runWorkmuxScrollbackLiveInputSendPlan({
 					currentCleanup,
 					isRequestCurrent: () => isTokenCurrent(token),
-					onPayloadAccepted: options?.onAccepted,
 					plan,
 					remoteCopyModeActive: planState.remoteCopyModeActive,
 					sendSegments: async () => {},
@@ -346,6 +330,16 @@ export function createScrollbackLiveInputCoordinator({
 				} catch {
 					return isTokenCurrent(token) ? unavailable : superseded;
 				}
+			}
+			if (!isTokenCurrent(token)) return superseded;
+			try {
+				options?.onAccepted?.();
+			} catch (error) {
+				warn(
+					token.context,
+					'Scrollback input acceptance callback failed',
+					error,
+				);
 			}
 			return isTokenCurrent(token) ? completed : superseded;
 		}
@@ -404,8 +398,8 @@ export function createScrollbackLiveInputCoordinator({
 				settle(isTokenCurrent(token) ? unavailable : superseded);
 				return;
 			}
-			if (planState.remoteCopyModeActive && barrier === null && !sendStarted) {
-				settle(unavailable);
+			if (barrier === null && !sendStarted) {
+				settle(isTokenCurrent(token) ? unavailable : superseded);
 				return;
 			}
 			if (barrier !== null) {

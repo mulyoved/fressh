@@ -115,6 +115,9 @@ function createFixture() {
 			remoteActive = active;
 			remoteGeneration += 1;
 		},
+		settleRemoteCleanup: () => {
+			remoteActive = false;
+		},
 		replaceRuntime: (next: string) => {
 			instanceId = next;
 			runtimeKey = `runtime-${next}` as TerminalRuntimeKey;
@@ -146,7 +149,6 @@ function createFixture() {
 		warnings,
 	};
 }
-
 void test('live input snapshots bytes, accepts once, and completes only after the ordered send', async () => {
 	const fixture = createFixture();
 	const bytes = new Uint8Array([0x61]);
@@ -159,7 +161,6 @@ void test('live input snapshots bytes, accepts once, and completes only after th
 	assert.deepEqual(fixture.sent, [[[0x61]]]);
 	assert.deepEqual(fixture.events, ['accepted', 'send']);
 });
-
 void test('inactivity advances send freshness before one cleanup and resume cannot resurrect it', async () => {
 	const fixture = createFixture();
 	const pending = createDeferred<boolean>();
@@ -186,7 +187,6 @@ void test('inactivity advances send freshness before one cleanup and resume cann
 	assert.deepEqual(await outcome, { status: 'superseded' });
 	assert.deepEqual(fixture.sent, []);
 });
-
 void test('live input waits for composite cleanup and fails closed on false or rejection', async () => {
 	for (const settlement of ['false', 'rejection'] as const) {
 		const fixture = createFixture();
@@ -200,7 +200,6 @@ void test('live input waits for composite cleanup and fails closed on false or r
 		assert.deepEqual(fixture.sent, []);
 	}
 });
-
 void test('remote copy mode starts cleanup, uses the exit delay, and fails closed without a barrier', async () => {
 	const fixture = createFixture();
 	const pending = createDeferred<boolean>();
@@ -218,8 +217,17 @@ void test('remote copy mode starts cleanup, uses the exit delay, and fails close
 		await blocked.coordinator.sendSegments([new Uint8Array([0x61])]),
 		{ status: 'unavailable' },
 	);
+	let cleanupOnlyAccepted = 0;
+	assert.deepEqual(
+		await blocked.coordinator.sendSegments([new Uint8Array([])], {
+			onAccepted: () => {
+				cleanupOnlyAccepted += 1;
+			},
+		}),
+		{ status: 'unavailable' },
+	);
+	assert.equal(cleanupOnlyAccepted, 0);
 });
-
 void test('new cleanup waits for the post-registration composite in either settlement order', async () => {
 	for (const outerFirst of [true, false]) {
 		const fixture = createFixture();
@@ -242,7 +250,6 @@ void test('new cleanup waits for the post-registration composite in either settl
 		assert.deepEqual(fixture.sent, []);
 	}
 });
-
 void test('new cleanup waits for a rejecting inner composite member in either settlement order', async () => {
 	for (const outerFirst of [true, false]) {
 		const fixture = createFixture();
@@ -267,7 +274,28 @@ void test('new cleanup waits for a rejecting inner composite member in either se
 		assert.deepEqual(fixture.sent, []);
 	}
 });
-
+void test('reentrant nested cleanup adopts the exact post-start authority and remains composite-blocked', async () => {
+	const fixture = createFixture();
+	const barrier = createWorkmuxScrollbackLiveInputCleanupBarrier();
+	const outer = createDeferred<boolean>();
+	const inner = createDeferred<boolean>();
+	fixture.remote(true);
+	fixture.setCurrentCleanupGetter(barrier.current);
+	fixture.setStartCleanup(() => {
+		void barrier.track(outer.promise);
+		fixture.remote(true);
+		void barrier.track(inner.promise);
+		return outer.promise;
+	});
+	const outcome = fixture.coordinator.sendSegments([new Uint8Array([1])]);
+	outer.resolve(true);
+	await Promise.resolve();
+	assert.deepEqual(fixture.sent, []);
+	fixture.settleRemoteCleanup();
+	inner.resolve(true);
+	assert.deepEqual(await outcome, { status: 'completed' });
+	assert.deepEqual(fixture.sent, [[[1]]]);
+});
 void test('mode activation during authenticated capture starts cleanup from the validated state', async () => {
 	const fixture = createFixture();
 	const cleanup = createDeferred<boolean>();
@@ -287,7 +315,6 @@ void test('mode activation during authenticated capture starts cleanup from the 
 	assert.deepEqual(await outcome, { status: 'completed' });
 	assert.deepEqual(fixture.sent, [[[1]]]);
 });
-
 void test('mode activation or deactivation during cleanup supersedes captured input', async () => {
 	for (const initialActive of [false, true]) {
 		const fixture = createFixture();
@@ -301,7 +328,6 @@ void test('mode activation or deactivation during cleanup supersedes captured in
 		assert.deepEqual(fixture.sent, []);
 	}
 });
-
 void test('phase change during cleanup supersedes captured input', async () => {
 	const fixture = createFixture();
 	const cleanup = createDeferred<boolean>();
@@ -312,7 +338,6 @@ void test('phase change during cleanup supersedes captured input', async () => {
 	assert.deepEqual(await outcome, { status: 'superseded' });
 	assert.deepEqual(fixture.sent, []);
 });
-
 void test('the cleanup-owned local exit advances the captured mode revision without superseding input', async () => {
 	const fixture = createFixture();
 	fixture.setScrollbackActive(true);
@@ -326,7 +351,6 @@ void test('the cleanup-owned local exit advances the captured mode revision with
 	);
 	assert.deepEqual(fixture.sent, [[[1]]]);
 });
-
 void test('remote cleanup adopts its owned inactive dragging normalization before sending', async () => {
 	const fixture = createFixture();
 	const cleanup = createDeferred<boolean>();
@@ -350,6 +374,87 @@ void test('inactive active-phase input requires no owned local revision adoption
 		{ status: 'completed' },
 	);
 	assert.deepEqual(fixture.sent, [[[1]]]);
+});
+
+void test('inactive all-empty input is unavailable without acceptance or transport', async () => {
+	const fixture = createFixture();
+	let accepted = 0;
+	assert.deepEqual(
+		await fixture.coordinator.sendSegments([new Uint8Array([])], {
+			onAccepted: () => {
+				accepted += 1;
+			},
+		}),
+		{ status: 'unavailable' },
+	);
+	assert.equal(accepted, 0);
+	assert.deepEqual(fixture.sent, []);
+});
+
+void test('active cleanup-only input accepts once only after current successful cleanup', async () => {
+	for (const settlement of ['true', 'false', 'reject', 'stale'] as const) {
+		const fixture = createFixture();
+		const cleanup = createDeferred<boolean>();
+		let accepted = 0;
+		fixture.setScrollbackActive(true);
+		fixture.setStartCleanup(() => {
+			fixture.setScrollbackActive(false);
+			return cleanup.promise;
+		});
+		const outcome = fixture.coordinator.sendSegments([new Uint8Array([])], {
+			onAccepted: () => {
+				accepted += 1;
+			},
+		});
+		if (settlement === 'stale') fixture.invalidate();
+		if (settlement === 'reject') cleanup.reject(new Error('cleanup failed'));
+		else cleanup.resolve(settlement !== 'false');
+		assert.deepEqual(await outcome, {
+			status:
+				settlement === 'true'
+					? 'completed'
+					: settlement === 'stale'
+						? 'superseded'
+						: 'unavailable',
+		});
+		assert.equal(accepted, settlement === 'true' ? 1 : 0);
+		assert.deepEqual(fixture.sent, []);
+	}
+});
+
+void test('active exit-key-only input completes cleanup without terminal bytes', async () => {
+	const fixture = createFixture();
+	const cleanup = createDeferred<boolean>();
+	let accepted = 0;
+	fixture.setScrollbackActive(true);
+	fixture.setStartCleanup(() => {
+		fixture.setScrollbackActive(false);
+		return cleanup.promise;
+	});
+	const outcome = fixture.coordinator.sendSegments([new Uint8Array([0x71])], {
+		onAccepted: () => {
+			accepted += 1;
+		},
+	});
+	cleanup.resolve(true);
+	assert.deepEqual(await outcome, { status: 'completed' });
+	assert.equal(accepted, 1);
+	assert.deepEqual(fixture.sent, []);
+});
+
+void test('no-barrier reentrant final currentness resolves promptly without transport', async () => {
+	const fixture = createFixture();
+	let checks = 0;
+	fixture.context.terminalTransport.isLeaseCurrent = () => {
+		checks += 1;
+		if (checks === 4) fixture.invalidate();
+		return true;
+	};
+	assert.deepEqual(
+		await fixture.coordinator.sendSegments([new Uint8Array([1])]),
+		{ status: 'superseded' },
+	);
+	assert.deepEqual(fixture.sent, []);
 });
 
 void test('onAccepted reentry advances freshness before transport invocation', async () => {

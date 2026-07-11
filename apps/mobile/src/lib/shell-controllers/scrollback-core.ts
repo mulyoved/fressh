@@ -431,7 +431,6 @@ export function createShellScrollbackControllerCore(
 		context = nextContext;
 		buildExecutor(nextContext);
 	};
-
 	const setContext = (nextContext: ShellScrollbackContext): void => {
 		if (disposed) return;
 		const normalizedContext = {
@@ -443,14 +442,15 @@ export function createShellScrollbackControllerCore(
 			context === null ||
 			context.targetKey !== normalizedContext.targetKey ||
 			context.targetName !== normalizedContext.targetName ||
-			context.workmuxScroll !== normalizedContext.workmuxScroll;
+			context.workmuxScroll !== normalizedContext.workmuxScroll ||
+			context.terminalTransport !== normalizedContext.terminalTransport ||
+			context.terminalView !== normalizedContext.terminalView;
 		if (requiresExecutorReplacement) {
 			replaceExecutor(normalizedContext);
 			return;
 		}
-		context = normalizedContext;
+		if (context !== null) Object.assign(context, normalizedContext);
 	};
-
 	const onTerminalRuntimeChanged = (instanceId: string | null): void => {
 		if (disposed || runtimeInstanceId === instanceId) return;
 		runtimeInstanceId = instanceId;
