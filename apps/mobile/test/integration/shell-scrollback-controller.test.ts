@@ -180,7 +180,7 @@ function createScrollbackHarness(
 	};
 }
 
-void test('scrollback runtime replacement clears local and remote state', () => {
+void test('scrollback runtime replacement clears local state and retains unconfirmed remote ownership', () => {
 	const harness = createScrollbackHarness();
 	harness.core.onTerminalRuntimeChanged('instance-1');
 	harness.core.onScrollbackModeChange({
@@ -197,7 +197,7 @@ void test('scrollback runtime replacement clears local and remote state', () => 
 		phase: 'active',
 		runtimeInstanceId: 'instance-2',
 	});
-	assert.equal(harness.remoteCopyModeActive.current, false);
+	assert.equal(harness.remoteCopyModeActive.current, true);
 	assert.equal(harness.lineAccumulator.lines, 0);
 	assert.equal(harness.lineAccumulator.direction, null);
 });
@@ -266,7 +266,7 @@ void test('scrollback runtime cleanup completes before publishing replacement', 
 		);
 	});
 	harness.core.onTerminalRuntimeChanged('instance-2');
-	assert.deepEqual(observations, ['false:0']);
+	assert.deepEqual(observations, ['true:0']);
 });
 
 void test('scrollback suppresses callbacks from a replaced executor', () => {
@@ -332,7 +332,7 @@ void test('scrollback runtime reset restores remote ownership when current clean
 	executor.reset = () => cleanup.promise;
 	harness.remoteCopyModeActive.current = true;
 	harness.core.onTerminalRuntimeChanged('instance-2');
-	assert.equal(harness.remoteCopyModeActive.current, false);
+	assert.equal(harness.remoteCopyModeActive.current, true);
 	cleanup.resolve(false);
 	await flushPromises();
 	assert.equal(harness.remoteCopyModeActive.current, true);
@@ -384,7 +384,7 @@ void test('scrollback context replacement restores remote ownership when current
 	assert.equal(harness.remoteCopyModeActive.current, true);
 });
 
-void test('scrollback stale runtime cleanup cannot restore remote ownership over a newer generation', async () => {
+void test('scrollback failed older same-target cleanup remains blocking across a newer generation', async () => {
 	const harness = createScrollbackHarness();
 	harness.core.onTerminalRuntimeChanged('instance-1');
 	const staleCleanup = createDeferred<boolean>();
@@ -404,7 +404,7 @@ void test('scrollback stale runtime cleanup cannot restore remote ownership over
 	await flushPromises();
 	staleCleanup.resolve(false);
 	await flushPromises();
-	assert.equal(harness.remoteCopyModeActive.current, false);
+	assert.equal(harness.remoteCopyModeActive.current, true);
 });
 
 void test('scrollback stale rejected context cleanup cannot restore remote ownership over a newer generation', async () => {
@@ -430,7 +430,7 @@ void test('scrollback stale rejected context cleanup cannot restore remote owner
 	assert.equal(harness.remoteCopyModeActive.current, false);
 });
 
-void test('scrollback reentrant runtime reset keeps stale cleanup in its original generation', async () => {
+void test('scrollback reentrant runtime reset remains blocking when any composed cleanup fails', async () => {
 	const harness = createScrollbackHarness();
 	harness.core.onTerminalRuntimeChanged('instance-1');
 	const staleCleanup = createDeferred<boolean>();
@@ -453,10 +453,10 @@ void test('scrollback reentrant runtime reset keeps stale cleanup in its origina
 	staleCleanup.resolve(false);
 	await flushPromises();
 	assert.equal(harness.core.getSnapshot().runtimeInstanceId, 'instance-3');
-	assert.equal(harness.remoteCopyModeActive.current, false);
+	assert.equal(harness.remoteCopyModeActive.current, true);
 });
 
-void test('scrollback reentrant context replacement keeps stale cleanup in its original generation', async () => {
+void test('scrollback reentrant same-target replacement without another exit remains blocking', async () => {
 	const harness = createScrollbackHarness();
 	const staleCleanup = createDeferred<boolean>();
 	const firstExecutor = harness.executors[0];
@@ -478,7 +478,7 @@ void test('scrollback reentrant context replacement keeps stale cleanup in its o
 	staleCleanup.resolve(false);
 	await flushPromises();
 	assert.equal(harness.executors.length, 2);
-	assert.equal(harness.remoteCopyModeActive.current, false);
+	assert.equal(harness.remoteCopyModeActive.current, true);
 });
 
 for (const settlement of ['false', 'reject'] as const) {
@@ -886,4 +886,94 @@ void test('scrollback disposal publishes once and every later command is a no-op
 		status: 'unavailable',
 	});
 	assert.equal(notifications, beforeDispose + 1);
+});
+
+void test('scrollback retains same-target remote ownership while runtime cleanup is pending', async () => {
+	const harness = createScrollbackHarness();
+	harness.core.onTerminalRuntimeChanged('instance-1');
+	const cleanup = createDeferred<boolean>();
+	const executor = harness.executors[0];
+	assert.ok(executor);
+	executor.reset = () => cleanup.promise;
+	harness.remoteCopyModeActive.current = true;
+	harness.core.onTerminalRuntimeChanged('instance-2');
+	assert.equal(harness.remoteCopyModeActive.current, true);
+	cleanup.resolve(true);
+	await flushPromises();
+	assert.equal(harness.remoteCopyModeActive.current, false);
+});
+
+void test('scrollback retains same-target remote ownership through replacement and factory failure', async () => {
+	const harness = createScrollbackHarness();
+	const cleanup = createDeferred<boolean>();
+	const executor = harness.executors[0];
+	assert.ok(executor);
+	executor.dispose = () => cleanup.promise;
+	harness.setExecutorFactoryOverride(() => {
+		throw new Error('replacement factory failed');
+	});
+	harness.remoteCopyModeActive.current = true;
+	harness.core.setContext({
+		...harness.context,
+		workmuxScroll: { ...harness.scroll },
+	});
+	assert.equal(harness.remoteCopyModeActive.current, true);
+	cleanup.resolve(true);
+	await flushPromises();
+	assert.equal(harness.remoteCopyModeActive.current, false);
+	harness.remoteCopyModeActive.current = true;
+	harness.core.invalidate('focus-lost');
+	assert.equal(harness.remoteCopyModeActive.current, true);
+});
+
+void test('scrollback invalidate retains ownership until a successful cleanup retry', async () => {
+	const harness = createScrollbackHarness();
+	const firstCleanup = createDeferred<boolean>();
+	const retryCleanup = createDeferred<boolean>();
+	const executor = harness.executors[0];
+	assert.ok(executor);
+	let resetCount = 0;
+	executor.reset = () => {
+		resetCount += 1;
+		return resetCount === 1 ? firstCleanup.promise : retryCleanup.promise;
+	};
+	harness.remoteCopyModeActive.current = true;
+	harness.core.invalidate('focus-lost');
+	assert.equal(harness.remoteCopyModeActive.current, true);
+	firstCleanup.resolve(false);
+	await flushPromises();
+	assert.equal(harness.remoteCopyModeActive.current, true);
+	harness.core.invalidate('app-inactive');
+	assert.equal(harness.remoteCopyModeActive.current, true);
+	retryCleanup.resolve(true);
+	await flushPromises();
+	assert.equal(harness.remoteCopyModeActive.current, false);
+});
+
+void test('scrollback records runtime before context and accepts matching mode after context arrives', () => {
+	const lineAccumulator = createTmuxScrollbackLineAccumulator();
+	lineAccumulator.lines = 4;
+	const core = createShellScrollbackControllerCore({ lineAccumulator });
+	core.onTerminalRuntimeChanged('instance-before-context');
+	assert.deepEqual(core.getSnapshot(), {
+		active: false,
+		phase: 'active',
+		runtimeInstanceId: 'instance-before-context',
+	});
+	assert.equal(lineAccumulator.lines, 0);
+	const harness = createScrollbackHarness();
+	core.setContext(harness.context);
+	core.onScrollbackModeChange({
+		active: true,
+		phase: 'active',
+		instanceId: 'instance-before-context',
+	});
+	assert.equal(core.getSnapshot().active, true);
+	core.dispose();
+
+	const nullFirst = createShellScrollbackControllerCore();
+	nullFirst.onTerminalRuntimeChanged('temporary');
+	nullFirst.onTerminalRuntimeChanged(null);
+	assert.equal(nullFirst.getSnapshot().runtimeInstanceId, null);
+	nullFirst.dispose();
 });

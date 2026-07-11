@@ -158,13 +158,13 @@ export function createShellScrollbackControllerCore(
 	let runtimeInstanceId: string | null = null;
 	const requestGenerations = { enter: 0, liveInput: 0 };
 	let executorRevision = 0;
+	let targetOwnershipRevision = 0;
 	let nextTraceId = 0;
 	let activeTraceId = 'scroll-0';
 	let disposed = false;
 
 	type CleanupOwnership = Readonly<{
-		generation: number;
-		executorRevision: number;
+		targetOwnershipRevision: number;
 		targetKey: ShellTargetKey;
 		targetName: string;
 	}>;
@@ -186,16 +186,14 @@ export function createShellScrollbackControllerCore(
 	const captureCleanupOwnership = (
 		ownerContext: ShellScrollbackContext,
 	): CleanupOwnership => ({
-		generation: remoteCopyModeGeneration.current,
-		executorRevision,
+		targetOwnershipRevision,
 		targetKey: ownerContext.targetKey,
 		targetName: ownerContext.targetName,
 	});
 
 	const isCleanupOwnershipCurrent = (ownership: CleanupOwnership): boolean =>
 		!disposed &&
-		remoteCopyModeGeneration.current === ownership.generation &&
-		executorRevision === ownership.executorRevision &&
+		targetOwnershipRevision === ownership.targetOwnershipRevision &&
 		context?.targetKey === ownership.targetKey &&
 		context.targetName === ownership.targetName;
 
@@ -259,10 +257,9 @@ export function createShellScrollbackControllerCore(
 		remoteCopyModeGeneration.current += 1;
 	};
 
-	const clearOwnedState = (): void => {
+	const clearLocalState = (): void => {
 		resetTmuxScrollbackLocalExitRequests(localExitRequestIds);
 		clearTmuxScrollbackLineAccumulator(lineAccumulator);
-		remoteCopyModeActive.current = false;
 		activeTraceId = `scroll-${nextTraceId}`;
 	};
 
@@ -379,18 +376,21 @@ export function createShellScrollbackControllerCore(
 	const replaceExecutor = (nextContext: ShellScrollbackContext): void => {
 		const previousExecutor = executor;
 		const previousContext = context;
+		const targetChanged =
+			previousContext !== null && !targetsEqual(previousContext, nextContext);
+		const ownership = previousContext
+			? captureCleanupOwnership(previousContext)
+			: null;
+		if (targetChanged) targetOwnershipRevision += 1;
 		executor = null;
 		executorRevision += 1;
 		const replacementRevision = executorRevision;
 		advanceFreshness();
 		const remoteWasActive = remoteCopyModeActive.current;
-		const ownership = previousContext
-			? captureCleanupOwnership(previousContext)
-			: null;
-		const restoreRemoteOnFailure =
-			previousContext !== null && targetsEqual(previousContext, nextContext);
+		const restoreRemoteOnFailure = previousContext !== null && !targetChanged;
 		const previousSafeWarn = createSafeWarn(previousContext?.logger);
-		clearOwnedState();
+		clearLocalState();
+		if (targetChanged) remoteCopyModeActive.current = false;
 		if (previousExecutor) {
 			let cleanup: Promise<boolean> | null = null;
 			try {
@@ -442,15 +442,18 @@ export function createShellScrollbackControllerCore(
 	};
 
 	const onTerminalRuntimeChanged = (instanceId: string | null): void => {
-		if (disposed || runtimeInstanceId === instanceId || context === null)
-			return;
+		if (disposed || runtimeInstanceId === instanceId) return;
 		runtimeInstanceId = instanceId;
 		advanceFreshness();
 		const transitionGeneration = requestGenerations.liveInput;
+		clearLocalState();
+		if (context === null) {
+			safelyPublish({ ...initialState, runtimeInstanceId: instanceId });
+			return;
+		}
 		const ownerContext = context;
 		const remoteWasActive = remoteCopyModeActive.current;
 		const ownership = captureCleanupOwnership(ownerContext);
-		clearOwnedState();
 		resetExecutor({
 			failurePolicy: 'suppress',
 			ownerContext,
@@ -474,7 +477,7 @@ export function createShellScrollbackControllerCore(
 		const ownerContext = context;
 		const remoteWasActive = remoteCopyModeActive.current;
 		const ownership = captureCleanupOwnership(ownerContext);
-		clearOwnedState();
+		clearLocalState();
 		resetExecutor({
 			failurePolicy: 'suppress',
 			ownerContext,
@@ -490,6 +493,7 @@ export function createShellScrollbackControllerCore(
 	const dispose = (): void => {
 		if (disposed) return;
 		disposed = true;
+		targetOwnershipRevision += 1;
 		executorRevision += 1;
 		advanceFreshness();
 		const activeExecutor = executor;
@@ -497,7 +501,8 @@ export function createShellScrollbackControllerCore(
 		const disposeSafeWarn = createSafeWarn(disposeContext?.logger);
 		executor = null;
 		const remoteWasActive = remoteCopyModeActive.current;
-		clearOwnedState();
+		clearLocalState();
+		remoteCopyModeActive.current = false;
 		try {
 			safelyPublish(initialState);
 			if (activeExecutor) {
