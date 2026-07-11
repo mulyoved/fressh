@@ -37,6 +37,13 @@ import {
 	type ControllerInvalidationReason,
 } from './controller-core';
 import {
+	applyKeyboardSelectionMode,
+	createKeyboardAnimationIdentityTracker,
+	createKeyboardClipboardAuthority,
+	createKeyboardControllerAdmission,
+	subscribeKeyboardVisibility,
+} from './keyboard-hook-runtime';
+import {
 	type ShellKeyboardInputLogger,
 	type ShellKeyboardInputCore,
 } from './keyboard-input-contracts';
@@ -165,15 +172,13 @@ export function useShellKeyboardController(
 	deps: UseShellKeyboardControllerInput,
 ): ShellKeyboardControllerHandle {
 	const committedDeps = useRef(deps);
-	const authorityGeneration = useRef(0);
 	const visibleRef = useRef(false);
 	const lastVisibleRef = useRef(false);
 	const lastInteractiveRef = useRef(deps.activity.snapshot.interactive);
-	const copiedSelectionRef = useRef('');
-	const selectionCopyInFlightRef = useRef('');
+	const [clipboardAuthority] = useState(createKeyboardClipboardAuthority);
 	const [flashName, setFlashName] = useState<string | null>(null);
 	const [flashOpacity] = useState(() => new Animated.Value(0));
-	const firstKeyboardRef = useRef(true);
+	const initialKeyboardSetupRef = useRef(false);
 
 	useLayoutEffect(() => {
 		committedDeps.current = deps;
@@ -240,7 +245,6 @@ export function useShellKeyboardController(
 	);
 	const [lifecycle] = useState(() =>
 		createReplaySafeDisposer(() => {
-			authorityGeneration.current += 1;
 			inputCore.invalidate('unmount');
 			remoteCore.invalidate('unmount');
 			remoteCore.dispose();
@@ -248,51 +252,49 @@ export function useShellKeyboardController(
 			stateCore.dispose();
 		}),
 	);
+	const [admission] = useState(() =>
+		createKeyboardControllerAdmission((reason) => {
+			clipboardAuthority.invalidate();
+			inputCore.invalidate(reason);
+			remoteCore.invalidate(reason);
+		}),
+	);
+	const [animationIdentity] = useState(() =>
+		createKeyboardAnimationIdentityTracker(
+			stateCore.getSnapshot().keyboard?.id ?? null,
+		),
+	);
 	const snapshot = useSyncExternalStore(
 		stateCore.subscribe,
 		stateCore.getSnapshot,
 		stateCore.getSnapshot,
 	);
 
-	const copySelection = useCallback(async () => {
-		const generation = authorityGeneration.current;
-		const instanceId =
-			committedDeps.current.terminalView.getRuntimeInstanceId();
-		if (!instanceId) return;
+	const safeWarn = useCallback((message: string, error: unknown) => {
 		try {
-			const text = await committedDeps.current.terminalView.getSelection();
-			if (
-				generation !== authorityGeneration.current ||
-				!committedDeps.current.terminalView.isCurrentInstance(instanceId) ||
-				!text ||
-				text === copiedSelectionRef.current ||
-				text === selectionCopyInFlightRef.current
-			)
-				return;
-			selectionCopyInFlightRef.current = text;
-			try {
-				await Clipboard.setStringAsync(text);
-			} finally {
-				if (selectionCopyInFlightRef.current === text)
-					selectionCopyInFlightRef.current = '';
-			}
-			if (
-				generation !== authorityGeneration.current ||
-				!committedDeps.current.terminalView.isCurrentInstance(instanceId)
-			)
-				return;
-			copiedSelectionRef.current = text;
-			stateCore.setSelectionModeEnabled(false);
-			committedDeps.current.terminalView.setSelectionModeEnabled(false);
-			if (generation === authorityGeneration.current)
-				stateCore.completeSlotPress();
-		} catch (error) {
-			committedDeps.current.logger?.warn(
-				'Failed to copy terminal selection',
-				error,
-			);
+			committedDeps.current.logger?.warn(message, error);
+		} catch {
+			// Diagnostics never own clipboard authority.
 		}
-	}, [stateCore]);
+	}, []);
+	const copySelection = useCallback(async () => {
+		await clipboardAuthority.copy({
+			isAdmitted: () => admission.getGeneration() !== null,
+			getInstanceId: () =>
+				committedDeps.current.terminalView.getRuntimeInstanceId(),
+			getSelection: () => committedDeps.current.terminalView.getSelection(),
+			isCurrentInstance: (id) =>
+				committedDeps.current.terminalView.isCurrentInstance(id),
+			writeClipboard: async (text) => {
+				await Clipboard.setStringAsync(text);
+			},
+			exitSelectionState: () => stateCore.setSelectionModeEnabled(false),
+			exitSelectionView: () =>
+				committedDeps.current.terminalView.setSelectionModeEnabled(false),
+			completeSlotPress: stateCore.completeSlotPress,
+			warn: safeWarn,
+		});
+	}, [admission, clipboardAuthority, safeWarn, stateCore]);
 
 	const actionContext = useMemo<ActionContext>(
 		() => ({
@@ -370,19 +372,22 @@ export function useShellKeyboardController(
 		remoteCore.setTargetContext(deps.remoteTarget);
 	}, [deps.initialShellConfigState, deps.remoteTarget, remoteCore, stateCore]);
 
+	useEffect(() => {
+		const generation = admission.setup();
+		return () => admission.cleanup(generation);
+	}, [admission]);
 	useEffect(() => lifecycle.setup(), [lifecycle]);
 	useEffect(() => {
-		if ((deps.platformOS ?? Platform.OS) !== 'android') return;
-		const show = Keyboard.addListener('keyboardDidShow', () => {
-			visibleRef.current = true;
+		return subscribeKeyboardVisibility({
+			platformOS: deps.platformOS ?? Platform.OS,
+			addListener: (event, listener) =>
+				event === 'keyboardDidShow'
+					? Keyboard.addListener('keyboardDidShow', listener)
+					: Keyboard.addListener('keyboardDidHide', listener),
+			onVisibility: (visible) => {
+				visibleRef.current = visible;
+			},
 		});
-		const hide = Keyboard.addListener('keyboardDidHide', () => {
-			visibleRef.current = false;
-		});
-		return () => {
-			show.remove();
-			hide.remove();
-		};
 	}, [deps.platformOS]);
 
 	useEffect(() => {
@@ -404,6 +409,10 @@ export function useShellKeyboardController(
 			dismissKeyboard: () => Keyboard.dismiss(),
 			scheduleDelayedDismiss: scheduler.schedule,
 		});
+		if (!initialKeyboardSetupRef.current) {
+			initialKeyboardSetupRef.current = true;
+			actions.setupInitialKeyboard();
+		}
 		if (lastInteractiveRef.current && !deps.activity.snapshot.interactive)
 			lastVisibleRef.current = visibleRef.current;
 		if (!lastInteractiveRef.current && deps.activity.snapshot.interactive)
@@ -418,10 +427,7 @@ export function useShellKeyboardController(
 	]);
 
 	useEffect(() => {
-		if (firstKeyboardRef.current) {
-			firstKeyboardRef.current = false;
-			return;
-		}
+		if (!animationIdentity.replace(snapshot.keyboard?.id ?? null)) return;
 		if (!snapshot.keyboard) return;
 		// eslint-disable-next-line @eslint-react/hooks-extra/no-direct-set-state-in-use-effect -- The effect deliberately mirrors the committed keyboard into transient animation copy.
 		setFlashName(snapshot.keyboard.name);
@@ -436,32 +442,194 @@ export function useShellKeyboardController(
 			if (finished) setFlashName(null);
 		});
 		return () => animation.stop();
-	}, [flashOpacity, snapshot.keyboard]);
+	}, [animationIdentity, flashOpacity, snapshot.keyboard]);
 
-	const onAction = useCallback((actionId: ActionId) => {
-		void runAction(actionId, actionContextRef.current!);
-	}, []);
+	const onAction = useCallback(
+		(actionId: ActionId) => {
+			const generation = admission.getGeneration();
+			const context = actionContextRef.current;
+			if (generation === null || !context) return;
+			void runAction(actionId, context);
+		},
+		[admission],
+	);
 	const onSelectionModeChange = useCallback(
 		(enabled: boolean) => {
-			stateCore.setSelectionModeEnabled(enabled);
-			try {
-				committedDeps.current.terminalView.setSelectionModeEnabled(enabled);
-			} catch (error) {
-				committedDeps.current.logger?.warn(
-					'Failed to change terminal selection mode',
-					error,
-				);
-			}
+			const generation = admission.getGeneration();
+			if (generation === null) return;
+			applyKeyboardSelectionMode({
+				enabled,
+				platformOS: committedDeps.current.platformOS ?? Platform.OS,
+				isCurrent: () => admission.isCurrent(generation),
+				setSelectionMode: stateCore.setSelectionModeEnabled,
+				setTerminalSystemKeyboard: (value) =>
+					committedDeps.current.terminalView.setSystemKeyboardEnabled(value),
+				dismissKeyboard: () => Keyboard.dismiss(),
+				clearKeyboardVisibility: () => {
+					visibleRef.current = false;
+				},
+				setSystemKeyboard: stateCore.setSystemKeyboardEnabled,
+				warn: safeWarn,
+			});
 		},
-		[stateCore],
+		[admission, safeWarn, stateCore],
 	);
 	const invalidate = useCallback(
 		(reason: ControllerInvalidationReason) => {
-			authorityGeneration.current += 1;
-			inputCore.invalidate(reason);
-			remoteCore.invalidate(reason);
+			admission.invalidate(reason);
 		},
-		[inputCore, remoteCore],
+		[admission],
+	);
+	const onSlotPress = useCallback(
+		(slot: KeyboardExecutableItem) => {
+			if (admission.getGeneration() !== null)
+				void inputCore.handleSlotPress(slot);
+		},
+		[admission, inputCore],
+	);
+	const onCopySelection = useCallback(() => {
+		void copySelection();
+	}, [copySelection]);
+	const onPreset = useCallback(
+		(preset: CommandPreset) => {
+			if (admission.getGeneration() !== null)
+				void inputCore.runCommandPreset(preset);
+		},
+		[admission, inputCore],
+	);
+	const onBridge = useCallback(
+		(entry: CommandBridgeEntry) => {
+			if (admission.getGeneration() !== null)
+				void remoteCore.handleCommandBridgeEntry(entry);
+		},
+		[admission, remoteCore],
+	);
+	const onExecuteCommand = useCallback(
+		(value: string) => {
+			if (admission.getGeneration() !== null)
+				void inputCore.executeCommanderCommand(value);
+		},
+		[admission, inputCore],
+	);
+	const onPasteText = useCallback(
+		(value: string) => {
+			if (admission.getGeneration() !== null)
+				void inputCore.pasteCommanderText(value);
+		},
+		[admission, inputCore],
+	);
+	const onSendShortcut = useCallback(
+		(sequence: string) => {
+			if (admission.getGeneration() !== null)
+				void inputCore.sendShortcut(sequence);
+		},
+		[admission, inputCore],
+	);
+	const onTextEntryPaste = useCallback(
+		(value: string) => {
+			if (admission.getGeneration() !== null)
+				void inputCore.pasteTextEntry(value);
+		},
+		[admission, inputCore],
+	);
+	const onReloadConfig = useCallback(() => {
+		if (admission.getGeneration() !== null) void remoteCore.reloadConfig();
+	}, [admission, remoteCore]);
+	const onWebViewInput = useCallback(
+		(input: { str: string; instanceId: string }) => {
+			if (admission.getGeneration() !== null)
+				void inputCore.onWebViewInput({ ...input });
+		},
+		[admission, inputCore],
+	);
+	const onSelectionChanged = useCallback(
+		(text: string) => {
+			clipboardAuthority.noteSelection(text);
+		},
+		[clipboardAuthority],
+	);
+
+	const terminalKeyboardProps = useMemo<
+		ShellKeyboardControllerHandle['terminalKeyboardProps']
+	>(
+		() => ({
+			keyboard: snapshot.keyboard,
+			modifierKeysActive: [...snapshot.modifierKeysActive],
+			onSlotPress,
+			selectionModeEnabled: snapshot.selectionModeEnabled,
+			onCopySelection,
+			navScope: deps.navScope,
+		}),
+		[
+			deps.navScope,
+			onCopySelection,
+			onSlotPress,
+			snapshot.keyboard,
+			snapshot.modifierKeysActive,
+			snapshot.selectionModeEnabled,
+		],
+	);
+	const commandMenuProps = useMemo<
+		ShellKeyboardControllerHandle['commandMenuProps']
+	>(
+		() => ({
+			entries: [...snapshot.shellConfigState.config.commandMenus],
+			onSelect: onPreset,
+			onAction,
+			onBridge,
+		}),
+		[
+			onAction,
+			onBridge,
+			onPreset,
+			snapshot.shellConfigState.config.commandMenus,
+		],
+	);
+	const commanderProps = useMemo<
+		ShellKeyboardControllerHandle['commanderProps']
+	>(
+		() => ({
+			onExecuteCommand,
+			onPasteText,
+			onSendShortcut,
+		}),
+		[onExecuteCommand, onPasteText, onSendShortcut],
+	);
+	const historyProps = useMemo<TextEntryHistoryModalProps>(
+		() => ({
+			cycleEntries: snapshot.history.cycleEntries,
+			pinnedEntries: snapshot.history.pinned,
+			recentEntries: snapshot.history.recent,
+			onPinText: stateCore.pinHistoryText,
+			onPinEntry: stateCore.pinHistoryEntry,
+			onUnpinEntry: stateCore.unpinHistoryEntry,
+			onDeleteEntry: stateCore.deleteHistoryEntry,
+			onClearRecent: stateCore.clearRecentHistory,
+		}),
+		[snapshot.history, stateCore],
+	);
+	const textEntryProps = useMemo<
+		ShellKeyboardControllerHandle['textEntryProps']
+	>(
+		() => ({
+			onPaste: onTextEntryPaste,
+			history: historyProps,
+		}),
+		[historyProps, onTextEntryPaste],
+	);
+	const configureProps = useMemo<
+		ShellKeyboardControllerHandle['configureProps']
+	>(
+		() => ({
+			...deps.configureCommands,
+			onReloadConfig,
+			configVersion: snapshot.shellConfigState.config.version,
+			configUpdatedAt: snapshot.shellConfigState.config.updatedAt,
+			configSource: snapshot.shellConfigState.source,
+			configLastLoadedAt: snapshot.shellConfigState.lastLoadedAt,
+			configLastError: snapshot.shellConfigState.lastError,
+		}),
+		[deps.configureCommands, onReloadConfig, snapshot.shellConfigState],
 	);
 
 	return useMemo<ShellKeyboardControllerHandle>(
@@ -473,91 +641,31 @@ export function useShellKeyboardController(
 			selectionModeEnabled: snapshot.selectionModeEnabled,
 			flash: { name: flashName, opacity: flashOpacity },
 			shellConfigState: snapshot.shellConfigState,
-			terminalKeyboardProps: {
-				keyboard: snapshot.keyboard,
-				modifierKeysActive: [...snapshot.modifierKeysActive],
-				onSlotPress: (slot) => {
-					void inputCore.handleSlotPress(slot);
-				},
-				selectionModeEnabled: snapshot.selectionModeEnabled,
-				onCopySelection: () => {
-					void copySelection();
-				},
-				navScope: deps.navScope,
-			},
-			commandMenuProps: {
-				entries: [...snapshot.shellConfigState.config.commandMenus],
-				onSelect: (preset) => {
-					void inputCore.runCommandPreset(preset);
-				},
-				onAction,
-				onBridge: (entry) => {
-					void remoteCore.handleCommandBridgeEntry(entry);
-				},
-			},
-			commanderProps: {
-				onExecuteCommand: (value) => {
-					void inputCore.executeCommanderCommand(value);
-				},
-				onPasteText: (value) => {
-					void inputCore.pasteCommanderText(value);
-				},
-				onSendShortcut: (sequence) => {
-					void inputCore.sendShortcut(sequence);
-				},
-			},
-			textEntryProps: {
-				onPaste: (value) => {
-					void inputCore.pasteTextEntry(value);
-				},
-				history: {
-					cycleEntries: snapshot.history.cycleEntries,
-					pinnedEntries: snapshot.history.pinned,
-					recentEntries: snapshot.history.recent,
-					onPinText: stateCore.pinHistoryText,
-					onPinEntry: stateCore.pinHistoryEntry,
-					onUnpinEntry: stateCore.unpinHistoryEntry,
-					onDeleteEntry: stateCore.deleteHistoryEntry,
-					onClearRecent: stateCore.clearRecentHistory,
-				},
-			},
-			configureProps: {
-				...deps.configureCommands,
-				onReloadConfig: () => {
-					void remoteCore.reloadConfig();
-				},
-				configVersion: snapshot.shellConfigState.config.version,
-				configUpdatedAt: snapshot.shellConfigState.config.updatedAt,
-				configSource: snapshot.shellConfigState.source,
-				configLastLoadedAt: snapshot.shellConfigState.lastLoadedAt,
-				configLastError: snapshot.shellConfigState.lastError,
-			},
-			onWebViewInput: (input) => {
-				void inputCore.onWebViewInput({ ...input });
-			},
-			onSelectionChanged: (text) => {
-				if (text !== copiedSelectionRef.current)
-					copiedSelectionRef.current = '';
-			},
+			terminalKeyboardProps,
+			commandMenuProps,
+			commanderProps,
+			textEntryProps,
+			configureProps,
+			onWebViewInput,
+			onSelectionChanged,
 			onSelectionModeChange,
-			onCommandBridgeEntry: (entry) => {
-				void remoteCore.handleCommandBridgeEntry(entry);
-			},
+			onCommandBridgeEntry: onBridge,
 			invalidate,
 		}),
 		[
-			copySelection,
-			deps.configureCommands,
-			deps.navScope,
+			commandMenuProps,
+			commanderProps,
+			configureProps,
 			flashName,
 			flashOpacity,
-			inputCore,
 			invalidate,
-			onAction,
+			onSelectionChanged,
 			onSelectionModeChange,
-			remoteCore,
+			onBridge,
+			onWebViewInput,
 			snapshot,
-			stateCore,
+			terminalKeyboardProps,
+			textEntryProps,
 		],
 	);
 }
