@@ -284,6 +284,31 @@ void test('clipboard authority supersedes an older selection read before write',
 	assert.deepEqual(writes, ['new']);
 });
 
+void test('clipboard invalidation prevents an old slow reader from inheriting a newer completed cohort', async () => {
+	const authority = createKeyboardClipboardAuthority();
+	let resolveOld!: (text: string) => void;
+	const oldSelection = new Promise<string>((resolve) => {
+		resolveOld = resolve;
+	});
+	const ports = (getSelection: () => Promise<string>) => ({
+		isAdmitted: () => true,
+		getInstanceId: () => 'instance',
+		getSelection,
+		isCurrentInstance: () => true,
+		writeClipboard: async () => {},
+		exitSelectionState: () => {},
+		exitSelectionView: () => {},
+		warn: () => {},
+	});
+	const old = authority.copy(ports(() => oldSelection));
+	authority.invalidate();
+	assert.deepEqual(await authority.copy(ports(async () => 'same')), {
+		status: 'completed',
+	});
+	resolveOld('same');
+	assert.deepEqual(await old, { status: 'superseded' });
+});
+
 void test('clipboard authority suppresses duplicate copy and completes despite view failure', async () => {
 	const authority = createKeyboardClipboardAuthority();
 	const calls: string[] = [];

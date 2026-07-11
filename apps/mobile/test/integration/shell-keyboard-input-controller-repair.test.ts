@@ -106,6 +106,74 @@ void test('composed overlapping identical COPY_SELECTION joins finalization and 
 	assert.deepEqual(harness.completedSlots, ['complete']);
 });
 
+void test('slow overlapping identical COPY_SELECTION inherits completed cohort while sequential duplicate stays unavailable', async () => {
+	const harness = createKeyboardInputHarness();
+	const authority = createKeyboardClipboardAuthority();
+	const events: string[] = [];
+	let selectionRead = 0;
+	let resolveSlowSelection!: (text: string) => void;
+	const slowSelection = new Promise<string>((resolve) => {
+		resolveSlowSelection = resolve;
+	});
+	let releaseWrite!: () => void;
+	const write = new Promise<void>((resolve) => {
+		releaseWrite = resolve;
+	});
+	const context: ActionContext = {
+		availableKeyboardIds: new Set(),
+		selectKeyboard: () => {},
+		rotateKeyboard: () => {},
+		openConfigurator: () => {},
+		sendBytes: () => {},
+		pasteClipboard: async () => {},
+		copySelection: () =>
+			authority.copy({
+				isAdmitted: () => true,
+				getInstanceId: () => 'instance',
+				getSelection: async () => {
+					selectionRead += 1;
+					return selectionRead === 2 ? slowSelection : 'selection';
+				},
+				isCurrentInstance: () => true,
+				writeClipboard: async () => {
+					events.push('write');
+					await write;
+				},
+				exitSelectionState: () => events.push('state'),
+				exitSelectionView: () => events.push('view'),
+				warn: () => events.push('warn'),
+			}),
+	};
+	harness.setActionImplementation((actionId, options) =>
+		runAction(actionId, context, options),
+	);
+	const slot = {
+		type: 'action' as const,
+		actionId: 'COPY_SELECTION',
+		label: 'Copy',
+		icon: null,
+	};
+	const first = harness.core.handleSlotPress(slot);
+	await Promise.resolve();
+	await Promise.resolve();
+	const slowOverlap = harness.core.handleSlotPress(slot);
+	await Promise.resolve();
+	await Promise.resolve();
+	releaseWrite();
+	assert.deepEqual(await first, { status: 'superseded' });
+	assert.deepEqual(events, ['write', 'state', 'view']);
+	resolveSlowSelection('selection');
+	assert.deepEqual(await slowOverlap, { status: 'completed' });
+	assert.deepEqual(events, ['write', 'state', 'view']);
+	assert.deepEqual(harness.completedSlots, ['complete']);
+
+	assert.deepEqual(await harness.core.handleSlotPress(slot), {
+		status: 'unavailable',
+	});
+	assert.deepEqual(events, ['write', 'state', 'view']);
+	assert.deepEqual(harness.completedSlots, ['complete']);
+});
+
 void test('final authority getter reentry cannot let an older request send', async () => {
 	const harness = createKeyboardInputHarness();
 	let newer: Promise<ControllerOutcome<{ message: string }>> | null = null;

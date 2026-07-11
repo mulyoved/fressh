@@ -258,7 +258,12 @@ export type KeyboardClipboardAuthority = {
 export function createKeyboardClipboardAuthority(): KeyboardClipboardAuthority {
 	let request = 0;
 	let operation = 0;
-	let lastCopied: { instanceId: string; text: string } | null = null;
+	let completedCopy = 0;
+	let lastCopied: {
+		instanceId: string;
+		text: string;
+		completion: number;
+	} | null = null;
 	let activeWrite: {
 		instanceId: string;
 		text: string;
@@ -300,6 +305,7 @@ export function createKeyboardClipboardAuthority(): KeyboardClipboardAuthority {
 	return {
 		copy: async (ports) => {
 			const requestId = ++request;
+			const completedCopyAtStart = completedCopy;
 			if (!ports.isAdmitted()) return { status: 'unavailable' };
 			let instanceId: string | null;
 			try {
@@ -329,9 +335,11 @@ export function createKeyboardClipboardAuthority(): KeyboardClipboardAuthority {
 			if (!text) return { status: 'unavailable' };
 			if (activeWrite?.instanceId === instanceId && activeWrite.text === text)
 				return activeWrite.result;
-			if (lastCopied?.instanceId === instanceId && lastCopied.text === text)
-				return { status: 'unavailable' };
 			if (requestId !== request) return { status: 'superseded' };
+			if (lastCopied?.instanceId === instanceId && lastCopied.text === text)
+				return lastCopied.completion > completedCopyAtStart
+					? { status: 'completed' }
+					: { status: 'unavailable' };
 			detachWrite();
 			const id = ++operation;
 			if (!safeCurrent(ports, id, instanceId)) return { status: 'superseded' };
@@ -356,7 +364,6 @@ export function createKeyboardClipboardAuthority(): KeyboardClipboardAuthority {
 						: { status: 'superseded' };
 				}
 				if (id !== operation) return { status: 'superseded' };
-				lastCopied = { instanceId, text };
 				if (!safeCurrent(ports, id, instanceId))
 					return { status: 'superseded' };
 				try {
@@ -375,9 +382,11 @@ export function createKeyboardClipboardAuthority(): KeyboardClipboardAuthority {
 						error,
 					);
 				}
-				return safeCurrent(ports, id, instanceId)
-					? { status: 'completed' }
-					: { status: 'superseded' };
+				if (!safeCurrent(ports, id, instanceId))
+					return { status: 'superseded' };
+				completedCopy += 1;
+				lastCopied = { instanceId, text, completion: completedCopy };
+				return { status: 'completed' };
 			})().finally(() => {
 				if (activeWrite?.release === release) activeWrite = null;
 			});
