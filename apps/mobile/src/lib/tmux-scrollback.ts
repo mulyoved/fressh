@@ -319,6 +319,9 @@ export async function handleTmuxScrollbackEnterRequested({
 	clearLocalScrollbackUiState,
 	sendScrollbackEnterAck,
 	isRequestCurrent = () => true,
+	operationOwner,
+	onEnterCommandSettled,
+	rollbackEnteredCopyMode,
 	trace,
 }: {
 	event: { instanceId: string; requestId: number };
@@ -335,21 +338,45 @@ export async function handleTmuxScrollbackEnterRequested({
 	clearLocalScrollbackUiState: () => void;
 	sendScrollbackEnterAck: (requestId: number, instanceId: string) => void;
 	isRequestCurrent?: () => boolean;
+	operationOwner?: unknown;
+	onEnterCommandSettled?: () => void;
+	rollbackEnteredCopyMode?: () => Promise<boolean> | null;
 	trace?: ScrollTraceSink;
 }): Promise<void> {
-	trace?.({
-		event: 'rn.enter.request',
-		requestId: event.requestId,
-		instanceId: event.instanceId,
-		currentInstanceId,
-	});
+	const emitTrace = (traceEvent: Parameters<ScrollTraceSink>[0]): boolean => {
+		try {
+			trace?.(traceEvent);
+		} catch {
+			// Trace sinks are observational and cannot own entry state.
+		}
+		return isRequestCurrent();
+	};
+	const rollback = async (): Promise<void> => {
+		const cleanup = rollbackEnteredCopyMode
+			? rollbackEnteredCopyMode()
+			: commandExecutor.reset({
+					targetName,
+					failurePolicy: 'suppress',
+				});
+		await cleanup;
+	};
+	if (
+		!emitTrace({
+			event: 'rn.enter.request',
+			requestId: event.requestId,
+			instanceId: event.instanceId,
+			currentInstanceId,
+		})
+	) {
+		return;
+	}
 	const requestResolution = resolveTmuxScrollbackEnterRequest({
 		isAppActive,
 		instanceId: event.instanceId,
 		currentInstanceId,
 	});
 	if (requestResolution.action === 'ignore') {
-		trace?.({
+		emitTrace({
 			event: 'rn.enter.dropped',
 			reason: 'stale-instance',
 			requestId: event.requestId,
@@ -359,12 +386,15 @@ export async function handleTmuxScrollbackEnterRequested({
 		return;
 	}
 	if (requestResolution.action === 'clear-local-ui') {
-		trace?.({
-			event: 'rn.enter.dropped',
-			reason: 'app-inactive',
-			requestId: event.requestId,
-			instanceId: event.instanceId,
-		});
+		if (
+			!emitTrace({
+				event: 'rn.enter.dropped',
+				reason: 'app-inactive',
+				requestId: event.requestId,
+				instanceId: event.instanceId,
+			})
+		)
+			return;
 		clearLocalScrollbackUiState();
 		return;
 	}
@@ -375,59 +405,85 @@ export async function handleTmuxScrollbackEnterRequested({
 		!tmuxEnabled ||
 		!connectionAvailable
 	) {
-		trace?.({
-			event: 'rn.enter.dropped',
-			reason: 'unavailable',
-			requestId: event.requestId,
-			instanceId: event.instanceId,
-			shellAvailable,
-			selectionModeEnabled,
-			tmuxEnabled,
-			connectionAvailable,
-		});
+		if (
+			!emitTrace({
+				event: 'rn.enter.dropped',
+				reason: 'unavailable',
+				requestId: event.requestId,
+				instanceId: event.instanceId,
+				shellAvailable,
+				selectionModeEnabled,
+				tmuxEnabled,
+				connectionAvailable,
+			})
+		)
+			return;
 		clearLocalScrollbackUiState();
 		return;
 	}
 
-	trace?.({
-		event: 'rn.enter.command',
-		requestId: event.requestId,
-		instanceId: event.instanceId,
-	});
-	const entered = await commandExecutor.runEnterCommand(targetName);
+	if (
+		!emitTrace({
+			event: 'rn.enter.command',
+			requestId: event.requestId,
+			instanceId: event.instanceId,
+		})
+	)
+		return;
+	let entered: boolean;
+	try {
+		entered = await commandExecutor.runEnterCommand(targetName, operationOwner);
+	} finally {
+		try {
+			onEnterCommandSettled?.();
+		} catch {
+			// Command attribution cleanup is best-effort and cannot own entry state.
+		}
+	}
 	if (!isRequestCurrent()) {
-		trace?.({
+		emitTrace({
 			event: 'rn.enter.stale-after-command',
 			requestId: event.requestId,
 			instanceId: event.instanceId,
 			entered,
 		});
 		if (entered) {
-			await commandExecutor.reset({
-				targetName,
-				failurePolicy: 'suppress',
-			});
+			await rollback();
 		}
 		return;
 	}
 	if (!entered) {
-		trace?.({
-			event: 'rn.enter.failed',
-			requestId: event.requestId,
-			instanceId: event.instanceId,
-		});
+		if (
+			!emitTrace({
+				event: 'rn.enter.failed',
+				requestId: event.requestId,
+				instanceId: event.instanceId,
+			})
+		)
+			return;
 		clearLocalScrollbackUiState();
 		return;
 	}
 	remoteCopyModeGenerationRef.current += 1;
 	remoteCopyModeActiveRef.current = true;
-	trace?.({
-		event: 'rn.enter.acked',
-		requestId: event.requestId,
-		instanceId: event.instanceId,
-		remoteGeneration: remoteCopyModeGenerationRef.current,
-	});
-	sendScrollbackEnterAck(event.requestId, event.instanceId);
+	if (
+		!emitTrace({
+			event: 'rn.enter.acked',
+			requestId: event.requestId,
+			instanceId: event.instanceId,
+			remoteGeneration: remoteCopyModeGenerationRef.current,
+		})
+	) {
+		await rollback();
+		return;
+	}
+	try {
+		sendScrollbackEnterAck(event.requestId, event.instanceId);
+	} catch {
+		await rollback();
+		return;
+	}
+	if (!isRequestCurrent()) await rollback();
 }
 
 export function handleTmuxScrollbackBatchEvent({
@@ -442,6 +498,8 @@ export function handleTmuxScrollbackBatchEvent({
 	targetName,
 	lineAccumulator,
 	enqueueScrollBatch,
+	isRequestCurrent = () => true,
+	onEnqueueFailure,
 	trace,
 }: {
 	event: {
@@ -466,25 +524,33 @@ export function handleTmuxScrollbackBatchEvent({
 	enqueueScrollBatch: (
 		commands: WorkmuxScrollbackPageCommand[],
 	) => Promise<boolean>;
+	isRequestCurrent?: () => boolean;
+	onEnqueueFailure?: (error: unknown) => void;
 	trace?: ScrollTraceSink;
 }): boolean {
 	const traceBatch = (
 		traceEvent: 'rn.batch.accepted' | 'rn.batch.dropped',
 		extras?: Record<string, unknown>,
-	) => {
-		trace?.({
-			event: traceEvent,
-			direction: event.direction,
-			pages: event.pages,
-			lines: event.lines,
-			pageStep: event.pageStep,
-			instanceId: event.instanceId,
-			seq: event.seq,
-			webviewTs: event.ts,
-			source: event.source,
-			...extras,
-		});
+	): boolean => {
+		try {
+			trace?.({
+				event: traceEvent,
+				direction: event.direction,
+				pages: event.pages,
+				lines: event.lines,
+				pageStep: event.pageStep,
+				instanceId: event.instanceId,
+				seq: event.seq,
+				webviewTs: event.ts,
+				source: event.source,
+				...extras,
+			});
+		} catch {
+			// Trace sinks are observational and cannot own batch state.
+		}
+		return isRequestCurrent();
 	};
+	if (!isRequestCurrent()) return false;
 	if (!shellAvailable) {
 		traceBatch('rn.batch.dropped', { reason: 'no-shell' });
 		return false;
@@ -533,7 +599,15 @@ export function handleTmuxScrollbackBatchEvent({
 		traceBatch('rn.batch.dropped', { reason: 'empty' });
 		return false;
 	}
-	traceBatch('rn.batch.accepted', { commandCount: commands.length });
-	void enqueueScrollBatch(commands);
+	if (!traceBatch('rn.batch.accepted', { commandCount: commands.length })) {
+		return false;
+	}
+	void enqueueScrollBatch(commands).catch((error: unknown) => {
+		try {
+			onEnqueueFailure?.(error);
+		} catch {
+			// Failure observation cannot become an unhandled rejection.
+		}
+	});
 	return true;
 }

@@ -1,15 +1,10 @@
 import { type ScrollTraceSink } from '../scroll-trace';
 import {
-	handleTmuxScrollbackBatchEvent,
 	handleTmuxScrollbackEnterRequested,
 	registerTmuxScrollbackRemoteCopyModeExitCleanup,
 	resetTmuxScrollbackRuntimeState,
-	shouldRunTmuxScrollbackRemoteResetForModeChange,
 } from '../tmux-scrollback';
-import {
-	createTmuxScrollbackLocalExitRequest,
-	resetTmuxScrollbackLocalExitRequests,
-} from '../tmux-scrollback-local-exit';
+import { resetTmuxScrollbackLocalExitRequests } from '../tmux-scrollback-local-exit';
 import { type WorkmuxControlChannel } from '../workmux-control-channel';
 import {
 	clearTmuxScrollbackLineAccumulator,
@@ -31,11 +26,15 @@ import {
 	type ControllerInvalidationReason,
 	type ControllerOutcome,
 } from './controller-core';
+import { handleScrollbackBatch } from './scrollback-batch-coordinator';
 import {
-	handleShellWorkmuxScrollbackCommandFailureActions,
-	handleShellWorkmuxScrollbackDisposeExitFailureActions,
-	shouldTreatShellWorkmuxScrollbackFailureAsAlreadyInactive,
-} from './scrollback-policy';
+	createScrollbackEntryCoordinator,
+	type ScrollbackEnterRequestToken,
+} from './scrollback-entry-coordinator';
+import { createScrollbackFailureCoordinator } from './scrollback-failure-coordinator';
+import { createScrollbackLocalUiCoordinator } from './scrollback-local-ui-coordinator';
+import { handleScrollbackModeChange } from './scrollback-mode-coordinator';
+import { handleShellWorkmuxScrollbackDisposeExitFailureActions } from './scrollback-policy';
 import { type ShellTargetKey } from './source-keys';
 // eslint-disable-next-line import/consistent-type-specifier-style -- Keep this plain-TypeScript core free from React Native module evaluation.
 import type { ShellTerminalViewPort } from './terminal';
@@ -172,10 +171,10 @@ export function createShellScrollbackControllerCore(
 	let targetOwnershipRevision = 0;
 	let nextTraceId = 0;
 	let activeTraceId = 'scroll-0';
-	let nextLocalExitRequestId = 0;
 	let disposed = false;
 	let nextResetInvocationRevision = 0;
 	type ResetOperationKey = Readonly<{
+		failurePolicy: 'notify' | 'suppress';
 		invocationRevision: number;
 		remoteCopyModeGeneration: number;
 		requiresDurableTargetExit: boolean;
@@ -187,10 +186,6 @@ export function createShellScrollbackControllerCore(
 		WorkmuxScrollbackCommandExecutor,
 		PendingResetOperation
 	>();
-	const pendingEnterRequestGenerations = new WeakMap<
-		WorkmuxScrollbackCommandExecutor,
-		number[]
-	>();
 
 	type CleanupOwnership = Readonly<{
 		targetOwnershipRevision: number;
@@ -198,7 +193,6 @@ export function createShellScrollbackControllerCore(
 		targetKey: ShellTargetKey;
 		targetName: string;
 	}>;
-
 	const createSafeWarn =
 		(logger: ShellScrollbackLogger | undefined) =>
 		(message: string, error?: unknown): void => {
@@ -234,7 +228,9 @@ export function createShellScrollbackControllerCore(
 
 	const captureResetOperationKey = (
 		requiresDurableTargetExit: boolean,
+		failurePolicy: 'notify' | 'suppress',
 	): ResetOperationKey => ({
+		failurePolicy,
 		invocationRevision: ++nextResetInvocationRevision,
 		remoteCopyModeGeneration: remoteCopyModeGeneration.current,
 		requiresDurableTargetExit,
@@ -244,11 +240,13 @@ export function createShellScrollbackControllerCore(
 	const getPendingResetOperation = (
 		ownerExecutor: WorkmuxScrollbackCommandExecutor,
 		requiresDurableTargetExit: boolean,
+		failurePolicy: 'notify' | 'suppress',
 	): Promise<boolean> | null => {
 		const pending = pendingResetOperations.get(ownerExecutor);
 		return pending?.targetOwnershipRevision === targetOwnershipRevision &&
 			pending.remoteCopyModeGeneration === remoteCopyModeGeneration.current &&
-			pending.requiresDurableTargetExit === requiresDurableTargetExit
+			pending.requiresDurableTargetExit === requiresDurableTargetExit &&
+			pending.failurePolicy === failurePolicy
 			? pending.cleanup
 			: null;
 	};
@@ -383,11 +381,18 @@ export function createShellScrollbackControllerCore(
 	}): Promise<boolean> | null => {
 		const activeExecutor = executor;
 		if (!activeExecutor) return null;
-		const pending = getPendingResetOperation(activeExecutor, remoteWasActive);
+		const pending = getPendingResetOperation(
+			activeExecutor,
+			remoteWasActive,
+			failurePolicy,
+		);
 		if (pending) return pending;
 		remoteCopyModeGeneration.current += 1;
 		const ownership = captureCleanupOwnership(ownerContext);
-		const operationKey = captureResetOperationKey(remoteWasActive);
+		const operationKey = captureResetOperationKey(
+			remoteWasActive,
+			failurePolicy,
+		);
 		let cleanup: Promise<boolean> | null = null;
 		try {
 			cleanup = resetTmuxScrollbackRuntimeState({
@@ -448,41 +453,19 @@ export function createShellScrollbackControllerCore(
 		}
 	};
 
-	const clearLocalScrollbackUiState = (
-		ownerContext: ShellScrollbackContext,
-	): void => {
-		const current = publisher.getSnapshot();
-		if (current.active || current.phase !== 'active') {
-			safelyPublish({
-				active: false,
-				phase: 'active',
-				runtimeInstanceId,
-			});
-		}
-		clearTmuxScrollbackLineAccumulator(lineAccumulator);
-		const instanceId = runtimeInstanceId;
-		if (
-			instanceId === null ||
-			context !== ownerContext ||
-			!isTerminalInstanceCurrent(ownerContext, instanceId)
-		) {
-			return;
-		}
-		nextLocalExitRequestId += 1;
-		const exitRequest = createTmuxScrollbackLocalExitRequest({
-			requestIds: localExitRequestIds,
-			requestId: nextLocalExitRequestId,
-			instanceId,
-		});
-		try {
-			ownerContext.terminalView.exitScrollback(exitRequest.message);
-		} catch (error) {
-			createSafeWarn(ownerContext.logger)(
-				'Scrollback local exit failed',
-				error,
-			);
-		}
-	};
+	const clearLocalScrollbackUiState = createScrollbackLocalUiCoordinator({
+		getCurrentState: () => ({
+			context,
+			runtimeInstanceId,
+			snapshot: publisher.getSnapshot(),
+		}),
+		isTerminalInstanceCurrent,
+		lineAccumulator,
+		localExitRequestIds,
+		publish: safelyPublish,
+		warn: (ownerContext, message, error) =>
+			createSafeWarn(ownerContext.logger)(message, error),
+	});
 
 	const clearScrollbackState = (
 		ownerContext: ShellScrollbackContext,
@@ -496,69 +479,42 @@ export function createShellScrollbackControllerCore(
 		});
 	};
 
-	const handleCommandFailure = (
-		ownerContext: ShellScrollbackContext,
-		message: string,
-		failureContext: { commandKind: 'enter' | 'scroll' | 'exit' },
-	): void => {
-		if (context !== ownerContext || disposed) return;
-		if (
-			shouldTreatShellWorkmuxScrollbackFailureAsAlreadyInactive({
-				message,
-				commandKind: failureContext.commandKind,
-			})
-		) {
-			safelyTrace(ownerContext, {
-				event: 'rn.remote.inactive',
-				reason: 'not-in-mode',
-				commandKind: failureContext.commandKind,
-				message,
+	const entryCoordinator = createScrollbackEntryCoordinator({
+		getCurrentState: () => ({
+			context,
+			disposed,
+			executor,
+			remoteCopyModeGeneration: remoteCopyModeGeneration.current,
+			requestGeneration: requestGenerations.enter,
+			runtimeInstanceId,
+			targetOwnershipRevision,
+		}),
+		isTerminalInstanceCurrent,
+		registerRollbackCleanup: ({ cleanup, logger, ownership }) => {
+			void registerCleanup({
+				cleanup,
+				failureMessage: 'Workmux scrollback enter rollback failed',
+				logger,
+				ownership,
+				remoteWasActive: true,
+				restoreRemoteOnFailure: true,
 			});
-			createSafeWarn(ownerContext.logger)(message);
-			remoteCopyModeGeneration.current += 1;
-			remoteCopyModeActive.current = false;
-			clearLocalScrollbackUiState(ownerContext);
-			return;
-		}
-		let interactive = false;
-		try {
-			interactive = ownerContext.getActivitySnapshot().interactive;
-		} catch (error) {
-			createSafeWarn(ownerContext.logger)(
-				'Scrollback activity check failed',
-				error,
-			);
-		}
-		if (!interactive) {
-			createSafeWarn(ownerContext.logger)(message);
-			if (failureContext.commandKind === 'exit') {
-				clearLocalScrollbackUiState(ownerContext);
-			} else {
-				void clearScrollbackState(ownerContext, 'suppress');
-			}
-			return;
-		}
-		try {
-			handleShellWorkmuxScrollbackCommandFailureActions({
-				message,
-				alert: ownerContext.feedback.alert,
-				copyMessage: ownerContext.feedback.copyMessage,
-				clearScrollbackState: () => {
-					if (failureContext.commandKind === 'exit') {
-						clearLocalScrollbackUiState(ownerContext);
-					} else {
-						void clearScrollbackState(ownerContext);
-					}
-				},
-				warn: (warning) => ownerContext.logger.warn(warning),
-			});
-		} catch (error) {
-			createSafeWarn(ownerContext.logger)(
-				'Workmux scrollback failure feedback failed',
-				error,
-			);
-		}
-	};
+		},
+		remoteCopyModeActive,
+		remoteCopyModeGeneration,
+		warn: (logger, message, error) => createSafeWarn(logger)(message, error),
+	});
+	const handleCommandFailure = createScrollbackFailureCoordinator({
+		clearLocalState: clearLocalScrollbackUiState,
+		clearState: (ownerContext, failurePolicy) => {
+			void clearScrollbackState(ownerContext, failurePolicy);
+		},
+		isCurrentContext: (ownerContext) => !disposed && context === ownerContext,
+		remoteCopyModeActive,
+		remoteCopyModeGeneration,
+		trace: safelyTrace,
+		warn: (logger, message, error) => createSafeWarn(logger)(message, error),
+	});
 
 	const buildExecutor = (nextContext: ShellScrollbackContext): void => {
 		const capturedExecutorRevision = executorRevision;
@@ -582,14 +538,13 @@ export function createShellScrollbackControllerCore(
 					if (!isCurrentExecutor()) return;
 					const currentContext = context;
 					if (currentContext === null) return;
-					const enterOwner =
-						failureContext.commandKind === 'enter' && createdExecutor
-							? pendingEnterRequestGenerations.get(createdExecutor)?.[0]
-							: undefined;
-					if (
-						enterOwner !== undefined &&
-						enterOwner !== requestGenerations.enter
-					) {
+					const enterOwnerCurrent =
+						failureContext.commandKind === 'enter'
+							? entryCoordinator.isAttributedOwnerCurrent(
+									failureContext.operationOwner,
+								)
+							: null;
+					if (enterOwnerCurrent === false) {
 						createSafeWarn(currentContext.logger)(message);
 						return;
 					}
@@ -649,7 +604,6 @@ export function createShellScrollbackControllerCore(
 			return;
 		}
 		executor = createdExecutor;
-		pendingEnterRequestGenerations.set(createdExecutor, []);
 	};
 
 	const replaceExecutor = (nextContext: ShellScrollbackContext): void => {
@@ -814,84 +768,55 @@ export function createShellScrollbackControllerCore(
 		onTerminalRuntimeChanged,
 		onScrollbackModeChange: (event) => {
 			const ownerContext = context;
-			if (
-				disposed ||
-				ownerContext === null ||
-				event.instanceId !== runtimeInstanceId ||
-				!isTerminalInstanceCurrent(ownerContext, event.instanceId)
-			) {
-				return;
-			}
-			const current = publisher.getSnapshot();
-			if (event.active && !current.active) {
-				nextTraceId += 1;
-				activeTraceId = `scroll-${nextTraceId}`;
-			}
-			safelyTrace(ownerContext, {
-				event: 'rn.mode',
-				active: event.active,
-				phase: event.phase,
-				instanceId: event.instanceId,
-				requestId: event.requestId,
+			if (ownerContext === null) return;
+			handleScrollbackModeChange({
+				event,
+				getCurrentState: () => ({
+					...publisher.getSnapshot(),
+					disposed,
+				}),
+				isTerminalInstanceCurrent: (instanceId) =>
+					isTerminalInstanceCurrent(ownerContext, instanceId),
+				localExitRequestIds,
+				onActivated: () => {
+					nextTraceId += 1;
+					activeTraceId = `scroll-${nextTraceId}`;
+				},
+				publish: safelyPublish,
 				remoteCopyModeActive: remoteCopyModeActive.current,
+				resetRemote: () => {
+					void resetExecutor({
+						failurePolicy: 'notify',
+						ownerContext,
+						remoteWasActive: remoteCopyModeActive.current,
+					});
+				},
+				trace: (traceEvent) => safelyTrace(ownerContext, traceEvent),
 			});
-			if (current.active !== event.active || current.phase !== event.phase) {
-				safelyPublish({
-					active: event.active,
-					phase: event.phase,
-					runtimeInstanceId,
-				});
-			}
-			if (
-				shouldRunTmuxScrollbackRemoteResetForModeChange({
-					active: event.active,
-					requestId: event.requestId,
-					localExitRequestIds,
-				})
-			) {
-				void resetExecutor({
-					failurePolicy: 'notify',
-					ownerContext,
-					remoteWasActive: remoteCopyModeActive.current,
-				});
-			}
 		},
 		onScrollbackEnterRequested: async (event) => {
 			requestGenerations.enter += 1;
 			const requestGeneration = requestGenerations.enter;
+			const requestTargetOwnershipRevision = targetOwnershipRevision;
 			const ownerContext = context;
 			const ownerExecutor = executor;
 			if (
 				disposed ||
 				ownerContext === null ||
 				ownerExecutor === null ||
-				runtimeInstanceId !== event.instanceId ||
-				!isTerminalInstanceCurrent(ownerContext, event.instanceId)
+				runtimeInstanceId !== event.instanceId
 			) {
 				return;
 			}
-			const isRequestCurrent = (): boolean => {
-				if (
-					disposed ||
-					requestGenerations.enter !== requestGeneration ||
-					context !== ownerContext ||
-					executor !== ownerExecutor ||
-					runtimeInstanceId !== event.instanceId ||
-					!isTerminalInstanceCurrent(ownerContext, event.instanceId)
-				) {
-					return false;
-				}
-				try {
-					const activity = ownerContext.getActivitySnapshot();
-					return activity.interactive && activity.appActive;
-				} catch (error) {
-					createSafeWarn(ownerContext.logger)(
-						'Scrollback activity check failed',
-						error,
-					);
-					return false;
-				}
-			};
+			const baseIsCurrent = () =>
+				!disposed &&
+				requestGenerations.enter === requestGeneration &&
+				context === ownerContext &&
+				executor === ownerExecutor &&
+				runtimeInstanceId === event.instanceId &&
+				targetOwnershipRevision === requestTargetOwnershipRevision;
+			if (!isTerminalInstanceCurrent(ownerContext, event.instanceId)) return;
+			if (!baseIsCurrent()) return;
 			let activity: ShellActivitySnapshot;
 			try {
 				activity = ownerContext.getActivitySnapshot();
@@ -902,19 +827,42 @@ export function createShellScrollbackControllerCore(
 				);
 				return;
 			}
-			try {
-				const enterOwners =
-					pendingEnterRequestGenerations.get(ownerExecutor) ?? [];
-				if (!pendingEnterRequestGenerations.has(ownerExecutor)) {
-					pendingEnterRequestGenerations.set(ownerExecutor, enterOwners);
+			if (!baseIsCurrent()) return;
+			const token: ScrollbackEnterRequestToken = Object.freeze({
+				activityGeneration: activity.generation,
+				context: ownerContext,
+				executor: ownerExecutor,
+				instanceId: event.instanceId,
+				remoteCopyModeGeneration: remoteCopyModeGeneration.current,
+				requestGeneration,
+				targetOwnershipRevision: requestTargetOwnershipRevision,
+			});
+			if (!activity.interactive || !activity.appActive) {
+				if (entryCoordinator.isInternallyCurrent(token)) {
+					clearLocalScrollbackUiState(ownerContext);
 				}
-				enterOwners.push(requestGeneration);
+				return;
+			}
+			if (!entryCoordinator.validate(token)) return;
+			let selectionModeEnabled: boolean;
+			try {
+				selectionModeEnabled = ownerContext.getSelectionModeEnabled();
+			} catch (error) {
+				createSafeWarn(ownerContext.logger)(
+					'Scrollback selection check failed',
+					error,
+				);
+				return;
+			}
+			if (!entryCoordinator.validate(token)) return;
+			entryCoordinator.track(token);
+			try {
 				await handleTmuxScrollbackEnterRequested({
 					event,
 					isAppActive: activity.appActive,
 					currentInstanceId: runtimeInstanceId,
 					shellAvailable: ownerContext.shellAvailable,
-					selectionModeEnabled: ownerContext.getSelectionModeEnabled(),
+					selectionModeEnabled,
 					tmuxEnabled: ownerContext.tmuxEnabled,
 					connectionAvailable: ownerContext.connectionAvailable,
 					targetName: ownerContext.targetName,
@@ -923,26 +871,15 @@ export function createShellScrollbackControllerCore(
 					remoteCopyModeGenerationRef: remoteCopyModeGeneration,
 					clearLocalScrollbackUiState: () =>
 						clearLocalScrollbackUiState(ownerContext),
-					sendScrollbackEnterAck: (requestId, instanceId) => {
-						if (!isRequestCurrent()) return;
-						try {
-							ownerContext.terminalView.sendScrollbackEnterAck(
-								requestId,
-								instanceId,
-							);
-						} catch (error) {
-							createSafeWarn(ownerContext.logger)(
-								'Scrollback enter acknowledgement failed',
-								error,
-							);
-							remoteCopyModeActive.current = false;
-							void ownerExecutor.reset({
-								targetName: ownerContext.targetName,
-								failurePolicy: 'suppress',
-							});
-						}
-					},
-					isRequestCurrent,
+					sendScrollbackEnterAck: (requestId, instanceId) =>
+						ownerContext.terminalView.sendScrollbackEnterAck(
+							requestId,
+							instanceId,
+						),
+					isRequestCurrent: () => entryCoordinator.validate(token),
+					operationOwner: token,
+					onEnterCommandSettled: () => entryCoordinator.release(token),
+					rollbackEnteredCopyMode: () => entryCoordinator.rollback(token),
 					trace: (traceEvent) => safelyTrace(ownerContext, traceEvent),
 				});
 			} catch (error) {
@@ -950,69 +887,40 @@ export function createShellScrollbackControllerCore(
 					'Workmux scrollback enter failed',
 					error,
 				);
-				if (isRequestCurrent()) clearLocalScrollbackUiState(ownerContext);
+				if (entryCoordinator.validate(token)) {
+					clearLocalScrollbackUiState(ownerContext);
+				}
 			} finally {
-				const enterOwners = pendingEnterRequestGenerations.get(ownerExecutor);
-				const ownerIndex = enterOwners?.indexOf(requestGeneration) ?? -1;
-				if (enterOwners && ownerIndex >= 0) enterOwners.splice(ownerIndex, 1);
+				entryCoordinator.release(token);
 			}
 		},
 		onScrollbackBatch: (event) => {
 			const ownerContext = context;
 			const ownerExecutor = executor;
 			if (disposed || ownerContext === null || ownerExecutor === null) return;
-			if (
-				runtimeInstanceId === null ||
-				event.instanceId !== runtimeInstanceId ||
-				!isTerminalInstanceCurrent(ownerContext, event.instanceId)
-			) {
-				safelyTrace(ownerContext, {
-					event: 'rn.batch.dropped',
-					reason: 'stale-instance',
-					instanceId: event.instanceId,
-					currentInstanceId: runtimeInstanceId,
-					direction: event.direction,
-					pages: event.pages,
-					lines: event.lines,
-					pageStep: event.pageStep,
-					seq: event.seq,
-					webviewTs: event.ts,
-					source: event.source,
-				});
-				return;
-			}
-			try {
-				handleTmuxScrollbackBatchEvent({
-					event,
-					shellAvailable: ownerContext.shellAvailable,
-					currentInstanceId: runtimeInstanceId,
-					selectionModeEnabled: ownerContext.getSelectionModeEnabled(),
-					tmuxEnabled: ownerContext.tmuxEnabled,
-					connectionAvailable: ownerContext.connectionAvailable,
-					scrollbackActive: publisher.getSnapshot().active,
-					remoteCopyModeActive: remoteCopyModeActive.current,
-					targetName: ownerContext.targetName,
-					lineAccumulator,
-					enqueueScrollBatch: (commands) => {
-						if (
-							disposed ||
-							context !== ownerContext ||
-							executor !== ownerExecutor ||
-							runtimeInstanceId !== event.instanceId ||
-							!isTerminalInstanceCurrent(ownerContext, event.instanceId)
-						) {
-							return Promise.resolve(false);
-						}
-						return ownerExecutor.enqueueScrollBatch(commands);
-					},
-					trace: (traceEvent) => safelyTrace(ownerContext, traceEvent),
-				});
-			} catch (error) {
-				createSafeWarn(ownerContext.logger)(
-					'Workmux scrollback batch failed',
-					error,
-				);
-			}
+			handleScrollbackBatch({
+				context: ownerContext,
+				event,
+				executor: ownerExecutor,
+				getCurrentState: () => ({
+					context,
+					disposed,
+					executor,
+					runtimeInstanceId,
+					targetOwnershipRevision,
+				}),
+				isTerminalInstanceCurrent,
+				lineAccumulator,
+				onCurrentFailure: (message) =>
+					handleCommandFailure(ownerContext, message, {
+						commandKind: 'scroll',
+					}),
+				remoteCopyModeActive: remoteCopyModeActive.current,
+				scrollbackActive: publisher.getSnapshot().active,
+				trace: (traceEvent) => safelyTrace(ownerContext, traceEvent),
+				warn: (message, error) =>
+					createSafeWarn(ownerContext.logger)(message, error),
+			});
 		},
 		sendSegments: async () => ({ status: 'unavailable' }),
 		clear: (options) => {

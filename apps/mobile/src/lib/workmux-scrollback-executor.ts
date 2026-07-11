@@ -18,12 +18,16 @@ export type WorkmuxScrollbackFailurePolicy = 'notify' | 'suppress';
 
 export type WorkmuxScrollbackFailureContext = {
 	commandKind: 'enter' | 'scroll' | 'exit';
+	operationOwner?: unknown;
 };
 
 export type WorkmuxScrollbackTraceEvent = Parameters<ScrollTraceSink>[0];
 
 export type WorkmuxScrollbackCommandExecutor = {
-	runEnterCommand: (targetName: string) => Promise<boolean>;
+	runEnterCommand: (
+		targetName: string,
+		operationOwner?: unknown,
+	) => Promise<boolean>;
 	enqueueScrollBatch: (
 		commands: WorkmuxScrollbackPageCommand[],
 	) => Promise<boolean>;
@@ -159,6 +163,7 @@ export function createWorkmuxScrollbackCommandExecutor({
 		commandKind,
 		operationGeneration,
 		rollbackTargetName,
+		operationOwner,
 		durableExit = false,
 		failurePolicy = 'notify',
 	}: {
@@ -166,6 +171,7 @@ export function createWorkmuxScrollbackCommandExecutor({
 		commandKind: WorkmuxScrollbackCommandKind;
 		operationGeneration: number;
 		rollbackTargetName?: string;
+		operationOwner?: unknown;
 		durableExit?: boolean;
 		failurePolicy?: WorkmuxScrollbackFailurePolicy;
 	}) => {
@@ -203,7 +209,10 @@ export function createWorkmuxScrollbackCommandExecutor({
 				if (failureMessage && commandKind === 'enter' && !disposed) {
 					canceledEnterRollbackSucceeded = false;
 					if (canceledEnterRollbackFailurePolicy === 'notify') {
-						notifyFailure(failureMessage, { commandKind: 'enter' });
+						notifyFailure(failureMessage, {
+							commandKind: 'enter',
+							operationOwner,
+						});
 					} else {
 						notifyDisposeExitFailure(failureMessage);
 					}
@@ -218,7 +227,10 @@ export function createWorkmuxScrollbackCommandExecutor({
 						canceledEnterRollbackSucceeded && !rollbackFailureMessage;
 					if (rollbackFailureMessage) {
 						if (canceledEnterRollbackFailurePolicy === 'notify') {
-							notifyFailure(rollbackFailureMessage, { commandKind: 'exit' });
+							notifyFailure(rollbackFailureMessage, {
+								commandKind: 'exit',
+								operationOwner,
+							});
 						} else {
 							notifyDisposeExitFailure(rollbackFailureMessage);
 						}
@@ -233,6 +245,7 @@ export function createWorkmuxScrollbackCommandExecutor({
 			if (failurePolicy === 'notify') {
 				notifyFailure(failureMessage, {
 					commandKind: durableExit ? 'exit' : commandKind,
+					operationOwner,
 				});
 			} else {
 				notifyDisposeExitFailure(failureMessage);
@@ -296,7 +309,7 @@ export function createWorkmuxScrollbackCommandExecutor({
 	};
 
 	return {
-		runEnterCommand: (targetName: string) =>
+		runEnterCommand: (targetName: string, operationOwner?: unknown) =>
 			closed || disposed
 				? Promise.resolve(false)
 				: (() => {
@@ -311,6 +324,7 @@ export function createWorkmuxScrollbackCommandExecutor({
 									commandKind: 'enter',
 									operationGeneration,
 									rollbackTargetName: targetName,
+									operationOwner,
 								});
 							} finally {
 								pendingEnterOperations -= 1;

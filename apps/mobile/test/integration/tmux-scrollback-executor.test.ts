@@ -216,6 +216,21 @@ void test('workmux scrollback executor settles enter failure when callback throw
 	assert.equal(await executor.runEnterCommand('main'), false);
 });
 
+void test('workmux scrollback executor attributes enter failure to exact operation owner', async () => {
+	const owner = Object.freeze({ request: 7 });
+	const failures: unknown[] = [];
+	const executor = createWorkmuxScrollbackCommandExecutor({
+		executeCommand: async () => ({
+			success: false,
+			output: '',
+			error: 'enter failed',
+		}),
+		onFailure: (_message, context) => failures.push(context.operationOwner),
+	});
+	assert.equal(await executor.runEnterCommand('main', owner), false);
+	assert.deepEqual(failures, [owner]);
+});
+
 void test('workmux scrollback executor settles scroll batch when failure callback throws', async () => {
 	const executor = createWorkmuxScrollbackCommandExecutor({
 		executeCommand: async () => ({

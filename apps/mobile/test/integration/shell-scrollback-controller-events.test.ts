@@ -4,7 +4,9 @@ import { createShellTargetKey } from '../../src/lib/shell-controllers/source-key
 import { type WorkmuxScrollbackPageCommand } from '../../src/lib/workmux-scrollback-batch';
 import {
 	createDeferred,
+	createRecordingCleanupBarrier,
 	createScrollbackHarness,
+	flushPromises,
 } from './shell-scrollback-controller-test-support';
 
 const enterEvent = { instanceId: 'instance-1', requestId: 7 };
@@ -51,7 +53,7 @@ void test('scrollback focus invalidation rolls back an in-flight enter without a
 	await pending;
 
 	assert.deepEqual(harness.enterAcks, []);
-	assert.equal(harness.remoteCopyModeActive.current, false);
+	assert.equal(harness.remoteCopyModeActive.current, true);
 	assert.ok(harness.resetCalls.length >= 1);
 	assert.deepEqual(harness.resetCalls.at(-1), {
 		targetName: 'main',
@@ -89,11 +91,14 @@ void test('scrollback superseded enter failure logs without a stale alert', asyn
 	assert.ok(callback);
 	assert.ok(executor);
 	let calls = 0;
-	executor.runEnterCommand = async () => {
+	executor.runEnterCommand = async (_targetName, operationOwner) => {
 		calls += 1;
 		if (calls === 1) {
 			const result = await firstEnter.promise;
-			callback('stale enter failure', { commandKind: 'enter' });
+			callback('stale enter failure', {
+				commandKind: 'enter',
+				operationOwner,
+			});
 			return result;
 		}
 		return true;
@@ -341,4 +346,251 @@ void test('scrollback not-in-mode scroll failure clears ownership without recurs
 	assert.equal(harness.remoteCopyModeActive.current, false);
 	assert.equal(harness.resetCalls.length, before);
 	assert.equal(harness.localExitMessages.length, 1);
+});
+
+void test('scrollback superseded successful enter registers durable rollback in the cleanup barrier', async () => {
+	const recording = createRecordingCleanupBarrier();
+	const harness = createScrollbackHarness({
+		cleanupBarrier: recording.barrier,
+	});
+	const entered = createDeferred<boolean>();
+	const rollback = createDeferred<boolean>();
+	const executor = harness.executors[0];
+	assert.ok(executor);
+	executor.runEnterCommand = () => entered.promise;
+	executor.reset = (options) =>
+		options?.targetName === 'main' ? rollback.promise : null;
+	harness.core.onTerminalRuntimeChanged('instance-1');
+	const pending = harness.core.onScrollbackEnterRequested(enterEvent);
+	void harness.core.onScrollbackEnterRequested({
+		instanceId: 'stale',
+		requestId: 8,
+	});
+	entered.resolve(true);
+	await flushPromises();
+	assert.notEqual(recording.barrier.current(), null);
+	assert.equal(harness.remoteCopyModeActive.current, true);
+	rollback.resolve(true);
+	await pending;
+	assert.equal(harness.remoteCopyModeActive.current, false);
+});
+
+void test('scrollback throwing acknowledgement registers durable rollback in the cleanup barrier', async () => {
+	const recording = createRecordingCleanupBarrier();
+	const harness = createScrollbackHarness({
+		cleanupBarrier: recording.barrier,
+	});
+	const rollback = createDeferred<boolean>();
+	const executor = harness.executors[0];
+	assert.ok(executor);
+	executor.runEnterCommand = async () => true;
+	executor.reset = () => rollback.promise;
+	harness.context.terminalView.sendScrollbackEnterAck = () => {
+		throw new Error('ack failed');
+	};
+	harness.core.onTerminalRuntimeChanged('instance-1');
+	const pending = harness.core.onScrollbackEnterRequested(enterEvent);
+	await flushPromises();
+	assert.notEqual(recording.barrier.current(), null);
+	assert.equal(harness.remoteCopyModeActive.current, true);
+	rollback.resolve(true);
+	await pending;
+	assert.equal(harness.remoteCopyModeActive.current, false);
+});
+
+void test('scrollback acknowledgement reentry rolls back acquired ownership', async () => {
+	const recording = createRecordingCleanupBarrier();
+	const harness = createScrollbackHarness({
+		cleanupBarrier: recording.barrier,
+	});
+	const rollback = createDeferred<boolean>();
+	const executor = harness.executors[0];
+	assert.ok(executor);
+	executor.runEnterCommand = async () => true;
+	executor.reset = () => rollback.promise;
+	let ackCalls = 0;
+	harness.context.terminalView.sendScrollbackEnterAck = () => {
+		ackCalls += 1;
+		harness.core.onTerminalRuntimeChanged('instance-2');
+	};
+	harness.core.onTerminalRuntimeChanged('instance-1');
+	const pending = harness.core.onScrollbackEnterRequested(enterEvent);
+	await flushPromises();
+	assert.equal(ackCalls, 1);
+	assert.notEqual(recording.barrier.current(), null);
+	assert.equal(harness.remoteCopyModeActive.current, true);
+	rollback.resolve(true);
+	await pending;
+	assert.equal(harness.remoteCopyModeActive.current, false);
+});
+
+for (const boundary of [
+	'terminal',
+	'activity',
+	'selection',
+	'trace',
+] as const) {
+	void test(`scrollback revalidates request after reentrant ${boundary} callback`, async () => {
+		const harness = createScrollbackHarness();
+		const executor = harness.executors[0];
+		assert.ok(executor);
+		let enterCalls = 0;
+		executor.runEnterCommand = async () => {
+			enterCalls += 1;
+			return true;
+		};
+		harness.core.onTerminalRuntimeChanged('instance-1');
+		let reentered = false;
+		const reenter = () => {
+			if (reentered) return;
+			reentered = true;
+			harness.core.onTerminalRuntimeChanged('instance-2');
+		};
+		if (boundary === 'terminal') {
+			harness.context.terminalView.isCurrentInstance = () => {
+				reenter();
+				return true;
+			};
+		} else if (boundary === 'activity') {
+			harness.core.setContext({
+				...harness.context,
+				getActivitySnapshot: () => {
+					reenter();
+					return harness.context.getActivitySnapshot();
+				},
+			});
+		} else if (boundary === 'selection') {
+			harness.core.setContext({
+				...harness.context,
+				getSelectionModeEnabled: () => {
+					reenter();
+					return false;
+				},
+			});
+		} else {
+			harness.core.setContext({
+				...harness.context,
+				trace: () => reenter(),
+			});
+		}
+		await harness.core.onScrollbackEnterRequested(enterEvent);
+		assert.equal(enterCalls, 0);
+		assert.deepEqual(harness.enterAcks, []);
+		assert.equal(harness.remoteCopyModeActive.current, false);
+	});
+}
+
+void test('scrollback attributes concurrent enter failures to their exact requests', async () => {
+	const harness = createScrollbackHarness();
+	const first = createDeferred<boolean>();
+	const second = createDeferred<boolean>();
+	const callback = harness.executorInputs[0]?.onFailure as
+		| ((
+				message: string,
+				context: { commandKind: 'enter'; operationOwner?: unknown },
+		  ) => void)
+		| undefined;
+	const executor = harness.executors[0];
+	assert.ok(callback);
+	assert.ok(executor);
+	let call = 0;
+	executor.runEnterCommand = ((_: string, operationOwner?: unknown) => {
+		call += 1;
+		const callNumber = call;
+		const completion = callNumber === 1 ? first : second;
+		return completion.promise.then((result) => {
+			callback(callNumber === 1 ? 'stale failure' : 'current failure', {
+				commandKind: 'enter',
+				operationOwner,
+			});
+			return result;
+		});
+	}) as typeof executor.runEnterCommand;
+	harness.core.onTerminalRuntimeChanged('instance-1');
+	const stale = harness.core.onScrollbackEnterRequested(enterEvent);
+	const current = harness.core.onScrollbackEnterRequested({
+		...enterEvent,
+		requestId: 8,
+	});
+	second.resolve(false);
+	await current;
+	first.resolve(false);
+	await stale;
+	assert.deepEqual(harness.alerts, [
+		{ title: 'Workmux scroll unavailable', message: 'current failure' },
+	]);
+	assert.ok(harness.warnings.includes('stale failure'));
+});
+
+for (const policies of [
+	['suppress', 'notify'],
+	['notify', 'suppress'],
+] as const) {
+	void test(`scrollback does not coalesce ${policies[0]} cleanup with ${policies[1]} clear`, () => {
+		const harness = createScrollbackHarness();
+		const pending = createDeferred<boolean>();
+		const executor = harness.executors[0];
+		assert.ok(executor);
+		harness.core.onTerminalRuntimeChanged('instance-1');
+		executor.reset = (options) => {
+			harness.resetCalls.push(options);
+			return pending.promise;
+		};
+		harness.resetCalls.length = 0;
+		void harness.core.clear({ failurePolicy: policies[0] });
+		void harness.core.clear({ failurePolicy: policies[1] });
+		assert.deepEqual(
+			harness.resetCalls.map(
+				(options) => (options as { failurePolicy?: string }).failurePolicy,
+			),
+			policies,
+		);
+		pending.resolve(true);
+	});
+}
+
+void test('scrollback observes current batch enqueue rejection through failure policy', async () => {
+	const harness = createScrollbackHarness();
+	const executor = harness.executors[0];
+	assert.ok(executor);
+	executor.enqueueScrollBatch = async () => {
+		throw new Error('batch rejected');
+	};
+	harness.core.onTerminalRuntimeChanged('instance-1');
+	harness.core.onScrollbackModeChange({
+		active: true,
+		phase: 'active',
+		instanceId: 'instance-1',
+	});
+	harness.remoteCopyModeActive.current = true;
+	harness.core.onScrollbackBatch(batchEvent);
+	await flushPromises();
+	assert.deepEqual(harness.alerts, [
+		{ title: 'Workmux scroll unavailable', message: 'batch rejected' },
+	]);
+});
+
+void test('scrollback observes stale batch enqueue rejection without stale alert', async () => {
+	const harness = createScrollbackHarness();
+	const rejected = createDeferred<boolean>();
+	const executor = harness.executors[0];
+	assert.ok(executor);
+	executor.enqueueScrollBatch = () => rejected.promise;
+	harness.core.onTerminalRuntimeChanged('instance-1');
+	harness.core.onScrollbackModeChange({
+		active: true,
+		phase: 'active',
+		instanceId: 'instance-1',
+	});
+	harness.remoteCopyModeActive.current = true;
+	harness.core.onScrollbackBatch(batchEvent);
+	harness.core.onTerminalRuntimeChanged('instance-2');
+	rejected.reject(new Error('stale batch rejected'));
+	await flushPromises();
+	assert.deepEqual(harness.alerts, []);
+	assert.ok(
+		harness.warnings.some((message) =>
+			message.includes('stale batch rejected'),
+		),
+	);
 });
