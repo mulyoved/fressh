@@ -129,19 +129,23 @@ void describe('shell detail Workmux control channel wiring', () => {
 		assert.doesNotMatch(source, /buildWorkmuxAppScrollPageCommand/);
 	});
 
-	void test('cleans up scrollback executor before disposing the control channel', () => {
+	void test('delegates scrollback cleanup while retaining control-channel disposal', () => {
 		const source = readFileSync(detailSourcePath, 'utf8');
-		const executorCleanupIndex = source.indexOf(
-			'const cleanup = disposeTmuxScrollbackRuntimeStateForUiReset',
+		const controllerIndex = source.indexOf(
+			'const scrollback = useShellScrollbackController',
 		);
 		const sequencedDisposeIndex = source.indexOf(
 			'disposeWorkmuxControlChannelAfterCleanup',
-			executorCleanupIndex,
+			controllerIndex,
 		);
 
-		assert.notEqual(executorCleanupIndex, -1);
+		assert.notEqual(controllerIndex, -1);
 		assert.notEqual(sequencedDisposeIndex, -1);
-		assert.ok(executorCleanupIndex < sequencedDisposeIndex);
+		assert.ok(controllerIndex < sequencedDisposeIndex);
+		assert.doesNotMatch(
+			source,
+			/disposeTmuxScrollbackRuntimeStateForUiReset|createWorkmuxScrollbackCommandExecutor/,
+		);
 		assert.doesNotMatch(
 			source,
 			/void workmuxControlChannel\.dispose\(\)\.catch/,
@@ -188,23 +192,23 @@ void describe('shell detail Workmux control channel wiring', () => {
 
 	void test('captures reconnect disposal reason before deferred channel cleanup', () => {
 		const source = readFileSync(detailSourcePath, 'utf8');
-		const cleanupIndex = source.indexOf(
-			'const cleanup = disposeTmuxScrollbackRuntimeStateForUiReset',
+		const controllerIndex = source.indexOf(
+			'const scrollback = useShellScrollbackController',
 		);
 		const disposeReasonIndex = source.indexOf(
 			'const disposeReason = useAutoConnectStore.getState().isReconnecting',
-			cleanupIndex,
+			controllerIndex,
 		);
 		const deferredDisposeIndex = source.indexOf(
 			'disposeWorkmuxControlChannelAfterCleanup',
-			cleanupIndex,
+			controllerIndex,
 		);
 		const deferredBlock = source.slice(
 			deferredDisposeIndex,
 			source.indexOf('onDisposeError', deferredDisposeIndex),
 		);
 
-		assert.notEqual(cleanupIndex, -1);
+		assert.notEqual(controllerIndex, -1);
 		assert.notEqual(disposeReasonIndex, -1);
 		assert.notEqual(deferredDisposeIndex, -1);
 		assert.ok(disposeReasonIndex < deferredDisposeIndex);

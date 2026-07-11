@@ -90,7 +90,6 @@ void test('shell detail composes the terminal with transport identity and raw ru
 		runtimeCallback,
 		/\(_runtimeKey: TerminalRuntimeKey \| null, instanceId: string \| null\)/,
 	);
-	assert.match(runtimeCallback, /currentInstanceIdRef\.current = instanceId/);
 	const nullBranchStart = runtimeCallback.indexOf('if (instanceId === null)');
 	assert.notEqual(nullBranchStart, -1);
 	const sharedRuntimeReset = runtimeCallback.slice(0, nullBranchStart);
@@ -99,18 +98,13 @@ void test('shell detail composes the terminal with transport identity and raw ru
 	const sharedRuntimeSuffix = runtimeCallback.slice(
 		nullBranchStart + nullRuntimeReset.length,
 	);
-	assert.match(sharedRuntimeReset, /liveInputGenerationRef\.current \+= 1/);
-	assert.match(
-		sharedRuntimeReset,
-		/scrollbackEnterRequestGenerationRef\.current \+= 1/,
-	);
-	assert.match(sharedRuntimeReset, /resetTmuxScrollbackLocalExitRequests\(/);
-	assert.match(sharedRuntimeReset, /setScrollbackActive\(false\)/);
 	assert.doesNotMatch(sharedRuntimeReset, /commandTimeoutsRef/);
 	assert.match(nullRuntimeReset, /commandTimeoutsRef\.current\.forEach/);
 	assert.match(nullRuntimeReset, /commandTimeoutsRef\.current = \[\]/);
-	assert.doesNotMatch(nullRuntimeReset, /resetTmuxScrollbackForUiReset/);
-	assert.match(sharedRuntimeSuffix, /void resetTmuxScrollbackForUiReset\(\)/);
+	assert.match(
+		sharedRuntimeSuffix,
+		/scrollbackRuntimeChangedRef\.current\(instanceId\)/,
+	);
 	assert.doesNotMatch(sharedRuntimeSuffix, /commandTimeoutsRef/);
 	assert.doesNotMatch(runtimeCallback, /JSON\.parse|\.split\(/);
 	assert.doesNotMatch(terminalCall, /targetKey|tmuxTarget/);
@@ -136,24 +130,14 @@ void test('shell detail consumes terminal size, view, and transport ports', () =
 		/waitForTerminalSizeAfterFit: terminal\.waitForSizeAfterFit/,
 	);
 	assert.match(source, /terminal\.view\.fit\(\)/);
-	assert.match(source, /createShellTerminalLiveInputRequest\(\{/);
-	const liveInputAdapter = extractBalancedCall(
-		'createShellTerminalLiveInputRequest',
+	const scrollbackAdapter = extractBalancedCall('useShellScrollbackController');
+	assert.match(scrollbackAdapter, /terminalTransport: terminal\.transport/);
+	assert.match(scrollbackAdapter, /terminalView: terminal\.view/);
+	assert.match(source, /scrollback\.input\.sendSegments/);
+	assert.doesNotMatch(
+		source,
+		/createShellTerminalLiveInputRequest|runWorkmuxScrollbackLiveInputSendPlan/,
 	);
-	assert.match(liveInputAdapter, /transport: terminal\.transport/);
-	assert.match(
-		liveInputAdapter,
-		/requestInstanceId: currentInstanceIdRef\.current/,
-	);
-	assert.match(liveInputAdapter, /getCurrentInstanceId:/);
-	assert.match(liveInputAdapter, /requestGeneration:/);
-	assert.match(liveInputAdapter, /getCurrentGeneration:/);
-	assert.match(liveInputAdapter, /getActivitySnapshot/);
-	const liveInputRunner = extractBalancedCall(
-		'runWorkmuxScrollbackLiveInputSendPlan',
-	);
-	assert.match(liveInputRunner, /isRequestCurrent: request\.isCurrent/);
-	assert.match(liveInputRunner, /sendSegments: request\.sendSegments/);
 	assert.match(
 		manualFit,
 		/terminal\.view,[\s\S]*terminal\.waitForSizeAfterFit/,

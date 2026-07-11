@@ -103,6 +103,11 @@ void test('shell detail delegates activity and notification lifecycle', () => {
 		'const [retainedDomainBridge] = useState',
 		'const enableSystemKeyboard',
 	);
+	const retainedDomainActions = extractBlock(
+		source,
+		'const retainedDomainActions:',
+		'const retainedDomainActionsRef',
+	);
 	assert.match(source, /createShellActivityRetainedDomainBridge/);
 	assert.match(source, /createShellActivityKeyboardActions/);
 	assert.match(
@@ -124,7 +129,19 @@ void test('shell detail delegates activity and notification lifecycle', () => {
 	);
 	assert.match(activityBridge, /retainedDomainBridge\.setup\(\)/);
 	assert.match(source, /invalidateKeyboardRunner/);
-	assert.match(source, /clearScrollbackState/);
+	assert.match(source, /useShellScrollbackController\(\{/);
+	assert.match(
+		retainedDomainActions,
+		/invalidateScrollbackRequests:\s*\(\)\s*=>\s*\{\}/,
+	);
+	assert.match(
+		retainedDomainActions,
+		/runInactiveScrollbackCleanup:\s*\(\)\s*=>\s*\{\}/,
+	);
+	assert.doesNotMatch(
+		retainedDomainActions,
+		/scrollback\.(?:clear|invalidate)/,
+	);
 	assert.doesNotMatch(
 		activityBridge,
 		/return retainedDomainBridge\.reconcile|return invalidateRetainedDomains/,
