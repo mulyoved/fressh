@@ -166,9 +166,14 @@ export function createTerminalLifecycleController({
 		}
 	};
 
-	const detachOwned = (): void => {
+	const takeAttachment = (): Attachment | null => {
 		const owned = attachment;
 		attachment = null;
+		return owned;
+	};
+
+	const detachOwned = (): void => {
+		const owned = takeAttachment();
 		if (owned) removeAttachment(owned);
 	};
 
@@ -363,11 +368,12 @@ export function createTerminalLifecycleController({
 		runtimeRevision += 1;
 		runtimeInstanceId = null;
 		runtimeKey = null;
-		detachOwned();
+		const oldAttachment = takeAttachment();
 		const captured: CapturedError = { present: false, value: undefined };
 		if (generation === operationGeneration) {
 			capture(captured, transport.clearRuntime);
 		}
+		if (oldAttachment) removeAttachment(oldAttachment);
 		if (generation === operationGeneration) {
 			capture(captured, () =>
 				publish({

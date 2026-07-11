@@ -263,11 +263,41 @@ void test('hook runtime creates cores once and behaviorally delegates layout, at
 void test('hook runtime ordinary and Strict Mode cleanup attempts every disposer despite failure', () => {
 	const error = new Error('lifecycle dispose failed');
 	const ordinary = createFixture({ lifecycleDisposeError: error });
+	const cleanupEvents: string[] = [];
+	ordinary.runtime.updateDependencies({
+		logger: {
+			info: () => {},
+			warn: (message) => cleanupEvents.push(message),
+		},
+		router: { back: () => {} },
+		onRuntimeChanged: () => {},
+	});
 	const cleanup = ordinary.runtime.setupDisposal();
 	cleanup();
 	assert.equal(ordinary.deferredTasks.length, 1);
-	assert.throws(() => ordinary.deferredTasks.shift()?.(), error);
+	assert.doesNotThrow(() => ordinary.deferredTasks.shift()?.());
 	assert.deepEqual(ordinary.calls.slice(-3), [
+		'lifecycle.dispose',
+		'size.dispose',
+		'transport.dispose',
+	]);
+	assert.deepEqual(cleanupEvents, ['Failed to dispose terminal controllers']);
+
+	const throwingLogger = createFixture({ lifecycleDisposeError: error });
+	throwingLogger.runtime.updateDependencies({
+		logger: {
+			info: () => {},
+			warn: () => {
+				throw new Error('logger failed');
+			},
+		},
+		router: { back: () => {} },
+		onRuntimeChanged: () => {},
+	});
+	const throwingCleanup = throwingLogger.runtime.setupDisposal();
+	throwingCleanup();
+	assert.doesNotThrow(() => throwingLogger.deferredTasks.shift()?.());
+	assert.deepEqual(throwingLogger.calls, [
 		'lifecycle.dispose',
 		'size.dispose',
 		'transport.dispose',

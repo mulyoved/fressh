@@ -159,10 +159,20 @@ export function createShellTerminalHookRuntime(input: {
 		onRuntimeChanged: (runtimeKey, instanceId) =>
 			dependencies.onRuntimeChanged(runtimeKey, instanceId),
 	});
-	const disposer = factories.createDisposer(
-		() => disposeTerminalControllerCores({ lifecycle, size, transport }),
-		input.deferDisposal ?? queueMicrotask,
-	);
+	const disposer = factories.createDisposer(() => {
+		try {
+			disposeTerminalControllerCores({ lifecycle, size, transport });
+		} catch (error) {
+			try {
+				dependencies.logger.warn(
+					'Failed to dispose terminal controllers',
+					error,
+				);
+			} catch {
+				// Deferred production cleanup must never escape a microtask.
+			}
+		}
+	}, input.deferDisposal ?? queueMicrotask);
 	const sendCurrentShell = async (
 		bytes: Uint8Array<ArrayBufferLike>,
 	): Promise<void> => {

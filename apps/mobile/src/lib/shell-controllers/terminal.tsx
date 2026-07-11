@@ -102,7 +102,7 @@ export function useShellTerminalController({
 
 	useEffect(() => {
 		void runtime.requestAttach(lifecycleState.ready, Boolean(shell));
-	}, [lifecycleState.ready, runtime, shell]);
+	}, [lifecycleState.ready, runtime, shell, transportKey]);
 
 	useEffect(() => runtime.setupDisposal(), [runtime]);
 

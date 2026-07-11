@@ -376,8 +376,8 @@ void test('load start invalidates runtime before detach and readiness publicatio
 	order.length = 0;
 	harness.core.handleLoadStart();
 	assert.deepEqual(order.slice(0, 3), [
-		'detach',
 		'transport:clear',
+		'detach',
 		'ready:false',
 	]);
 	assert.equal(harness.core.getRuntimeKey(), null);
@@ -403,6 +403,75 @@ void test('runtime notifications cover init-before-shell, shell keys, and load s
 		},
 		{ runtimeKey: null, instanceId: null },
 	]);
+});
+
+void test('ready lifecycle attaches across null-to-key and same-shell key replacement', async () => {
+	const harness = createHarness();
+	harness.core.setShell(null, harness.shellA);
+	harness.core.handleInitialized('instance-1');
+	await harness.core.attach();
+	assert.equal(harness.shellA.listenerCursors.length, 0);
+
+	const keyA = createShellTransportKey('connection-a', 7);
+	harness.core.setShell(keyA, harness.shellA);
+	await harness.core.attach();
+	assert.equal(harness.shellA.listenerCursors.length, 1);
+	assert.equal(harness.core.isAttached(), true);
+
+	const keyB = createShellTransportKey('connection-b', 8);
+	harness.core.setShell(keyB, harness.shellA);
+	await harness.core.attach();
+	assert.equal(harness.shellA.listenerCursors.length, 2);
+	assert.deepEqual(harness.shellA.removedListenerIds, [1n]);
+	assert.equal(harness.core.isAttached(), true);
+});
+
+void test('load-start clears old transport before reentrant removal logging initializes a new runtime', async () => {
+	let transportWasCleared = false;
+	let harness!: ReturnType<typeof createHarness>;
+	harness = createHarness('android', {
+		onTransportClear: () => {
+			transportWasCleared = true;
+		},
+		onWarn: (message) => {
+			if (message === 'Failed to remove prior shell listener') {
+				harness.core.handleInitialized('instance-2');
+			}
+		},
+	});
+	harness.core.setShell(
+		createShellTransportKey('connection-a', 7),
+		harness.shellA,
+	);
+	harness.core.handleInitialized('instance-1');
+	await harness.core.attach();
+	harness.shellA.removeListener = () => {
+		assert.equal(transportWasCleared, true);
+		throw new Error('remove failed');
+	};
+	harness.core.handleLoadStart();
+	assert.equal(harness.core.getRuntimeInstanceId(), 'instance-2');
+	assert.equal(harness.core.getSnapshot().ready, true);
+	assert.equal(harness.transportCalls.at(-1), 'set:instance-2');
+});
+
+void test('throwing transport clear still detaches the old listener and publishes not-ready', async () => {
+	const error = new Error('clear runtime failed');
+	const harness = createHarness('android', {
+		onTransportClear: () => {
+			throw error;
+		},
+	});
+	harness.core.setShell(
+		createShellTransportKey('connection-a', 7),
+		harness.shellA,
+	);
+	harness.core.handleInitialized('instance-1');
+	await harness.core.attach();
+	assert.throws(() => harness.core.handleLoadStart(), error);
+	assert.deepEqual(harness.shellA.removedListenerIds, [1n]);
+	assert.equal(harness.core.isAttached(), false);
+	assert.equal(harness.core.getSnapshot().ready, false);
 });
 
 void test('rejected listener creation preserves first-attach ownership for retry', async () => {
@@ -903,4 +972,8 @@ void test('terminal hook publishes the exact controller ports and guarded xterm 
 	}
 	assert.match(source, /createShellTerminalHookRuntime/);
 	assert.match(source, /view: runtime\.view/);
+	assert.match(
+		source,
+		/\[lifecycleState\.ready, runtime, shell, transportKey\]/,
+	);
 });
