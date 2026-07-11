@@ -1,3 +1,4 @@
+import { type ShellActivitySnapshot } from '../../src/lib/shell-controllers/activity-core';
 import {
 	createShellScrollbackControllerCore,
 	type ShellScrollbackContext,
@@ -57,6 +58,19 @@ export function createScrollbackHarness(
 	const localExitRequestIds = new Set<number>();
 	const resetCalls: unknown[] = [];
 	const warnings: string[] = [];
+	const enterAcks: { requestId: number; instanceId: string }[] = [];
+	const localExitMessages: { requestId: number; instanceId?: string }[] = [];
+	const alerts: { title: string; message: string }[] = [];
+	const copiedMessages: string[] = [];
+	const traces: Record<string, unknown>[] = [];
+	let activitySnapshot = {
+		focused: true,
+		appState: 'active',
+		appActive: true,
+		interactive: true,
+		generation: 0,
+	} as const;
+	let selectionModeEnabled = false;
 	const executorInputs: Parameters<
 		typeof createWorkmuxScrollbackCommandExecutor
 	>[0][] = [];
@@ -99,13 +113,17 @@ export function createScrollbackHarness(
 	const terminalView = {
 		getRuntimeKey: () => null,
 		getRuntimeInstanceId: () => null,
-		isCurrentInstance: () => false,
+		isCurrentInstance: () => true,
 		fit: () => {},
 		setSystemKeyboardEnabled: () => {},
 		setSelectionModeEnabled: () => {},
 		getSelection: async () => '',
-		exitScrollback: () => {},
-		sendScrollbackEnterAck: () => {},
+		exitScrollback: (message: { requestId: number; instanceId?: string }) => {
+			localExitMessages.push(message);
+		},
+		sendScrollbackEnterAck: (requestId: number, instanceId: string) => {
+			enterAcks.push({ requestId, instanceId });
+		},
 	};
 	const terminalTransport = {
 		captureLease: () => null,
@@ -123,19 +141,16 @@ export function createScrollbackHarness(
 		connectionAvailable: true,
 		shellAvailable: true,
 		tmuxEnabled: true,
-		getActivitySnapshot: () => ({
-			focused: true,
-			appState: 'active',
-			appActive: true,
-			interactive: true,
-			generation: 0,
-		}),
-		getSelectionModeEnabled: () => false,
+		getActivitySnapshot: () => activitySnapshot,
+		getSelectionModeEnabled: () => selectionModeEnabled,
 		terminalTransport,
 		terminalView,
 		workmuxScroll: scroll,
-		trace: () => {},
-		feedback: { alert: () => {}, copyMessage: () => {} },
+		trace: (event) => traces.push(event),
+		feedback: {
+			alert: (title, message) => alerts.push({ title, message }),
+			copyMessage: (message) => copiedMessages.push(message),
+		},
 		logger:
 			options.logger ??
 			({
@@ -156,11 +171,15 @@ export function createScrollbackHarness(
 
 	return {
 		core,
+		alerts,
+		copiedMessages,
 		context,
+		enterAcks,
 		events,
 		executorInputs,
 		executors,
 		lineAccumulator,
+		localExitMessages,
 		localExitRequestIds,
 		remoteCopyModeActive,
 		remoteCopyModeGeneration,
@@ -169,6 +188,16 @@ export function createScrollbackHarness(
 		setExecutorFactoryOverride: (override: typeof executorFactoryOverride) => {
 			executorFactoryOverride = override;
 		},
+		setActivitySnapshot: (next: Partial<ShellActivitySnapshot>) => {
+			activitySnapshot = {
+				...activitySnapshot,
+				...next,
+			} as typeof activitySnapshot;
+		},
+		setSelectionModeEnabled: (enabled: boolean) => {
+			selectionModeEnabled = enabled;
+		},
+		traces,
 		warnings,
 	};
 }

@@ -108,7 +108,7 @@ void test('scrollback suppresses callbacks from a replaced executor', () => {
 	assert.deepEqual(harness.warnings, []);
 });
 
-void test('scrollback later-task commands are fail-closed and inert', async () => {
+void test('scrollback live input remains fail-closed while event commands stay runtime guarded', async () => {
 	const harness = createScrollbackHarness();
 	const before = harness.core.getSnapshot();
 	const beforeEvents = [...harness.events];
@@ -129,7 +129,7 @@ void test('scrollback later-task commands are fail-closed and inert', async () =
 	});
 	assert.equal(harness.core.clear(), null);
 	harness.core.jumpToLive();
-	assert.deepEqual(harness.events, beforeEvents);
+	assert.deepEqual(harness.events, [...beforeEvents, 'reset:1']);
 	assert.deepEqual(harness.core.getSnapshot(), before);
 });
 
