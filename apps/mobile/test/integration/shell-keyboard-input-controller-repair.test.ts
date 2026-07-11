@@ -168,6 +168,48 @@ void test('macro config snapshot reentry cannot run or complete the stale macro'
 	assert.deepEqual(harness.completedSlots, []);
 });
 
+void test('missing macro snapshot reentry returns superseded while a present macro remains current', async () => {
+	const missing = createKeyboardInputHarness();
+	let newer: Promise<ControllerOutcome<{ message: string }>> | null = null;
+	missing.setStateSnapshotHook((call) => {
+		if (call !== 5) return;
+		missing.setStateSnapshotHook(null);
+		newer = missing.core.sendTextRaw('new');
+	});
+	assert.deepEqual(
+		await missing.core.handleSlotPress({
+			type: 'macro',
+			macroId: 'missing',
+			label: 'Missing',
+			icon: null,
+		}),
+		{ status: 'superseded' },
+	);
+	assert.deepEqual(await newer, { status: 'completed' });
+	assert.deepEqual(missing.sent, [[[0x6e, 0x65, 0x77]]]);
+
+	const present = createKeyboardInputHarness();
+	present.setMacros([
+		{
+			id: 'present',
+			name: 'Present',
+			label: 'Present',
+			category: 'test',
+			script: '{"type":"text","value":"present"}',
+		},
+	]);
+	assert.deepEqual(
+		await present.core.handleSlotPress({
+			type: 'macro',
+			macroId: 'present',
+			label: 'Present',
+			icon: null,
+		}),
+		{ status: 'completed' },
+	);
+	assert.deepEqual(present.completedSlots, ['complete']);
+});
+
 void test('current selection exit throw returns failed while reentry stays superseded', async () => {
 	const failed = createKeyboardInputHarness();
 	failed.setSelectionModeEnabled(true);
@@ -231,6 +273,66 @@ void test('action outcomes propagate exactly and only completed actions finish o
 		{ status: 'failed', failure: { message: 'Keyboard action failed.' } },
 	);
 	assert.deepEqual(rejected.completedSlots, []);
+});
+
+void test('completion callback reentry supersedes the completed action after committing once', async () => {
+	const harness = createKeyboardInputHarness();
+	let newer: Promise<ControllerOutcome<{ message: string }>> | null = null;
+	harness.setCompleteSlotImplementation(() => {
+		harness.setCompleteSlotImplementation(null);
+		newer = harness.core.sendTextRaw('new');
+	});
+	assert.deepEqual(
+		await harness.core.handleSlotPress({
+			type: 'action',
+			actionId: 'OPEN_COMMANDER',
+			label: 'Commander',
+			icon: null,
+		}),
+		{ status: 'superseded' },
+	);
+	assert.deepEqual(await newer, { status: 'completed' });
+	assert.deepEqual(harness.completedSlots, ['complete']);
+	assert.deepEqual(harness.sent, [[[0x6e, 0x65, 0x77]]]);
+});
+
+void test('completion throw is failed when current and superseded when logger reenters', async () => {
+	const current = createKeyboardInputHarness();
+	current.setCompleteSlotImplementation(() => {
+		throw new Error('complete failed');
+	});
+	assert.deepEqual(
+		await current.core.handleSlotPress({
+			type: 'action',
+			actionId: 'OPEN_COMMANDER',
+			label: 'Commander',
+			icon: null,
+		}),
+		{ status: 'failed', failure: { message: 'Keyboard input failed.' } },
+	);
+	assert.deepEqual(current.completedSlots, ['complete']);
+
+	const stale = createKeyboardInputHarness();
+	stale.setCompleteSlotImplementation(() => {
+		throw new Error('complete failed');
+	});
+	let newer: Promise<ControllerOutcome<{ message: string }>> | null = null;
+	stale.setLoggerImplementation(() => {
+		stale.setLoggerImplementation(null);
+		stale.setCompleteSlotImplementation(null);
+		newer = stale.core.sendTextRaw('new');
+	});
+	assert.deepEqual(
+		await stale.core.handleSlotPress({
+			type: 'action',
+			actionId: 'OPEN_COMMANDER',
+			label: 'Commander',
+			icon: null,
+		}),
+		{ status: 'superseded' },
+	);
+	assert.deepEqual(await newer, { status: 'completed' });
+	assert.deepEqual(stale.completedSlots, ['complete']);
 });
 
 void test('duplicate acceptance records text history exactly once', async () => {

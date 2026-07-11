@@ -540,15 +540,17 @@ export function createShellKeyboardInputCore({
 		};
 		return {
 			commit,
-			finish: (outcome: InputOutcome) => {
+			finish: (outcome: InputOutcome): InputOutcome => {
 				if (isCompleted(outcome)) commit();
-				if (phase === 'failed' && isCurrent(token)) {
-					return {
-						status: 'failed',
-						failure: { message: 'Keyboard input failed.' },
-					} satisfies InputOutcome;
+				if (phase === 'failed') {
+					return isCurrent(token)
+						? ({
+								status: 'failed',
+								failure: { message: 'Keyboard input failed.' },
+							} satisfies InputOutcome)
+						: { status: 'superseded' };
 				}
-				return outcome;
+				return isCurrent(token) ? outcome : { status: 'superseded' };
 			},
 		};
 	};
@@ -703,7 +705,11 @@ export function createShellKeyboardInputCore({
 								}
 							: { status: 'superseded' };
 					}
-					if (!macro) return { status: 'unavailable' };
+					if (!macro) {
+						return isCurrent(token)
+							? { status: 'unavailable' }
+							: { status: 'superseded' };
+					}
 					outcome = await runMacroWithToken(
 						token,
 						{ ...macro },

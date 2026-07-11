@@ -148,6 +148,8 @@ export function createKeyboardInputHarness() {
 	let terminalSelectionImplementation: ((enabled: boolean) => void) | null =
 		null;
 	let closeCommandMenuImplementation: (() => void) | null = null;
+	let completeSlotImplementation: (() => void) | null = null;
+	let loggerImplementation: (() => void) | null = null;
 	const closedCommandMenus: string[] = [];
 	const state: CreateShellKeyboardInputCoreOptions['state'] = {
 		getSnapshot: () => {
@@ -183,7 +185,10 @@ export function createKeyboardInputHarness() {
 			if (throwHistory) throw new Error('history failed');
 			recordedHistory.push(text);
 		},
-		completeSlotPress: () => completedSlots.push('complete'),
+		completeSlotPress: () => {
+			completedSlots.push('complete');
+			completeSlotImplementation?.();
+		},
 		toggleModifier: (modifier: ModifierKey) => modifierToggles.push(modifier),
 	};
 	const core = createShellKeyboardInputCore({
@@ -224,7 +229,12 @@ export function createKeyboardInputHarness() {
 			closedCommandMenus.push('close');
 			closeCommandMenuImplementation?.();
 		},
-		logger: { warn: (message) => warnings.push(message) },
+		logger: {
+			warn: (message) => {
+				warnings.push(message);
+				loggerImplementation?.();
+			},
+		},
 	});
 	return {
 		core,
@@ -307,6 +317,14 @@ export function createKeyboardInputHarness() {
 			implementation: typeof closeCommandMenuImplementation,
 		) => {
 			closeCommandMenuImplementation = implementation;
+		},
+		setCompleteSlotImplementation: (
+			implementation: typeof completeSlotImplementation,
+		) => {
+			completeSlotImplementation = implementation;
+		},
+		setLoggerImplementation: (implementation: typeof loggerImplementation) => {
+			loggerImplementation = implementation;
 		},
 	};
 }
