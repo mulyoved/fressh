@@ -335,6 +335,57 @@ void test('completion throw is failed when current and superseded when logger re
 	assert.deepEqual(stale.completedSlots, ['complete']);
 });
 
+for (const slot of [
+	{ type: 'text', text: 'a', label: 'Text', icon: null },
+	{ type: 'bytes', bytes: [0x61], label: 'Bytes', icon: null },
+] as const) {
+	void test(`${slot.type} slot modifier throw is failed only while current`, async () => {
+		const current = createKeyboardInputHarness();
+		current.setApplyModifiersImplementation(() => {
+			throw new Error('modifier failed');
+		});
+		assert.deepEqual(await current.core.handleSlotPress(slot), {
+			status: 'failed',
+			failure: { message: 'Keyboard input failed.' },
+		});
+		assert.deepEqual(current.sent, []);
+
+		const stale = createKeyboardInputHarness();
+		let replacement: Promise<ControllerOutcome<{ message: string }>> | null =
+			null;
+		stale.setApplyModifiersImplementation(() => {
+			stale.setApplyModifiersImplementation(null);
+			replacement = stale.core.sendTextRaw('new');
+			throw new Error('modifier failed');
+		});
+		assert.deepEqual(await stale.core.handleSlotPress(slot), {
+			status: 'superseded',
+		});
+		assert.deepEqual(await replacement, { status: 'completed' });
+		assert.deepEqual(stale.sent, [[[0x6e, 0x65, 0x77]]]);
+		assert.deepEqual(stale.completedSlots, []);
+
+		const loggerStale = createKeyboardInputHarness();
+		loggerStale.setApplyModifiersImplementation(() => {
+			throw new Error('modifier failed');
+		});
+		let loggerReplacement: Promise<
+			ControllerOutcome<{ message: string }>
+		> | null = null;
+		loggerStale.setLoggerImplementation(() => {
+			loggerStale.setLoggerImplementation(null);
+			loggerStale.setApplyModifiersImplementation(null);
+			loggerReplacement = loggerStale.core.sendTextRaw('new');
+		});
+		assert.deepEqual(await loggerStale.core.handleSlotPress(slot), {
+			status: 'superseded',
+		});
+		assert.deepEqual(await loggerReplacement, { status: 'completed' });
+		assert.deepEqual(loggerStale.sent, [[[0x6e, 0x65, 0x77]]]);
+		assert.deepEqual(loggerStale.completedSlots, []);
+	});
+}
+
 void test('duplicate acceptance records text history exactly once', async () => {
 	const harness = createKeyboardInputHarness();
 	harness.setSendImplementation((options) => {

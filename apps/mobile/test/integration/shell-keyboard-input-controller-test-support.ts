@@ -150,6 +150,9 @@ export function createKeyboardInputHarness() {
 	let closeCommandMenuImplementation: (() => void) | null = null;
 	let completeSlotImplementation: (() => void) | null = null;
 	let loggerImplementation: (() => void) | null = null;
+	let applyModifiersImplementation:
+		| ((bytes: Uint8Array<ArrayBuffer>) => Uint8Array<ArrayBuffer>)
+		| null = null;
 	const closedCommandMenus: string[] = [];
 	const state: CreateShellKeyboardInputCoreOptions['state'] = {
 		getSnapshot: () => {
@@ -174,6 +177,8 @@ export function createKeyboardInputHarness() {
 			};
 		},
 		applyModifiers: (bytes: Uint8Array<ArrayBuffer>) => {
+			if (applyModifiersImplementation)
+				return applyModifiersImplementation(bytes);
 			if (!modifiersActive) return new Uint8Array(bytes);
 			return new Uint8Array([bytes[0] === 0x61 ? 0x01 : (bytes[0] ?? 0)]);
 		},
@@ -325,6 +330,11 @@ export function createKeyboardInputHarness() {
 		},
 		setLoggerImplementation: (implementation: typeof loggerImplementation) => {
 			loggerImplementation = implementation;
+		},
+		setApplyModifiersImplementation: (
+			implementation: typeof applyModifiersImplementation,
+		) => {
+			applyModifiersImplementation = implementation;
 		},
 	};
 }

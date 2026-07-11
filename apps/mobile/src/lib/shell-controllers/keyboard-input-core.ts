@@ -453,10 +453,12 @@ export function createShellKeyboardInputCore({
 						bytes = new Uint8Array(state.applyModifiers(bytes));
 					} catch (error) {
 						safeWarn('Failed to apply keyboard modifiers', error);
-						return {
-							status: 'failed',
-							failure: { message: 'Keyboard input failed.' },
-						};
+						return isCurrent(token)
+							? {
+									status: 'failed',
+									failure: { message: 'Keyboard input failed.' },
+								}
+							: { status: 'superseded' };
 					}
 					outcome = await sendSegments(token, [bytes], undefined, () => {
 						completion.commit();
@@ -488,10 +490,12 @@ export function createShellKeyboardInputCore({
 							bytes = new Uint8Array(state.applyModifiers(bytes));
 						} catch (error) {
 							safeWarn('Failed to apply keyboard modifiers', error);
-							return {
-								status: 'failed',
-								failure: { message: 'Keyboard input failed.' },
-							};
+							return isCurrent(token)
+								? {
+										status: 'failed',
+										failure: { message: 'Keyboard input failed.' },
+									}
+								: { status: 'superseded' };
 						}
 						outcome = await sendSegments(token, [bytes], undefined, () => {
 							completion.commit();
