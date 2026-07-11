@@ -35,7 +35,7 @@ import {
 } from './scrollback-entry-coordinator';
 import { createScrollbackFailureCoordinator } from './scrollback-failure-coordinator';
 import { createScrollbackLocalUiCoordinator } from './scrollback-local-ui-coordinator';
-import { handleScrollbackModeChange } from './scrollback-mode-coordinator';
+import { createScrollbackModeCoordinator } from './scrollback-mode-coordinator';
 import { handleShellWorkmuxScrollbackDisposeExitFailureActions } from './scrollback-policy';
 import { type ShellTargetKey } from './source-keys';
 // eslint-disable-next-line import/consistent-type-specifier-style -- Keep this plain-TypeScript core free from React Native module evaluation.
@@ -290,6 +290,7 @@ export function createShellScrollbackControllerCore(
 		trace: safelyTrace,
 		warn: (logger, message, error) => createSafeWarn(logger)(message, error),
 	});
+	const handleModeChange = createScrollbackModeCoordinator();
 
 	const buildExecutor = (nextContext: ShellScrollbackContext): void => {
 		const capturedExecutorRevision = executorRevision;
@@ -544,7 +545,7 @@ export function createShellScrollbackControllerCore(
 		onScrollbackModeChange: (event) => {
 			const ownerContext = context;
 			if (ownerContext === null) return;
-			handleScrollbackModeChange({
+			handleModeChange({
 				event,
 				getCurrentState: () => ({
 					...publisher.getSnapshot(),
