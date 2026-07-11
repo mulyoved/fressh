@@ -353,6 +353,7 @@ export function createShellKeyboardInputCore({
 	const runStepsWithToken = (
 		token: RequestToken,
 		steps: readonly CommandStep[],
+		onAccepted?: () => void,
 	): Promise<InputOutcome> => {
 		const copiedSteps = steps.map(copyStep);
 		if (copiedSteps.length === 0)
@@ -380,7 +381,12 @@ export function createShellKeyboardInputCore({
 					const timer = scheduleTimeout(() => {
 						if (sequence?.generation !== token.generation) return;
 						sequence.timer = null;
-						void sendSegments(token, stepSegments(step)).then((outcome) => {
+						void sendSegments(
+							token,
+							stepSegments(step),
+							undefined,
+							onAccepted,
+						).then((outcome) => {
 							if (sequence?.generation !== token.generation) return;
 							if (!isCompleted(outcome)) {
 								finish(outcome);
@@ -405,6 +411,7 @@ export function createShellKeyboardInputCore({
 	};
 
 	const runSteps = (steps: readonly CommandStep[]): Promise<InputOutcome> => {
+		const copiedSteps = steps.map(copyStep);
 		const token = createToken();
 		if (!token) return Promise.resolve({ status: 'unavailable' });
 		if (!exitSelection(token)) return Promise.resolve({ status: 'superseded' });
@@ -414,7 +421,7 @@ export function createShellKeyboardInputCore({
 			safeWarn('Failed to close command menu', error);
 		}
 		if (!isCurrent(token)) return Promise.resolve({ status: 'superseded' });
-		return runStepsWithToken(token, steps);
+		return runStepsWithToken(token, copiedSteps);
 	};
 
 	const collectMacroOperations = (macro: MacroDef): MacroOperation[] => {
@@ -437,6 +444,7 @@ export function createShellKeyboardInputCore({
 	const runMacroWithToken = async (
 		token: RequestToken,
 		macro: MacroDef,
+		onAccepted?: () => void,
 	): Promise<InputOutcome> => {
 		let operations: MacroOperation[];
 		try {
@@ -451,13 +459,23 @@ export function createShellKeyboardInputCore({
 		for (const operation of operations) {
 			let outcome: InputOutcome;
 			if (operation.type === 'bytes') {
-				outcome = await sendSegments(token, [operation.bytes]);
+				outcome = await sendSegments(
+					token,
+					[operation.bytes],
+					undefined,
+					onAccepted,
+				);
 			} else if (operation.type === 'text') {
-				outcome = await sendSegments(token, [encoder.encode(operation.value)]);
+				outcome = await sendSegments(
+					token,
+					[encoder.encode(operation.value)],
+					undefined,
+					onAccepted,
+				);
 			} else if (operation.type === 'action') {
 				outcome = await runActionWithToken(token, operation.actionId);
 			} else {
-				outcome = await runStepsWithToken(token, operation.steps);
+				outcome = await runStepsWithToken(token, operation.steps, onAccepted);
 			}
 			if (!isCompleted(outcome)) return outcome;
 		}
@@ -548,6 +566,18 @@ export function createShellKeyboardInputCore({
 			}
 			let outcome: InputOutcome;
 			let accepted = false;
+			let completedAtAcceptance = false;
+			let acceptanceCompletionFailed = false;
+			const completeAtAcceptance = () => {
+				if (completedAtAcceptance || !isCurrent(token)) return;
+				completedAtAcceptance = true;
+				try {
+					state.completeSlotPress();
+				} catch (error) {
+					acceptanceCompletionFailed = true;
+					safeWarn('Failed to complete keyboard slot press', error);
+				}
+			};
 			switch (copiedSlot.type) {
 				case 'modifier':
 					try {
@@ -577,6 +607,7 @@ export function createShellKeyboardInputCore({
 					}
 					outcome = await sendSegments(token, [bytes], undefined, () => {
 						accepted = true;
+						completeAtAcceptance();
 					});
 					break;
 				}
@@ -602,6 +633,7 @@ export function createShellKeyboardInputCore({
 						}
 						outcome = await sendSegments(token, [bytes], undefined, () => {
 							accepted = true;
+							completeAtAcceptance();
 						});
 					}
 					break;
@@ -611,7 +643,11 @@ export function createShellKeyboardInputCore({
 						.getSnapshot()
 						.macros.find((candidate) => candidate.id === copiedSlot.macroId);
 					if (!macro) return { status: 'unavailable' };
-					outcome = await runMacroWithToken(token, { ...macro });
+					outcome = await runMacroWithToken(
+						token,
+						{ ...macro },
+						completeAtAcceptance,
+					);
 					accepted = isCompleted(outcome);
 					break;
 				}
@@ -631,7 +667,15 @@ export function createShellKeyboardInputCore({
 				default:
 					return { status: 'unavailable' };
 			}
-			return completeSlot(token, outcome, accepted);
+			if (acceptanceCompletionFailed && isCurrent(token)) {
+				return {
+					status: 'failed',
+					failure: { message: 'Keyboard input failed.' },
+				};
+			}
+			return completedAtAcceptance
+				? outcome
+				: completeSlot(token, outcome, accepted);
 		},
 		invalidate: (_reason) => {
 			if (disposed) return;

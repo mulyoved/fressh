@@ -129,6 +129,7 @@ export function createKeyboardInputHarness() {
 	let currentConfigState: ShellConfigState = shellConfigState;
 	let throwHistory = false;
 	let keyboardId = 'main';
+	let activityReadHook: (() => void) | null = null;
 	const state = {
 		getSnapshot: () => ({
 			shellConfigState: currentConfigState,
@@ -178,7 +179,10 @@ export function createKeyboardInputHarness() {
 					: candidate === instanceId,
 			setSelectionModeEnabled: (enabled) => selectionCommands.push(enabled),
 		},
-		getActivitySnapshot: () => activity,
+		getActivitySnapshot: () => {
+			activityReadHook?.();
+			return activity;
+		},
 		getSourceKey: () => sourceKey,
 		runAction: (actionId, options) => {
 			actions.push({ actionId, options });
@@ -247,6 +251,9 @@ export function createKeyboardInputHarness() {
 		},
 		setKeyboardId: (id: string) => {
 			keyboardId = id;
+		},
+		setActivityReadHook: (hook: (() => void) | null) => {
+			activityReadHook = hook;
 		},
 	};
 }

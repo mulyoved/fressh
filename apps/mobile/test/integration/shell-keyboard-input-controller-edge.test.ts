@@ -265,6 +265,29 @@ void test('preset snapshots all steps before scheduling', async () => {
 	assert.deepEqual(harness.sent, [[[0x62, 0x65, 0x66, 0x6f, 0x72, 0x65]]]);
 });
 
+void test('runCommandSteps snapshots caller steps before external authority getters reenter', async () => {
+	const harness = createKeyboardInputHarness();
+	const steps = [
+		{ type: 'text' as const, data: 'before', delayMs: 10 },
+		{ type: 'enter' as const, delayMs: 0 },
+	];
+	harness.setActivityReadHook(() => {
+		harness.setActivityReadHook(null);
+		steps[0]!.data = 'after';
+		steps.splice(1, 1, { type: 'text', data: 'injected', delayMs: 0 });
+	});
+	const pending = harness.core.runCommandSteps(steps);
+	harness.clock.advanceBy(10);
+	await harness.clock.settled();
+	harness.clock.advanceBy(0);
+	await harness.clock.settled();
+	assert.deepEqual(await pending, { status: 'completed' });
+	assert.deepEqual(harness.sent, [
+		[[...new TextEncoder().encode('before')]],
+		[[0x0d]],
+	]);
+});
+
 void test('slot text bytes modifier and action complete one-shot after acceptance', async () => {
 	const harness = createKeyboardInputHarness();
 	await harness.core.handleSlotPress({
@@ -333,6 +356,65 @@ void test('accepted slot completes one-shot even when transport later fails', as
 		'failed',
 	);
 	assert.deepEqual(harness.completedSlots, ['complete']);
+});
+
+void test('slot completes one-shot immediately at acceptance exactly once despite later invalidation', async () => {
+	const harness = createKeyboardInputHarness();
+	const send = deferred<ControllerOutcome<{ message: string }>>();
+	harness.setSendImplementation((options) => {
+		options?.onAccepted?.();
+		options?.onAccepted?.();
+		return send.promise;
+	});
+	const pending = harness.core.handleSlotPress({
+		type: 'text',
+		text: 'a',
+		label: 'A',
+		icon: null,
+	});
+	assert.deepEqual(harness.completedSlots, ['complete']);
+	harness.core.invalidate('source-change');
+	send.resolve({ status: 'failed', failure: { message: 'late failure' } });
+	assert.deepEqual(await pending, { status: 'superseded' });
+	assert.deepEqual(harness.completedSlots, ['complete']);
+});
+
+void test('stale acceptance and pre-accept rejection never complete one-shot', async () => {
+	const stale = createKeyboardInputHarness();
+	const staleSend = deferred<ControllerOutcome<{ message: string }>>();
+	let accept: (() => void) | undefined;
+	stale.setSendImplementation((options) => {
+		accept = options?.onAccepted;
+		return staleSend.promise;
+	});
+	const stalePending = stale.core.handleSlotPress({
+		type: 'text',
+		text: 'a',
+		label: 'A',
+		icon: null,
+	});
+	stale.core.invalidate('source-change');
+	accept?.();
+	staleSend.resolve({ status: 'failed', failure: { message: 'late failure' } });
+	assert.deepEqual(await stalePending, { status: 'superseded' });
+	assert.deepEqual(stale.completedSlots, []);
+
+	const rejected = createKeyboardInputHarness();
+	rejected.setSendImplementation(async () => {
+		throw new Error('rejected before acceptance');
+	});
+	assert.equal(
+		(
+			await rejected.core.handleSlotPress({
+				type: 'bytes',
+				bytes: [0x1b],
+				label: 'Esc',
+				icon: null,
+			})
+		).status,
+		'failed',
+	);
+	assert.deepEqual(rejected.completedSlots, []);
 });
 
 void test('detected-open bytes route through canonical action planning', async () => {
