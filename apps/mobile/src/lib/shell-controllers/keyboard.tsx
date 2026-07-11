@@ -9,18 +9,9 @@ import {
 	useSyncExternalStore,
 } from 'react';
 import { Animated, Keyboard, Platform } from 'react-native';
-import { type HostBrowserUrlSlot } from '@/lib/host-browser-actions';
 import {
-	runAction,
-	type ActionContext,
-	type ActionId,
-} from '@/lib/keyboard-actions';
-import {
-	getKeyboardActionTarget,
 	type CommandBridgeEntry,
-	type CommandPreset,
 	type KeyboardDefinition,
-	type KeyboardExecutableItem,
 	type MacroDef,
 	type ModifierKey,
 } from '@/lib/shell-config';
@@ -40,14 +31,17 @@ import {
 	type ControllerInvalidationReason,
 } from './controller-core';
 import {
-	applyKeyboardSelectionMode,
+	createShellKeyboardControllerAdapter,
+	type ShellKeyboardBrowserCommands,
+	type ShellKeyboardControllerAdapter,
+	type ShellKeyboardModalCommands,
+} from './keyboard-controller-adapter';
+import {
 	createKeyboardActivityTransitionController,
 	createKeyboardAnimationController,
 	createKeyboardClipboardAuthority,
 	createKeyboardControllerAdmission,
-	createKeyboardPasteClipboardCommand,
 	invalidateKeyboardControllerDomains,
-	runKeyboardFireAndForget,
 	subscribeKeyboardVisibility,
 	type KeyboardAnimationController,
 } from './keyboard-hook-runtime';
@@ -76,23 +70,10 @@ import {
 import { type ShellScrollbackInputPort } from './scrollback-contracts';
 import { type ShellTerminalRuntimeView } from './terminal-hook-runtime';
 
-export type ShellKeyboardModalCommands = {
-	toggleCommandMenu(): void;
-	openCommander(): void;
-	openSkillSelector(): void;
-	openBrowserActions(): void;
-	openFeatureRequest(): void;
-	openWisprTextEditor(): void;
-	openConfigurator(): void;
-	closeCommandMenu(): void;
-};
-
-export type ShellKeyboardBrowserCommands = {
-	openDiff(): void;
-	openUrlSlot(slot: HostBrowserUrlSlot): void;
-	openDetected(mode: 'auto' | 'pick'): void;
-	editUrlSlot(slot: HostBrowserUrlSlot): void;
-};
+export type {
+	ShellKeyboardBrowserCommands,
+	ShellKeyboardModalCommands,
+} from './keyboard-controller-adapter';
 
 export type ShellKeyboardControllerHandle = {
 	keyboard: KeyboardDefinition | null;
@@ -209,7 +190,7 @@ export function useShellKeyboardController(
 			logger: deps.logger,
 		}),
 	);
-	const actionContextRef = useRef<ActionContext | null>(null);
+	const adapterRef = useRef<ShellKeyboardControllerAdapter | null>(null);
 	const [inputCore] = useState<ShellKeyboardInputCore>(() =>
 		createShellKeyboardInputCore({
 			state: stateCore,
@@ -229,9 +210,9 @@ export function useShellKeyboardController(
 			getActivitySnapshot: () => committedDeps.current.activity.getSnapshot(),
 			getSourceKey: () => committedDeps.current.sourceKey,
 			runAction: (actionId, options) => {
-				const context = actionContextRef.current;
-				return context
-					? runAction(actionId, context, options)
+				const adapter = adapterRef.current;
+				return adapter
+					? adapter.runAction(actionId, options)
 					: { status: 'unavailable' };
 			},
 			setTimeout: (task, delayMs) => setTimeout(task, delayMs),
@@ -302,116 +283,41 @@ export function useShellKeyboardController(
 			// Diagnostics never own clipboard authority.
 		}
 	}, []);
-	const copySelection = useCallback(async () => {
-		return await clipboardAuthority.copy({
-			isAdmitted: () => admission.getGeneration() !== null,
-			getInstanceId: () =>
-				committedDeps.current.terminalView.getRuntimeInstanceId(),
-			getSelection: () => committedDeps.current.terminalView.getSelection(),
-			isCurrentInstance: (id) =>
-				committedDeps.current.terminalView.isCurrentInstance(id),
-			writeClipboard: async (text) => {
-				await Clipboard.setStringAsync(text);
-			},
-			exitSelectionState: () => stateCore.setSelectionModeEnabled(false),
-			exitSelectionView: () =>
-				committedDeps.current.terminalView.setSelectionModeEnabled(false),
-			warn: safeWarn,
-		});
-	}, [admission, clipboardAuthority, safeWarn, stateCore]);
-	const pasteClipboard = useCallback(async () => {
-		const command = createKeyboardPasteClipboardCommand({
-			captureAuthority: () => {
-				const generation = admission.getGeneration();
-				if (generation === null) return null;
-				return {
-					generation,
-					source: committedDeps.current.sourceKey,
-					runtime: committedDeps.current.terminalView.getRuntimeKey(),
-					instance: committedDeps.current.terminalView.getRuntimeInstanceId(),
-					activityGeneration:
-						committedDeps.current.activity.getSnapshot().generation,
-				};
-			},
-			isCurrent: (token) =>
-				admission.isCurrent(token.generation) &&
-				Object.is(token.source, committedDeps.current.sourceKey) &&
-				token.runtime === committedDeps.current.terminalView.getRuntimeKey() &&
-				token.instance ===
-					committedDeps.current.terminalView.getRuntimeInstanceId() &&
-				(token.instance === null ||
-					committedDeps.current.terminalView.isCurrentInstance(
-						token.instance,
-					)) &&
-				token.activityGeneration ===
-					committedDeps.current.activity.getSnapshot().generation,
-			readClipboard: Clipboard.getStringAsync,
-			paste: (text) => inputCore.pasteClipboard(text),
-			warn: safeWarn,
-		});
-		await command();
-	}, [admission, inputCore, safeWarn]);
-
-	const actionContext = useMemo<ActionContext>(
-		() => ({
-			availableKeyboardIds: new Set(snapshot.activeKeyboardIds),
-			selectKeyboard: stateCore.selectKeyboardIfExists,
-			resolveKeyboardActionTarget: (actionId) =>
-				getKeyboardActionTarget(
-					stateCore.getSnapshot().shellConfigState.config,
-					actionId,
-				),
-			rotateKeyboard: stateCore.rotateKeyboard,
-			openConfigurator: () =>
-				committedDeps.current.modalCommands.openConfigurator(),
-			sendBytes: (bytes) => {
-				void inputCore.sendBytes(bytes);
-			},
-			pasteClipboard,
-			copySelection,
-			fitTerminalToDevice: () => committedDeps.current.fitTerminalToDevice(),
-			restartCodex: async () => {
-				await remoteCore.restartCodex();
-			},
-			debugConnectionInCodex: () =>
-				committedDeps.current.debugConnectionInCodex(),
-			toggleCommandMenu: () =>
-				committedDeps.current.modalCommands.toggleCommandMenu(),
-			openCommander: () => committedDeps.current.modalCommands.openCommander(),
-			openSkillSelector: () =>
-				committedDeps.current.modalCommands.openSkillSelector(),
-			openBrowserActions: () =>
-				committedDeps.current.modalCommands.openBrowserActions(),
-			openRepoFeatureRequest: () =>
-				committedDeps.current.modalCommands.openFeatureRequest(),
-			openWisprTextEditor: () =>
-				committedDeps.current.modalCommands.openWisprTextEditor(),
-			openHostDiffity: () => committedDeps.current.browserCommands.openDiff(),
-			openHostUrlSlot: (slot) =>
-				committedDeps.current.browserCommands.openUrlSlot(slot),
-			openHostDetected: (mode) =>
-				committedDeps.current.browserCommands.openDetected(mode),
-			editHostUrlSlot: (slot) =>
-				committedDeps.current.browserCommands.editUrlSlot(slot),
-			runWorkmuxKeyboardCommand: remoteCore.runWorkmuxCommand,
-			setNavScope: (scope) => committedDeps.current.setNavScope(scope),
-		}),
-		[
-			copySelection,
-			inputCore,
-			pasteClipboard,
-			remoteCore,
-			snapshot.activeKeyboardIds,
+	const [adapter] = useState(() =>
+		createShellKeyboardControllerAdapter({
+			admission,
 			stateCore,
-		],
+			inputCore,
+			remoteCore,
+			clipboardAuthority,
+			getPorts: () => ({
+				activity: committedDeps.current.activity,
+				sourceKey: committedDeps.current.sourceKey,
+				terminalView: committedDeps.current.terminalView,
+				modalCommands: committedDeps.current.modalCommands,
+				browserCommands: committedDeps.current.browserCommands,
+				fitTerminalToDevice: committedDeps.current.fitTerminalToDevice,
+				debugConnectionInCodex: committedDeps.current.debugConnectionInCodex,
+				setNavScope: committedDeps.current.setNavScope,
+				platformOS: committedDeps.current.platformOS ?? Platform.OS,
+				dismissKeyboard: () => Keyboard.dismiss(),
+				clearKeyboardVisibility: () => {
+					visibleRef.current = false;
+				},
+				readClipboard: Clipboard.getStringAsync,
+				writeClipboard: async (text) => {
+					await Clipboard.setStringAsync(text);
+				},
+			}),
+			warn: safeWarn,
+		}),
 	);
 	useLayoutEffect(() => {
-		actionContextRef.current = actionContext;
+		adapterRef.current = adapter;
 		return () => {
-			if (actionContextRef.current === actionContext)
-				actionContextRef.current = null;
+			if (adapterRef.current === adapter) adapterRef.current = null;
 		};
-	}, [actionContext]);
+	}, [adapter]);
 
 	useLayoutEffect(() => {
 		stateCore.setShellConfigState(deps.initialShellConfigState);
@@ -502,128 +408,22 @@ export function useShellKeyboardController(
 		return animationController.cancel;
 	}, [animationController, snapshot.keyboard]);
 
-	const onAction = useCallback(
-		(actionId: ActionId) => {
-			const generation = admission.getGeneration();
-			const context = actionContextRef.current;
-			if (generation === null || !context) return;
-			runKeyboardFireAndForget(
-				() => runAction(actionId, context),
-				() => admission.isCurrent(generation),
-				safeWarn,
-			);
-		},
-		[admission, safeWarn],
-	);
-	const onSelectionModeChange = useCallback(
-		(enabled: boolean) => {
-			const generation = admission.getGeneration();
-			if (generation === null) return;
-			applyKeyboardSelectionMode({
-				enabled,
-				platformOS: committedDeps.current.platformOS ?? Platform.OS,
-				isCurrent: () => admission.isCurrent(generation),
-				setSelectionMode: stateCore.setSelectionModeEnabled,
-				setTerminalSystemKeyboard: (value) =>
-					committedDeps.current.terminalView.setSystemKeyboardEnabled(value),
-				dismissKeyboard: () => Keyboard.dismiss(),
-				clearKeyboardVisibility: () => {
-					visibleRef.current = false;
-				},
-				setSystemKeyboard: stateCore.setSystemKeyboardEnabled,
-				warn: safeWarn,
-			});
-		},
-		[admission, safeWarn, stateCore],
-	);
-	const invalidate = useCallback(
-		(reason: ControllerInvalidationReason) => {
-			admission.invalidate(reason);
-		},
-		[admission],
-	);
-	const onSlotPress = useCallback(
-		(slot: KeyboardExecutableItem) => {
-			if (admission.getGeneration() !== null)
-				void inputCore.handleSlotPress(slot);
-		},
-		[admission, inputCore],
-	);
-	const onCopySelection = useCallback(() => {
-		if (admission.getGeneration() !== null)
-			void inputCore.handleSlotPress({
-				type: 'action',
-				actionId: 'COPY_SELECTION',
-				label: 'Copy selection',
-				icon: null,
-			});
-	}, [admission, inputCore]);
-	const onPreset = useCallback(
-		(preset: CommandPreset) => {
-			if (admission.getGeneration() !== null)
-				void inputCore.runCommandPreset(preset);
-		},
-		[admission, inputCore],
-	);
-	const onBridge = useCallback(
-		(entry: CommandBridgeEntry) => {
-			if (admission.getGeneration() !== null)
-				void remoteCore.handleCommandBridgeEntry(entry);
-		},
-		[admission, remoteCore],
-	);
-	const onExecuteCommand = useCallback(
-		(value: string) => {
-			if (admission.getGeneration() !== null)
-				void inputCore.executeCommanderCommand(value);
-		},
-		[admission, inputCore],
-	);
-	const onPasteText = useCallback(
-		(value: string) => {
-			if (admission.getGeneration() !== null)
-				void inputCore.pasteCommanderText(value);
-		},
-		[admission, inputCore],
-	);
-	const onSendShortcut = useCallback(
-		(sequence: string) => {
-			if (admission.getGeneration() !== null)
-				void inputCore.sendShortcut(sequence);
-		},
-		[admission, inputCore],
-	);
-	const onTextEntryPaste = useCallback(
-		(value: string) => {
-			if (admission.getGeneration() !== null)
-				void inputCore.pasteTextEntry(value);
-		},
-		[admission, inputCore],
-	);
-	const onReloadConfig = useCallback(() => {
-		if (admission.getGeneration() !== null) void remoteCore.reloadConfig();
-	}, [admission, remoteCore]);
-	const onWebViewInput = useCallback(
-		(input: { str: string; instanceId: string }) => {
-			if (admission.getGeneration() !== null)
-				void inputCore.onWebViewInput({ ...input });
-		},
-		[admission, inputCore],
-	);
-	const onSelectionChanged = useCallback(
-		(text: string) => {
-			if (admission.getGeneration() === null) return;
-			let instanceId: string | null = null;
-			try {
-				instanceId = committedDeps.current.terminalView.getRuntimeInstanceId();
-			} catch (error) {
-				safeWarn('Failed to read selection change terminal instance', error);
-				return;
-			}
-			clipboardAuthority.noteSelection(text, instanceId);
-		},
-		[admission, clipboardAuthority, safeWarn],
-	);
+	const {
+		onAction,
+		onSelectionModeChange,
+		invalidate,
+		onSlotPress,
+		onCopySelection,
+		onPreset,
+		onBridge,
+		onExecuteCommand,
+		onPasteText,
+		onSendShortcut,
+		onTextEntryPaste,
+		onReloadConfig,
+		onWebViewInput,
+		onSelectionChanged,
+	} = adapter;
 
 	const terminalKeyboardProps = useMemo<
 		ShellKeyboardControllerHandle['terminalKeyboardProps']
