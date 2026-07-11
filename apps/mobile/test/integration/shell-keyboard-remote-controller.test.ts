@@ -5,7 +5,6 @@ import {
 	createShellKeyboardRemoteCore,
 	type ShellKeyboardRemoteTargetContext,
 } from '../../src/lib/shell-controllers/keyboard-remote-core';
-import { type ShellKeyboardStateCore } from '../../src/lib/shell-controllers/keyboard-state-core';
 
 function deferred<Value>() {
 	let resolve!: (value: Value) => void;
@@ -15,6 +14,15 @@ function deferred<Value>() {
 		reject = rejectPromise;
 	});
 	return { promise, resolve, reject };
+}
+
+async function settlesWithin<Value>(promise: Promise<Value>): Promise<Value> {
+	return Promise.race([
+		promise,
+		new Promise<never>((_, reject) =>
+			setTimeout(() => reject(new Error('request did not settle')), 50),
+		),
+	]);
 }
 
 function createKeyboardRemoteHarness() {
@@ -65,10 +73,7 @@ function createKeyboardRemoteHarness() {
 		getActivitySnapshot: () => activity,
 		getNavScope: () => 'visible',
 		keyboardState: {
-			getSnapshot: () =>
-				({
-					shellConfigState: configState('current'),
-				}) as ReturnType<ShellKeyboardStateCore['getSnapshot']>,
+			getSnapshot: () => remoteStateSnapshot(),
 			setShellConfigState: (state) => appliedConfigs.push(state),
 		},
 		reloadRuntimeShellConfig: () => reload.promise,
@@ -101,6 +106,10 @@ function configState(version: string): ShellConfigState {
 		lastLoadedAt: 1,
 		lastError: null,
 	} as unknown as ShellConfigState;
+}
+
+function remoteStateSnapshot(version = 'current') {
+	return { shellConfigState: configState(version) };
 }
 
 void test('keyboard remote core suppresses stale status failure', async () => {
@@ -167,8 +176,7 @@ void test('keyboard remote core instruments failed Workmux command results', asy
 		}),
 		getNavScope: () => 'visible',
 		keyboardState: {
-			getSnapshot: () =>
-				({ shellConfigState: configState('current') }) as never,
+			getSnapshot: () => remoteStateSnapshot(),
 			setShellConfigState: () => {},
 		},
 		reloadRuntimeShellConfig: async () => configState('remote'),
@@ -202,8 +210,7 @@ void test('keyboard remote core contains a throwing start clock', async () => {
 		}),
 		getNavScope: () => 'visible',
 		keyboardState: {
-			getSnapshot: () =>
-				({ shellConfigState: configState('current') }) as never,
+			getSnapshot: () => remoteStateSnapshot(),
 			setShellConfigState: () => {},
 		},
 		reloadRuntimeShellConfig: async () => configState('remote'),
@@ -244,8 +251,7 @@ void test('keyboard remote core preserves transport failure when error clock thr
 		}),
 		getNavScope: () => 'visible',
 		keyboardState: {
-			getSnapshot: () =>
-				({ shellConfigState: configState('current') }) as never,
+			getSnapshot: () => remoteStateSnapshot(),
 			setShellConfigState: () => {},
 		},
 		reloadRuntimeShellConfig: async () => configState('remote'),
@@ -280,8 +286,7 @@ void test('keyboard remote core contains a throwing result clock', async () => {
 		}),
 		getNavScope: () => 'visible',
 		keyboardState: {
-			getSnapshot: () =>
-				({ shellConfigState: configState('current') }) as never,
+			getSnapshot: () => remoteStateSnapshot(),
 			setShellConfigState: () => {},
 		},
 		reloadRuntimeShellConfig: async () => configState('remote'),
@@ -316,8 +321,7 @@ void test('keyboard remote core suppresses result logging after clock reentry', 
 		}),
 		getNavScope: () => 'visible',
 		keyboardState: {
-			getSnapshot: () =>
-				({ shellConfigState: configState('current') }) as never,
+			getSnapshot: () => remoteStateSnapshot(),
 			setShellConfigState: () => {},
 		},
 		reloadRuntimeShellConfig: async () => configState('remote'),
@@ -359,8 +363,7 @@ void test('keyboard remote core revalidates after clock reentry before logging',
 		}),
 		getNavScope: () => 'visible',
 		keyboardState: {
-			getSnapshot: () =>
-				({ shellConfigState: configState('current') }) as never,
+			getSnapshot: () => remoteStateSnapshot(),
 			setShellConfigState: () => {},
 		},
 		reloadRuntimeShellConfig: async () => configState('remote'),
@@ -404,8 +407,7 @@ void test('keyboard remote core routes current transport failure to invalidation
 		}),
 		getNavScope: () => 'visible',
 		keyboardState: {
-			getSnapshot: () =>
-				({ shellConfigState: configState('current') }) as never,
+			getSnapshot: () => remoteStateSnapshot(),
 			setShellConfigState: () => {},
 		},
 		reloadRuntimeShellConfig: async () => configState('remote'),
@@ -449,8 +451,7 @@ void test('keyboard remote core contains throwing transport invalidation', async
 		}),
 		getNavScope: () => 'visible',
 		keyboardState: {
-			getSnapshot: () =>
-				({ shellConfigState: configState('current') }) as never,
+			getSnapshot: () => remoteStateSnapshot(),
 			setShellConfigState: () => {},
 		},
 		reloadRuntimeShellConfig: async () => configState('remote'),
@@ -513,8 +514,7 @@ void test('keyboard remote core suppresses reentrant throwing transport feedback
 		}),
 		getNavScope: () => 'visible',
 		keyboardState: {
-			getSnapshot: () =>
-				({ shellConfigState: configState('current') }) as never,
+			getSnapshot: () => remoteStateSnapshot(),
 			setShellConfigState: () => {},
 		},
 		reloadRuntimeShellConfig: async () => configState('remote'),
@@ -570,8 +570,7 @@ void test('keyboard remote core bounds queued Workmux commands to the latest rep
 		}),
 		getNavScope: () => 'visible',
 		keyboardState: {
-			getSnapshot: () =>
-				({ shellConfigState: configState('current') }) as never,
+			getSnapshot: () => remoteStateSnapshot(),
 			setShellConfigState: () => {},
 		},
 		reloadRuntimeShellConfig: async () => configState('remote'),
@@ -644,8 +643,7 @@ void test('keyboard remote core contains config state callback failures', async 
 		}),
 		getNavScope: () => 'visible',
 		keyboardState: {
-			getSnapshot: () =>
-				({ shellConfigState: configState('current') }) as never,
+			getSnapshot: () => remoteStateSnapshot(),
 			setShellConfigState: () => {
 				throw new Error('state callback failed');
 			},
@@ -756,8 +754,7 @@ void test('keyboard remote core closes admission before a reentrant config reloa
 		}),
 		getNavScope: () => 'visible',
 		keyboardState: {
-			getSnapshot: () =>
-				({ shellConfigState: configState('current') }) as never,
+			getSnapshot: () => remoteStateSnapshot(),
 			setShellConfigState: () => {},
 		},
 		reloadRuntimeShellConfig: async () => {
@@ -789,8 +786,7 @@ void test('keyboard remote core lets a reentrant config reload replace its calle
 		}),
 		getNavScope: () => 'visible',
 		keyboardState: {
-			getSnapshot: () =>
-				({ shellConfigState: configState('current') }) as never,
+			getSnapshot: () => remoteStateSnapshot(),
 			setShellConfigState: () => {},
 		},
 		reloadRuntimeShellConfig: () => {
@@ -827,8 +823,7 @@ void test('keyboard remote core suppresses feedback after alert reentry', async 
 		}),
 		getNavScope: () => 'visible',
 		keyboardState: {
-			getSnapshot: () =>
-				({ shellConfigState: configState('current') }) as never,
+			getSnapshot: () => remoteStateSnapshot(),
 			setShellConfigState: () => {},
 		},
 		reloadRuntimeShellConfig: () => reload.promise,
@@ -866,8 +861,7 @@ void test('keyboard remote core revalidates after logger reentry', async () => {
 		}),
 		getNavScope: () => 'visible',
 		keyboardState: {
-			getSnapshot: () =>
-				({ shellConfigState: configState('current') }) as never,
+			getSnapshot: () => remoteStateSnapshot(),
 			setShellConfigState: () => {},
 		},
 		reloadRuntimeShellConfig: async () => configState('remote'),
@@ -882,6 +876,135 @@ void test('keyboard remote core revalidates after logger reentry', async () => {
 	assert.deepEqual(await core.runWorkmuxCommand({ type: 'status-cycle' }), {
 		status: 'superseded',
 	});
+	assert.equal(commandCalls, 0);
+});
+
+void test('keyboard remote core contains a throwing nav-scope getter', async () => {
+	const alerts: { title: string; message: string }[] = [];
+	const harness = createKeyboardRemoteHarness();
+	const core = createShellKeyboardRemoteCore({
+		initialTargetContext: harness.initialTarget,
+		getActivitySnapshot: () => ({
+			focused: true,
+			appActive: true,
+			interactive: true,
+			generation: 0,
+		}),
+		getNavScope: () => {
+			throw new Error('nav scope failed');
+		},
+		keyboardState: {
+			getSnapshot: () => remoteStateSnapshot(),
+			setShellConfigState: () => {},
+		},
+		reloadRuntimeShellConfig: async () => configState('remote'),
+		closeCommandMenu: () => {},
+		showAlert: (title, message) => alerts.push({ title, message }),
+		invalidateShellTransport: () => {},
+	});
+	assert.deepEqual(
+		await core.runWorkmuxCommand({ type: 'nav', action: 'next' }),
+		{ status: 'handled' },
+	);
+	assert.match(alerts[0]?.message ?? '', /nav scope failed/);
+	assert.equal(harness.commandCalls.length, 0);
+});
+
+void test('keyboard remote core suppresses transport after nav-scope reentry', async () => {
+	let commandCalls = 0;
+	const alerts: unknown[] = [];
+	let core!: ReturnType<typeof createShellKeyboardRemoteCore>;
+	const target = createKeyboardRemoteHarness().target('main');
+	target.workmuxControlChannel = {
+		...target.workmuxControlChannel,
+		command: async () => {
+			commandCalls += 1;
+			return { success: true, output: '' };
+		},
+	};
+	core = createShellKeyboardRemoteCore({
+		initialTargetContext: target,
+		getActivitySnapshot: () => ({
+			focused: true,
+			appActive: true,
+			interactive: true,
+			generation: 0,
+		}),
+		getNavScope: () => {
+			core.invalidate('focus-lost');
+			return 'visible';
+		},
+		keyboardState: {
+			getSnapshot: () => remoteStateSnapshot(),
+			setShellConfigState: () => {},
+		},
+		reloadRuntimeShellConfig: async () => configState('remote'),
+		closeCommandMenu: () => {},
+		showAlert: (...args) => alerts.push(args),
+		invalidateShellTransport: () => {},
+	});
+	assert.deepEqual(
+		await core.runWorkmuxCommand({ type: 'nav', action: 'next' }),
+		{ status: 'superseded' },
+	);
+	assert.equal(commandCalls, 0);
+	assert.deepEqual(alerts, []);
+});
+
+void test('keyboard remote core contains throwing and reentrant activity getters', async () => {
+	const target = createKeyboardRemoteHarness().target('main');
+	let commandCalls = 0;
+	target.workmuxControlChannel = {
+		...target.workmuxControlChannel,
+		command: async () => {
+			commandCalls += 1;
+			return { success: true, output: '' };
+		},
+	};
+	const throwing = createShellKeyboardRemoteCore({
+		initialTargetContext: target,
+		getActivitySnapshot: () => {
+			throw new Error('activity failed');
+		},
+		getNavScope: () => 'visible',
+		keyboardState: {
+			getSnapshot: () => remoteStateSnapshot(),
+			setShellConfigState: () => {},
+		},
+		reloadRuntimeShellConfig: async () => configState('remote'),
+		closeCommandMenu: () => {},
+		showAlert: () => {},
+		invalidateShellTransport: () => {},
+	});
+	assert.deepEqual(await throwing.runWorkmuxCommand({ type: 'status-cycle' }), {
+		status: 'superseded',
+	});
+	let reentrant!: ReturnType<typeof createShellKeyboardRemoteCore>;
+	reentrant = createShellKeyboardRemoteCore({
+		initialTargetContext: target,
+		getActivitySnapshot: () => {
+			reentrant.dispose();
+			return {
+				focused: true,
+				appActive: true,
+				interactive: true,
+				generation: 0,
+			};
+		},
+		getNavScope: () => 'visible',
+		keyboardState: {
+			getSnapshot: () => remoteStateSnapshot(),
+			setShellConfigState: () => {},
+		},
+		reloadRuntimeShellConfig: async () => configState('remote'),
+		closeCommandMenu: () => {},
+		showAlert: () => {},
+		invalidateShellTransport: () => {},
+	});
+	assert.deepEqual(
+		await reentrant.runWorkmuxCommand({ type: 'status-cycle' }),
+		{ status: 'superseded' },
+	);
 	assert.equal(commandCalls, 0);
 });
 
@@ -913,8 +1036,7 @@ void test('keyboard remote core invalidation is reusable', async () => {
 		}),
 		getNavScope: () => 'visible',
 		keyboardState: {
-			getSnapshot: () =>
-				({ shellConfigState: configState('current') }) as never,
+			getSnapshot: () => remoteStateSnapshot(),
 			setShellConfigState: () => {},
 		},
 		reloadRuntimeShellConfig: async () => configState('remote'),
@@ -929,6 +1051,269 @@ void test('keyboard remote core invalidation is reusable', async () => {
 	const second = core.runWorkmuxCommand({ type: 'status-cycle' });
 	secondCommand.resolve({ success: true, output: '' });
 	assert.deepEqual(await second, { status: 'handled' });
+});
+
+void test('keyboard remote core immediately detaches an unresolved Workmux command', async () => {
+	const oldCommand = deferred<{ success: boolean; output: string }>();
+	const nextCommand = deferred<{ success: boolean; output: string }>();
+	let calls = 0;
+	const target = createKeyboardRemoteHarness().target('main');
+	target.workmuxControlChannel = {
+		...target.workmuxControlChannel,
+		command: () => (calls++ === 0 ? oldCommand.promise : nextCommand.promise),
+	};
+	const core = createShellKeyboardRemoteCore({
+		initialTargetContext: target,
+		getActivitySnapshot: () => ({
+			focused: true,
+			appActive: true,
+			interactive: true,
+			generation: 0,
+		}),
+		getNavScope: () => 'visible',
+		keyboardState: {
+			getSnapshot: () => remoteStateSnapshot(),
+			setShellConfigState: () => {},
+		},
+		reloadRuntimeShellConfig: async () => configState('remote'),
+		closeCommandMenu: () => {},
+		showAlert: () => {},
+		invalidateShellTransport: () => {},
+	});
+	const old = core.runWorkmuxCommand({ type: 'status-cycle' });
+	core.invalidate('focus-lost');
+	assert.deepEqual(await settlesWithin(old), { status: 'superseded' });
+	const next = core.runWorkmuxCommand({ type: 'status-cycle' });
+	nextCommand.resolve({ success: true, output: 'next' });
+	assert.deepEqual(await settlesWithin(next), { status: 'handled' });
+	oldCommand.reject(new Error('late old failure'));
+	await Promise.resolve();
+});
+
+void test('keyboard remote core target replacement detaches unresolved Workmux ownership', async () => {
+	const old = deferred<{ success: boolean; output: string }>();
+	const next = deferred<{ success: boolean; output: string }>();
+	const harness = createKeyboardRemoteHarness();
+	const initial = {
+		...harness.initialTarget,
+		workmuxControlChannel: {
+			...harness.initialTarget.workmuxControlChannel,
+			command: () => old.promise,
+		},
+	};
+	const replacement = {
+		...harness.target('other'),
+		workmuxControlChannel: {
+			...harness.target('other').workmuxControlChannel,
+			command: () => next.promise,
+		},
+	};
+	const core = createShellKeyboardRemoteCore({
+		initialTargetContext: initial,
+		getActivitySnapshot: () => ({
+			focused: true,
+			appActive: true,
+			interactive: true,
+			generation: 0,
+		}),
+		getNavScope: () => 'visible',
+		keyboardState: {
+			getSnapshot: () => remoteStateSnapshot(),
+			setShellConfigState: () => {},
+		},
+		reloadRuntimeShellConfig: async () => configState('remote'),
+		closeCommandMenu: () => {},
+		showAlert: () => {},
+		invalidateShellTransport: () => {},
+	});
+	const stale = core.runWorkmuxCommand({ type: 'status-cycle' });
+	core.setTargetContext(replacement);
+	assert.deepEqual(await settlesWithin(stale), { status: 'superseded' });
+	const current = core.runWorkmuxCommand({ type: 'status-cycle' });
+	next.resolve({ success: true, output: '' });
+	assert.deepEqual(await current, { status: 'handled' });
+	old.resolve({ success: true, output: 'late' });
+});
+
+void test('keyboard remote core immediately detaches unresolved config ownership', async () => {
+	const oldReload = deferred<ShellConfigState>();
+	const nextReload = deferred<ShellConfigState>();
+	let calls = 0;
+	const applied: ShellConfigState[] = [];
+	const harness = createKeyboardRemoteHarness();
+	const core = createShellKeyboardRemoteCore({
+		initialTargetContext: harness.initialTarget,
+		getActivitySnapshot: () => ({
+			focused: true,
+			appActive: true,
+			interactive: true,
+			generation: 0,
+		}),
+		getNavScope: () => 'visible',
+		keyboardState: {
+			getSnapshot: () => remoteStateSnapshot(),
+			setShellConfigState: (state) => applied.push(state),
+		},
+		reloadRuntimeShellConfig: () =>
+			calls++ === 0 ? oldReload.promise : nextReload.promise,
+		closeCommandMenu: () => {},
+		showAlert: () => {},
+		invalidateShellTransport: () => {},
+	});
+	const old = core.reloadConfig();
+	const next = core.reloadConfig();
+	assert.deepEqual(await settlesWithin(old), { status: 'superseded' });
+	nextReload.resolve(configState('next'));
+	assert.deepEqual(await settlesWithin(next), { status: 'handled' });
+	oldReload.resolve(configState('old'));
+	await Promise.resolve();
+	assert.deepEqual(
+		applied.map((state) => state.config.version),
+		['next'],
+	);
+});
+
+void test('keyboard remote core immediately releases unresolved restart ownership', async () => {
+	const oldRestart = deferred<{ status: 'handled' | 'failed' }>();
+	const nextRestart = deferred<{ status: 'handled' | 'failed' }>();
+	let calls = 0;
+	const harness = createKeyboardRemoteHarness();
+	const core = createShellKeyboardRemoteCore({
+		initialTargetContext: harness.initialTarget,
+		getActivitySnapshot: () => ({
+			focused: true,
+			appActive: true,
+			interactive: true,
+			generation: 0,
+		}),
+		getNavScope: () => 'visible',
+		keyboardState: {
+			getSnapshot: () => remoteStateSnapshot(),
+			setShellConfigState: () => {},
+		},
+		reloadRuntimeShellConfig: async () => configState('remote'),
+		closeCommandMenu: () => {},
+		showAlert: () => {},
+		invalidateShellTransport: () => {},
+		restartCodex: () =>
+			calls++ === 0 ? oldRestart.promise : nextRestart.promise,
+	});
+	const old = core.restartCodex();
+	core.invalidate('app-inactive');
+	assert.deepEqual(await settlesWithin(old), { status: 'superseded' });
+	const next = core.restartCodex();
+	nextRestart.resolve({ status: 'handled' });
+	assert.deepEqual(await settlesWithin(next), { status: 'handled' });
+	oldRestart.resolve({ status: 'failed' });
+	await Promise.resolve();
+});
+
+void test('keyboard remote core disposal settles unresolved config and restart requests', async () => {
+	const harness = createKeyboardRemoteHarness();
+	const reloadCore = createShellKeyboardRemoteCore({
+		initialTargetContext: harness.initialTarget,
+		getActivitySnapshot: () => ({
+			focused: true,
+			appActive: true,
+			interactive: true,
+			generation: 0,
+		}),
+		getNavScope: () => 'visible',
+		keyboardState: {
+			getSnapshot: () => remoteStateSnapshot(),
+			setShellConfigState: () => {},
+		},
+		reloadRuntimeShellConfig: () => new Promise(() => {}),
+		closeCommandMenu: () => {},
+		showAlert: () => {},
+		invalidateShellTransport: () => {},
+	});
+	const reload = reloadCore.reloadConfig();
+	reloadCore.dispose();
+	assert.deepEqual(await settlesWithin(reload), { status: 'unavailable' });
+	const restartCore = createShellKeyboardRemoteCore({
+		initialTargetContext: harness.initialTarget,
+		getActivitySnapshot: () => ({
+			focused: true,
+			appActive: true,
+			interactive: true,
+			generation: 0,
+		}),
+		getNavScope: () => 'visible',
+		keyboardState: {
+			getSnapshot: () => remoteStateSnapshot(),
+			setShellConfigState: () => {},
+		},
+		reloadRuntimeShellConfig: async () => configState('remote'),
+		closeCommandMenu: () => {},
+		showAlert: () => {},
+		invalidateShellTransport: () => {},
+		restartCodex: () => new Promise(() => {}),
+	});
+	const restart = restartCore.restartCodex();
+	restartCore.dispose();
+	assert.deepEqual(await settlesWithin(restart), { status: 'unavailable' });
+});
+
+void test('keyboard remote core suppresses config alert after warning reentry', async () => {
+	const alerts: unknown[] = [];
+	let core!: ReturnType<typeof createShellKeyboardRemoteCore>;
+	const harness = createKeyboardRemoteHarness();
+	core = createShellKeyboardRemoteCore({
+		initialTargetContext: harness.initialTarget,
+		getActivitySnapshot: () => ({
+			focused: true,
+			appActive: true,
+			interactive: true,
+			generation: 0,
+		}),
+		getNavScope: () => 'visible',
+		keyboardState: {
+			getSnapshot: () => {
+				throw new Error('state failed');
+			},
+			setShellConfigState: () => {},
+		},
+		reloadRuntimeShellConfig: async () => {
+			throw new Error('reload failed');
+		},
+		closeCommandMenu: () => {},
+		showAlert: (...args) => alerts.push(args),
+		invalidateShellTransport: () => {},
+		logger: { info: () => {}, warn: () => core.invalidate('focus-lost') },
+	});
+	assert.deepEqual(await core.reloadConfig(), { status: 'superseded' });
+	assert.deepEqual(alerts, []);
+});
+
+void test('keyboard remote core suppresses restart alert after warning reentry', async () => {
+	const alerts: unknown[] = [];
+	let core!: ReturnType<typeof createShellKeyboardRemoteCore>;
+	const harness = createKeyboardRemoteHarness();
+	core = createShellKeyboardRemoteCore({
+		initialTargetContext: harness.initialTarget,
+		getActivitySnapshot: () => ({
+			focused: true,
+			appActive: true,
+			interactive: true,
+			generation: 0,
+		}),
+		getNavScope: () => 'visible',
+		keyboardState: {
+			getSnapshot: () => remoteStateSnapshot(),
+			setShellConfigState: () => {},
+		},
+		reloadRuntimeShellConfig: async () => configState('remote'),
+		closeCommandMenu: () => {},
+		showAlert: (...args) => alerts.push(args),
+		invalidateShellTransport: () => {},
+		restartCodex: async () => {
+			throw new Error('restart failed');
+		},
+		logger: { info: () => {}, warn: () => core.invalidate('focus-lost') },
+	});
+	assert.deepEqual(await core.restartCodex(), { status: 'superseded' });
+	assert.deepEqual(alerts, []);
 });
 
 void test('keyboard remote core dispose is idempotent and permanently inert', async () => {

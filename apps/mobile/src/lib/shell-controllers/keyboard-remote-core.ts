@@ -4,105 +4,37 @@ import {
 	type WorkmuxKeyboardCommand,
 	type WorkmuxKeyboardCommandRunResult,
 } from '@/lib/keyboard-actions';
-import { type CommandBridgeEntry } from '@/lib/shell-config';
 import { type ShellConfigState } from '@/lib/shell-config-store';
-import { type WorkmuxNavScope } from '@/lib/workmux-app-commands';
-import { type WorkmuxControlChannel } from '@/lib/workmux-control-channel';
 import {
 	runShellWorkmuxKeyboardCommand,
 	showShellWorkmuxKeyboardFailure,
 } from '../../app/shell/shell-workmux-keyboard-policy';
 
-import { type ControllerInvalidationReason } from './controller-core';
-import { type ShellKeyboardStateCore } from './keyboard-state-core';
+import {
+	type CreateShellKeyboardRemoteCoreOptions,
+	type ShellKeyboardRemoteActivitySnapshot,
+	type ShellKeyboardRemoteCore,
+	type ShellKeyboardRemoteOutcome,
+} from './keyboard-remote-contracts';
+import {
+	copyKeyboardRemoteTarget,
+	createKeyboardRemoteCancellation,
+	getKeyboardRemoteErrorMessage,
+	isSameKeyboardRemoteTarget,
+	type KeyboardRemoteAuthority,
+	type KeyboardRemoteCancellation,
+	type QueuedKeyboardRemoteWorkmux,
+} from './keyboard-remote-support';
 
-type RemoteOutcome =
-	| { status: 'handled' }
-	| { status: 'failed' }
-	| { status: 'superseded' }
-	| { status: 'unavailable' };
-
-export type ShellKeyboardRemoteActivitySnapshot = {
-	focused: boolean;
-	appActive: boolean;
-	interactive: boolean;
-	generation: number;
-};
-
-export type ShellKeyboardRemoteTargetContext = {
-	targetKey: string;
-	tmuxEnabled: boolean;
-	sessionName: string;
-	connectionId: string;
-	channelId: number;
-	workmuxControlChannel: Pick<WorkmuxControlChannel, 'command' | 'operation'>;
-	source: unknown;
-};
-
-export type ShellKeyboardRemoteLogger = {
-	info(message: string, details?: unknown): void;
-	warn(message: string, details?: unknown): void;
-};
-
-export type ShellKeyboardRemoteCore = {
-	runWorkmuxCommand(
-		command: WorkmuxKeyboardCommand,
-	): Promise<WorkmuxKeyboardCommandRunResult>;
-	reloadConfig(): Promise<RemoteOutcome>;
-	restartCodex(options?: { timeoutMs?: number }): Promise<RemoteOutcome>;
-	handleCommandBridgeEntry(entry: CommandBridgeEntry): Promise<RemoteOutcome>;
-	setTargetContext(context: ShellKeyboardRemoteTargetContext): void;
-	invalidate(reason: ControllerInvalidationReason): void;
-	dispose(): void;
-};
-
-export type CreateShellKeyboardRemoteCoreOptions = {
-	initialTargetContext: ShellKeyboardRemoteTargetContext;
-	getActivitySnapshot(): ShellKeyboardRemoteActivitySnapshot;
-	getNavScope(): WorkmuxNavScope;
-	keyboardState: Pick<
-		ShellKeyboardStateCore,
-		'getSnapshot' | 'setShellConfigState'
-	>;
-	reloadRuntimeShellConfig(): PromiseLike<ShellConfigState>;
-	closeCommandMenu(): void;
-	showAlert(title: string, message: string): void;
-	invalidateShellTransport(connectionId: string, channelId: number): void;
-	logger?: ShellKeyboardRemoteLogger;
-	now?: () => number;
-	restartCodex?: typeof restartCodexWithBridge;
-};
-
-type Authority = {
-	generation: number;
-	activityGeneration: number;
-	target: ShellKeyboardRemoteTargetContext;
-};
-
-function copyTarget(
-	context: ShellKeyboardRemoteTargetContext,
-): ShellKeyboardRemoteTargetContext {
-	return { ...context };
-}
-
-function sameTarget(
-	left: ShellKeyboardRemoteTargetContext,
-	right: ShellKeyboardRemoteTargetContext,
-): boolean {
-	return (
-		left.targetKey === right.targetKey &&
-		left.tmuxEnabled === right.tmuxEnabled &&
-		left.sessionName === right.sessionName &&
-		left.connectionId === right.connectionId &&
-		left.channelId === right.channelId &&
-		left.workmuxControlChannel === right.workmuxControlChannel &&
-		left.source === right.source
-	);
-}
-
-function errorMessage(error: unknown): string {
-	return error instanceof Error ? error.message : String(error);
-}
+export type {
+	CreateShellKeyboardRemoteCoreOptions,
+	ShellKeyboardRemoteActivitySnapshot,
+	ShellKeyboardRemoteCore,
+	ShellKeyboardRemoteLogger,
+	ShellKeyboardRemoteOutcome,
+	ShellKeyboardRemoteStatePort,
+	ShellKeyboardRemoteTargetContext,
+} from './keyboard-remote-contracts';
 
 export function createShellKeyboardRemoteCore({
 	initialTargetContext,
@@ -119,15 +51,17 @@ export function createShellKeyboardRemoteCore({
 }: CreateShellKeyboardRemoteCoreOptions): ShellKeyboardRemoteCore {
 	let disposed = false;
 	let generation = 0;
-	let target = copyTarget(initialTargetContext);
+	let target = copyKeyboardRemoteTarget(initialTargetContext);
 	let reloadGeneration = 0;
+	let reloadCancellation: KeyboardRemoteCancellation | null = null;
 	let restartGeneration = 0;
 	let restartInFlight: number | null = null;
-	let activeWorkmuxAuthority: Authority | null = null;
+	let restartCancellation: KeyboardRemoteCancellation | null = null;
+	let activeWorkmuxAuthority: KeyboardRemoteAuthority | null = null;
 	let workmuxRunning = false;
-	let pendingWorkmux: {
-		command: WorkmuxKeyboardCommand;
-		authority: Authority;
+	let pendingWorkmux: QueuedKeyboardRemoteWorkmux | null = null;
+	let activeWorkmux: {
+		id: symbol;
 		resolve(result: WorkmuxKeyboardCommandRunResult): void;
 	} | null = null;
 
@@ -171,16 +105,16 @@ export function createShellKeyboardRemoteCore({
 			return null;
 		}
 	};
-	const captureAuthority = (): Authority | null => {
+	const captureAuthority = (): KeyboardRemoteAuthority | null => {
 		if (disposed) return null;
 		const startingGeneration = generation;
-		const startingTarget = copyTarget(target);
+		const startingTarget = copyKeyboardRemoteTarget(target);
 		const activity = readActivity();
 		if (
 			!activity?.interactive ||
 			disposed ||
 			startingGeneration !== generation ||
-			!sameTarget(startingTarget, target)
+			!isSameKeyboardRemoteTarget(startingTarget, target)
 		) {
 			return null;
 		}
@@ -190,11 +124,11 @@ export function createShellKeyboardRemoteCore({
 			target: startingTarget,
 		};
 	};
-	const isCurrent = (authority: Authority): boolean => {
+	const isCurrent = (authority: KeyboardRemoteAuthority): boolean => {
 		if (
 			disposed ||
 			authority.generation !== generation ||
-			!sameTarget(authority.target, target)
+			!isSameKeyboardRemoteTarget(authority.target, target)
 		) {
 			return false;
 		}
@@ -204,17 +138,17 @@ export function createShellKeyboardRemoteCore({
 				activity.generation === authority.activityGeneration &&
 				!disposed &&
 				authority.generation === generation &&
-				sameTarget(authority.target, target),
+				isSameKeyboardRemoteTarget(authority.target, target),
 		);
 	};
 
 	const createRunner = () => {
-		const runnerTarget = copyTarget(target);
+		const runnerTarget = copyKeyboardRemoteTarget(target);
 		const runnerGeneration = generation;
 		const runnerIsCurrent = () =>
 			!disposed &&
 			runnerGeneration === generation &&
-			sameTarget(runnerTarget, target);
+			isSameKeyboardRemoteTarget(runnerTarget, target);
 		const commandIsCurrent = () =>
 			runnerIsCurrent() &&
 			(activeWorkmuxAuthority === null || isCurrent(activeWorkmuxAuthority));
@@ -272,7 +206,7 @@ export function createShellKeyboardRemoteCore({
 									...(startedAtMs === null || failedAtMs === null
 										? {}
 										: { elapsedMs: failedAtMs - startedAtMs }),
-									error: errorMessage(error),
+									error: getKeyboardRemoteErrorMessage(error),
 								});
 							}
 							throw error;
@@ -322,54 +256,64 @@ export function createShellKeyboardRemoteCore({
 					safeWarn('Failed to show Workmux keyboard command failure', error);
 				}
 			},
-			getErrorMessage: errorMessage,
+			getErrorMessage: getKeyboardRemoteErrorMessage,
 		});
 	};
 
 	let runner = createRunner();
 	const advanceGeneration = () => {
 		runner.invalidate();
+		activeWorkmux?.resolve({ status: 'superseded' });
+		activeWorkmux = null;
+		activeWorkmuxAuthority = null;
+		workmuxRunning = false;
 		pendingWorkmux?.resolve({ status: 'superseded' });
 		pendingWorkmux = null;
+		reloadCancellation?.settle({ status: 'superseded' });
+		reloadCancellation = null;
+		restartCancellation?.settle({ status: 'superseded' });
+		restartCancellation = null;
 		generation += 1;
 		reloadGeneration += 1;
 		restartGeneration += 1;
 		restartInFlight = null;
 	};
 
-	const executeWorkmux = async (queued: {
-		command: WorkmuxKeyboardCommand;
-		authority: Authority;
-		resolve(result: WorkmuxKeyboardCommandRunResult): void;
-	}): Promise<void> => {
+	const executeWorkmux = async (
+		queued: QueuedKeyboardRemoteWorkmux,
+	): Promise<void> => {
 		workmuxRunning = true;
-		let current: typeof queued | null = queued;
+		const execution = { id: Symbol('workmux'), resolve: queued.resolve };
+		activeWorkmux = execution;
+		activeWorkmuxAuthority = queued.authority;
+		const commandRunner = runner;
 		try {
-			while (current) {
-				activeWorkmuxAuthority = current.authority;
-				let result: WorkmuxKeyboardCommandRunResult;
-				try {
-					result = isCurrent(current.authority)
-						? await runner.run(current.command)
-						: { status: 'superseded' };
-				} catch (error) {
-					safeWarn('Workmux keyboard command runner failed', error);
-					result = isCurrent(current.authority)
-						? { status: 'handled' }
-						: { status: 'superseded' };
-				}
-				current.resolve(
-					isCurrent(current.authority) ? result : { status: 'superseded' },
-				);
-				current = pendingWorkmux;
-				pendingWorkmux = null;
+			let result: WorkmuxKeyboardCommandRunResult;
+			try {
+				result = isCurrent(queued.authority)
+					? await commandRunner.run(queued.command)
+					: { status: 'superseded' };
+			} catch (error) {
+				if (activeWorkmux !== execution) return;
+				safeWarn('Workmux keyboard command runner failed', error);
+				if (activeWorkmux !== execution) return;
+				result = isCurrent(queued.authority)
+					? { status: 'handled' }
+					: { status: 'superseded' };
 			}
+			if (activeWorkmux !== execution) return;
+			queued.resolve(
+				isCurrent(queued.authority) ? result : { status: 'superseded' },
+			);
 		} finally {
-			activeWorkmuxAuthority = null;
-			workmuxRunning = false;
-			const next = pendingWorkmux;
-			pendingWorkmux = null;
-			if (next) void executeWorkmux(next);
+			if (activeWorkmux === execution) {
+				activeWorkmux = null;
+				activeWorkmuxAuthority = null;
+				workmuxRunning = false;
+				const next = pendingWorkmux;
+				pendingWorkmux = null;
+				if (next) void executeWorkmux(next);
+			}
 		}
 	};
 
@@ -400,8 +344,11 @@ export function createShellKeyboardRemoteCore({
 		});
 	};
 
-	const reloadConfig = async (): Promise<RemoteOutcome> => {
+	const reloadConfig = async (): Promise<ShellKeyboardRemoteOutcome> => {
 		if (disposed) return { status: 'unavailable' };
+		reloadCancellation?.settle({ status: 'superseded' });
+		const cancellation = createKeyboardRemoteCancellation();
+		reloadCancellation = cancellation;
 		const requestGeneration = ++reloadGeneration;
 		try {
 			closeCommandMenu();
@@ -417,7 +364,25 @@ export function createShellKeyboardRemoteCore({
 		const requestIsCurrent = () =>
 			requestGeneration === reloadGeneration && isCurrent(authority);
 		try {
-			const nextState = await reloadRuntimeShellConfig();
+			let reloadPending: PromiseLike<ShellConfigState>;
+			try {
+				reloadPending = reloadRuntimeShellConfig();
+			} catch (error) {
+				reloadPending = Promise.reject(error);
+			}
+			const raced = await Promise.race([
+				Promise.resolve(reloadPending).then(
+					(value) => ({ kind: 'value' as const, value }),
+					(error: unknown) => ({ kind: 'error' as const, error }),
+				),
+				cancellation.promise.then((outcome) => ({
+					kind: 'cancelled' as const,
+					outcome,
+				})),
+			]);
+			if (raced.kind === 'cancelled') return raced.outcome;
+			if (raced.kind === 'error') throw raced.error;
+			const nextState = raced.value;
 			if (!requestIsCurrent()) return { status: 'superseded' };
 			keyboardState.setShellConfigState(nextState);
 			if (!requestIsCurrent()) return { status: 'superseded' };
@@ -440,6 +405,7 @@ export function createShellKeyboardRemoteCore({
 					'Failed to read config state after remote reload failure',
 					stateError,
 				);
+				if (!requestIsCurrent()) return { status: 'superseded' };
 				safeAlert('Config reload failed', message);
 				return requestIsCurrent()
 					? { status: 'failed' }
@@ -450,6 +416,7 @@ export function createShellKeyboardRemoteCore({
 				keyboardState.setShellConfigState({ ...current, lastError: message });
 			} catch (stateError) {
 				safeWarn('Failed to apply remote config reload failure', stateError);
+				if (!requestIsCurrent()) return { status: 'superseded' };
 				safeAlert('Config reload failed', message);
 				return requestIsCurrent()
 					? { status: 'failed' }
@@ -465,7 +432,7 @@ export function createShellKeyboardRemoteCore({
 
 	const restartCodexCommand = async (options?: {
 		timeoutMs?: number;
-	}): Promise<RemoteOutcome> => {
+	}): Promise<ShellKeyboardRemoteOutcome> => {
 		const copiedOptions =
 			options?.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs };
 		if (disposed) return { status: 'unavailable' };
@@ -479,57 +446,87 @@ export function createShellKeyboardRemoteCore({
 		if (!authority) return { status: disposed ? 'unavailable' : 'superseded' };
 		const requestGeneration = ++restartGeneration;
 		restartInFlight = requestGeneration;
+		const cancellation = createKeyboardRemoteCancellation();
+		restartCancellation = cancellation;
 		const requestIsCurrent = () =>
 			restartInFlight === requestGeneration &&
 			requestGeneration === restartGeneration &&
 			isCurrent(authority);
 		let result: { status: 'handled' | 'failed' };
-		let outcome: RemoteOutcome = { status: 'superseded' };
+		let outcome: ShellKeyboardRemoteOutcome = { status: 'superseded' };
 		try {
-			result = await restartCodex({
-				tmuxEnabled: authority.target.tmuxEnabled,
-				sessionName: authority.target.sessionName,
-				workmuxControlChannel: {
-					command: (argv, commandOptions) => {
-						if (!requestIsCurrent()) {
-							return Promise.resolve({
-								success: false,
-								output: '',
-								error: 'Codex restart superseded.',
-							});
-						}
-						return authority.target.workmuxControlChannel.command(
-							[...argv],
-							commandOptions,
-						);
-					},
-					operation: (request, commandOptions) => {
-						if (!requestIsCurrent()) {
-							return Promise.resolve({
-								success: false,
-								output: '',
-								error: 'Codex restart superseded.',
-							});
-						}
-						return authority.target.workmuxControlChannel.operation(
-							{ operation: request.operation, params: { ...request.params } },
-							commandOptions,
-						);
-					},
-				},
-				showFailure: (message) => {
-					if (!requestIsCurrent()) {
-						safeWarn('Codex restart failed after becoming stale', message);
-						return;
-					}
-					safeAlert('Codex restart failed', message);
-				},
-				...copiedOptions,
-			});
+			let restartPromise: Promise<{ status: 'handled' | 'failed' }>;
+			try {
+				restartPromise = Promise.resolve(
+					restartCodex({
+						tmuxEnabled: authority.target.tmuxEnabled,
+						sessionName: authority.target.sessionName,
+						workmuxControlChannel: {
+							command: (argv, commandOptions) => {
+								if (!requestIsCurrent()) {
+									return Promise.resolve({
+										success: false,
+										output: '',
+										error: 'Codex restart superseded.',
+									});
+								}
+								return authority.target.workmuxControlChannel.command(
+									[...argv],
+									commandOptions,
+								);
+							},
+							operation: (request, commandOptions) => {
+								if (!requestIsCurrent()) {
+									return Promise.resolve({
+										success: false,
+										output: '',
+										error: 'Codex restart superseded.',
+									});
+								}
+								return authority.target.workmuxControlChannel.operation(
+									{
+										operation: request.operation,
+										params: { ...request.params },
+									},
+									commandOptions,
+								);
+							},
+						},
+						showFailure: (message) => {
+							if (!requestIsCurrent()) {
+								safeWarn('Codex restart failed after becoming stale', message);
+								return;
+							}
+							safeAlert('Codex restart failed', message);
+						},
+						...copiedOptions,
+					}),
+				);
+			} catch (error) {
+				restartPromise = Promise.reject(error);
+			}
+			const raced = await Promise.race([
+				restartPromise.then(
+					(value) => ({ kind: 'value' as const, value }),
+					(error: unknown) => ({ kind: 'error' as const, error }),
+				),
+				cancellation.promise.then((cancelledOutcome) => ({
+					kind: 'cancelled' as const,
+					outcome: cancelledOutcome,
+				})),
+			]);
+			if (raced.kind === 'cancelled') return raced.outcome;
+			if (raced.kind === 'error') throw raced.error;
+			result = raced.value;
 		} catch (error) {
 			if (requestIsCurrent()) {
 				safeWarn('Codex restart failed', error);
-				safeAlert('Codex restart failed', errorMessage(error));
+				if (requestIsCurrent()) {
+					safeAlert(
+						'Codex restart failed',
+						getKeyboardRemoteErrorMessage(error),
+					);
+				}
 			}
 			result = { status: 'failed' };
 		} finally {
@@ -541,6 +538,9 @@ export function createShellKeyboardRemoteCore({
 				restartGeneration === requestGeneration
 			) {
 				restartInFlight = null;
+			}
+			if (restartCancellation === cancellation) {
+				restartCancellation = null;
 			}
 		}
 		return outcome;
@@ -570,8 +570,8 @@ export function createShellKeyboardRemoteCore({
 		},
 		setTargetContext: (nextContext) => {
 			if (disposed) return;
-			const copied = copyTarget(nextContext);
-			if (sameTarget(target, copied)) return;
+			const copied = copyKeyboardRemoteTarget(nextContext);
+			if (isSameKeyboardRemoteTarget(target, copied)) return;
 			advanceGeneration();
 			target = copied;
 			runner = createRunner();
@@ -585,8 +585,16 @@ export function createShellKeyboardRemoteCore({
 			if (disposed) return;
 			disposed = true;
 			runner.invalidate();
+			activeWorkmux?.resolve({ status: 'superseded' });
+			activeWorkmux = null;
+			activeWorkmuxAuthority = null;
+			workmuxRunning = false;
 			pendingWorkmux?.resolve({ status: 'superseded' });
 			pendingWorkmux = null;
+			reloadCancellation?.settle({ status: 'unavailable' });
+			reloadCancellation = null;
+			restartCancellation?.settle({ status: 'unavailable' });
+			restartCancellation = null;
 			generation += 1;
 			reloadGeneration += 1;
 			restartGeneration += 1;
