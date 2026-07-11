@@ -800,7 +800,13 @@ void test('dispose rollback exit failure can mark remote copy mode active for ca
 		cleanup: executor.dispose(),
 		remoteCopyModeActiveRef,
 		remoteCopyModeWasActive: remoteCopyModeActiveRef.current,
-		markRemoteCopyModeActiveOnFailedCleanup: true,
+		freshness: { kind: 'always' },
+		failureOwnership: {
+			kind: 'preserve-if-cleared',
+			acquireOnFailure: true,
+		},
+		successOwnership: 'clear',
+		failureReporting: { kind: 'ignore' },
 	});
 
 	assert.notEqual(cleanup, null);
@@ -821,7 +827,13 @@ void test('stale remote copy mode cleanup cannot clear a newer scrollback genera
 		cleanup: cleanupBlock.promise,
 		remoteCopyModeActiveRef,
 		remoteCopyModeWasActive: remoteCopyModeActiveRef.current,
-		cleanupGeneration,
+		freshness: { kind: 'generation', generation: cleanupGeneration },
+		failureOwnership: {
+			kind: 'preserve-if-cleared',
+			acquireOnFailure: false,
+		},
+		successOwnership: 'clear',
+		failureReporting: { kind: 'ignore' },
 	});
 
 	assert.notEqual(cleanup, null);
@@ -842,7 +854,13 @@ void test('successful current remote copy mode cleanup clears active state', asy
 		cleanup: cleanupBlock.promise,
 		remoteCopyModeActiveRef,
 		remoteCopyModeWasActive: remoteCopyModeActiveRef.current,
-		cleanupGeneration,
+		freshness: { kind: 'generation', generation: cleanupGeneration },
+		failureOwnership: {
+			kind: 'preserve-if-cleared',
+			acquireOnFailure: false,
+		},
+		successOwnership: 'clear',
+		failureReporting: { kind: 'ignore' },
 	});
 
 	assert.notEqual(cleanup, null);
@@ -865,8 +883,13 @@ void test('failed current remote copy mode cleanup preserves inactive state clea
 		cleanup: cleanupPromise,
 		remoteCopyModeActiveRef,
 		remoteCopyModeWasActive: remoteCopyModeActiveRef.current,
-		markRemoteCopyModeActiveOnFailedCleanup: true,
-		cleanupGeneration,
+		freshness: { kind: 'generation', generation: cleanupGeneration },
+		failureOwnership: {
+			kind: 'preserve-if-cleared',
+			acquireOnFailure: true,
+		},
+		successOwnership: 'clear',
+		failureReporting: { kind: 'ignore' },
 	});
 
 	assert.notEqual(cleanup, null);
@@ -885,8 +908,13 @@ void test('stale failed remote copy mode cleanup cannot mark a newer generation 
 		cleanup: cleanupBlock.promise,
 		remoteCopyModeActiveRef,
 		remoteCopyModeWasActive: true,
-		markRemoteCopyModeActiveOnFailedCleanup: true,
-		cleanupGeneration,
+		freshness: { kind: 'generation', generation: cleanupGeneration },
+		failureOwnership: {
+			kind: 'preserve-if-cleared',
+			acquireOnFailure: true,
+		},
+		successOwnership: 'clear',
+		failureReporting: { kind: 'ignore' },
 	});
 
 	assert.notEqual(cleanup, null);
@@ -910,9 +938,17 @@ for (const staleSettlement of ['false', 'reject'] as const) {
 			cleanup: cleanupA.promise,
 			remoteCopyModeActiveRef,
 			remoteCopyModeWasActive: true,
-			restoreRemoteCopyModeOnFailedCleanup: true,
-			isCleanupCurrent: () => targetACurrent,
-			onCleanupFailure: (error) => failuresA.push(error),
+			freshness: {
+				kind: 'predicates',
+				isSuccessCurrent: () => targetACurrent,
+				isFailureCurrent: () => targetACurrent,
+			},
+			failureOwnership: { kind: 'restore' },
+			successOwnership: 'clear',
+			failureReporting: {
+				kind: 'report',
+				report: (error) => failuresA.push(error),
+			},
 		});
 		assert.notEqual(aggregateA, null);
 		targetACurrent = false;
@@ -922,9 +958,17 @@ for (const staleSettlement of ['false', 'reject'] as const) {
 			cleanup: cleanupB.promise,
 			remoteCopyModeActiveRef,
 			remoteCopyModeWasActive: true,
-			restoreRemoteCopyModeOnFailedCleanup: true,
-			isCleanupCurrent: () => true,
-			onCleanupFailure: (error) => failuresB.push(error),
+			freshness: {
+				kind: 'predicates',
+				isSuccessCurrent: () => true,
+				isFailureCurrent: () => true,
+			},
+			failureOwnership: { kind: 'restore' },
+			successOwnership: 'clear',
+			failureReporting: {
+				kind: 'report',
+				report: (error) => failuresB.push(error),
+			},
 		});
 		assert.equal(aggregateB, aggregateA);
 		cleanupB.resolve(true);
@@ -957,9 +1001,17 @@ for (const failedSettlement of ['false', 'reject'] as const) {
 			cleanup: failedCleanup.promise,
 			remoteCopyModeActiveRef,
 			remoteCopyModeWasActive: true,
-			restoreRemoteCopyModeOnFailedCleanup: true,
-			isCleanupCurrent: () => true,
-			onCleanupFailure: (error) => failures.push(error),
+			freshness: {
+				kind: 'predicates',
+				isSuccessCurrent: () => true,
+				isFailureCurrent: () => true,
+			},
+			failureOwnership: { kind: 'restore' },
+			successOwnership: 'clear',
+			failureReporting: {
+				kind: 'report',
+				report: (error) => failures.push(error),
+			},
 		});
 		assert.notEqual(aggregate, null);
 		assert.equal(
@@ -968,9 +1020,17 @@ for (const failedSettlement of ['false', 'reject'] as const) {
 				cleanup: successfulCleanup.promise,
 				remoteCopyModeActiveRef,
 				remoteCopyModeWasActive: true,
-				restoreRemoteCopyModeOnFailedCleanup: true,
-				isCleanupCurrent: () => true,
-				onCleanupFailure: (error) => failures.push(error),
+				freshness: {
+					kind: 'predicates',
+					isSuccessCurrent: () => true,
+					isFailureCurrent: () => true,
+				},
+				failureOwnership: { kind: 'restore' },
+				successOwnership: 'clear',
+				failureReporting: {
+					kind: 'report',
+					report: (error) => failures.push(error),
+				},
 			}),
 			aggregate,
 		);

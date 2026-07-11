@@ -36,44 +36,63 @@ export function resetTmuxScrollbackRuntimeState({
 	);
 }
 
+export type TmuxScrollbackCleanupFreshnessPolicy =
+	| { kind: 'always' }
+	| { kind: 'generation'; generation: { current: number } }
+	| {
+			kind: 'predicates';
+			isSuccessCurrent(): boolean;
+			isFailureCurrent(): boolean;
+	  };
+
+export type TmuxScrollbackCleanupFailureOwnershipPolicy =
+	| { kind: 'ignore' }
+	| { kind: 'restore' }
+	| { kind: 'preserve-if-cleared'; acquireOnFailure: boolean };
+
+export type TmuxScrollbackCleanupFailureReportingPolicy =
+	| { kind: 'ignore' }
+	| {
+			kind: 'report';
+			report(
+				error: unknown,
+				context: { kind: 'resolved-false' | 'rejected' },
+			): void;
+	  };
+
 export function registerTmuxScrollbackRemoteCopyModeExitCleanup({
 	barrier,
 	cleanup,
 	remoteCopyModeActiveRef,
 	remoteCopyModeWasActive = remoteCopyModeActiveRef.current,
-	markRemoteCopyModeActiveOnFailedCleanup = false,
-	cleanupGeneration,
-	isCleanupCurrent,
-	isCleanupSuccessCurrent,
-	isCleanupFailureCurrent,
-	restoreRemoteCopyModeOnFailedCleanup = false,
-	clearRemoteCopyModeOnSuccessfulCleanup = true,
-	onCleanupFailure,
+	freshness,
+	failureOwnership,
+	successOwnership,
+	failureReporting,
 }: {
 	barrier: WorkmuxScrollbackLiveInputCleanupBarrier;
 	cleanup?: Promise<boolean> | null;
 	remoteCopyModeActiveRef: { current: boolean };
 	remoteCopyModeWasActive?: boolean;
-	markRemoteCopyModeActiveOnFailedCleanup?: boolean;
-	cleanupGeneration?: { current: number };
-	isCleanupCurrent?: () => boolean;
-	isCleanupSuccessCurrent?: () => boolean;
-	isCleanupFailureCurrent?: () => boolean;
-	restoreRemoteCopyModeOnFailedCleanup?: boolean;
-	clearRemoteCopyModeOnSuccessfulCleanup?: boolean;
-	onCleanupFailure?: (
-		error: unknown,
-		context: { kind: 'resolved-false' | 'rejected' },
-	) => void;
+	freshness: TmuxScrollbackCleanupFreshnessPolicy;
+	failureOwnership: TmuxScrollbackCleanupFailureOwnershipPolicy;
+	successOwnership: 'clear' | 'preserve';
+	failureReporting: TmuxScrollbackCleanupFailureReportingPolicy;
 }): Promise<boolean> | null {
-	const generation = cleanupGeneration?.current;
-	const isCurrent = (specific?: () => boolean) => {
+	const capturedGeneration =
+		freshness.kind === 'generation' ? freshness.generation.current : undefined;
+	const isCurrent = (result: 'success' | 'failure') => {
 		try {
-			return (
-				(generation === undefined ||
-					cleanupGeneration?.current === generation) &&
-				(specific?.() ?? isCleanupCurrent?.() ?? true)
-			);
+			switch (freshness.kind) {
+				case 'always':
+					return true;
+				case 'generation':
+					return freshness.generation.current === capturedGeneration;
+				case 'predicates':
+					return result === 'success'
+						? freshness.isSuccessCurrent()
+						: freshness.isFailureCurrent();
+			}
 		} catch {
 			return false;
 		}
@@ -83,7 +102,9 @@ export function registerTmuxScrollbackRemoteCopyModeExitCleanup({
 		context: { kind: 'resolved-false' | 'rejected' },
 	) => {
 		try {
-			onCleanupFailure?.(error, context);
+			if (failureReporting.kind === 'report') {
+				failureReporting.report(error, context);
+			}
 		} catch {
 			// Cleanup failure reporting is best-effort.
 		}
@@ -94,43 +115,36 @@ export function registerTmuxScrollbackRemoteCopyModeExitCleanup({
 	);
 	void cleanup?.then(
 		(exited) => {
-			if (
-				!isCurrent(exited ? isCleanupSuccessCurrent : isCleanupFailureCurrent)
-			) {
-				return;
-			}
+			if (!isCurrent(exited ? 'success' : 'failure')) return;
 			if (exited) {
-				if (clearRemoteCopyModeOnSuccessfulCleanup) {
+				if (successOwnership === 'clear') {
 					remoteCopyModeActiveRef.current = false;
 				}
 				return;
 			}
-			if (restoreRemoteCopyModeOnFailedCleanup) {
-				if (
-					remoteCopyModeWasActive ||
-					markRemoteCopyModeActiveOnFailedCleanup
-				) {
+			switch (failureOwnership.kind) {
+				case 'ignore':
+					break;
+				case 'restore':
 					remoteCopyModeActiveRef.current = true;
+					break;
+				case 'preserve-if-cleared': {
+					const wasClearedDuringCleanup =
+						remoteCopyModeWasActive && !remoteCopyModeActiveRef.current;
+					if (
+						!wasClearedDuringCleanup &&
+						(remoteCopyModeWasActive || failureOwnership.acquireOnFailure)
+					) {
+						remoteCopyModeActiveRef.current = true;
+					}
+					break;
 				}
-				reportFailure(undefined, { kind: 'resolved-false' });
-				return;
-			}
-			const wasClearedDuringCleanup =
-				remoteCopyModeWasActive && !remoteCopyModeActiveRef.current;
-			if (
-				!wasClearedDuringCleanup &&
-				(remoteCopyModeWasActive || markRemoteCopyModeActiveOnFailedCleanup)
-			) {
-				remoteCopyModeActiveRef.current = true;
 			}
 			reportFailure(undefined, { kind: 'resolved-false' });
 		},
 		(error) => {
-			if (!isCurrent(isCleanupFailureCurrent)) return;
-			if (
-				restoreRemoteCopyModeOnFailedCleanup &&
-				(remoteCopyModeWasActive || markRemoteCopyModeActiveOnFailedCleanup)
-			) {
+			if (!isCurrent('failure')) return;
+			if (failureOwnership.kind === 'restore') {
 				remoteCopyModeActiveRef.current = true;
 			}
 			reportFailure(error, { kind: 'rejected' });
@@ -177,8 +191,15 @@ function runTmuxScrollbackRemoteCopyModeCleanupForUiReset({
 		cleanup,
 		remoteCopyModeActiveRef,
 		remoteCopyModeWasActive,
-		markRemoteCopyModeActiveOnFailedCleanup: true,
-		cleanupGeneration,
+		freshness: cleanupGeneration
+			? { kind: 'generation', generation: cleanupGeneration }
+			: { kind: 'always' },
+		failureOwnership: {
+			kind: 'preserve-if-cleared',
+			acquireOnFailure: true,
+		},
+		successOwnership: 'clear',
+		failureReporting: { kind: 'ignore' },
 	});
 }
 

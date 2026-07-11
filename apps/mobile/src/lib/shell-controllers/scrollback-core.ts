@@ -238,14 +238,24 @@ export function createShellScrollbackControllerCore(
 				cleanup,
 				remoteCopyModeActiveRef: remoteCopyModeActive,
 				remoteCopyModeWasActive: remoteWasActive,
-				restoreRemoteCopyModeOnFailedCleanup: restoreRemoteOnFailure,
-				clearRemoteCopyModeOnSuccessfulCleanup: clearRemoteOnSuccess,
-				isCleanupSuccessCurrent: isSuccessCurrent,
-				isCleanupFailureCurrent: isFailureCurrent,
-				onCleanupFailure: (error, failure) => {
-					if (failure.kind === 'rejected' || reportResolvedFalse) {
-						safeWarn(failureMessage, error);
-					}
+				freshness: currentAfterDispose
+					? { kind: 'always' }
+					: {
+							kind: 'predicates',
+							isSuccessCurrent,
+							isFailureCurrent,
+						},
+				failureOwnership: restoreRemoteOnFailure
+					? { kind: 'restore' }
+					: { kind: 'ignore' },
+				successOwnership: clearRemoteOnSuccess ? 'clear' : 'preserve',
+				failureReporting: {
+					kind: 'report',
+					report: (error, failure) => {
+						if (failure.kind === 'rejected' || reportResolvedFalse) {
+							safeWarn(failureMessage, error);
+						}
+					},
 				},
 			});
 		try {
