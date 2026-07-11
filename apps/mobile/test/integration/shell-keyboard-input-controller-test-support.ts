@@ -2,14 +2,15 @@ import {
 	type ActionId,
 	type RunActionOptions,
 } from '../../src/lib/keyboard-actions';
-import { type MacroDef } from '../../src/lib/shell-config';
+import { type MacroDef, type ModifierKey } from '../../src/lib/shell-config';
 import { type ShellConfigState } from '../../src/lib/shell-config-store';
 import { type ControllerOutcome } from '../../src/lib/shell-controllers/controller-core';
 import {
 	createShellKeyboardInputCore,
+	type CreateShellKeyboardInputCoreOptions,
 	type ShellKeyboardInputCore,
 } from '../../src/lib/shell-controllers/keyboard-input-core';
-import { type ShellKeyboardStateCore } from '../../src/lib/shell-controllers/keyboard-state-core';
+import { type TerminalRuntimeKey } from '../../src/lib/shell-controllers/terminal-transport';
 
 export type TimerId = number;
 
@@ -19,6 +20,7 @@ export function createFakeClock() {
 	let throwNextSchedule = false;
 	let scheduleHook: (() => void) | null = null;
 	let throwNextClear = false;
+	let clearHook: (() => void) | null = null;
 	const timers = new Map<TimerId, { at: number; task: () => void }>();
 	return {
 		setTimeout: (task: () => void, delayMs: number): TimerId => {
@@ -36,6 +38,7 @@ export function createFakeClock() {
 				throwNextClear = false;
 				throw new Error('clear failed');
 			}
+			clearHook?.();
 			timers.delete(id);
 		},
 		advanceBy: (durationMs: number): void => {
@@ -64,6 +67,9 @@ export function createFakeClock() {
 		},
 		setScheduleHook: (hook: (() => void) | null) => {
 			scheduleHook = hook;
+		},
+		setClearHook: (hook: (() => void) | null) => {
+			clearHook = hook;
 		},
 		settled: async (): Promise<void> => {
 			await Promise.resolve();
@@ -110,7 +116,7 @@ export function createKeyboardInputHarness() {
 		generation: 1,
 	};
 	let sourceKey = 'source-1';
-	let runtimeKey: object | null = { id: 'runtime-1' };
+	let runtimeKey: TerminalRuntimeKey | null = 'runtime-1' as TerminalRuntimeKey;
 	let instanceId: string | null = 'instance-1';
 	let macros: MacroDef[] = shellConfigState.config.macrosByKeyboardId.main;
 	let modifiersActive = false;
@@ -124,26 +130,47 @@ export function createKeyboardInputHarness() {
 		| null = null;
 	let currentnessImplementation: ((candidate: string) => boolean) | null = null;
 	let actionImplementation:
-		| ((actionId: ActionId, options?: RunActionOptions) => void | Promise<void>)
+		| ((
+				actionId: ActionId,
+				options?: RunActionOptions,
+		  ) =>
+				| void
+				| ControllerOutcome<{ message: string }>
+				| PromiseLike<void | ControllerOutcome<{ message: string }>>)
 		| null = null;
 	let currentConfigState: ShellConfigState = shellConfigState;
 	let throwHistory = false;
 	let keyboardId = 'main';
 	let activityReadHook: (() => void) | null = null;
-	const state = {
-		getSnapshot: () => ({
-			shellConfigState: currentConfigState,
-			keyboard: {
-				...(currentConfigState.config.keyboards[0] ?? {
-					name: 'Keyboard',
-					grid: [],
-				}),
-				id: keyboardId,
-			},
-			macros,
-			modifierKeysActive: modifiersActive ? ['CTRL' as const] : [],
-			selectionModeEnabled,
-		}),
+	let stateSnapshotHook: ((call: number) => void) | null = null;
+	let stateSnapshotCalls = 0;
+	let throwStateSnapshotCall: number | null = null;
+	let terminalSelectionImplementation: ((enabled: boolean) => void) | null =
+		null;
+	let closeCommandMenuImplementation: (() => void) | null = null;
+	const closedCommandMenus: string[] = [];
+	const state: CreateShellKeyboardInputCoreOptions['state'] = {
+		getSnapshot: () => {
+			stateSnapshotCalls += 1;
+			stateSnapshotHook?.(stateSnapshotCalls);
+			if (throwStateSnapshotCall === stateSnapshotCalls) {
+				throwStateSnapshotCall = null;
+				throw new Error('snapshot failed');
+			}
+			return {
+				shellConfigState: currentConfigState,
+				keyboard: {
+					...(currentConfigState.config.keyboards[0] ?? {
+						name: 'Keyboard',
+						grid: [],
+					}),
+					id: keyboardId,
+				},
+				macros,
+				modifierKeysActive: modifiersActive ? ['CTRL' as const] : [],
+				selectionModeEnabled,
+			};
+		},
 		applyModifiers: (bytes: Uint8Array<ArrayBuffer>) => {
 			if (!modifiersActive) return new Uint8Array(bytes);
 			return new Uint8Array([bytes[0] === 0x61 ? 0x01 : (bytes[0] ?? 0)]);
@@ -157,8 +184,8 @@ export function createKeyboardInputHarness() {
 			recordedHistory.push(text);
 		},
 		completeSlotPress: () => completedSlots.push('complete'),
-		toggleModifier: (modifier: string) => modifierToggles.push(modifier),
-	} as unknown as ShellKeyboardStateCore;
+		toggleModifier: (modifier: ModifierKey) => modifierToggles.push(modifier),
+	};
 	const core = createShellKeyboardInputCore({
 		state,
 		scrollbackInput: {
@@ -171,13 +198,16 @@ export function createKeyboardInputHarness() {
 			},
 		},
 		terminalView: {
-			getRuntimeKey: () => runtimeKey as never,
+			getRuntimeKey: () => runtimeKey,
 			getRuntimeInstanceId: () => instanceId,
 			isCurrentInstance: (candidate) =>
 				currentnessImplementation
 					? currentnessImplementation(candidate)
 					: candidate === instanceId,
-			setSelectionModeEnabled: (enabled) => selectionCommands.push(enabled),
+			setSelectionModeEnabled: (enabled) => {
+				terminalSelectionImplementation?.(enabled);
+				selectionCommands.push(enabled);
+			},
 		},
 		getActivitySnapshot: () => {
 			activityReadHook?.();
@@ -190,6 +220,10 @@ export function createKeyboardInputHarness() {
 		},
 		setTimeout: clock.setTimeout,
 		clearTimeout: clock.clearTimeout,
+		closeCommandMenu: () => {
+			closedCommandMenus.push('close');
+			closeCommandMenuImplementation?.();
+		},
 		logger: { warn: (message) => warnings.push(message) },
 	});
 	return {
@@ -203,6 +237,7 @@ export function createKeyboardInputHarness() {
 		completedSlots,
 		modifierToggles,
 		warnings,
+		closedCommandMenus,
 		setOutcome: (next: ControllerOutcome<{ message: string }>) => {
 			outcome = next;
 		},
@@ -228,7 +263,7 @@ export function createKeyboardInputHarness() {
 			sourceKey = `${sourceKey}-next`;
 		},
 		replaceRuntime: () => {
-			runtimeKey = { id: 'runtime-next' };
+			runtimeKey = 'runtime-next' as TerminalRuntimeKey;
 			instanceId = 'instance-next';
 		},
 		setInstanceId: (next: string | null) => {
@@ -254,6 +289,24 @@ export function createKeyboardInputHarness() {
 		},
 		setActivityReadHook: (hook: (() => void) | null) => {
 			activityReadHook = hook;
+		},
+		setStateSnapshotHook: (hook: ((call: number) => void) | null) => {
+			stateSnapshotCalls = 0;
+			stateSnapshotHook = hook;
+		},
+		throwOnStateSnapshotCall: (call: number) => {
+			stateSnapshotCalls = 0;
+			throwStateSnapshotCall = call;
+		},
+		setTerminalSelectionImplementation: (
+			implementation: typeof terminalSelectionImplementation,
+		) => {
+			terminalSelectionImplementation = implementation;
+		},
+		setCloseCommandMenuImplementation: (
+			implementation: typeof closeCommandMenuImplementation,
+		) => {
+			closeCommandMenuImplementation = implementation;
 		},
 	};
 }

@@ -7,6 +7,7 @@ import {
 	type CommandStep,
 	type KeyboardExecutableItem,
 	type MacroDef,
+	type ModifierKey,
 } from '@/lib/shell-config';
 import {
 	buildClipboardPasteSegments,
@@ -19,10 +20,9 @@ import {
 	type ControllerInvalidationReason,
 	type ControllerOutcome,
 } from './controller-core';
-import { type ShellKeyboardStateCore } from './keyboard-state-core';
+import { type ShellKeyboardStateSnapshot } from './keyboard-state-core';
 import { type ShellScrollbackInputPort } from './scrollback-contracts';
-// eslint-disable-next-line import/consistent-type-specifier-style -- Keep the pure input core out of the React Native hook module in Node tests.
-import type { ShellTerminalViewPort } from './terminal';
+import { type ShellTerminalRuntimeView } from './terminal-hook-runtime';
 
 const encoder = new TextEncoder();
 const defaultStepDelayMs = 50;
@@ -34,6 +34,22 @@ type TimerHandle = unknown;
 
 export type ShellKeyboardInputLogger = {
 	warn(message: string, error?: unknown): void;
+};
+
+export type ShellKeyboardInputStatePort = {
+	getSnapshot(): Pick<
+		ShellKeyboardStateSnapshot,
+		| 'shellConfigState'
+		| 'keyboard'
+		| 'macros'
+		| 'modifierKeysActive'
+		| 'selectionModeEnabled'
+	>;
+	applyModifiers(bytes: Uint8Array<ArrayBuffer>): Uint8Array<ArrayBuffer>;
+	setSelectionModeEnabled(enabled: boolean): void;
+	recordAcceptedTextPaste(text: string): void;
+	completeSlotPress(): void;
+	toggleModifier(modifier: ModifierKey): void;
 };
 
 export type ShellKeyboardInputCore = {
@@ -58,18 +74,10 @@ export type ShellKeyboardInputCore = {
 };
 
 export type CreateShellKeyboardInputCoreOptions = {
-	state: Pick<
-		ShellKeyboardStateCore,
-		| 'getSnapshot'
-		| 'applyModifiers'
-		| 'setSelectionModeEnabled'
-		| 'recordAcceptedTextPaste'
-		| 'completeSlotPress'
-		| 'toggleModifier'
-	>;
+	state: ShellKeyboardInputStatePort;
 	scrollbackInput: ShellScrollbackInputPort;
 	terminalView: Pick<
-		ShellTerminalViewPort,
+		ShellTerminalRuntimeView,
 		| 'getRuntimeKey'
 		| 'getRuntimeInstanceId'
 		| 'isCurrentInstance'
@@ -208,35 +216,59 @@ export function createShellKeyboardInputCore({
 	};
 
 	const isCurrent = (token: RequestToken): boolean => {
-		if (disposed || token.generation !== generation) return false;
+		const ownsGeneration = () => !disposed && token.generation === generation;
+		if (!ownsGeneration()) return false;
 		try {
 			const activity = getActivitySnapshot();
-			return (
-				activity.interactive &&
-				activity.generation === token.activityGeneration &&
-				getSourceKey() === token.sourceKey &&
-				terminalView.getRuntimeKey() === token.runtimeKey &&
-				terminalView.getRuntimeInstanceId() === token.runtimeInstanceId &&
-				terminalView.isCurrentInstance(token.runtimeInstanceId) &&
-				state.getSnapshot().shellConfigState === token.configState
+			if (
+				!ownsGeneration() ||
+				!activity.interactive ||
+				activity.generation !== token.activityGeneration
+			) {
+				return false;
+			}
+			const sourceKey = getSourceKey();
+			if (!ownsGeneration() || sourceKey !== token.sourceKey) return false;
+			const runtimeKey = terminalView.getRuntimeKey();
+			if (!ownsGeneration() || runtimeKey !== token.runtimeKey) return false;
+			const runtimeInstanceId = terminalView.getRuntimeInstanceId();
+			if (!ownsGeneration() || runtimeInstanceId !== token.runtimeInstanceId) {
+				return false;
+			}
+			const instanceCurrent = terminalView.isCurrentInstance(
+				token.runtimeInstanceId,
 			);
+			if (!ownsGeneration() || !instanceCurrent) return false;
+			const configState = state.getSnapshot().shellConfigState;
+			return ownsGeneration() && configState === token.configState;
 		} catch (error) {
 			safeWarn('Failed to validate keyboard input authority', error);
 			return false;
 		}
 	};
 
-	const exitSelection = (token: RequestToken): boolean => {
-		if (!isCurrent(token)) return false;
+	const exitSelection = (token: RequestToken): InputOutcome => {
+		if (!isCurrent(token)) return { status: 'superseded' };
 		try {
-			if (!state.getSnapshot().selectionModeEnabled) return isCurrent(token);
+			if (!state.getSnapshot().selectionModeEnabled) {
+				return isCurrent(token)
+					? { status: 'completed' }
+					: { status: 'superseded' };
+			}
 			state.setSelectionModeEnabled(false);
-			if (!isCurrent(token)) return false;
+			if (!isCurrent(token)) return { status: 'superseded' };
 			terminalView.setSelectionModeEnabled(false);
-			return isCurrent(token);
+			return isCurrent(token)
+				? { status: 'completed' }
+				: { status: 'superseded' };
 		} catch (error) {
 			safeWarn('Failed to exit terminal selection mode', error);
-			return false;
+			return isCurrent(token)
+				? {
+						status: 'failed',
+						failure: { message: 'Failed to exit terminal selection mode.' },
+					}
+				: { status: 'superseded' };
 		}
 	};
 
@@ -293,7 +325,8 @@ export function createShellKeyboardInputCore({
 	): Promise<InputOutcome> => {
 		const token = createToken();
 		if (!token) return { status: 'unavailable' };
-		if (!exitSelection(token)) return { status: 'superseded' };
+		const selectionOutcome = exitSelection(token);
+		if (!isCompleted(selectionOutcome)) return selectionOutcome;
 		let copied = copySegments(segments);
 		if (options?.modifiers) {
 			try {
@@ -381,20 +414,27 @@ export function createShellKeyboardInputCore({
 					const timer = scheduleTimeout(() => {
 						if (sequence?.generation !== token.generation) return;
 						sequence.timer = null;
-						void sendSegments(
-							token,
-							stepSegments(step),
-							undefined,
-							onAccepted,
-						).then((outcome) => {
-							if (sequence?.generation !== token.generation) return;
-							if (!isCompleted(outcome)) {
-								finish(outcome);
+						const segments = stepSegments(step);
+						if (segments.length === 0) {
+							if (!isCurrent(token)) {
+								finish({ status: 'superseded' });
 								return;
 							}
 							index += 1;
 							scheduleNext();
-						});
+							return;
+						}
+						void sendSegments(token, segments, undefined, onAccepted).then(
+							(outcome) => {
+								if (sequence?.generation !== token.generation) return;
+								if (!isCompleted(outcome)) {
+									finish(outcome);
+									return;
+								}
+								index += 1;
+								scheduleNext();
+							},
+						);
 					}, delay);
 					if (sequence?.generation === token.generation) sequence.timer = timer;
 					else cancelTimeout(timer);
@@ -414,7 +454,9 @@ export function createShellKeyboardInputCore({
 		const copiedSteps = steps.map(copyStep);
 		const token = createToken();
 		if (!token) return Promise.resolve({ status: 'unavailable' });
-		if (!exitSelection(token)) return Promise.resolve({ status: 'superseded' });
+		const selectionOutcome = exitSelection(token);
+		if (!isCompleted(selectionOutcome))
+			return Promise.resolve(selectionOutcome);
 		try {
 			closeCommandMenu?.();
 		} catch (error) {
@@ -484,21 +526,31 @@ export function createShellKeyboardInputCore({
 			: { status: 'superseded' };
 	};
 
-	const completeSlot = (
-		token: RequestToken,
-		outcome: InputOutcome,
-		accepted = isCompleted(outcome),
-	): InputOutcome => {
-		if (!accepted || !isCurrent(token)) return outcome;
-		try {
-			state.completeSlotPress();
-			return isCurrent(token) ? outcome : { status: 'superseded' };
-		} catch (error) {
-			safeWarn('Failed to complete keyboard slot press', error);
-			return isCurrent(token)
-				? { status: 'failed', failure: { message: 'Keyboard input failed.' } }
-				: { status: 'superseded' };
-		}
+	const createSlotCompletion = (token: RequestToken) => {
+		let phase: 'pending' | 'completed' | 'failed' = 'pending';
+		const commit = () => {
+			if (phase !== 'pending' || !isCurrent(token)) return;
+			try {
+				state.completeSlotPress();
+				phase = 'completed';
+			} catch (error) {
+				phase = 'failed';
+				safeWarn('Failed to complete keyboard slot press', error);
+			}
+		};
+		return {
+			commit,
+			finish: (outcome: InputOutcome) => {
+				if (isCompleted(outcome)) commit();
+				if (phase === 'failed' && isCurrent(token)) {
+					return {
+						status: 'failed',
+						failure: { message: 'Keyboard input failed.' },
+					} satisfies InputOutcome;
+				}
+				return outcome;
+			},
+		};
 	};
 
 	return {
@@ -516,7 +568,8 @@ export function createShellKeyboardInputCore({
 				return { status: 'unavailable' };
 			}
 			if (!isCurrent(token)) return { status: 'superseded' };
-			if (!exitSelection(token)) return { status: 'superseded' };
+			const selectionOutcome = exitSelection(token);
+			if (!isCompleted(selectionOutcome)) return selectionOutcome;
 			return sendSegments(token, [encoder.encode(copiedValue)]);
 		},
 		pasteClipboard: (value) =>
@@ -527,7 +580,8 @@ export function createShellKeyboardInputCore({
 			const historyText = payload.historyText;
 			const token = createToken();
 			if (!token) return { status: 'unavailable' };
-			if (!exitSelection(token)) return { status: 'superseded' };
+			const selectionOutcome = exitSelection(token);
+			if (!isCompleted(selectionOutcome)) return selectionOutcome;
 			const outcome = await sendSegments(
 				token,
 				payload.segments,
@@ -561,23 +615,12 @@ export function createShellKeyboardInputCore({
 			const explicitCopy =
 				copiedSlot.type === 'action' &&
 				copiedSlot.actionId === 'COPY_SELECTION';
-			if (!explicitCopy && !exitSelection(token)) {
-				return { status: 'superseded' };
+			if (!explicitCopy) {
+				const selectionOutcome = exitSelection(token);
+				if (!isCompleted(selectionOutcome)) return selectionOutcome;
 			}
 			let outcome: InputOutcome;
-			let accepted = false;
-			let completedAtAcceptance = false;
-			let acceptanceCompletionFailed = false;
-			const completeAtAcceptance = () => {
-				if (completedAtAcceptance || !isCurrent(token)) return;
-				completedAtAcceptance = true;
-				try {
-					state.completeSlotPress();
-				} catch (error) {
-					acceptanceCompletionFailed = true;
-					safeWarn('Failed to complete keyboard slot press', error);
-				}
-			};
+			const completion = createSlotCompletion(token);
 			switch (copiedSlot.type) {
 				case 'modifier':
 					try {
@@ -585,7 +628,6 @@ export function createShellKeyboardInputCore({
 						outcome = isCurrent(token)
 							? { status: 'completed' }
 							: { status: 'superseded' };
-						accepted = isCompleted(outcome);
 					} catch (error) {
 						safeWarn('Keyboard modifier action failed', error);
 						outcome = {
@@ -606,20 +648,29 @@ export function createShellKeyboardInputCore({
 						};
 					}
 					outcome = await sendSegments(token, [bytes], undefined, () => {
-						accepted = true;
-						completeAtAcceptance();
+						completion.commit();
 					});
 					break;
 				}
 				case 'bytes': {
-					const plan = planDetectedOpenShortcutPress(
-						state.getSnapshot().keyboard?.id,
-						copiedSlot,
-					);
+					let plan;
+					try {
+						plan = planDetectedOpenShortcutPress(
+							state.getSnapshot().keyboard?.id,
+							copiedSlot,
+						);
+					} catch (error) {
+						safeWarn('Failed to snapshot keyboard byte slot', error);
+						return isCurrent(token)
+							? {
+									status: 'failed',
+									failure: { message: 'Keyboard input failed.' },
+								}
+							: { status: 'superseded' };
+					}
 					if (!isCurrent(token)) return { status: 'superseded' };
 					if (plan.type === 'action') {
 						outcome = await runActionWithToken(token, plan.actionId);
-						accepted = isCompleted(outcome);
 					} else {
 						let bytes = new Uint8Array(plan.bytes);
 						try {
@@ -632,23 +683,32 @@ export function createShellKeyboardInputCore({
 							};
 						}
 						outcome = await sendSegments(token, [bytes], undefined, () => {
-							accepted = true;
-							completeAtAcceptance();
+							completion.commit();
 						});
 					}
 					break;
 				}
 				case 'macro': {
-					const macro = state
-						.getSnapshot()
-						.macros.find((candidate) => candidate.id === copiedSlot.macroId);
+					let macro: MacroDef | undefined;
+					try {
+						macro = state
+							.getSnapshot()
+							.macros.find((candidate) => candidate.id === copiedSlot.macroId);
+					} catch (error) {
+						safeWarn('Failed to snapshot keyboard macro slot', error);
+						return isCurrent(token)
+							? {
+									status: 'failed',
+									failure: { message: 'Keyboard macro failed.' },
+								}
+							: { status: 'superseded' };
+					}
 					if (!macro) return { status: 'unavailable' };
 					outcome = await runMacroWithToken(
 						token,
 						{ ...macro },
-						completeAtAcceptance,
+						completion.commit,
 					);
-					accepted = isCompleted(outcome);
 					break;
 				}
 				case 'action': {
@@ -661,21 +721,12 @@ export function createShellKeyboardInputCore({
 					outcome = routed
 						? await runActionWithToken(token, routed.actionId, routed.options)
 						: { status: 'unavailable' };
-					accepted = isCompleted(outcome);
 					break;
 				}
 				default:
 					return { status: 'unavailable' };
 			}
-			if (acceptanceCompletionFailed && isCurrent(token)) {
-				return {
-					status: 'failed',
-					failure: { message: 'Keyboard input failed.' },
-				};
-			}
-			return completedAtAcceptance
-				? outcome
-				: completeSlot(token, outcome, accepted);
+			return completion.finish(outcome);
 		},
 		invalidate: (_reason) => {
 			if (disposed) return;
@@ -683,8 +734,8 @@ export function createShellKeyboardInputCore({
 		},
 		dispose: () => {
 			if (disposed) return;
-			advanceGeneration();
 			disposed = true;
+			advanceGeneration();
 		},
 	};
 }

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { type ControllerOutcome } from '../../src/lib/shell-controllers/controller-core';
+import { type ResolvedKeyboardLongPressOption } from '../../src/lib/work-key-long-press-options';
 import { createKeyboardInputHarness } from './shell-keyboard-input-controller-test-support';
 
 function deferred<Value>() {
@@ -202,6 +203,9 @@ void test('throwing timer cancellation is contained while invalidation settles s
 	assert.deepEqual(harness.warnings, [
 		'Failed to cancel keyboard command timer',
 	]);
+	harness.clock.advanceBy(10);
+	assert.deepEqual(harness.sent, []);
+	assert.equal(harness.clock.pendingCount(), 0);
 });
 
 void test('non-completed step outcomes stop all remaining scheduled work', async () => {
@@ -435,13 +439,14 @@ void test('detected-open bytes route through canonical action planning', async (
 
 void test('long-press action metadata is forwarded through canonical routing', async () => {
 	const harness = createKeyboardInputHarness();
-	await harness.core.handleSlotPress({
+	const option = {
 		type: 'action',
 		actionId: 'WORKMUX_NAV_PREV',
 		label: 'Prev',
 		icon: null,
 		workmuxNavScopeOverride: 'all',
-	} as never);
+	} satisfies ResolvedKeyboardLongPressOption;
+	await harness.core.handleSlotPress(option);
 	assert.deepEqual(harness.actions, [
 		{
 			actionId: 'WORKMUX_NAV_PREV',
