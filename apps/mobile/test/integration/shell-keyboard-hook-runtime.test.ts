@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
 	applyKeyboardSelectionMode,
 	createKeyboardAnimationIdentityTracker,
+	createKeyboardAnimationController,
 	createKeyboardClipboardAuthority,
 	createKeyboardControllerAdmission,
 	subscribeKeyboardVisibility,
@@ -149,4 +150,70 @@ void test('controller admission closes synchronously and matching setup reopens 
 	assert.equal(admission.isCurrent(first), false);
 	admission.cleanup(first);
 	assert.equal(admission.isCurrent(second), true);
+});
+
+void test('routine invalidation stales old ownership and immediately admits new work', () => {
+	const invalidations: string[] = [];
+	const admission = createKeyboardControllerAdmission((reason) =>
+		invalidations.push(reason),
+	);
+	const first = admission.setup();
+	const second = admission.invalidate('focus-lost');
+	assert.equal(admission.isCurrent(first), false);
+	assert.ok(second !== null);
+	assert.equal(admission.isCurrent(second), true);
+	const third = admission.invalidate('runtime-reset');
+	assert.ok(third !== null);
+	assert.equal(admission.isCurrent(second), false);
+	assert.equal(admission.isCurrent(third), true);
+	assert.deepEqual(invalidations, ['focus-lost', 'runtime-reset']);
+	admission.cleanup(third);
+	assert.equal(admission.getGeneration(), null);
+	assert.equal(admission.invalidate('source-change'), null);
+	const replay = admission.setup();
+	assert.equal(admission.isCurrent(replay), true);
+	admission.dispose();
+	assert.equal(admission.setup(), null);
+	assert.equal(admission.invalidate('runtime-reset'), null);
+});
+
+void test('animation completion is current-only and cleanup stops exact timing', () => {
+	const names: (string | null)[] = [];
+	const values: number[] = [];
+	const configurations: {
+		duration: number;
+		delay: number;
+		useNativeDriver: boolean;
+	}[] = [];
+	const completions: ((result: { finished: boolean }) => void)[] = [];
+	let stops = 0;
+	let admitted = true;
+	const controller = createKeyboardAnimationController({
+		initialIdentity: 'main',
+		isAdmitted: () => admitted,
+		setName: (name) => names.push(name),
+		setOpacity: (value) => values.push(value),
+		start: (configuration, completion) => {
+			configurations.push(configuration);
+			completions.push(completion);
+			return () => {
+				stops += 1;
+			};
+		},
+	});
+	assert.equal(controller.replace('main', 'Main'), false);
+	assert.equal(controller.replace('advanced', 'Advanced'), true);
+	assert.deepEqual(configurations, [
+		{ duration: 800, delay: 400, useNativeDriver: true },
+	]);
+	assert.deepEqual(values, [1]);
+	assert.equal(controller.replace('browser', 'Browser'), true);
+	assert.equal(stops, 1);
+	completions[0]?.({ finished: true });
+	assert.deepEqual(names, ['Advanced', 'Browser']);
+	admitted = false;
+	completions[1]?.({ finished: true });
+	assert.deepEqual(names, ['Advanced', 'Browser']);
+	controller.cancel();
+	assert.equal(stops, 2);
 });

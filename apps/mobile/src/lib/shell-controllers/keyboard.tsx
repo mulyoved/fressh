@@ -38,7 +38,7 @@ import {
 } from './controller-core';
 import {
 	applyKeyboardSelectionMode,
-	createKeyboardAnimationIdentityTracker,
+	createKeyboardAnimationController,
 	createKeyboardClipboardAuthority,
 	createKeyboardControllerAdmission,
 	subscribeKeyboardVisibility,
@@ -243,15 +243,6 @@ export function useShellKeyboardController(
 			logger: deps.logger,
 		}),
 	);
-	const [lifecycle] = useState(() =>
-		createReplaySafeDisposer(() => {
-			inputCore.invalidate('unmount');
-			remoteCore.invalidate('unmount');
-			remoteCore.dispose();
-			inputCore.dispose();
-			stateCore.dispose();
-		}),
-	);
 	const [admission] = useState(() =>
 		createKeyboardControllerAdmission((reason) => {
 			clipboardAuthority.invalidate();
@@ -259,10 +250,32 @@ export function useShellKeyboardController(
 			remoteCore.invalidate(reason);
 		}),
 	);
-	const [animationIdentity] = useState(() =>
-		createKeyboardAnimationIdentityTracker(
-			stateCore.getSnapshot().keyboard?.id ?? null,
-		),
+	const [lifecycle] = useState(() =>
+		createReplaySafeDisposer(() => {
+			admission.dispose();
+			clipboardAuthority.invalidate();
+			inputCore.invalidate('unmount');
+			remoteCore.invalidate('unmount');
+			remoteCore.dispose();
+			inputCore.dispose();
+			stateCore.dispose();
+		}),
+	);
+	const [animationController] = useState(() =>
+		createKeyboardAnimationController({
+			initialIdentity: stateCore.getSnapshot().keyboard?.id ?? null,
+			isAdmitted: () => admission.getGeneration() !== null,
+			setName: setFlashName,
+			setOpacity: (value) => flashOpacity.setValue(value),
+			start: (configuration, completion) => {
+				const animation = Animated.timing(flashOpacity, {
+					toValue: 0,
+					...configuration,
+				});
+				animation.start(completion);
+				return () => animation.stop();
+			},
+		}),
 	);
 	const snapshot = useSyncExternalStore(
 		stateCore.subscribe,
@@ -374,7 +387,9 @@ export function useShellKeyboardController(
 
 	useEffect(() => {
 		const generation = admission.setup();
-		return () => admission.cleanup(generation);
+		return () => {
+			if (generation !== null) admission.cleanup(generation);
+		};
 	}, [admission]);
 	useEffect(() => lifecycle.setup(), [lifecycle]);
 	useEffect(() => {
@@ -427,22 +442,12 @@ export function useShellKeyboardController(
 	]);
 
 	useEffect(() => {
-		if (!animationIdentity.replace(snapshot.keyboard?.id ?? null)) return;
-		if (!snapshot.keyboard) return;
-		// eslint-disable-next-line @eslint-react/hooks-extra/no-direct-set-state-in-use-effect -- The effect deliberately mirrors the committed keyboard into transient animation copy.
-		setFlashName(snapshot.keyboard.name);
-		flashOpacity.setValue(1);
-		const animation = Animated.timing(flashOpacity, {
-			toValue: 0,
-			duration: 800,
-			delay: 400,
-			useNativeDriver: true,
-		});
-		animation.start(({ finished }) => {
-			if (finished) setFlashName(null);
-		});
-		return () => animation.stop();
-	}, [animationIdentity, flashOpacity, snapshot.keyboard]);
+		animationController.replace(
+			snapshot.keyboard?.id ?? null,
+			snapshot.keyboard?.name ?? null,
+		);
+		return animationController.cancel;
+	}, [animationController, snapshot.keyboard]);
 
 	const onAction = useCallback(
 		(actionId: ActionId) => {

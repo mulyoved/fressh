@@ -1,10 +1,11 @@
 import { type ControllerInvalidationReason } from './controller-core';
 
 export type KeyboardControllerAdmission = {
-	setup(): number;
-	cleanup(generation: number): void;
-	invalidate(reason: ControllerInvalidationReason): void;
-	isCurrent(generation: number): boolean;
+	setup(): number | null;
+	cleanup(generation: number | null): void;
+	invalidate(reason: ControllerInvalidationReason): number | null;
+	dispose(): void;
+	isCurrent(generation: number | null): boolean;
 	getGeneration(): number | null;
 };
 
@@ -13,8 +14,10 @@ export function createKeyboardControllerAdmission(
 ): KeyboardControllerAdmission {
 	let generation = 0;
 	let admitted: number | null = null;
+	let disposed = false;
 	return {
 		setup: () => {
+			if (disposed) return null;
 			generation += 1;
 			admitted = generation;
 			return generation;
@@ -25,12 +28,70 @@ export function createKeyboardControllerAdmission(
 			invalidate('unmount');
 		},
 		invalidate: (reason) => {
-			if (admitted === null) return;
-			admitted = null;
+			if (disposed || admitted === null) return null;
 			invalidate(reason);
+			generation += 1;
+			admitted = generation;
+			return generation;
 		},
-		isCurrent: (ownedGeneration) => admitted === ownedGeneration,
+		dispose: () => {
+			if (disposed) return;
+			disposed = true;
+			admitted = null;
+		},
+		isCurrent: (ownedGeneration) =>
+			ownedGeneration !== null && admitted === ownedGeneration,
 		getGeneration: () => admitted,
+	};
+}
+
+export type KeyboardAnimationController = {
+	replace(identity: string | null, name: string | null): boolean;
+	cancel(): void;
+};
+
+export function createKeyboardAnimationController(input: {
+	initialIdentity: string | null;
+	isAdmitted(): boolean;
+	setName(name: string | null): void;
+	setOpacity(value: number): void;
+	start(
+		configuration: {
+			duration: number;
+			delay: number;
+			useNativeDriver: boolean;
+		},
+		completion: (result: { finished: boolean }) => void,
+	): () => void;
+}): KeyboardAnimationController {
+	const identities = createKeyboardAnimationIdentityTracker(
+		input.initialIdentity,
+	);
+	let generation = 0;
+	let stop: (() => void) | null = null;
+	return {
+		replace: (identity, name) => {
+			if (!identities.replace(identity) || name === null || !input.isAdmitted())
+				return false;
+			generation += 1;
+			const owned = generation;
+			stop?.();
+			input.setName(name);
+			input.setOpacity(1);
+			stop = input.start(
+				{ duration: 800, delay: 400, useNativeDriver: true },
+				({ finished }) => {
+					if (finished && owned === generation && input.isAdmitted())
+						input.setName(null);
+				},
+			);
+			return true;
+		},
+		cancel: () => {
+			generation += 1;
+			stop?.();
+			stop = null;
+		},
 	};
 }
 
