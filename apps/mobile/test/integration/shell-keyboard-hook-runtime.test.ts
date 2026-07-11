@@ -6,6 +6,7 @@ import {
 	createKeyboardAnimationController,
 	createKeyboardClipboardAuthority,
 	createKeyboardControllerAdmission,
+	invalidateKeyboardControllerDomains,
 	subscribeKeyboardVisibility,
 } from '../../src/lib/shell-controllers/keyboard-hook-runtime';
 
@@ -15,6 +16,28 @@ void test('animation identity survives setup replay and animates semantic replac
 	assert.equal(tracker.replace('main'), false);
 	assert.equal(tracker.replace('advanced'), true);
 	assert.equal(tracker.replace('advanced'), false);
+});
+
+void test('domain invalidation attempts every sibling after failures', () => {
+	const calls: string[] = [];
+	invalidateKeyboardControllerDomains('focus-lost', [
+		() => {
+			calls.push('clipboard');
+			throw new Error('clipboard');
+		},
+		() => calls.push('animation'),
+		(reason) => {
+			calls.push(`input:${reason}`);
+			throw new Error('input');
+		},
+		(reason) => calls.push(`remote:${reason}`),
+	]);
+	assert.deepEqual(calls, [
+		'clipboard',
+		'animation',
+		'input:focus-lost',
+		'remote:focus-lost',
+	]);
 });
 
 void test('Android visibility subscription owns exactly one listener pair and cleanup', () => {
@@ -167,7 +190,7 @@ void test('routine invalidation stales old ownership and immediately admits new 
 	assert.equal(admission.isCurrent(second), false);
 	assert.equal(admission.isCurrent(third), true);
 	assert.deepEqual(invalidations, ['focus-lost', 'runtime-reset']);
-	admission.cleanup(third);
+	admission.cleanup(first);
 	assert.equal(admission.getGeneration(), null);
 	assert.equal(admission.invalidate('source-change'), null);
 	const replay = admission.setup();
@@ -175,6 +198,54 @@ void test('routine invalidation stales old ownership and immediately admits new 
 	admission.dispose();
 	assert.equal(admission.setup(), null);
 	assert.equal(admission.invalidate('runtime-reset'), null);
+});
+
+void test('invalidation closes admission before domains and reopens after throwing invalidator', () => {
+	let admission!: ReturnType<typeof createKeyboardControllerAdmission>;
+	const observed: (number | null)[] = [];
+	admission = createKeyboardControllerAdmission(() => {
+		observed.push(admission.getGeneration());
+		throw new Error('domain failed');
+	});
+	const mounted = admission.setup();
+	const reopened = admission.invalidate('focus-lost');
+	assert.deepEqual(observed, [null]);
+	assert.equal(admission.isCurrent(mounted), false);
+	assert.ok(reopened !== null);
+	assert.equal(admission.isCurrent(reopened), true);
+});
+
+void test('cleanup or dispose during invalidation prevents reopen', () => {
+	let admission!: ReturnType<typeof createKeyboardControllerAdmission>;
+	let mounted: number | null = null;
+	let mode: 'cleanup' | 'dispose' = 'cleanup';
+	admission = createKeyboardControllerAdmission(() => {
+		if (mode === 'cleanup') admission.cleanup(mounted);
+		else admission.dispose();
+	});
+	mounted = admission.setup();
+	assert.equal(admission.invalidate('focus-lost'), null);
+	assert.equal(admission.getGeneration(), null);
+	mounted = admission.setup();
+	mode = 'dispose';
+	assert.equal(admission.invalidate('runtime-reset'), null);
+	assert.equal(admission.setup(), null);
+});
+
+void test('nested invalidation cannot let the outer transaction overwrite its generation', () => {
+	let admission!: ReturnType<typeof createKeyboardControllerAdmission>;
+	let nested = false;
+	let nestedGeneration: number | null = null;
+	admission = createKeyboardControllerAdmission(() => {
+		if (nested) return;
+		nested = true;
+		nestedGeneration = admission.invalidate('runtime-reset');
+	});
+	admission.setup();
+	const outerResult = admission.invalidate('focus-lost');
+	assert.equal(outerResult, nestedGeneration);
+	assert.ok(nestedGeneration !== null);
+	assert.equal(admission.getGeneration(), nestedGeneration);
 });
 
 void test('animation completion is current-only and cleanup stops exact timing', () => {
@@ -187,10 +258,10 @@ void test('animation completion is current-only and cleanup stops exact timing',
 	}[] = [];
 	const completions: ((result: { finished: boolean }) => void)[] = [];
 	let stops = 0;
-	let admitted = true;
+	let admissionGeneration: number | null = 1;
 	const controller = createKeyboardAnimationController({
 		initialIdentity: 'main',
-		isAdmitted: () => admitted,
+		getAdmissionGeneration: () => admissionGeneration,
 		setName: (name) => names.push(name),
 		setOpacity: (value) => values.push(value),
 		start: (configuration, completion) => {
@@ -211,7 +282,7 @@ void test('animation completion is current-only and cleanup stops exact timing',
 	assert.equal(stops, 1);
 	completions[0]?.({ finished: true });
 	assert.deepEqual(names, ['Advanced', 'Browser']);
-	admitted = false;
+	admissionGeneration = 2;
 	completions[1]?.({ finished: true });
 	assert.deepEqual(names, ['Advanced', 'Browser']);
 	controller.cancel();

@@ -1,5 +1,18 @@
 import { type ControllerInvalidationReason } from './controller-core';
 
+export function invalidateKeyboardControllerDomains(
+	reason: ControllerInvalidationReason,
+	domains: readonly ((reason: ControllerInvalidationReason) => void)[],
+): void {
+	for (const invalidate of domains) {
+		try {
+			invalidate(reason);
+		} catch {
+			/* Each sibling domain still receives invalidation. */
+		}
+	}
+}
+
 export type KeyboardControllerAdmission = {
 	setup(): number | null;
 	cleanup(generation: number | null): void;
@@ -14,29 +27,58 @@ export function createKeyboardControllerAdmission(
 ): KeyboardControllerAdmission {
 	let generation = 0;
 	let admitted: number | null = null;
+	let lifecycleOwner: number | null = null;
+	let mounted = false;
 	let disposed = false;
+	let transaction = 0;
 	return {
 		setup: () => {
 			if (disposed) return null;
 			generation += 1;
 			admitted = generation;
+			lifecycleOwner = generation;
+			mounted = true;
 			return generation;
 		},
 		cleanup: (ownedGeneration) => {
-			if (admitted !== ownedGeneration) return;
+			if (disposed || lifecycleOwner !== ownedGeneration) return;
+			transaction += 1;
+			mounted = false;
+			lifecycleOwner = null;
 			admitted = null;
-			invalidate('unmount');
+			try {
+				invalidate('unmount');
+			} catch {
+				/* Domain cleanup is contained. */
+			}
 		},
 		invalidate: (reason) => {
-			if (disposed || admitted === null) return null;
-			invalidate(reason);
-			generation += 1;
-			admitted = generation;
-			return generation;
+			if (disposed || !mounted) return null;
+			const ownedTransaction = ++transaction;
+			admitted = null;
+			try {
+				invalidate(reason);
+			} catch {
+				/* Reopen deterministically after contained domain failure. */
+			} finally {
+				if (
+					!disposed &&
+					mounted &&
+					transaction === ownedTransaction &&
+					admitted === null
+				) {
+					generation += 1;
+					admitted = generation;
+				}
+			}
+			return admitted;
 		},
 		dispose: () => {
 			if (disposed) return;
+			transaction += 1;
 			disposed = true;
+			mounted = false;
+			lifecycleOwner = null;
 			admitted = null;
 		},
 		isCurrent: (ownedGeneration) =>
@@ -52,7 +94,7 @@ export type KeyboardAnimationController = {
 
 export function createKeyboardAnimationController(input: {
 	initialIdentity: string | null;
-	isAdmitted(): boolean;
+	getAdmissionGeneration(): number | null;
 	setName(name: string | null): void;
 	setOpacity(value: number): void;
 	start(
@@ -71,7 +113,8 @@ export function createKeyboardAnimationController(input: {
 	let stop: (() => void) | null = null;
 	return {
 		replace: (identity, name) => {
-			if (!identities.replace(identity) || name === null || !input.isAdmitted())
+			const admission = input.getAdmissionGeneration();
+			if (!identities.replace(identity) || name === null || admission === null)
 				return false;
 			generation += 1;
 			const owned = generation;
@@ -81,7 +124,11 @@ export function createKeyboardAnimationController(input: {
 			stop = input.start(
 				{ duration: 800, delay: 400, useNativeDriver: true },
 				({ finished }) => {
-					if (finished && owned === generation && input.isAdmitted())
+					if (
+						finished &&
+						owned === generation &&
+						input.getAdmissionGeneration() === admission
+					)
 						input.setName(null);
 				},
 			);

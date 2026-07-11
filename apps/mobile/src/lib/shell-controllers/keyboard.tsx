@@ -41,7 +41,9 @@ import {
 	createKeyboardAnimationController,
 	createKeyboardClipboardAuthority,
 	createKeyboardControllerAdmission,
+	invalidateKeyboardControllerDomains,
 	subscribeKeyboardVisibility,
+	type KeyboardAnimationController,
 } from './keyboard-hook-runtime';
 import {
 	type ShellKeyboardInputLogger,
@@ -243,11 +245,17 @@ export function useShellKeyboardController(
 			logger: deps.logger,
 		}),
 	);
+	const animationControllerRef = useRef<KeyboardAnimationController | null>(
+		null,
+	);
 	const [admission] = useState(() =>
 		createKeyboardControllerAdmission((reason) => {
-			clipboardAuthority.invalidate();
-			inputCore.invalidate(reason);
-			remoteCore.invalidate(reason);
+			invalidateKeyboardControllerDomains(reason, [
+				() => clipboardAuthority.invalidate(),
+				() => animationControllerRef.current?.cancel(),
+				(nextReason) => inputCore.invalidate(nextReason),
+				(nextReason) => remoteCore.invalidate(nextReason),
+			]);
 		}),
 	);
 	const [lifecycle] = useState(() =>
@@ -264,7 +272,7 @@ export function useShellKeyboardController(
 	const [animationController] = useState(() =>
 		createKeyboardAnimationController({
 			initialIdentity: stateCore.getSnapshot().keyboard?.id ?? null,
-			isAdmitted: () => admission.getGeneration() !== null,
+			getAdmissionGeneration: admission.getGeneration,
 			setName: setFlashName,
 			setOpacity: (value) => flashOpacity.setValue(value),
 			start: (configuration, completion) => {
@@ -277,6 +285,13 @@ export function useShellKeyboardController(
 			},
 		}),
 	);
+	useLayoutEffect(() => {
+		animationControllerRef.current = animationController;
+		return () => {
+			if (animationControllerRef.current === animationController)
+				animationControllerRef.current = null;
+		};
+	}, [animationController]);
 	const snapshot = useSyncExternalStore(
 		stateCore.subscribe,
 		stateCore.getSnapshot,
