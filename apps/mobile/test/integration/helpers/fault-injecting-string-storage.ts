@@ -1,4 +1,4 @@
-import type { AsyncStringStorage } from '../../../src/lib/transactional-secure-storage/contracts';
+import { type AsyncStringStorage } from '../../../src/lib/transactional-secure-storage/contracts';
 
 export type StorageFault =
 	| 'throw-before'
@@ -15,6 +15,7 @@ export class FaultInjectingStringStorage implements AsyncStringStorage {
 	private visible: Map<string, string>;
 	private durable: Map<string, string>;
 	private readonly faults = new Map<number, StorageFault>();
+	private readFault?: { pattern: string; remainingMatches: number };
 	private operationNumber = 0;
 
 	constructor(initial: Record<string, string> = {}) {
@@ -24,6 +25,10 @@ export class FaultInjectingStringStorage implements AsyncStringStorage {
 
 	failOperation(operationNumber: number, fault: StorageFault): void {
 		this.faults.set(operationNumber, fault);
+	}
+
+	failMatchingRead(pattern: string, occurrence: number): void {
+		this.readFault = { pattern, remainingMatches: occurrence };
 	}
 
 	restart(): void {
@@ -36,6 +41,13 @@ export class FaultInjectingStringStorage implements AsyncStringStorage {
 
 	async getItem(key: string): Promise<string | null> {
 		this.operationLog.push({ type: 'get', key });
+		if (this.readFault !== undefined && key.includes(this.readFault.pattern)) {
+			this.readFault.remainingMatches -= 1;
+			if (this.readFault.remainingMatches === 0) {
+				this.readFault = undefined;
+				throw new Error('Injected storage read fault');
+			}
+		}
 		return this.visible.get(key) ?? null;
 	}
 

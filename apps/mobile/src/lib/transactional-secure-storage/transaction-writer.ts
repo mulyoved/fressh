@@ -195,7 +195,7 @@ export function createTransactionWriter<Metadata extends object, Value>(
 			}
 			reopened = candidate.snapshot;
 		}
-		await runCleanup(staged.root.cleanupHeadKey);
+		await runCleanup(staged.root.cleanupHeadKey).catch(() => undefined);
 		let planCleanupComplete = true;
 		for (let pageIndex = 0; pageIndex < planPageCount; pageIndex++) {
 			if (!(await deleteBestEffort(keys.intentPlan(attemptId, pageIndex)))) {

@@ -384,6 +384,36 @@ void test('intent recovery preserves pending cleanup pages for retry', async () 
 	);
 });
 
+void test('does not fail a durable delete when cleanup-head reading fails', async () => {
+	const durableOld = await seedOldState();
+	const successful = new FaultInjectingStringStorage(durableOld);
+	await createStore(successful).deleteEntry(first.id);
+	const keys = buildV2Keys(namespace);
+	const lastRootWrite = successful.operationLog.findLastIndex(
+		({ type, key }) =>
+			type === 'set' && (key === keys.root.a || key === keys.root.b),
+	);
+	const postRootCleanupRead = successful.operationLog.findIndex(
+		({ type, key }, index) =>
+			index > lastRootWrite && type === 'get' && key.includes('-v2-cleanup-'),
+	);
+	assert.notEqual(postRootCleanupRead, -1);
+	const cleanupReadOccurrence = successful.operationLog
+		.slice(0, postRootCleanupRead + 1)
+		.filter(
+			({ type, key }) => type === 'get' && key.includes('-v2-cleanup-'),
+		).length;
+
+	const storage = new FaultInjectingStringStorage(durableOld);
+	storage.failMatchingRead('-v2-cleanup-', cleanupReadOccurrence);
+	const store = createStore(storage);
+
+	await store.deleteEntry(first.id);
+
+	assert.equal(await store.getEntry(first.id), null);
+	assert.equal((await store.ensureReady()).cleanupPending, true);
+});
+
 for (const fault of [
 	'throw-before',
 	'throw-after-visible',
