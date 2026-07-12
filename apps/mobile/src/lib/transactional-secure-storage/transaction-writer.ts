@@ -59,12 +59,9 @@ export function createTransactionWriter<Metadata extends object, Value>(
 				left.id < right.id ? -1 : left.id > right.id ? 1 : 0,
 			);
 			staged = await stageRecords(base, orderedEntries, attemptId, snapshotId);
-			const carriedCleanup = (
-				await readCleanupPages(base.root.cleanupHeadKey)
-			).flatMap(({ key, garbageKey }) => [garbageKey, key]);
-			const garbageKeys = [
-				...new Set([...cleanupKeys, ...carriedCleanup]),
-			].filter(
+			const legacyPending = base.root.legacyCleanupPending === true;
+			const carriedCleanup = legacyPending ? [] : (await readCleanupPages(base.root.cleanupHeadKey)).flatMap(({ key, garbageKey }) => [garbageKey, key]);
+			const garbageKeys = (legacyPending ? [] : [...new Set([...cleanupKeys, ...carriedCleanup])]).filter(
 				(key) =>
 					!staged.protectedKeys.has(key) &&
 					key !== keys.root.a &&
@@ -194,7 +191,7 @@ export function createTransactionWriter<Metadata extends object, Value>(
 			}
 			reopened = candidate.snapshot;
 		}
-		if (!deferCleanup)
+		if (!deferCleanup && reopened.root.legacyCleanupPending !== true)
 			await runCleanup(staged.root.cleanupHeadKey).catch(() => undefined);
 		let planCleanupComplete = true;
 		for (let pageIndex = 0; pageIndex < planPageCount; pageIndex++) {
@@ -311,7 +308,7 @@ export function createTransactionWriter<Metadata extends object, Value>(
 				manifestHeadKey: keys.manifest(attemptId, 0),
 				manifestPageCount: pageCount,
 				entryCount: references.length,
-				cleanupHeadKey: undefined as string | undefined,
+				cleanupHeadKey: base.root.legacyCleanupPending === true ? base.root.cleanupHeadKey : undefined,
 				legacyCleanupPageCount: base.root.legacyCleanupPageCount,
 				legacyCleanupPending: base.root.legacyCleanupPending,
 				legacyCleanupSha256: base.root.legacyCleanupSha256,

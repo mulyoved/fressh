@@ -106,7 +106,8 @@ export function createRecordSchemas<Metadata extends object>(
 			legacyCleanupPending: z.literal(true).optional(),
 			legacyCleanupSha256: z.string().optional(),
 		}).superRefine((record, context) => {
-			if ((record.legacyCleanupPageCount === undefined) !== (record.legacyCleanupSha256 === undefined)) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Legacy cleanup anchor fields must appear together' });
+			const legacyFields = [record.legacyCleanupPending, record.legacyCleanupPageCount, record.legacyCleanupSha256];
+			if (legacyFields.some((field) => field !== undefined) && (legacyFields.some((field) => field === undefined) || record.cleanupHeadKey === undefined)) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Anchored legacy cleanup fields and head must appear together' });
 		}),
 	);
 	const manifestPage = payloadBounded(

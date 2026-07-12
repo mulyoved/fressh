@@ -241,7 +241,9 @@ void test('unavailable exact inventory performs no cleanup-page reads or legacy 
 	for (const slot of ['a', 'b'] as const) {
 		const root = JSON.parse((await seeded.getItem(keys.root[slot]))!) as Record<string, unknown>;
 		delete root.legacyCleanupPageCount;
+		delete root.legacyCleanupPending;
 		delete root.legacyCleanupSha256;
+		delete root.cleanupHeadKey;
 		await seeded.setItem(keys.root[slot], JSON.stringify(root));
 	}
 	const legacy = new Set(legacyKeys(seeded));
@@ -262,7 +264,7 @@ void test('unavailable exact inventory performs no cleanup-page reads or legacy 
 		legacy: createLegacyChunkedStorageReader({ storagePrefix: namespace, metadataSchema, parseValue: (raw) => JSON.parse(raw) as Value, storage }),
 		randomUUID: () => `migration-${++nextId}`, sha256,
 	});
-	assert.equal((await store.ensureReady()).cleanupPending, true);
+	assert.equal((await store.ensureReady()).cleanupPending, false);
 	assert.deepEqual((await store.listEntries()).map(({ id }) => id), ['alpha', 'beta']);
 	const unavailableAt = observed.findIndex(({ key }) => legacy.has(key));
 	const cleanupOperations = observed.slice(unavailableAt + 1).filter(({ key }) => key.includes('-v2-cleanup-'));
@@ -304,4 +306,36 @@ void test('stale peer with unreadable legacy is mirrored but no cleanup is attem
 	const b = JSON.parse((await storage.getItem(rootKeys.root.b))!) as { snapshotId: string };
 	assert.equal(a.snapshotId, b.snapshotId);
 	assert.deepEqual(legacyKeys(storage), beforeLegacy);
+});
+
+void test('anchored partial legacy cleanup survives every later mutation and retry path', async () => {
+	for (const run of [
+		(store: ReturnType<typeof createStore>) => store.upsertEntry({ id: 'gamma', metadata: { label: 'Gamma' }, value: { privateKey: 'three' } }),
+		(store: ReturnType<typeof createStore>) => store.replaceAllEntries([{ id: 'alpha', metadata: { label: 'Alpha 2' }, value: { privateKey: 'one' } }]),
+		(store: ReturnType<typeof createStore>) => store.deleteEntry('beta'),
+		(store: ReturnType<typeof createStore>) => store.retryCleanup(),
+	] as const) {
+		const storage = await seedLegacy();
+		const unrelated = `${namespace}-entry-unrelated-chunk-0`;
+		await storage.setItem(unrelated, 'keep');
+		await createStore(storage).ensureReady();
+		storage.restart();
+		const target = legacyKeys(storage).find((key) => key.includes('-entry-alpha-'))!;
+		storage.failMatchingRead(target, 2);
+		const reopened = createStore(storage);
+		assert.equal((await reopened.ensureReady()).cleanupPending, true);
+		const roots = buildV2Keys(namespace).root;
+		const anchoredBefore = JSON.parse((await storage.getItem(roots.b))!) as { cleanupHeadKey: string; legacyCleanupPageCount: number; legacyCleanupPending: true; legacyCleanupSha256: string };
+		const legacyBeforeMutation = legacyKeys(storage);
+		await run(reopened);
+		const rootA = JSON.parse((await storage.getItem(roots.a))!) as typeof anchoredBefore;
+		const rootB = JSON.parse((await storage.getItem(roots.b))!) as typeof anchoredBefore;
+		const current = rootA.legacyCleanupPending === true ? rootA : rootB;
+		assert.deepEqual({ head: current.cleanupHeadKey, count: current.legacyCleanupPageCount, sha: current.legacyCleanupSha256 }, { head: anchoredBefore.cleanupHeadKey, count: anchoredBefore.legacyCleanupPageCount, sha: anchoredBefore.legacyCleanupSha256 });
+		assert.deepEqual(legacyKeys(storage), legacyBeforeMutation);
+		storage.restart();
+		await createStore(storage).ensureReady();
+		assert.equal(await storage.getItem(unrelated), 'keep');
+		assert.deepEqual(legacyKeys(storage), [unrelated]);
+	}
 });

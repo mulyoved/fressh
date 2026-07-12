@@ -125,7 +125,7 @@ const recordFixtures = {
 	},
 } as const;
 
-for (const name of Object.keys(recordFixtures) as Array<keyof typeof recordFixtures>) {
+for (const name of Object.keys(recordFixtures) as (keyof typeof recordFixtures)[]) {
 	void test(`${name} schema is strict, namespace-bound, and payload-bounded`, () => {
 		const schema = schemas[name];
 		const fixture = recordFixtures[name];
@@ -290,4 +290,18 @@ void test('manifest and plan aggregate hashes use their exact canonical inputs',
 		'{"pageHashes":["one","two"],"snapshotId":"snapshot"}',
 		'{"pageHashes":["one","two"]}',
 	]);
+});
+
+void test('root commits reject incomplete anchored legacy cleanup states', () => {
+	const base = recordFixtures.rootCommit;
+	for (const fields of [
+		{ legacyCleanupPending: true },
+		{ legacyCleanupPageCount: 1, legacyCleanupSha256: 'cleanup-hash' },
+		{ legacyCleanupPending: true, legacyCleanupPageCount: 1, legacyCleanupSha256: 'cleanup-hash' },
+		{ cleanupHeadKey: 'cleanup', legacyCleanupPending: true },
+		{ cleanupHeadKey: 'cleanup', legacyCleanupPending: true, legacyCleanupPageCount: 1 },
+		{ cleanupHeadKey: 'cleanup', legacyCleanupPending: true, legacyCleanupSha256: 'cleanup-hash' },
+	]) assert.equal(schemas.rootCommit.safeParse({ ...base, ...fields }).success, false);
+	assert.equal(schemas.rootCommit.safeParse({ ...base, cleanupHeadKey: 'ordinary-cleanup' }).success, true);
+	assert.equal(schemas.rootCommit.safeParse({ ...base, cleanupHeadKey: 'legacy-cleanup', legacyCleanupPending: true, legacyCleanupPageCount: 1, legacyCleanupSha256: 'cleanup-hash' }).success, true);
 });
