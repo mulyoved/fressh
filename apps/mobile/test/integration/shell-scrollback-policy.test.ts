@@ -5,7 +5,7 @@ import {
 	handleShellWorkmuxScrollbackDisposeExitFailureActions,
 	runShellScrollbackInactiveCleanup,
 	shouldTreatShellWorkmuxScrollbackFailureAsAlreadyInactive,
-} from '../../src/app/shell/shell-scrollback-policy';
+} from '../../src/lib/shell-controllers/scrollback-policy';
 
 void test('shell scrollback inactive cleanup runs on active to non-active transitions', async () => {
 	const events: string[] = [];

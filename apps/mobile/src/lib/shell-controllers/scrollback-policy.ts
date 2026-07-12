@@ -1,4 +1,4 @@
-import { isWorkmuxScrollAlreadyInactiveFailureMessage } from '../../lib/workmux-app-commands';
+import { isWorkmuxScrollAlreadyInactiveFailureMessage } from '../workmux-app-commands';
 
 type ShellWorkmuxScrollbackFailureCommandKind = 'enter' | 'scroll' | 'exit';
 
@@ -45,6 +45,7 @@ export function handleShellWorkmuxScrollbackCommandFailureActions({
 	alert,
 	copyMessage,
 	clearScrollbackState,
+	isCurrent = () => true,
 	warn,
 }: {
 	message: string;
@@ -55,6 +56,7 @@ export function handleShellWorkmuxScrollbackCommandFailureActions({
 	) => void;
 	copyMessage: (message: string) => void;
 	clearScrollbackState: () => void;
+	isCurrent?: () => boolean;
 	warn: (message: string) => void;
 }): void {
 	try {
@@ -64,13 +66,19 @@ export function handleShellWorkmuxScrollbackCommandFailureActions({
 		} catch (error) {
 			warningError = error;
 		}
+		if (!isCurrent()) return;
 		alert('Workmux scroll unavailable', message, [
-			{ text: 'Copy Message', onPress: () => copyMessage(message) },
+			{
+				text: 'Copy Message',
+				onPress: () => {
+					if (isCurrent()) copyMessage(message);
+				},
+			},
 			{ text: 'OK' },
 		]);
 		if (warningError) throw warningError;
 	} finally {
-		clearScrollbackState();
+		if (isCurrent()) clearScrollbackState();
 	}
 }
 

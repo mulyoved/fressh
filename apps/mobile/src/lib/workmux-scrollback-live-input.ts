@@ -41,19 +41,72 @@ export function isWorkmuxScrollbackLiveInputRequestCurrent<TWriter>({
 }
 
 export function createWorkmuxScrollbackLiveInputCleanupBarrier(): WorkmuxScrollbackLiveInputCleanupBarrier {
-	let pendingCleanup: Promise<boolean> | null = null;
+	type CleanupCycle = {
+		cleanups: Set<Promise<boolean>>;
+		allSucceeded: boolean;
+		hasFailure: boolean;
+		failure: unknown;
+		promise: Promise<boolean>;
+		resolve(value: boolean): void;
+		reject(error: unknown): void;
+	};
+
+	let cycle: CleanupCycle | null = null;
+
+	const createCycle = (): CleanupCycle => {
+		let resolve!: (value: boolean) => void;
+		let reject!: (error: unknown) => void;
+		const promise = new Promise<boolean>((resolvePromise, rejectPromise) => {
+			resolve = resolvePromise;
+			reject = rejectPromise;
+		});
+		// The barrier may be tracked for state only; keep rejection observable to
+		// callers without allowing an ignored returned promise to go unhandled.
+		void promise.catch(() => {});
+		return {
+			cleanups: new Set(),
+			allSucceeded: true,
+			hasFailure: false,
+			failure: undefined,
+			promise,
+			resolve,
+			reject,
+		};
+	};
+
+	const settle = (
+		settledCycle: CleanupCycle,
+		cleanup: Promise<boolean>,
+		result: { value: boolean } | { error: unknown },
+	): void => {
+		if (!settledCycle.cleanups.delete(cleanup)) return;
+		if ('error' in result) {
+			if (!settledCycle.hasFailure) settledCycle.failure = result.error;
+			settledCycle.hasFailure = true;
+		} else if (!result.value) {
+			settledCycle.allSucceeded = false;
+		}
+		if (settledCycle.cleanups.size > 0) return;
+		if (cycle === settledCycle) cycle = null;
+		if (settledCycle.hasFailure) {
+			settledCycle.reject(settledCycle.failure);
+		} else {
+			settledCycle.resolve(settledCycle.allSucceeded);
+		}
+	};
 
 	return {
-		current: () => pendingCleanup,
+		current: () => cycle?.promise ?? null,
 		track: (cleanup?: Promise<boolean> | null) => {
-			if (!cleanup) return pendingCleanup;
-			const barrier = cleanup.finally(() => {
-				if (pendingCleanup === barrier) {
-					pendingCleanup = null;
-				}
-			});
-			pendingCleanup = barrier;
-			return barrier;
+			if (!cleanup) return cycle?.promise ?? null;
+			const activeCycle = cycle ?? (cycle = createCycle());
+			if (activeCycle.cleanups.has(cleanup)) return activeCycle.promise;
+			activeCycle.cleanups.add(cleanup);
+			void cleanup.then(
+				(value) => settle(activeCycle, cleanup, { value }),
+				(error) => settle(activeCycle, cleanup, { error }),
+			);
+			return activeCycle.promise;
 		},
 	};
 }

@@ -25,20 +25,9 @@ function extractCreateWorkmuxControlChannelBlock(source: string): string {
 function extractWorkmuxControlChannelMemoBlock(source: string): string {
 	const memoStart = source.indexOf('const workmuxControlChannel = useMemo');
 	assert.notEqual(memoStart, -1);
-	const memoEnd = source.indexOf('const workmuxControlChannelRef', memoStart);
+	const memoEnd = source.indexOf('const [keyboardLateBindings]', memoStart);
 	assert.notEqual(memoEnd, -1);
 	return source.slice(memoStart, memoEnd);
-}
-
-function extractAgentNotificationRouteEffectBlock(source: string): string {
-	const effectStart = source.indexOf('void handleAgentNotificationRoute({');
-	assert.notEqual(effectStart, -1);
-	const effectEnd = source.indexOf(
-		'const acknowledgeVisibleAgentNotification',
-		effectStart,
-	);
-	assert.notEqual(effectEnd, -1);
-	return source.slice(effectStart, effectEnd);
 }
 
 function extractRunBrowserActionsWorkmuxCommandBlock(source: string): string {
@@ -48,65 +37,6 @@ function extractRunBrowserActionsWorkmuxCommandBlock(source: string): string {
 	assert.notEqual(callbackStart, -1);
 	const callbackEnd = source.indexOf(
 		'const browserActions = useBrowserActionsController',
-		callbackStart,
-	);
-	assert.notEqual(callbackEnd, -1);
-	return source.slice(callbackStart, callbackEnd);
-}
-
-function extractHandleRestartCodexBlock(source: string): string {
-	const callbackStart = source.indexOf(
-		'const handleRestartCodex = useCallback',
-	);
-	assert.notEqual(callbackStart, -1);
-	const callbackEnd = source.indexOf(
-		'const actionContext = useMemo',
-		callbackStart,
-	);
-	assert.notEqual(callbackEnd, -1);
-	return source.slice(callbackStart, callbackEnd);
-}
-
-function extractActionContextBlock(source: string): string {
-	const contextStart = source.indexOf('const actionContext = useMemo');
-	assert.notEqual(contextStart, -1);
-	const contextEnd = source.indexOf(
-		'const handleAction = useCallback',
-		contextStart,
-	);
-	assert.notEqual(contextEnd, -1);
-	return source.slice(contextStart, contextEnd);
-}
-
-function extractHandleCommandBridgeEntryBlock(source: string): string {
-	const callbackStart = source.indexOf(
-		'const handleCommandBridgeEntry = useCallback',
-	);
-	assert.notEqual(callbackStart, -1);
-	const callbackEnd = source.indexOf(
-		'const handleAction = useCallback',
-		callbackStart,
-	);
-	assert.notEqual(callbackEnd, -1);
-	return source.slice(callbackStart, callbackEnd);
-}
-
-function extractHandleActionBlock(source: string): string {
-	const callbackStart = source.indexOf('const handleAction = useCallback');
-	assert.notEqual(callbackStart, -1);
-	const callbackEnd = source.indexOf(
-		'const handleSlotPress = useCallback',
-		callbackStart,
-	);
-	assert.notEqual(callbackEnd, -1);
-	return source.slice(callbackStart, callbackEnd);
-}
-
-function extractHandleSlotPressBlock(source: string): string {
-	const callbackStart = source.indexOf('const handleSlotPress = useCallback');
-	assert.notEqual(callbackStart, -1);
-	const callbackEnd = source.indexOf(
-		'// Debounced PTY resize handler',
 		callbackStart,
 	);
 	assert.notEqual(callbackEnd, -1);
@@ -125,19 +55,51 @@ void describe('shell detail Workmux control channel wiring', () => {
 		assert.doesNotMatch(source, /buildWorkmuxAppScrollPageCommand/);
 	});
 
-	void test('cleans up scrollback executor before disposing the control channel', () => {
+	void test('delegates scrollback cleanup while retaining control-channel disposal', () => {
 		const source = readFileSync(detailSourcePath, 'utf8');
-		const executorCleanupIndex = source.indexOf(
-			'const cleanup = disposeTmuxScrollbackRuntimeStateForUiReset',
+		const controllerIndex = source.indexOf(
+			'const scrollback = useShellScrollbackController',
 		);
 		const sequencedDisposeIndex = source.indexOf(
 			'disposeWorkmuxControlChannelAfterCleanup',
-			executorCleanupIndex,
+			controllerIndex,
 		);
 
-		assert.notEqual(executorCleanupIndex, -1);
+		assert.notEqual(controllerIndex, -1);
 		assert.notEqual(sequencedDisposeIndex, -1);
-		assert.ok(executorCleanupIndex < sequencedDisposeIndex);
+		assert.ok(controllerIndex < sequencedDisposeIndex);
+		const compositionEnd = source.indexOf(
+			'scrollbackRuntimeChangedRef.current',
+			controllerIndex,
+		);
+		assert.notEqual(compositionEnd, -1);
+		const composition = source.slice(controllerIndex, compositionEnd);
+		assert.match(composition, /onTeardownCleanup:\s*\(cleanup\)\s*=>\s*\{/);
+		assert.match(
+			composition,
+			/disposeWorkmuxControlChannelAfterCleanup\(\{[\s\S]*?^\s*cleanup,/m,
+		);
+		assert.match(
+			composition,
+			/onCleanupError:\s*\(error\)\s*=>\s*reportShellScrollbackChannelCleanupError\(\{/,
+		);
+		assert.match(
+			composition,
+			/reportShellScrollbackChannelCleanupError\(\{[\s\S]*?^\s*logger,/m,
+		);
+		assert.equal(
+			composition.match(/onCleanupError:/g)?.length,
+			1,
+			'cleanup timeout/error observer must be mapped exactly once',
+		);
+		assert.doesNotMatch(
+			source.slice(compositionEnd),
+			/disposeWorkmuxControlChannelAfterCleanup/,
+		);
+		assert.doesNotMatch(
+			source,
+			/disposeTmuxScrollbackRuntimeStateForUiReset|createWorkmuxScrollbackCommandExecutor/,
+		);
 		assert.doesNotMatch(
 			source,
 			/void workmuxControlChannel\.dispose\(\)\.catch/,
@@ -184,23 +146,23 @@ void describe('shell detail Workmux control channel wiring', () => {
 
 	void test('captures reconnect disposal reason before deferred channel cleanup', () => {
 		const source = readFileSync(detailSourcePath, 'utf8');
-		const cleanupIndex = source.indexOf(
-			'const cleanup = disposeTmuxScrollbackRuntimeStateForUiReset',
+		const controllerIndex = source.indexOf(
+			'const scrollback = useShellScrollbackController',
 		);
 		const disposeReasonIndex = source.indexOf(
 			'const disposeReason = useAutoConnectStore.getState().isReconnecting',
-			cleanupIndex,
+			controllerIndex,
 		);
 		const deferredDisposeIndex = source.indexOf(
 			'disposeWorkmuxControlChannelAfterCleanup',
-			cleanupIndex,
+			controllerIndex,
 		);
 		const deferredBlock = source.slice(
 			deferredDisposeIndex,
 			source.indexOf('onDisposeError', deferredDisposeIndex),
 		);
 
-		assert.notEqual(cleanupIndex, -1);
+		assert.notEqual(controllerIndex, -1);
 		assert.notEqual(disposeReasonIndex, -1);
 		assert.notEqual(deferredDisposeIndex, -1);
 		assert.ok(disposeReasonIndex < deferredDisposeIndex);
@@ -227,20 +189,19 @@ void describe('shell detail Workmux control channel wiring', () => {
 
 	void test('routes Workmux transport failures into shell transport invalidation', () => {
 		const source = readFileSync(detailSourcePath, 'utf8');
+		const remoteCore = readFileSync(
+			join(process.cwd(), 'src/lib/shell-controllers/keyboard-remote-core.ts'),
+			'utf8',
+		);
 
+		assert.match(source, /import \{ useSshStore \} from '@\/lib\/ssh-store'/);
+		assert.match(source, /invalidateShellTransport:\s*\(\s*nextConnectionId/);
 		assert.match(
 			source,
-			/import \{ useSshStore \} from '@\/lib\/ssh-store'/,
+			/invalidateShellTransport\(nextConnectionId, nextChannelId\)/,
 		);
-		assert.match(source, /onTransportUnhealthy:\s*\(failure\)\s*=>/);
-		assert.match(
-			source,
-			/Workmux transport unhealthy, triggering reconnect/,
-		);
-		assert.match(
-			source,
-			/useSshStore\s*\.\s*getState\(\)\s*\.\s*invalidateShellTransport\(connectionId,\s*channelId\)/,
-		);
+		assert.match(remoteCore, /onTransportUnhealthy:\s*\(\)\s*=>/);
+		assert.match(remoteCore, /invalidateShellTransport\(/);
 	});
 
 	void test('passes only the connection into WorkmuxControlChannel for Workmux control commands', () => {
@@ -263,73 +224,77 @@ void describe('shell detail Workmux control channel wiring', () => {
 		);
 	});
 
-	void test('retries routed agent notifications when the Workmux command channel changes', () => {
+	void test('keys routed agent notifications by the Workmux control channel', () => {
 		const source = readFileSync(detailSourcePath, 'utf8');
+		const notificationSource = readFileSync(
+			join(process.cwd(), 'src/lib/shell-controllers/notifications.tsx'),
+			'utf8',
+		);
 		const callbackBlock = extractRunBrowserActionsWorkmuxCommandBlock(source);
-		const effectBlock = extractAgentNotificationRouteEffectBlock(source);
 
 		assert.match(callbackBlock, /workmuxControlChannel\.command/);
 		assert.match(callbackBlock, /\[\s*workmuxControlChannel\s*\]/);
 		assert.match(
-			effectBlock,
-			/\[\s*agentConnectionId[\s\S]*runBrowserActionsWorkmuxCommand[\s\S]*\]/,
+			callbackBlock,
+			/const runNotificationWorkmuxCommand = useCallback\([\s\S]*\[runBrowserActionsWorkmuxCommand\]/,
+		);
+		assert.match(
+			notificationSource,
+			/\[core, hookOrchestrator, routeEffectKey, commandPortKey\]/,
+		);
+		assert.match(source, /commandPortKey:\s*workmuxControlChannel/);
+	});
+
+	void test('keeps the focused browser controller on the shared Workmux command channel', () => {
+		const source = readFileSync(detailSourcePath, 'utf8');
+		const callbackBlock = extractRunBrowserActionsWorkmuxCommandBlock(source);
+
+		assert.match(
+			source,
+			/import \{ useBrowserActionsController \} from '@\/lib\/shell-controllers\/browser-actions'/,
+		);
+		assert.match(callbackBlock, /workmuxControlChannel\.command/);
+		assert.match(
+			source,
+			/runWorkmuxCommand:\s*runBrowserActionsWorkmuxCommand/,
 		);
 	});
 
 	void test('wires bridge-backed Codex restart through WorkmuxControlChannel operation', () => {
 		const source = readFileSync(detailSourcePath, 'utf8');
-		const block = extractHandleRestartCodexBlock(source);
-		const actionContextBlock = extractActionContextBlock(source);
+		const remoteCore = readFileSync(
+			join(process.cwd(), 'src/lib/shell-controllers/keyboard-remote-core.ts'),
+			'utf8',
+		);
 
+		assert.match(source, /^\s*workmuxControlChannel,\s*$/m);
 		assert.match(
 			source,
-			/import \{ restartCodexWithBridge \} from '@\/lib\/codex-restart'/,
+			/remote:\s*\{[\s\S]*?workmuxControlChannel,[\s\S]*?source: connection,/,
 		);
-		assert.match(actionContextBlock, /restartCodex:\s*handleRestartCodex/);
-		assert.match(block, /restartCodexWithBridge\(\{/);
+		assert.match(remoteCore, /restartCodex\(\{/);
 		assert.match(
-			block,
-			/const workmuxControlChannelSnapshot\s*=\s*workmuxControlChannelRef\.current/,
+			remoteCore,
+			/authority\.target\.workmuxControlChannel\.(?:command|operation)/,
 		);
-		assert.match(block, /workmuxControlChannelSnapshot\.command/);
-		assert.match(block, /workmuxControlChannelSnapshot\.operation/);
-		assert.doesNotMatch(
-			block,
-			/workmuxControlChannelRef\.current\.(?:command|operation)/,
-		);
-		assert.doesNotMatch(
-			block,
-			/sendBytesRaw|pasteClipboard|runCommandPreset|TextEncoder|sendTextRaw|sendCommandStep/,
-		);
-		assert.doesNotMatch(block, /mdev codex restart/);
+		assert.doesNotMatch(source, /restartCodexWithBridge|handleRestartCodex/);
 	});
 
 	void test('guards Codex restart against duplicate and stale UI requests', () => {
 		const source = readFileSync(detailSourcePath, 'utf8');
-		const block = extractHandleRestartCodexBlock(source);
+		const remoteCore = readFileSync(
+			join(process.cwd(), 'src/lib/shell-controllers/keyboard-remote-core.ts'),
+			'utf8',
+		);
 
-		assert.match(
-			source,
-			/const invalidateCodexRestartRequests\s*=\s*useCallback/,
-		);
-		assert.match(source, /codexRestartGenerationRef\.current \+= 1/);
-		assert.match(block, /if \(codexRestartInFlightRef\.current\) return/);
-		assert.match(block, /codexRestartInFlightRef\.current = true/);
-		assert.match(
-			block,
-			/finally\s*\{\s*codexRestartInFlightRef\.current = false;\s*\}/,
-		);
-		assert.match(block, /const isCurrentRestart\s*=\s*\(\) =>/);
-		assert.match(block, /Codex restart superseded/);
-		assert.match(block, /Codex restart failed after becoming stale/);
-		assert.match(source, /invalidateCodexRestartRequests\(\);/);
-		const invalidationBlock = source.slice(
-			source.indexOf('const invalidateCodexRestartRequests = useCallback'),
-			source.indexOf('const exitSelectionMode = useCallback'),
-		);
+		assert.match(remoteCore, /restartInFlight/);
+		assert.match(remoteCore, /restartGeneration/);
+		assert.match(remoteCore, /restartCancellation/);
+		assert.match(remoteCore, /isCurrent\(authority\)/);
+		assert.doesNotMatch(source, /createGenerationRequestGate|codexRestartGate/);
 		assert.doesNotMatch(
-			invalidationBlock,
-			/codexRestartInFlightRef\.current = false/,
+			source,
+			/codexRestartGenerationRef|codexRestartInFlightRef/,
 		);
 	});
 
@@ -352,35 +317,25 @@ void describe('shell detail Workmux control channel wiring', () => {
 
 	void test('passes bridge handler into CommandMenuModal', () => {
 		const source = readFileSync(detailSourcePath, 'utf8');
-		const block = extractHandleCommandBridgeEntryBlock(source);
-
-		assert.match(source, /const handleCommandBridgeEntry\s*=\s*useCallback/);
-		assert.match(block, /case 'codex\.restart':/);
-		assert.match(
-			block,
-			/void handleRestartCodex\(\{ timeoutMs: entry\.timeoutMs \}\)/,
+		const remoteCore = readFileSync(
+			join(process.cwd(), 'src/lib/shell-controllers/keyboard-remote-core.ts'),
+			'utf8',
 		);
-		assert.match(block, /logger\.warn\('Unhandled command bridge operation'/);
-		assert.match(source, /onBridge=\{handleCommandBridgeEntry\}/);
+
+		assert.match(remoteCore, /copied\.operation === 'codex\.restart'/);
+		assert.match(source, /\{\.\.\.keyboard\.commandMenuProps\}/);
+		assert.doesNotMatch(source, /handleCommandBridgeEntry/);
 	});
 
 	void test('routes action slot presses through action run options helper', () => {
 		const source = readFileSync(detailSourcePath, 'utf8');
-		const actionBlock = extractHandleActionBlock(source);
-		const block = extractHandleSlotPressBlock(source);
+		const inputCore = readFileSync(
+			join(process.cwd(), 'src/lib/shell-controllers/keyboard-input-core.ts'),
+			'utf8',
+		);
 
-		assert.match(
-			source,
-			/import \{ runKeyboardActionSlot \} from '@\/lib\/keyboard-action-run-options'/,
-		);
-		assert.match(
-			actionBlock,
-			/\(actionId: ActionId, options\?: RunActionOptions\)/,
-		);
-		assert.match(actionBlock, /runAction\(actionId, actionContext, options\)/);
-		assert.match(
-			block,
-			/case 'action':\s*runKeyboardActionSlot\(slot, handleAction\);/,
-		);
+		assert.match(inputCore, /runKeyboardActionSlot\(copiedSlot,/);
+		assert.match(source, /\{\.\.\.keyboard\.terminalKeyboardProps\}/);
+		assert.doesNotMatch(source, /runKeyboardActionSlot|handleSlotPress/);
 	});
 });

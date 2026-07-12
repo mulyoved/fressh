@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
 	buildWorkmuxScrollbackLiveInputSendPlan,
+	createWorkmuxScrollbackLiveInputCleanupBarrier,
 	isWorkmuxScrollbackLiveInputRequestCurrent,
 	runWorkmuxScrollbackLiveInputSendPlan,
 } from '../../src/lib/workmux-scrollback-live-input';
@@ -18,6 +19,70 @@ const deferred = <T>() => {
 	});
 	return { promise, resolve, reject };
 };
+
+void test('cleanup barrier waits for all tracked cleanups in either settlement order', async () => {
+	for (const settleOlderFirst of [true, false]) {
+		const barrier = createWorkmuxScrollbackLiveInputCleanupBarrier();
+		const older = deferred<boolean>();
+		const newer = deferred<boolean>();
+		const cycle = barrier.track(older.promise);
+		assert.notEqual(cycle, null);
+		assert.equal(barrier.track(newer.promise), cycle);
+		const first = settleOlderFirst ? older : newer;
+		const second = settleOlderFirst ? newer : older;
+		first.resolve(true);
+		await Promise.resolve();
+		assert.equal(barrier.current(), cycle);
+		second.resolve(true);
+		assert.equal(await cycle, true);
+		assert.equal(barrier.current(), null);
+	}
+});
+
+void test('cleanup barrier resolves false only after every cleanup settles', async () => {
+	const barrier = createWorkmuxScrollbackLiveInputCleanupBarrier();
+	const failed = deferred<boolean>();
+	const pending = deferred<boolean>();
+	const cycle = barrier.track(failed.promise);
+	assert.notEqual(cycle, null);
+	void barrier.track(pending.promise);
+	failed.resolve(false);
+	await Promise.resolve();
+	assert.equal(barrier.current(), cycle);
+	pending.resolve(true);
+	assert.equal(await cycle, false);
+});
+
+void test('cleanup barrier delays rejection until all tracked cleanups settle', async () => {
+	const barrier = createWorkmuxScrollbackLiveInputCleanupBarrier();
+	const rejected = deferred<boolean>();
+	const pending = deferred<boolean>();
+	const cycle = barrier.track(rejected.promise);
+	assert.notEqual(cycle, null);
+	if (!cycle) throw new Error('expected cleanup cycle');
+	void barrier.track(pending.promise);
+	const failure = new Error('cleanup failed');
+	rejected.reject(failure);
+	await Promise.resolve();
+	assert.equal(barrier.current(), cycle);
+	pending.resolve(false);
+	await assert.rejects(cycle, failure);
+	assert.equal(barrier.current(), null);
+});
+
+void test('cleanup barrier composes an outer cleanup registered after reentrant inner cleanup', async () => {
+	const barrier = createWorkmuxScrollbackLiveInputCleanupBarrier();
+	const outer = deferred<boolean>();
+	const inner = deferred<boolean>();
+	const innerCycle = barrier.track(inner.promise);
+	assert.notEqual(innerCycle, null);
+	assert.equal(barrier.track(outer.promise), innerCycle);
+	inner.resolve(true);
+	await Promise.resolve();
+	assert.equal(barrier.current(), innerCycle);
+	outer.resolve(true);
+	assert.equal(await innerCycle, true);
+});
 
 void test('live input plan passes payload through when scrollback is inactive', () => {
 	const plan = buildWorkmuxScrollbackLiveInputSendPlan({
@@ -196,30 +261,38 @@ void test('live input freshness requires the same terminal instance and writer',
 	for (const stale of [
 		{ currentInstanceId: 'terminal-2', currentWriter: requestWriter },
 		{ currentInstanceId: 'terminal-1', currentWriter: {} },
-		{ currentInstanceId: 'terminal-1', currentWriter: requestWriter, isFocused: false },
-			{ currentInstanceId: 'terminal-1', currentWriter: requestWriter, isAppActive: false },
-			{
-				currentInstanceId: 'terminal-1',
-				currentWriter: requestWriter,
-				requestGeneration: 1,
-				currentGeneration: 2,
-			},
-			{ currentInstanceId: null, currentWriter: requestWriter },
-			{ currentInstanceId: 'terminal-1', currentWriter: null },
-		]) {
+		{
+			currentInstanceId: 'terminal-1',
+			currentWriter: requestWriter,
+			isFocused: false,
+		},
+		{
+			currentInstanceId: 'terminal-1',
+			currentWriter: requestWriter,
+			isAppActive: false,
+		},
+		{
+			currentInstanceId: 'terminal-1',
+			currentWriter: requestWriter,
+			requestGeneration: 1,
+			currentGeneration: 2,
+		},
+		{ currentInstanceId: null, currentWriter: requestWriter },
+		{ currentInstanceId: 'terminal-1', currentWriter: null },
+	]) {
 		assert.equal(
 			isWorkmuxScrollbackLiveInputRequestCurrent({
 				requestInstanceId: 'terminal-1',
 				requestWriter,
 				currentInstanceId: stale.currentInstanceId,
-					currentWriter: stale.currentWriter,
-					isFocused: stale.isFocused ?? true,
-					isAppActive: stale.isAppActive ?? true,
-					requestGeneration: stale.requestGeneration,
-					currentGeneration: stale.currentGeneration,
-				}),
-				false,
-			);
+				currentWriter: stale.currentWriter,
+				isFocused: stale.isFocused ?? true,
+				isAppActive: stale.isAppActive ?? true,
+				requestGeneration: stale.requestGeneration,
+				currentGeneration: stale.currentGeneration,
+			}),
+			false,
+		);
 	}
 });
 

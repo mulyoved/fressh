@@ -52,6 +52,21 @@ void test('runtime shell config falls back to default when selected keyboard is 
 	);
 });
 
+void test('selected keyboard resolver honors effective available definitions', () => {
+	const config = parseShellConfigString(bundledConfigText);
+	const effective = new Set(['advanced_keyboard', 'tmux_keyboard']);
+
+	assert.equal(
+		resolveSelectedKeyboardId(config, 'phone_base', effective),
+		'advanced_keyboard',
+	);
+	assert.equal(
+		resolveSelectedKeyboardId(config, 'tmux_keyboard', effective),
+		'tmux_keyboard',
+	);
+	assert.equal(resolveSelectedKeyboardId(config, null, new Set()), '');
+});
+
 void test('runtime shell config rejects duplicate active keyboard ids', () => {
 	const config = JSON.parse(bundledConfigText) as Record<string, unknown>;
 	config.activeKeyboardIds = ['phone_base', 'phone_base'];

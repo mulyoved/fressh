@@ -10,6 +10,8 @@ import {
 	View,
 } from 'react-native';
 import { useTheme } from '@/lib/theme';
+import { type TerminalCommanderModalProps } from './keyboard-component-props';
+export type { TerminalCommanderModalProps } from './keyboard-component-props';
 
 const COMMANDER_SHORTCUTS = [
 	{
@@ -81,14 +83,7 @@ export function TerminalCommanderModal({
 	onExecuteCommand,
 	onPasteText,
 	onSendShortcut,
-}: {
-	open: boolean;
-	bottomOffset: number;
-	onClose: () => void;
-	onExecuteCommand: (value: string) => void;
-	onPasteText: (value: string) => void;
-	onSendShortcut: (sequence: string) => void;
-}) {
+}: TerminalCommanderModalProps) {
 	const theme = useTheme();
 	const [commandInput, setCommandInput] = useState('');
 	const [pasteInput, setPasteInput] = useState('');

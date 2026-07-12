@@ -20,10 +20,8 @@ import {
 } from '@/lib/keyboard-long-press';
 import { resolveLucideIcon } from '@/lib/lucide-utils';
 import {
-	type KeyboardDefinition,
 	type KeyboardExecutableItem,
 	type KeyboardSlot,
-	type ModifierKey,
 } from '@/lib/shell-config';
 import { useTheme } from '@/lib/theme';
 import {
@@ -31,6 +29,7 @@ import {
 	WORKMUX_NAV_SCOPE_BADGE_LABEL,
 } from '@/lib/work-key-long-press-options';
 import { type WorkmuxNavScope } from '@/lib/workmux-app-commands';
+import { type TerminalKeyboardProps } from './keyboard-component-props';
 import {
 	activateTerminalKeyboardLongPressMount,
 	createTerminalKeyboardLongPressMeasureCallback,
@@ -38,6 +37,7 @@ import {
 	type TerminalKeyboardLongPressPopupState,
 } from './TerminalKeyboardLongPressController';
 import { TerminalKeyboardLongPressPopup } from './TerminalKeyboardLongPressPopup';
+export type { TerminalKeyboardProps } from './keyboard-component-props';
 
 type LongPressGestureState = {
 	slot: KeyboardSlot;
@@ -240,14 +240,7 @@ export function TerminalKeyboard({
 	selectionModeEnabled,
 	onCopySelection,
 	navScope = 'active',
-}: {
-	keyboard: KeyboardDefinition | null;
-	modifierKeysActive: ModifierKey[];
-	onSlotPress: (slot: KeyboardExecutableItem) => void;
-	selectionModeEnabled: boolean;
-	onCopySelection: () => void;
-	navScope?: WorkmuxNavScope;
-}) {
+}: TerminalKeyboardProps) {
 	const theme = useTheme();
 	// Fixed key height keeps all rows visually consistent even when some keys
 	// render an icon+label stack and others are label-only.
@@ -269,8 +262,9 @@ export function TerminalKeyboard({
 	const keyboardRootWindowRef = useRef({ x: 0, y: 0 });
 	const keyboardBoundsRef = useRef<LongPressKeyboardBounds | null>(null);
 	const keyboardWidthRef = useRef(0);
-	const longPressPopupRef =
-		useRef<TerminalKeyboardLongPressPopupState | null>(null);
+	const longPressPopupRef = useRef<TerminalKeyboardLongPressPopupState | null>(
+		null,
+	);
 	const navScopeRef = useRef(navScope);
 	navScopeRef.current = navScope;
 	const [longPressPopup, setLongPressPopup] =
@@ -327,24 +321,21 @@ export function TerminalKeyboard({
 		[clearRepeat, onSlotPress, repeatDelayMs, repeatIntervalMs],
 	);
 
-	useEffect(
-		() => {
-			activateTerminalKeyboardLongPressMount({ isMountedRef });
-			return () => {
-				deactivateTerminalKeyboardLongPressMount({
-					isMountedRef,
-					longPressGenerationRef,
-					longPressGestureRef,
-					clearPopup: () => {
-						longPressPopupRef.current = null;
-					},
-				});
-				clearRepeat();
-				clearLongPressTimer();
-			};
-		},
-		[clearLongPressTimer, clearRepeat],
-	);
+	useEffect(() => {
+		activateTerminalKeyboardLongPressMount({ isMountedRef });
+		return () => {
+			deactivateTerminalKeyboardLongPressMount({
+				isMountedRef,
+				longPressGenerationRef,
+				longPressGestureRef,
+				clearPopup: () => {
+					longPressPopupRef.current = null;
+				},
+			});
+			clearRepeat();
+			clearLongPressTimer();
+		};
+	}, [clearLongPressTimer, clearRepeat]);
 
 	const closeLongPressPopup = useCallback(() => {
 		longPressPopupRef.current = null;

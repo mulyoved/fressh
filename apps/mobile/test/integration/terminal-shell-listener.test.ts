@@ -13,7 +13,9 @@ void test('terminal reload detach removes live shell listener and clears attach 
 			},
 		} as { removeListener: (id: bigint) => void } | null,
 	};
-	const attachedShellKeyRef = { current: 'connection:channel' as string | null };
+	const attachedShellKeyRef = {
+		current: 'connection:channel' as string | null,
+	};
 
 	detachTerminalShellListener({
 		shell: null,
@@ -42,7 +44,9 @@ void test('terminal reload detach clears attach state when removal fails', () =>
 			},
 		} as { removeListener: (id: bigint) => void } | null,
 	};
-	const attachedShellKeyRef = { current: 'connection:channel' as string | null };
+	const attachedShellKeyRef = {
+		current: 'connection:channel' as string | null,
+	};
 	const warnings: unknown[] = [];
 
 	detachTerminalShellListener({

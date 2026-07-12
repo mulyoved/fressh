@@ -8,7 +8,14 @@ const modalPath = join(
 	'src/app/shell/components/FeatureRequestModal.tsx',
 );
 
-const shellModalsPath = join(process.cwd(), 'src/lib/shell-modals.tsx');
+const featureRequestControllerPath = join(
+	process.cwd(),
+	'src/lib/shell-controllers/feature-request.tsx',
+);
+const featureRequestCorePath = join(
+	process.cwd(),
+	'src/lib/shell-controllers/feature-request-core.ts',
+);
 
 void test('FeatureRequestModal imports Picker from @react-native-picker/picker', () => {
 	const source = readFileSync(modalPath, 'utf8');
@@ -66,7 +73,10 @@ void test('FeatureRequestModal derives pickerValue and handlePickerChange from s
 		source,
 		/const handlePickerChange = useCallback\(\(value: string\) => \{/,
 	);
-	assert.match(source, /setSelection\(\{ kind: 'pinned', repository: value \}\);/);
+	assert.match(
+		source,
+		/setSelection\(\{ kind: 'pinned', repository: value \}\);/,
+	);
 });
 
 void test('FeatureRequestModal uses canSubmitFeatureRequest and forwards repository on submit', () => {
@@ -84,21 +94,44 @@ void test('FeatureRequestModal no longer imports FeatureRequestTargetPicker', ()
 });
 
 void test('FeatureRequestModalProps.onSubmit accepts description and repository', () => {
-	const source = readFileSync(shellModalsPath, 'utf8');
+	const source = readFileSync(featureRequestControllerPath, 'utf8');
 	assert.match(
 		source,
 		/onSubmit: \(description: string, repository: string\) => Promise<void>;/,
 	);
 });
 
-void test('useFeatureRequestController.submit forwards repository into buildCreateGitHubIssueCommand', () => {
-	const source = readFileSync(shellModalsPath, 'utf8');
+void test('useFeatureRequestController.submit forwards repository into its core', () => {
+	const source = readFileSync(featureRequestControllerPath, 'utf8');
 	assert.match(
 		source,
-		/async \(description: string, repository: string\) => \{/,
+		/\(description: string, repository: string\) =>\s*core\.submit\(description, repository\)/,
 	);
+	assert.match(source, /createFeatureRequestControllerCore\(\{/);
+	assert.match(source, /executeSubmission: adapter\.executeSubmission/);
+});
+
+void test('useFeatureRequestController commits live dependencies outside render', () => {
+	const source = readFileSync(featureRequestControllerPath, 'utf8');
 	assert.match(
 		source,
-		/buildCreateGitHubIssueCommand\(\{\s*description,\s*repository,\s*\}\)/,
+		/useLayoutEffect\(\(\) => \{\s*committedDepsRef\.current = deps;/,
 	);
+	assert.doesNotMatch(source, /committedDepsRef\.current = deps;\s*const/);
+});
+
+void test('useFeatureRequestController binds the submitted alert and replay-safe lifecycle', () => {
+	const source = readFileSync(featureRequestControllerPath, 'utf8');
+	assert.match(source, /buildFeatureRequestSubmittedAlert\(\{/);
+	assert.match(
+		source,
+		/Alert\.alert\(alert\.title, alert\.message, \[\{ text: 'OK' \}\]\)/,
+	);
+	assert.match(source, /createReplaySafeControllerLifecycle\(core\)/);
+});
+
+void test('feature request core has one owner for submission state', () => {
+	const source = readFileSync(featureRequestCorePath, 'utf8');
+	assert.doesNotMatch(source, /submitInFlight/);
+	assert.doesNotMatch(source, /resolutionSubmitGeneration/);
 });

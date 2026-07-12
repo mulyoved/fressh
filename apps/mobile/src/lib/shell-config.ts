@@ -616,13 +616,16 @@ export function resolveActiveOneShotReturnKeyboardId(
 export function resolveSelectedKeyboardId(
 	config: ShellConfig,
 	selectedKeyboardId: string | null | undefined,
+	availableKeyboardIds: ReadonlySet<string> = new Set(config.activeKeyboardIds),
 ): string {
-	const activeKeyboardIds = new Set(config.activeKeyboardIds);
-	if (selectedKeyboardId && activeKeyboardIds.has(selectedKeyboardId)) {
+	const activeKeyboardIds = config.activeKeyboardIds.filter((keyboardId) =>
+		availableKeyboardIds.has(keyboardId),
+	);
+	if (selectedKeyboardId && activeKeyboardIds.includes(selectedKeyboardId)) {
 		return selectedKeyboardId;
 	}
-	if (activeKeyboardIds.has(config.defaultKeyboardId)) {
+	if (activeKeyboardIds.includes(config.defaultKeyboardId)) {
 		return config.defaultKeyboardId;
 	}
-	return config.activeKeyboardIds[0] ?? '';
+	return activeKeyboardIds[0] ?? '';
 }

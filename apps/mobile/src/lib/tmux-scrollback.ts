@@ -1,4 +1,5 @@
 import { type ScrollTraceSink } from './scroll-trace';
+import { type ScrollbackOperationOwner } from './shell-controllers/scrollback-operation-owner';
 import { type WorkmuxScrollDirection } from './workmux-app-commands';
 import {
 	accumulateWorkmuxScrollbackBatchCommands,
@@ -36,48 +37,120 @@ export function resetTmuxScrollbackRuntimeState({
 	);
 }
 
+export type TmuxScrollbackCleanupFreshnessPolicy =
+	| { kind: 'always' }
+	| { kind: 'generation'; generation: { current: number } }
+	| {
+			kind: 'predicates';
+			isSuccessCurrent(): boolean;
+			isFailureCurrent(): boolean;
+	  };
+
+export type TmuxScrollbackCleanupFailureOwnershipPolicy =
+	| { kind: 'ignore' }
+	| { kind: 'restore' }
+	| { kind: 'preserve-if-cleared'; acquireOnFailure: boolean };
+
+export type TmuxScrollbackCleanupFailureReportingPolicy =
+	| { kind: 'ignore' }
+	| {
+			kind: 'report';
+			report(
+				error: unknown,
+				context: { kind: 'resolved-false' | 'rejected' },
+			): void;
+	  };
+
 export function registerTmuxScrollbackRemoteCopyModeExitCleanup({
 	barrier,
 	cleanup,
 	remoteCopyModeActiveRef,
 	remoteCopyModeWasActive = remoteCopyModeActiveRef.current,
-	markRemoteCopyModeActiveOnFailedCleanup = false,
-	cleanupGeneration,
+	freshness,
+	failureOwnership,
+	successOwnership,
+	failureReporting,
 }: {
 	barrier: WorkmuxScrollbackLiveInputCleanupBarrier;
 	cleanup?: Promise<boolean> | null;
 	remoteCopyModeActiveRef: { current: boolean };
 	remoteCopyModeWasActive?: boolean;
-	markRemoteCopyModeActiveOnFailedCleanup?: boolean;
-	cleanupGeneration?: { current: number };
+	freshness: TmuxScrollbackCleanupFreshnessPolicy;
+	failureOwnership: TmuxScrollbackCleanupFailureOwnershipPolicy;
+	successOwnership: 'clear' | 'preserve';
+	failureReporting: TmuxScrollbackCleanupFailureReportingPolicy;
 }): Promise<boolean> | null {
-	const generation = cleanupGeneration?.current;
+	const capturedGeneration =
+		freshness.kind === 'generation' ? freshness.generation.current : undefined;
+	const isCurrent = (result: 'success' | 'failure') => {
+		try {
+			switch (freshness.kind) {
+				case 'always':
+					return true;
+				case 'generation':
+					return freshness.generation.current === capturedGeneration;
+				case 'predicates':
+					return result === 'success'
+						? freshness.isSuccessCurrent()
+						: freshness.isFailureCurrent();
+			}
+		} catch {
+			return false;
+		}
+	};
+	const reportFailure = (
+		error: unknown,
+		context: { kind: 'resolved-false' | 'rejected' },
+	) => {
+		try {
+			if (failureReporting.kind === 'report') {
+				failureReporting.report(error, context);
+			}
+		} catch {
+			// Cleanup failure reporting is best-effort.
+		}
+	};
 	const trackedCleanup = registerWorkmuxScrollbackLiveInputCleanup(
 		barrier,
 		cleanup,
 	);
-	void trackedCleanup
-		?.then((exited) => {
-			if (
-				generation !== undefined &&
-				cleanupGeneration?.current !== generation
-			) {
-				return;
-			}
+	void cleanup?.then(
+		(exited) => {
+			if (!isCurrent(exited ? 'success' : 'failure')) return;
 			if (exited) {
-				remoteCopyModeActiveRef.current = false;
+				if (successOwnership === 'clear') {
+					remoteCopyModeActiveRef.current = false;
+				}
 				return;
 			}
-			const wasClearedDuringCleanup =
-				remoteCopyModeWasActive && !remoteCopyModeActiveRef.current;
-			if (
-				!wasClearedDuringCleanup &&
-				(remoteCopyModeWasActive || markRemoteCopyModeActiveOnFailedCleanup)
-			) {
+			switch (failureOwnership.kind) {
+				case 'ignore':
+					break;
+				case 'restore':
+					remoteCopyModeActiveRef.current = true;
+					break;
+				case 'preserve-if-cleared': {
+					const wasClearedDuringCleanup =
+						remoteCopyModeWasActive && !remoteCopyModeActiveRef.current;
+					if (
+						!wasClearedDuringCleanup &&
+						(remoteCopyModeWasActive || failureOwnership.acquireOnFailure)
+					) {
+						remoteCopyModeActiveRef.current = true;
+					}
+					break;
+				}
+			}
+			reportFailure(undefined, { kind: 'resolved-false' });
+		},
+		(error) => {
+			if (!isCurrent('failure')) return;
+			if (failureOwnership.kind === 'restore') {
 				remoteCopyModeActiveRef.current = true;
 			}
-		})
-		.catch(() => {});
+			reportFailure(error, { kind: 'rejected' });
+		},
+	);
 	return trackedCleanup;
 }
 
@@ -119,8 +192,15 @@ function runTmuxScrollbackRemoteCopyModeCleanupForUiReset({
 		cleanup,
 		remoteCopyModeActiveRef,
 		remoteCopyModeWasActive,
-		markRemoteCopyModeActiveOnFailedCleanup: true,
-		cleanupGeneration,
+		freshness: cleanupGeneration
+			? { kind: 'generation', generation: cleanupGeneration }
+			: { kind: 'always' },
+		failureOwnership: {
+			kind: 'preserve-if-cleared',
+			acquireOnFailure: true,
+		},
+		successOwnership: 'clear',
+		failureReporting: { kind: 'ignore' },
 	});
 }
 
@@ -240,6 +320,9 @@ export async function handleTmuxScrollbackEnterRequested({
 	clearLocalScrollbackUiState,
 	sendScrollbackEnterAck,
 	isRequestCurrent = () => true,
+	operationOwner,
+	onEnterCommandSettled,
+	rollbackEnteredCopyMode,
 	trace,
 }: {
 	event: { instanceId: string; requestId: number };
@@ -256,21 +339,45 @@ export async function handleTmuxScrollbackEnterRequested({
 	clearLocalScrollbackUiState: () => void;
 	sendScrollbackEnterAck: (requestId: number, instanceId: string) => void;
 	isRequestCurrent?: () => boolean;
+	operationOwner?: ScrollbackOperationOwner;
+	onEnterCommandSettled?: () => void;
+	rollbackEnteredCopyMode?: () => Promise<boolean> | null;
 	trace?: ScrollTraceSink;
 }): Promise<void> {
-	trace?.({
-		event: 'rn.enter.request',
-		requestId: event.requestId,
-		instanceId: event.instanceId,
-		currentInstanceId,
-	});
+	const emitTrace = (traceEvent: Parameters<ScrollTraceSink>[0]): boolean => {
+		try {
+			trace?.(traceEvent);
+		} catch {
+			// Trace sinks are observational and cannot own entry state.
+		}
+		return isRequestCurrent();
+	};
+	const rollback = async (): Promise<void> => {
+		const cleanup = rollbackEnteredCopyMode
+			? rollbackEnteredCopyMode()
+			: commandExecutor.reset({
+					targetName,
+					failurePolicy: 'suppress',
+				});
+		await cleanup;
+	};
+	if (
+		!emitTrace({
+			event: 'rn.enter.request',
+			requestId: event.requestId,
+			instanceId: event.instanceId,
+			currentInstanceId,
+		})
+	) {
+		return;
+	}
 	const requestResolution = resolveTmuxScrollbackEnterRequest({
 		isAppActive,
 		instanceId: event.instanceId,
 		currentInstanceId,
 	});
 	if (requestResolution.action === 'ignore') {
-		trace?.({
+		emitTrace({
 			event: 'rn.enter.dropped',
 			reason: 'stale-instance',
 			requestId: event.requestId,
@@ -280,12 +387,15 @@ export async function handleTmuxScrollbackEnterRequested({
 		return;
 	}
 	if (requestResolution.action === 'clear-local-ui') {
-		trace?.({
-			event: 'rn.enter.dropped',
-			reason: 'app-inactive',
-			requestId: event.requestId,
-			instanceId: event.instanceId,
-		});
+		if (
+			!emitTrace({
+				event: 'rn.enter.dropped',
+				reason: 'app-inactive',
+				requestId: event.requestId,
+				instanceId: event.instanceId,
+			})
+		)
+			return;
 		clearLocalScrollbackUiState();
 		return;
 	}
@@ -296,59 +406,85 @@ export async function handleTmuxScrollbackEnterRequested({
 		!tmuxEnabled ||
 		!connectionAvailable
 	) {
-		trace?.({
-			event: 'rn.enter.dropped',
-			reason: 'unavailable',
-			requestId: event.requestId,
-			instanceId: event.instanceId,
-			shellAvailable,
-			selectionModeEnabled,
-			tmuxEnabled,
-			connectionAvailable,
-		});
+		if (
+			!emitTrace({
+				event: 'rn.enter.dropped',
+				reason: 'unavailable',
+				requestId: event.requestId,
+				instanceId: event.instanceId,
+				shellAvailable,
+				selectionModeEnabled,
+				tmuxEnabled,
+				connectionAvailable,
+			})
+		)
+			return;
 		clearLocalScrollbackUiState();
 		return;
 	}
 
-	trace?.({
-		event: 'rn.enter.command',
-		requestId: event.requestId,
-		instanceId: event.instanceId,
-	});
-	const entered = await commandExecutor.runEnterCommand(targetName);
+	if (
+		!emitTrace({
+			event: 'rn.enter.command',
+			requestId: event.requestId,
+			instanceId: event.instanceId,
+		})
+	)
+		return;
+	let entered: boolean;
+	try {
+		entered = await commandExecutor.runEnterCommand(targetName, operationOwner);
+	} finally {
+		try {
+			onEnterCommandSettled?.();
+		} catch {
+			// Command attribution cleanup is best-effort and cannot own entry state.
+		}
+	}
 	if (!isRequestCurrent()) {
-		trace?.({
+		emitTrace({
 			event: 'rn.enter.stale-after-command',
 			requestId: event.requestId,
 			instanceId: event.instanceId,
 			entered,
 		});
 		if (entered) {
-			await commandExecutor.reset({
-				targetName,
-				failurePolicy: 'suppress',
-			});
+			await rollback();
 		}
 		return;
 	}
 	if (!entered) {
-		trace?.({
-			event: 'rn.enter.failed',
-			requestId: event.requestId,
-			instanceId: event.instanceId,
-		});
+		if (
+			!emitTrace({
+				event: 'rn.enter.failed',
+				requestId: event.requestId,
+				instanceId: event.instanceId,
+			})
+		)
+			return;
 		clearLocalScrollbackUiState();
 		return;
 	}
 	remoteCopyModeGenerationRef.current += 1;
 	remoteCopyModeActiveRef.current = true;
-	trace?.({
-		event: 'rn.enter.acked',
-		requestId: event.requestId,
-		instanceId: event.instanceId,
-		remoteGeneration: remoteCopyModeGenerationRef.current,
-	});
-	sendScrollbackEnterAck(event.requestId, event.instanceId);
+	if (
+		!emitTrace({
+			event: 'rn.enter.acked',
+			requestId: event.requestId,
+			instanceId: event.instanceId,
+			remoteGeneration: remoteCopyModeGenerationRef.current,
+		})
+	) {
+		await rollback();
+		return;
+	}
+	try {
+		sendScrollbackEnterAck(event.requestId, event.instanceId);
+	} catch {
+		await rollback();
+		return;
+	}
+	if (!isRequestCurrent()) await rollback();
 }
 
 export function handleTmuxScrollbackBatchEvent({
@@ -363,6 +499,8 @@ export function handleTmuxScrollbackBatchEvent({
 	targetName,
 	lineAccumulator,
 	enqueueScrollBatch,
+	isRequestCurrent = () => true,
+	onEnqueueFailure,
 	trace,
 }: {
 	event: {
@@ -387,25 +525,33 @@ export function handleTmuxScrollbackBatchEvent({
 	enqueueScrollBatch: (
 		commands: WorkmuxScrollbackPageCommand[],
 	) => Promise<boolean>;
+	isRequestCurrent?: () => boolean;
+	onEnqueueFailure?: (error: unknown) => void;
 	trace?: ScrollTraceSink;
 }): boolean {
 	const traceBatch = (
 		traceEvent: 'rn.batch.accepted' | 'rn.batch.dropped',
 		extras?: Record<string, unknown>,
-	) => {
-		trace?.({
-			event: traceEvent,
-			direction: event.direction,
-			pages: event.pages,
-			lines: event.lines,
-			pageStep: event.pageStep,
-			instanceId: event.instanceId,
-			seq: event.seq,
-			webviewTs: event.ts,
-			source: event.source,
-			...extras,
-		});
+	): boolean => {
+		try {
+			trace?.({
+				event: traceEvent,
+				direction: event.direction,
+				pages: event.pages,
+				lines: event.lines,
+				pageStep: event.pageStep,
+				instanceId: event.instanceId,
+				seq: event.seq,
+				webviewTs: event.ts,
+				source: event.source,
+				...extras,
+			});
+		} catch {
+			// Trace sinks are observational and cannot own batch state.
+		}
+		return isRequestCurrent();
 	};
+	if (!isRequestCurrent()) return false;
 	if (!shellAvailable) {
 		traceBatch('rn.batch.dropped', { reason: 'no-shell' });
 		return false;
@@ -454,7 +600,23 @@ export function handleTmuxScrollbackBatchEvent({
 		traceBatch('rn.batch.dropped', { reason: 'empty' });
 		return false;
 	}
-	traceBatch('rn.batch.accepted', { commandCount: commands.length });
-	void enqueueScrollBatch(commands);
+	if (!traceBatch('rn.batch.accepted', { commandCount: commands.length })) {
+		return false;
+	}
+	const reportEnqueueFailure = (error: unknown) => {
+		try {
+			onEnqueueFailure?.(error);
+		} catch {
+			// Failure observation cannot become an unhandled rejection.
+		}
+	};
+	let enqueue: Promise<boolean>;
+	try {
+		enqueue = enqueueScrollBatch(commands);
+	} catch (error) {
+		reportEnqueueFailure(error);
+		return true;
+	}
+	void enqueue.catch(reportEnqueueFailure);
 	return true;
 }

@@ -1,4 +1,5 @@
 import { type ScrollTraceSink } from './scroll-trace';
+import { type ScrollbackOperationOwner } from './shell-controllers/scrollback-operation-owner';
 import { formatWorkmuxAppBoundaryFailureMessage } from './workmux-app-commands';
 import { type WorkmuxControlChannel } from './workmux-control-channel';
 import {
@@ -18,12 +19,16 @@ export type WorkmuxScrollbackFailurePolicy = 'notify' | 'suppress';
 
 export type WorkmuxScrollbackFailureContext = {
 	commandKind: 'enter' | 'scroll' | 'exit';
+	operationOwner?: ScrollbackOperationOwner;
 };
 
 export type WorkmuxScrollbackTraceEvent = Parameters<ScrollTraceSink>[0];
 
 export type WorkmuxScrollbackCommandExecutor = {
-	runEnterCommand: (targetName: string) => Promise<boolean>;
+	runEnterCommand: (
+		targetName: string,
+		operationOwner?: ScrollbackOperationOwner,
+	) => Promise<boolean>;
 	enqueueScrollBatch: (
 		commands: WorkmuxScrollbackPageCommand[],
 	) => Promise<boolean>;
@@ -80,9 +85,16 @@ export function createWorkmuxScrollbackCommandExecutor({
 	let exitGeneration = 0;
 	let pendingEnterOperations = 0;
 	let pendingSerializedOperations = 0;
-	let canceledEnterRollbackSucceeded = true;
-	let canceledEnterRollbackFailurePolicy: WorkmuxScrollbackFailurePolicy =
-		'notify';
+	const enterGenerations = new Map<
+		number,
+		{
+			pending: number;
+			cancellation?: {
+				failurePolicy: WorkmuxScrollbackFailurePolicy;
+				succeeded: boolean;
+			};
+		}
+	>();
 	let scrollDrainQueued = false;
 	let pendingScrollBatch: {
 		commands: WorkmuxScrollbackPageCommand[];
@@ -159,6 +171,7 @@ export function createWorkmuxScrollbackCommandExecutor({
 		commandKind,
 		operationGeneration,
 		rollbackTargetName,
+		operationOwner,
 		durableExit = false,
 		failurePolicy = 'notify',
 	}: {
@@ -166,6 +179,7 @@ export function createWorkmuxScrollbackCommandExecutor({
 		commandKind: WorkmuxScrollbackCommandKind;
 		operationGeneration: number;
 		rollbackTargetName?: string;
+		operationOwner?: ScrollbackOperationOwner;
 		durableExit?: boolean;
 		failurePolicy?: WorkmuxScrollbackFailurePolicy;
 	}) => {
@@ -198,12 +212,19 @@ export function createWorkmuxScrollbackCommandExecutor({
 				queueDepth: pendingSerializedOperations,
 			});
 			if (!isActive(operationGeneration)) {
+				const cancellation =
+					enterGenerations.get(operationGeneration)?.cancellation;
+				const canceledFailurePolicy =
+					cancellation?.failurePolicy ?? failurePolicy;
 				const failureMessage =
 					formatWorkmuxScrollbackCommandFailureMessage(result);
 				if (failureMessage && commandKind === 'enter' && !disposed) {
-					canceledEnterRollbackSucceeded = false;
-					if (canceledEnterRollbackFailurePolicy === 'notify') {
-						notifyFailure(failureMessage, { commandKind: 'enter' });
+					if (cancellation) cancellation.succeeded = false;
+					if (canceledFailurePolicy === 'notify') {
+						notifyFailure(failureMessage, {
+							commandKind: 'enter',
+							operationOwner,
+						});
 					} else {
 						notifyDisposeExitFailure(failureMessage);
 					}
@@ -214,11 +235,15 @@ export function createWorkmuxScrollbackCommandExecutor({
 					);
 					const rollbackFailureMessage =
 						formatWorkmuxScrollbackCommandFailureMessage(rollbackResult);
-					canceledEnterRollbackSucceeded =
-						canceledEnterRollbackSucceeded && !rollbackFailureMessage;
+					if (cancellation && rollbackFailureMessage) {
+						cancellation.succeeded = false;
+					}
 					if (rollbackFailureMessage) {
-						if (canceledEnterRollbackFailurePolicy === 'notify') {
-							notifyFailure(rollbackFailureMessage, { commandKind: 'exit' });
+						if (canceledFailurePolicy === 'notify') {
+							notifyFailure(rollbackFailureMessage, {
+								commandKind: 'exit',
+								operationOwner,
+							});
 						} else {
 							notifyDisposeExitFailure(rollbackFailureMessage);
 						}
@@ -233,6 +258,7 @@ export function createWorkmuxScrollbackCommandExecutor({
 			if (failurePolicy === 'notify') {
 				notifyFailure(failureMessage, {
 					commandKind: durableExit ? 'exit' : commandKind,
+					operationOwner,
 				});
 			} else {
 				notifyDisposeExitFailure(failureMessage);
@@ -271,15 +297,21 @@ export function createWorkmuxScrollbackCommandExecutor({
 	}) => {
 		const hadPendingEnter = pendingEnterOperations > 0;
 		const hadSerializedWork = pendingSerializedOperations > 0;
-		canceledEnterRollbackSucceeded = true;
-		canceledEnterRollbackFailurePolicy = options?.failurePolicy ?? 'notify';
+		const canceledGeneration = workGeneration;
+		const enterGeneration = enterGenerations.get(canceledGeneration);
+		const cancellation = enterGeneration
+			? (enterGeneration.cancellation ??= {
+					failurePolicy: options?.failurePolicy ?? 'notify',
+					succeeded: true,
+				})
+			: undefined;
 		workGeneration += 1;
 		clearPendingScrollBatches();
 		const targetName = options?.targetName;
 		if (disposed) return null;
 		if (!targetName) {
 			if (!hadPendingEnter || !hadSerializedWork) return null;
-			return enqueueSerialized(async () => canceledEnterRollbackSucceeded);
+			return enqueueSerialized(async () => cancellation?.succeeded ?? true);
 		}
 
 		exitGeneration += 1;
@@ -296,12 +328,22 @@ export function createWorkmuxScrollbackCommandExecutor({
 	};
 
 	return {
-		runEnterCommand: (targetName: string) =>
+		runEnterCommand: (
+			targetName: string,
+			operationOwner?: ScrollbackOperationOwner,
+		) =>
 			closed || disposed
 				? Promise.resolve(false)
 				: (() => {
 						pendingEnterOperations += 1;
 						const operationGeneration = workGeneration;
+						const enterGeneration = enterGenerations.get(
+							operationGeneration,
+						) ?? {
+							pending: 0,
+						};
+						enterGeneration.pending += 1;
+						enterGenerations.set(operationGeneration, enterGeneration);
 						return enqueueSerialized(async () => {
 							try {
 								return await runCommands({
@@ -311,9 +353,14 @@ export function createWorkmuxScrollbackCommandExecutor({
 									commandKind: 'enter',
 									operationGeneration,
 									rollbackTargetName: targetName,
+									operationOwner,
 								});
 							} finally {
 								pendingEnterOperations -= 1;
+								enterGeneration.pending -= 1;
+								if (enterGeneration.pending === 0) {
+									enterGenerations.delete(operationGeneration);
+								}
 							}
 						});
 					})(),

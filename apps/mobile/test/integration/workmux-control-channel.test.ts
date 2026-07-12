@@ -791,3 +791,21 @@ void test('disposeWorkmuxControlChannelAfterCleanup disposes after failed cleanu
 
 	assert.deepEqual(events, ['cleanup:exit failed', 'dispose']);
 });
+
+void test('disposeWorkmuxControlChannelAfterCleanup observes rejected channel disposal once and contains diagnostics', async () => {
+	let attempts = 0;
+	let diagnostics = 0;
+	disposeWorkmuxControlChannelAfterCleanup({
+		dispose: async () => {
+			attempts += 1;
+			throw new Error('channel dispose failed');
+		},
+		onDisposeError: () => {
+			diagnostics += 1;
+			throw new Error('logger failed');
+		},
+	});
+	await settle();
+	assert.equal(attempts, 1);
+	assert.equal(diagnostics, 1);
+});
