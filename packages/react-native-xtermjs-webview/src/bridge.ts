@@ -4,10 +4,20 @@ type ITerminalInitOnlyOptions = import('@xterm/xterm').ITerminalInitOnlyOptions;
 type BridgeLoad = { bridgeLoadId: number };
 type BridgeGeneration = BridgeLoad & { bridgeLoadToken: string };
 type LegacyBridgeGeneration = { bridgeStartedAt?: number };
+
+export type OutputProgressBridgeMessage = {
+	type: 'outputProgress';
+	instanceId: string;
+	receivedMessages: number;
+	receivedBytes: number;
+	completedWrites: number;
+} & BridgeGeneration;
+
 // Messages posted from the WebView (xterm page) to React Native
 export type BridgeInboundMessage =
 	| ({ type: 'documentStarted'; bridgeLoadToken: string } & BridgeLoad)
 	| ({ type: 'initialized'; instanceId: string } & BridgeGeneration)
+	| OutputProgressBridgeMessage
 	| {
 			type: 'input';
 			str: string;

@@ -18,6 +18,7 @@ import {
 	createXtermWebViewHandle,
 } from '../src/xterm-webview-handle';
 import { createXtermWebViewMessageHandler } from './webview-message-handler';
+import { createWriteProgressReporter } from './write-progress';
 
 function withTrackedClearTimeouts(run: (cleared: unknown[]) => void): unknown[] {
 	const clearTimeoutOriginal = globalThis.clearTimeout;
@@ -1100,6 +1101,80 @@ void test('WebView outbound handler ignores stale scrollback instance messages',
 	} as MessageEvent);
 
 	assert.deepEqual(events, [['exit', { requestId: 3 }], ['ack', 4], ['ack', 5]]);
+});
+
+void test('write progress reports received bytes and completed xterm writes without content', () => {
+	let nowMs = 1_000;
+	const messages: BridgeInboundDraftMessage[] = [];
+	const reporter = createWriteProgressReporter({
+		instanceId: 'instance-1',
+		now: () => nowMs,
+		sendToRn: (message) => messages.push(message),
+		minIntervalMs: 250,
+	});
+
+	reporter.received(12);
+	reporter.completed();
+	nowMs += 300;
+	reporter.received(7);
+	reporter.completed();
+
+	assert.deepEqual(messages, [
+		{
+			type: 'outputProgress',
+			instanceId: 'instance-1',
+			receivedMessages: 1,
+			receivedBytes: 12,
+			completedWrites: 1,
+		},
+		{
+			type: 'outputProgress',
+			instanceId: 'instance-1',
+			receivedMessages: 2,
+			receivedBytes: 19,
+			completedWrites: 2,
+		},
+	]);
+});
+
+void test('webview write progress advances only after the xterm callback', () => {
+	let complete: (() => void) | undefined;
+	const messages: BridgeInboundDraftMessage[] = [];
+	const handler = createXtermWebViewMessageHandler({
+		instanceId: 'instance-1',
+		term: {
+			cols: 80,
+			rows: 24,
+			options: {},
+			write: (_bytes, callback) => {
+				complete = callback;
+			},
+			resize: () => {},
+			getSelection: () => '',
+			clear: () => {},
+			focus: () => {},
+		},
+		fitAddon: { fit: () => {} },
+		selectionHandles: { applySelectionMode: () => {} },
+		touchScrollController: {
+			setConfig: () => {},
+			exitScrollback: () => {},
+			handleEnterAck: () => {},
+		},
+		sendToRn: (message) => messages.push(message),
+		applyFontFamily: () => {},
+		now: () => 1_000,
+	});
+
+	handler(
+		new MessageEvent('message', { data: { type: 'write', bStr: 'abc' } }),
+	);
+	assert.equal(
+		messages.some((message) => message.type === 'outputProgress'),
+		false,
+	);
+	complete?.();
+	assert.equal(messages.at(-1)?.type, 'outputProgress');
 });
 
 void test('public tmux ack handle sends the legacy tmux ack type', () => {
