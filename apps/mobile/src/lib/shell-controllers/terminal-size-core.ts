@@ -86,13 +86,18 @@ export function createTerminalSizeController({
 		const revision = ++operationRevision;
 		const waiterCohort = [...waiters];
 		const size = { cols, rows };
+		const previousSize = publisher.getSnapshot().lastSize;
+		const sizeChanged =
+			previousSize?.cols !== cols || previousSize.rows !== rows;
 		let publicationFailed = false;
 		let publicationError: unknown;
-		try {
-			publisher.publish({ lastSize: size });
-		} catch (error) {
-			publicationFailed = true;
-			publicationError = error;
+		if (sizeChanged) {
+			try {
+				publisher.publish({ lastSize: size });
+			} catch (error) {
+				publicationFailed = true;
+				publicationError = error;
+			}
 		}
 
 		if (!disposed && revision === operationRevision) {
