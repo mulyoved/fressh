@@ -208,11 +208,13 @@ void test('xterm output diagnostics separate queued, sent, and completed bytes',
 	diagnostics.recordFlush();
 	diagnostics.recordSent(10);
 	diagnostics.recordWebViewProgress({
+		instanceId: 'instance-1',
 		receivedMessages: 1,
 		receivedBytes: 10,
 		completedWrites: 1,
 	});
 	assert.deepEqual(diagnostics.getSnapshot(), {
+		webViewInstanceId: 'instance-1',
 		rnQueuedMessages: 1,
 		rnQueuedBytes: 10,
 		rnFlushes: 1,
@@ -243,6 +245,7 @@ Use this public snapshot shape:
 
 ```ts
 export type XtermOutputDiagnostics = {
+	webViewInstanceId: string | null;
 	rnQueuedMessages: number;
 	rnQueuedBytes: number;
 	rnFlushes: number;
@@ -257,7 +260,8 @@ export type XtermOutputDiagnostics = {
 Record queued bytes in `write` and `writeMany`, increment `rnFlushes` whenever
 `flush` sends a non-empty buffer, record sent bytes in `flush` and `writeMany`,
 and update WebView fields only after `handleXtermBridgeInboundMessage` accepts a
-current `outputProgress` message. Add `getOutputDiagnostics` to
+current `outputProgress` message, including that message's `instanceId` as
+`webViewInstanceId`. Add `getOutputDiagnostics` to
 `XtermWebViewHandle` and return a copied snapshot so callers cannot mutate
 counters.
 
