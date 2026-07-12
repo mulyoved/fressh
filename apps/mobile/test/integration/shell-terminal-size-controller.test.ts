@@ -260,7 +260,7 @@ void test('disposal without a size settles waiters, is idempotent, and rejects l
 	assert.deepEqual(clock.pending(), []);
 });
 
-void test('subscribers see every resize event and no publication after disposal', () => {
+void test('subscribers see size changes but not duplicate resize events', () => {
 	const clock = createFakeClock();
 	const core = createTerminalSizeController(createSizeDeps(clock));
 	const seen: ({ cols: number; rows: number } | null)[] = [];
@@ -269,14 +269,15 @@ void test('subscribers see every resize event and no publication after disposal'
 	});
 
 	core.handleResize(80, 24);
-	core.handleResize(80, 24);
+	for (let index = 0; index < 100; index += 1) {
+		core.handleResize(80, 24);
+	}
 	core.invalidate('runtime-reset');
 	core.handleResize(100, 30);
 	core.dispose();
 	core.handleResize(120, 40);
 
 	assert.deepEqual(seen, [
-		{ cols: 80, rows: 24 },
 		{ cols: 80, rows: 24 },
 		null,
 		{ cols: 100, rows: 30 },
