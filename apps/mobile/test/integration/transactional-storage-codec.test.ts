@@ -28,6 +28,13 @@ void test('canonicalJson ignores object insertion order', () => {
 	);
 });
 
+void test('canonicalJson uses locale-independent UTF-16 key order', () => {
+	assert.equal(
+		canonicalJson({ ä: 4, Á: 3, z: 2, a: 1 }),
+		'{"a":1,"z":2,"Á":3,"ä":4}',
+	);
+});
+
 void test('assertPayloadFits rejects 1801 UTF-8 bytes', () => {
 	assert.throws(() => assertPayloadFits('x'.repeat(1801)), /1800 UTF-8 bytes/);
 });
