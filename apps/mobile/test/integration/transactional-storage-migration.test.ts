@@ -7,6 +7,7 @@ import { createTransactionalSecureStore, SecureStorageCorruptionError, type Sha2
 import { createLegacyChunkedStorageReader } from '../../src/lib/transactional-secure-storage/legacy-reader';
 import { buildV2Keys } from '../../src/lib/transactional-secure-storage/records';
 import { FaultInjectingStringStorage, type StorageFault } from './helpers/fault-injecting-string-storage';
+import { writeTransactionalStorageFixture } from './helpers/transactional-storage-fixtures';
 
 const namespace = 'migration';
 const metadataSchema = z.strictObject({ label: z.string() });
@@ -141,4 +142,77 @@ void test('stale and disagreeing intent headers are removed before a new migrati
 	await createStore(storage).ensureReady();
 	assert.doesNotThrow(() => JSON.parse(storage.snapshotDurable()[keys.intent.a]!));
 	assert.equal(await storage.getItem(keys.intent.a), await storage.getItem(keys.intent.b));
+});
+
+void test('every first-instance mutation path preserves all durable v1 records', async () => {
+	for (const run of [
+		(store: ReturnType<typeof createStore>) => store.upsertEntry({ id: 'gamma', metadata: { label: 'Gamma' }, value: { privateKey: 'three' } }),
+		(store: ReturnType<typeof createStore>) => store.replaceAllEntries([]),
+		(store: ReturnType<typeof createStore>) => store.deleteEntry('alpha'),
+		(store: ReturnType<typeof createStore>) => store.retryCleanup(),
+	] as const) {
+		const storage = await seedLegacy();
+		const before = legacyKeys(storage);
+		const store = createStore(storage);
+		await store.ensureReady();
+		await run(store);
+		await store.ensureReady();
+		assert.deepEqual(legacyKeys(storage), before);
+	}
+});
+
+void test('missing or malformed legacy cleanup pages are rebuilt from readable v1 and eventually cleaned', async () => {
+	for (const replacement of [null, '{'] as const) {
+		const storage = await seedLegacy();
+		await createStore(storage).ensureReady();
+		storage.restart();
+		const root = JSON.parse((await storage.getItem(buildV2Keys(namespace).root.b))!) as { cleanupHeadKey: string };
+		if (replacement === null) await storage.deleteItem(root.cleanupHeadKey);
+		else await storage.setItem(root.cleanupHeadKey, replacement);
+		await createStore(storage).ensureReady();
+		assert.deepEqual(legacyKeys(storage), []);
+	}
+});
+
+void test('a stale valid peer root is mirrored to the selected snapshot before legacy cleanup', async () => {
+	const storage = await seedLegacy();
+	await createStore(storage).ensureReady();
+	await writeTransactionalStorageFixture({ namespace, metadataSchema, serializeValue: JSON.stringify, storage, sha256, slot: 'a', commitGeneration: 0, entries: [] });
+	storage.restart();
+	await createStore(storage).ensureReady();
+	const keys = buildV2Keys(namespace);
+	const a = JSON.parse((await storage.getItem(keys.root.a))!) as { snapshotId: string };
+	const b = JSON.parse((await storage.getItem(keys.root.b))!) as { snapshotId: string };
+	assert.equal(a.snapshotId, b.snapshotId);
+	assert.deepEqual(legacyKeys(storage), []);
+});
+
+void test('recomputed cleanup pages cannot delete keys outside the exact readable v1 inventory', async () => {
+	const storage = await seedLegacy();
+	await storage.setItem('unrelated-app-secret', 'keep');
+	await createStore(storage).ensureReady();
+	storage.restart();
+	const root = JSON.parse((await storage.getItem(buildV2Keys(namespace).root.b))!) as { cleanupHeadKey: string };
+	const page = JSON.parse((await storage.getItem(root.cleanupHeadKey))!) as Record<string, unknown>;
+	page.garbageKey = 'unrelated-app-secret';
+	page.pageSha256 = await sha256(new TextEncoder().encode(JSON.stringify(Object.fromEntries(Object.entries(page).filter(([key]) => key !== 'pageSha256')))));
+	await storage.setItem(root.cleanupHeadKey, JSON.stringify(page));
+	await createStore(storage).ensureReady();
+	assert.equal(await storage.getItem('unrelated-app-secret'), 'keep');
+	assert.deepEqual(legacyKeys(storage), ['unrelated-app-secret']);
+});
+
+void test('silent no-op at every migration publication boundary is detected before success', async () => {
+	const probe = await seedLegacy();
+	const offset = probe.operationLog.filter(({ type }) => type === 'set' || type === 'delete').length;
+	await createStore(probe).ensureReady();
+	const boundaries = probe.operationLog.filter(({ type }) => type === 'set').length - offset;
+	for (let boundary = 1; boundary <= boundaries; boundary++) {
+		const storage = await seedLegacy();
+		const start = storage.operationLog.filter(({ type }) => type === 'set' || type === 'delete').length;
+		storage.failOperation(start + boundary, 'delete-noop');
+		await assert.rejects(createStore(storage).ensureReady(), `boundary ${boundary}`);
+		storage.restart();
+		assert.equal(legacyKeys(storage).length, 4);
+	}
 });

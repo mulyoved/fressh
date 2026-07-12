@@ -94,9 +94,13 @@ export function createTransactionalSecureStore<Metadata extends object, Value>(
 			return { status: state.type === 'fresh' ? 'initialized' as const : 'migrated' as const, cleanupPending: state.type === 'legacy' };
 		}
 		const selected = state.snapshot;
+		let legacy: LegacySnapshot<Metadata, Value> | undefined;
+		if (!createdV2ThisInstance) {
+			try { legacy = await options.legacy.read(); } catch { legacy = undefined; }
+		}
 		const other = await readRootCandidate(options, selected.slot === 'a' ? 'b' : 'a');
-		if (other.status !== 'valid') await startup.mirror(selected);
-		const cleanupPending = createdV2ThisInstance ? selected.root.cleanupHeadKey !== undefined : await startup.cleanup(selected);
+		if (other.status !== 'valid' || (legacy?.status === 'present' && !startup.sameSnapshot(selected, other.snapshot))) await startup.mirror(selected);
+		const cleanupPending = createdV2ThisInstance ? selected.root.cleanupHeadKey !== undefined : await startup.cleanup(selected, legacy);
 		return { status: state.type === 'recovered' ? 'recovered' as const : 'current' as const, cleanupPending };
 	}
 
@@ -115,6 +119,7 @@ export function createTransactionalSecureStore<Metadata extends object, Value>(
 			nextEntries: nextEntries(base),
 			targetSlots: [olderSlot(base)],
 			cleanupKeys: [],
+			deferCleanup: createdV2ThisInstance,
 		});
 	}
 
@@ -132,6 +137,7 @@ export function createTransactionalSecureStore<Metadata extends object, Value>(
 			nextEntries: [...entries.values()],
 			targetSlots: [olderSlot(base), base.slot],
 			cleanupKeys: [...cleanupKeys],
+			deferCleanup: createdV2ThisInstance,
 		});
 	}
 

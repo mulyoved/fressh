@@ -31,6 +31,7 @@ type CommitOptions<Metadata extends object, Value> = {
 	nextEntries: readonly SecureEntry<Metadata, Value>[];
 	targetSlots: readonly RootSlot[];
 	cleanupKeys: readonly string[];
+	deferCleanup?: boolean;
 };
 
 export function createTransactionWriter<Metadata extends object, Value>(
@@ -47,6 +48,7 @@ export function createTransactionWriter<Metadata extends object, Value>(
 		nextEntries,
 		targetSlots,
 		cleanupKeys,
+		deferCleanup,
 	}: CommitOptions<Metadata, Value>) {
 		let attemptId!: string;
 		let snapshotId!: string;
@@ -195,7 +197,8 @@ export function createTransactionWriter<Metadata extends object, Value>(
 			}
 			reopened = candidate.snapshot;
 		}
-		await runCleanup(staged.root.cleanupHeadKey).catch(() => undefined);
+		if (!deferCleanup)
+			await runCleanup(staged.root.cleanupHeadKey).catch(() => undefined);
 		let planCleanupComplete = true;
 		for (let pageIndex = 0; pageIndex < planPageCount; pageIndex++) {
 			if (!(await deleteBestEffort(keys.intentPlan(attemptId, pageIndex)))) {
@@ -433,9 +436,7 @@ export function createTransactionWriter<Metadata extends object, Value>(
 			try {
 				const intent = schemas.transactionIntent.parse(JSON.parse(raw));
 				intents.set(intent.attemptId, intent);
-			} catch {
-				// A malformed fixed header cannot identify any immutable records.
-			}
+			} catch { /* malformed headers cannot identify immutable records */ }
 		}
 		for (const intent of intents.values()) {
 			const pages = [];
@@ -461,9 +462,7 @@ export function createTransactionWriter<Metadata extends object, Value>(
 						) {
 							pages.push(page);
 						}
-					} catch {
-						// The deterministic plan key itself is still safe to discard.
-					}
+					} catch { /* deterministic plan keys remain safe to discard */ }
 				}
 				await deleteBestEffort(planKey);
 			}
@@ -490,7 +489,6 @@ export function createTransactionWriter<Metadata extends object, Value>(
 			await options.storage.deleteItem(key);
 			return (await options.storage.getItem(key)) === null;
 		} catch {
-			// Cleanup can be retried on the next open.
 			return false;
 		}
 	}
