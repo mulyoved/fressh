@@ -189,11 +189,9 @@ export function makeBetterSecureStore<
 
 	async function getEntry(id: string) {
 		const manifest = await getManifest();
-		const manifestEntry = manifest.manifestChunks.reduce<Entry | undefined>(
-			(_, manifestChunk) =>
-				manifestChunk.manifestChunk.entries.find((entry) => entry.id === id),
-			undefined,
-		);
+		const manifestEntry = manifest.manifestChunks
+			.flatMap((manifestChunk) => manifestChunk.manifestChunk.entries)
+			.find((entry) => entry.id === id);
 		if (!manifestEntry) throw new Error('Entry not found');
 
 		return {
