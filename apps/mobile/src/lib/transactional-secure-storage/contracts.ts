@@ -65,3 +65,76 @@ export type TransactionalSecureStoreOptions<
 	sha256: Sha256;
 	logger?: LoggerLike;
 };
+
+export type RootSlot = 'a' | 'b';
+
+export type TransactionIntentV2 = {
+	formatVersion: 2;
+	namespace: string;
+	attemptId: string;
+	targetRootSlots: RootSlot[];
+	firstCommitGeneration: number;
+	snapshotId: string;
+	planPageCount: number;
+	planSha256: string;
+};
+
+export type IntentPlanPageV2 = {
+	formatVersion: 2;
+	namespace: string;
+	attemptId: string;
+	pageIndex: number;
+	plannedKey: string;
+	nextPageKey?: string;
+	pageSha256: string;
+};
+
+export type RootCommitV2 = {
+	formatVersion: 2;
+	namespace: string;
+	commitGeneration: number;
+	snapshotId: string;
+	manifestHeadKey: string;
+	manifestPageCount: number;
+	entryCount: number;
+	manifestSha256: string;
+	cleanupHeadKey?: string;
+};
+
+export type ManifestEntryRefV2 = {
+	entryId: string;
+	revisionKey: string;
+	revisionSha256: string;
+};
+
+export type ManifestPageV2 = {
+	formatVersion: 2;
+	namespace: string;
+	snapshotId: string;
+	pageIndex: number;
+	entries: ManifestEntryRefV2[];
+	nextPageKey?: string;
+	pageSha256: string;
+};
+
+export type EntryRevisionV2<Metadata extends object> = {
+	formatVersion: 2;
+	namespace: string;
+	entryId: string;
+	revisionId: string;
+	metadata: Metadata;
+	valueRecordId: string;
+	valueChunkCount: number;
+	valueByteLength: number;
+	valueSha256: string;
+};
+
+export type CleanupPageV2 = {
+	formatVersion: 2;
+	namespace: string;
+	attemptId: string;
+	pageIndex: number;
+	garbageKey: string;
+	nextPageKey?: string;
+	pageSha256: string;
+};
