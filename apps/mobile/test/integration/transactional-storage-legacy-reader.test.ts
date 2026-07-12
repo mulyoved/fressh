@@ -160,21 +160,135 @@ void test('rejects duplicate entry IDs across manifest chunks', async () => {
 void test('returns absent only when the v1 root does not exist', async () => {
 	const memory = createMemoryStorage();
 	const guarded = readOnlyStorage(memory.storage);
+	const rootKey = buildChunkedStoreKeys('legacy').rootManifestKey;
 
 	assert.deepEqual(await createReader(guarded.storage).read(), {
 		status: 'absent',
 		entries: [],
-		recordKeys: [],
+		recordKeys: [rootKey],
 	});
 	assert.equal(guarded.writeCount(), 0);
 
-	await memory.storage.setItem(
-		buildChunkedStoreKeys('legacy').rootManifestKey,
-		'{',
-	);
+	await memory.storage.setItem(rootKey, '{');
 	await assert.rejects(
 		createReader(guarded.storage).read(),
 		SecureStorageCorruptionError,
 	);
+	assert.equal(guarded.writeCount(), 0);
+});
+
+void test('propagates manifest storage read failures unchanged', async () => {
+	const seeded = await seedLegacyStorage();
+	const sentinel = new Error('manifest adapter unavailable');
+	const manifestKey =
+		buildChunkedStoreKeys('legacy').manifestChunkKey('manifest-1');
+	const guarded = readOnlyStorage({
+		...seeded.storage,
+		getItem: async (key) => {
+			if (key === manifestKey) throw sentinel;
+			return seeded.storage.getItem(key);
+		},
+	});
+
+	await assert.rejects(createReader(guarded.storage).read(), (error) => {
+		assert.equal(error, sentinel);
+		return true;
+	});
+	assert.equal(guarded.writeCount(), 0);
+});
+
+void test('propagates value storage read failures unchanged', async () => {
+	const seeded = await seedLegacyStorage();
+	const sentinel = new Error('value adapter unavailable');
+	const valueKey = buildChunkedStoreKeys('legacy').entryKey('second', 0);
+	const guarded = readOnlyStorage({
+		...seeded.storage,
+		getItem: async (key) => {
+			if (key === valueKey) throw sentinel;
+			return seeded.storage.getItem(key);
+		},
+	});
+
+	await assert.rejects(createReader(guarded.storage).read(), (error) => {
+		assert.equal(error, sentinel);
+		return true;
+	});
+	assert.equal(guarded.writeCount(), 0);
+});
+
+void test('rejects a present root manifest version other than 1', async () => {
+	const seeded = await seedLegacyStorage();
+	const rootKey = buildChunkedStoreKeys('legacy').rootManifestKey;
+	const root = JSON.parse(seeded.records.get(rootKey)!) as {
+		manifestVersion: number;
+	};
+	root.manifestVersion = 2;
+	seeded.records.set(rootKey, JSON.stringify(root));
+
+	await assert.rejects(
+		createReader(readOnlyStorage(seeded.storage).storage).read(),
+		SecureStorageCorruptionError,
+	);
+});
+
+void test('rejects a present manifest chunk version other than 1', async () => {
+	const seeded = await seedLegacyStorage();
+	const manifestKey =
+		buildChunkedStoreKeys('legacy').manifestChunkKey('manifest-1');
+	const manifest = JSON.parse(seeded.records.get(manifestKey)!) as {
+		manifestChunkVersion: number;
+	};
+	manifest.manifestChunkVersion = 2;
+	seeded.records.set(manifestKey, JSON.stringify(manifest));
+
+	await assert.rejects(
+		createReader(readOnlyStorage(seeded.storage).storage).read(),
+		SecureStorageCorruptionError,
+	);
+});
+
+void test('reads a schema-valid zero-chunk entry as an empty string without a value read', async () => {
+	const memory = createMemoryStorage();
+	const keys = buildChunkedStoreKeys('legacy');
+	await memory.storage.setItem(
+		keys.rootManifestKey,
+		JSON.stringify({ manifestChunksIds: ['empty'] }),
+	);
+	await memory.storage.setItem(
+		keys.manifestChunkKey('empty'),
+		JSON.stringify({
+			entries: [
+				{
+					id: 'empty',
+					chunkCount: 0,
+					metadata: { position: 1, padding: '' },
+				},
+			],
+		}),
+	);
+	const readKeys: string[] = [];
+	const guarded = readOnlyStorage({
+		...memory.storage,
+		getItem: async (key) => {
+			readKeys.push(key);
+			return memory.storage.getItem(key);
+		},
+	});
+
+	assert.deepEqual(await createReader(guarded.storage).read(), {
+		status: 'present',
+		entries: [
+			{
+				id: 'empty',
+				metadata: { position: 1, padding: '' },
+				value: '',
+			},
+		],
+		recordKeys: [keys.rootManifestKey, keys.manifestChunkKey('empty')],
+	});
+	assert.deepEqual(readKeys, [
+		keys.rootManifestKey,
+		keys.manifestChunkKey('empty'),
+	]);
 	assert.equal(guarded.writeCount(), 0);
 });
