@@ -90,6 +90,10 @@ function valueKeys(storage: FaultInjectingStringStorage) {
 		.sort();
 }
 
+function mutationOperations(storage: FaultInjectingStringStorage) {
+	return storage.operationLog.filter(({ type }) => type !== 'get');
+}
+
 void test('replace-all and upsert publish a canonical snapshot and reuse an unchanged value', async () => {
 	const storage = await seedEmptyPair();
 	const store = createStore(storage);
@@ -218,6 +222,114 @@ void test('retains an intent header when committed plan cleanup fails', async ()
 	assert.equal(
 		durableKeys.includes(keys.intent.a) || durableKeys.includes(keys.intent.b),
 		true,
+	);
+});
+
+void test('delete publishes both roots before deleting unreachable value records', async () => {
+	const storage = new FaultInjectingStringStorage(await seedOldState());
+	const keys = buildV2Keys(namespace);
+	storage.operationLog.length = 0;
+
+	await createStore(storage).deleteEntry(first.id);
+
+	const operations = mutationOperations(storage);
+	const rootWrites = operations
+		.map((operation, index) => ({ ...operation, index }))
+		.filter(
+			({ type, key }) =>
+				type === 'set' && (key === keys.root.a || key === keys.root.b),
+		);
+	assert.equal(rootWrites.length, 2);
+	assert.deepEqual(
+		rootWrites.map(({ key }) => key),
+		[keys.root.b, keys.root.a],
+	);
+	assert.ok(rootWrites[0]!.index < rootWrites[1]!.index);
+	const firstGarbageDelete = operations.findIndex(
+		({ type, key }) =>
+			type === 'delete' &&
+			(key.includes('-v2-entry-') || key.includes('-v2-value-')),
+	);
+	assert.ok(firstGarbageDelete > rootWrites[1]!.index);
+
+	const roots = await Promise.all([
+		storage.getItem(keys.root.a),
+		storage.getItem(keys.root.b),
+	]);
+	const parsedRoots = roots.map(
+		(raw) =>
+			JSON.parse(raw!) as {
+				commitGeneration: number;
+				snapshotId: string;
+			},
+	);
+	assert.equal(parsedRoots[0]!.snapshotId, parsedRoots[1]!.snapshotId);
+	assert.equal(
+		Math.abs(
+			parsedRoots[0]!.commitGeneration - parsedRoots[1]!.commitGeneration,
+		),
+		1,
+	);
+	assert.deepEqual(await createStore(storage).listEntries(), []);
+});
+
+for (const rootWrite of [1, 2] as const) {
+	void test(`reopens a complete state when delete root write ${rootWrite} fails`, async () => {
+		const durableOld = await seedOldState();
+		const successful = new FaultInjectingStringStorage(durableOld);
+		await createStore(successful).deleteEntry(first.id);
+		const keys = buildV2Keys(namespace);
+		const rootOperation = mutationOperations(successful)
+			.map((operation, index) => ({ ...operation, operation: index + 1 }))
+			.filter(
+				({ type, key }) =>
+					type === 'set' && (key === keys.root.a || key === keys.root.b),
+			)[rootWrite - 1]!.operation;
+
+		const storage = new FaultInjectingStringStorage(durableOld);
+		storage.failOperation(rootOperation, 'throw-before');
+		await assert.rejects(createStore(storage).deleteEntry(first.id));
+		storage.restart();
+		const entries = await createStore(storage).listEntries();
+		assert.ok(
+			[JSON.stringify([first]), JSON.stringify([])].includes(
+				JSON.stringify(entries),
+			),
+		);
+	});
+}
+
+void test('keeps delete logically committed when cleanup is a no-op and retries it', async () => {
+	const durableOld = await seedOldState();
+	const successful = new FaultInjectingStringStorage(durableOld);
+	await createStore(successful).deleteEntry(first.id);
+	const garbageDelete = mutationOperations(successful).findIndex(
+		({ type, key }) =>
+			type === 'delete' &&
+			(key.includes('-v2-entry-') || key.includes('-v2-value-')),
+	);
+	assert.notEqual(garbageDelete, -1);
+
+	const storage = new FaultInjectingStringStorage(durableOld);
+	storage.failOperation(garbageDelete + 1, 'delete-noop');
+	const store = createStore(storage);
+	await store.deleteEntry(first.id);
+	assert.equal(await store.getEntry(first.id), null);
+	assert.equal((await store.ensureReady()).cleanupPending, true);
+	const garbageBeforeRetry = Object.keys(storage.snapshotDurable()).filter(
+		(key) => key.includes('-v2-entry-') || key.includes('-v2-value-'),
+	);
+	assert.ok(garbageBeforeRetry.length > 0);
+
+	await store.retryCleanup();
+
+	assert.equal(await store.getEntry(first.id), null);
+	assert.equal((await store.ensureReady()).cleanupPending, false);
+	assert.deepEqual(
+		Object.keys(storage.snapshotDurable()).filter(
+			(key) => key.includes('-v2-entry-') || key.includes('-v2-value-'),
+		),
+		[],
 	);
 });
 

@@ -5,7 +5,11 @@ import {
 	type TransactionalSecureStore,
 	type TransactionalSecureStoreOptions,
 } from './contracts';
-import { selectSnapshot, type ValidatedSnapshot } from './snapshot-reader';
+import {
+	readRootCandidate,
+	selectSnapshot,
+	type ValidatedSnapshot,
+} from './snapshot-reader';
 import { createTransactionWriter } from './transaction-writer';
 
 export function createTransactionalSecureStore<Metadata extends object, Value>(
@@ -54,10 +58,30 @@ export function createTransactionalSecureStore<Metadata extends object, Value>(
 		});
 	}
 
+	async function deleteOrRetry(id?: string): Promise<void> {
+		const base = await open();
+		const entries = new Map(base.entries);
+		if (id !== undefined) entries.delete(id);
+		const cleanupKeys = new Set(base.reachableKeys);
+		const older = await readRootCandidate(options, olderSlot(base));
+		if (older.status === 'valid') {
+			for (const key of older.snapshot.reachableKeys) cleanupKeys.add(key);
+		}
+		await writer.commitSnapshot({
+			base,
+			nextEntries: [...entries.values()],
+			targetSlots: [olderSlot(base), base.slot],
+			cleanupKeys: [...cleanupKeys],
+		});
+	}
+
 	return {
 		async ensureReady() {
-			await openAfterMutations();
-			return { status: 'current', cleanupPending: false };
+			const snapshot = await openAfterMutations();
+			const cleanupPending =
+				snapshot.root.cleanupHeadKey !== undefined &&
+				(await options.storage.getItem(snapshot.root.cleanupHeadKey)) !== null;
+			return { status: 'current', cleanupPending };
 		},
 		async getEntry(id) {
 			return (await openAfterMutations()).entries.get(id) ?? null;
@@ -84,9 +108,11 @@ export function createTransactionalSecureStore<Metadata extends object, Value>(
 			}
 			return serializeMutation(() => mutate(() => entries));
 		},
-		async deleteEntry() {
-			throw new Error('deleteEntry is not implemented');
+		deleteEntry(id) {
+			return serializeMutation(() => deleteOrRetry(id));
 		},
-		async retryCleanup() {},
+		retryCleanup() {
+			return serializeMutation(() => deleteOrRetry());
+		},
 	};
 }

@@ -1,7 +1,7 @@
 import type * as z from 'zod';
 import { canonicalJson, encodeValueChunks } from './codec';
 import {
-	SecureStorageWriteNotCommittedError,
+	SecureStorageWriteNotCommittedError as WriteError,
 	type AsyncStringStorage,
 	type ManifestEntryRefV2,
 	type RootSlot,
@@ -12,11 +12,9 @@ import {
 import {
 	buildV2Keys,
 	createRecordSchemas,
-	hashCanonicalRecord,
+	hashCanonicalRecord as hash,
 } from './records';
 import { readRootCandidate, type ValidatedSnapshot } from './snapshot-reader';
-
-const textEncoder = new TextEncoder();
 
 type WriterOptions<Metadata extends object, Value> = {
 	namespace: string;
@@ -35,10 +33,6 @@ type CommitOptions<Metadata extends object, Value> = {
 	cleanupKeys: readonly string[];
 };
 
-function revisionKey(namespace: string, revisionId: string): string {
-	return `${namespace}-v2-entry-${revisionId}`;
-}
-
 export function createTransactionWriter<Metadata extends object, Value>(
 	options: WriterOptions<Metadata, Value>,
 ) {
@@ -52,6 +46,7 @@ export function createTransactionWriter<Metadata extends object, Value>(
 		base,
 		nextEntries,
 		targetSlots,
+		cleanupKeys,
 	}: CommitOptions<Metadata, Value>): Promise<
 		ValidatedSnapshot<Metadata, Value>
 	> {
@@ -67,6 +62,50 @@ export function createTransactionWriter<Metadata extends object, Value>(
 				left.id < right.id ? -1 : left.id > right.id ? 1 : 0,
 			);
 			staged = await stageRecords(base, orderedEntries, attemptId, snapshotId);
+			const carriedCleanup = (
+				await readCleanupPages(base.root.cleanupHeadKey)
+			).flatMap(({ key, garbageKey }) => [garbageKey, key]);
+			const garbageKeys = [
+				...new Set([...cleanupKeys, ...carriedCleanup]),
+			].filter(
+				(key) =>
+					!staged.protectedKeys.has(key) &&
+					key !== keys.root.a &&
+					key !== keys.root.b &&
+					key !== keys.intent.a &&
+					key !== keys.intent.b,
+			);
+			const cleanupPageKeys: string[] = [];
+			for (
+				let pageIndex = garbageKeys.length - 1;
+				pageIndex >= 0;
+				pageIndex--
+			) {
+				const cleanupKey = keys.cleanup(attemptId, pageIndex);
+				const withoutHash = {
+					formatVersion: 2 as const,
+					namespace: options.namespace,
+					attemptId,
+					pageIndex,
+					garbageKey: garbageKeys[pageIndex]!,
+					...(pageIndex + 1 < garbageKeys.length
+						? { nextPageKey: keys.cleanup(attemptId, pageIndex + 1) }
+						: {}),
+				};
+				staged.records.set(
+					cleanupKey,
+					canonicalJson(
+						schemas.cleanupPage.parse({
+							...withoutHash,
+							pageSha256: await hash(withoutHash, undefined, options.sha256),
+						}),
+					),
+				);
+				cleanupPageKeys[pageIndex] = cleanupKey;
+			}
+			if (cleanupPageKeys[0] !== undefined) {
+				staged.root.cleanupHeadKey = cleanupPageKeys[0];
+			}
 			const plannedKeys = [...staged.records.keys()];
 			const planPages = await Promise.all(
 				plannedKeys.map(async (plannedKey, pageIndex) => {
@@ -82,11 +121,7 @@ export function createTransactionWriter<Metadata extends object, Value>(
 					};
 					return schemas.intentPlanPage.parse({
 						...withoutHash,
-						pageSha256: await hashCanonicalRecord(
-							withoutHash,
-							undefined,
-							options.sha256,
-						),
+						pageSha256: await hash(withoutHash, undefined, options.sha256),
 					});
 				}),
 			);
@@ -99,7 +134,7 @@ export function createTransactionWriter<Metadata extends object, Value>(
 				snapshotId,
 				planPageCount: planPages.length,
 				planSha256: await options.sha256(
-					textEncoder.encode(canonicalJson(planPages)),
+					new TextEncoder().encode(canonicalJson(planPages)),
 				),
 			});
 			planPageCount = intent.planPageCount;
@@ -137,29 +172,32 @@ export function createTransactionWriter<Metadata extends object, Value>(
 			}
 			await validateStaged(staged.records);
 		} catch (error) {
-			throw new SecureStorageWriteNotCommittedError(
-				`Secure storage staging failed: ${String(error)}`,
-			);
+			throw new WriteError(`Secure storage staging failed: ${String(error)}`);
 		}
 
 		for (const { slot, raw } of rootRecords) {
 			try {
 				await options.storage.setItem(keys.root[slot], raw);
 			} catch (error) {
-				throw new SecureStorageWriteNotCommittedError(
+				throw new WriteError(
 					`Secure storage root publication failed: ${String(error)}`,
 				);
 			}
 		}
-		const reopened = await readRootCandidate(options, targetSlots.at(-1)!);
-		if (
-			reopened.status !== 'valid' ||
-			reopened.snapshot.root.snapshotId !== snapshotId
-		) {
-			throw new SecureStorageWriteNotCommittedError(
-				'Secure storage root did not reopen after publication',
-			);
+		let reopened!: ValidatedSnapshot<Metadata, Value>;
+		for (const slot of targetSlots) {
+			const candidate = await readRootCandidate(options, slot);
+			if (
+				candidate.status !== 'valid' ||
+				candidate.snapshot.root.snapshotId !== snapshotId
+			) {
+				throw new WriteError(
+					'Secure storage root did not reopen after publication',
+				);
+			}
+			reopened = candidate.snapshot;
 		}
+		await runCleanup(staged.root.cleanupHeadKey);
 		let planCleanupComplete = true;
 		for (let pageIndex = 0; pageIndex < planPageCount; pageIndex++) {
 			if (!(await deleteBestEffort(keys.intentPlan(attemptId, pageIndex)))) {
@@ -170,7 +208,7 @@ export function createTransactionWriter<Metadata extends object, Value>(
 			await deleteBestEffort(keys.intent.a);
 			await deleteBestEffort(keys.intent.b);
 		}
-		return reopened.snapshot;
+		return reopened;
 	}
 
 	async function stageRecords(
@@ -180,16 +218,22 @@ export function createTransactionWriter<Metadata extends object, Value>(
 		snapshotId: string,
 	) {
 		const records = new Map<string, string>();
+		const protectedKeys = new Set<string>();
 		const references: ManifestEntryRefV2[] = [];
 		for (const [entryIndex, entry] of entries.entries()) {
 			const serializedValue = options.serializeValue(entry.value);
-			const valueBytes = textEncoder.encode(serializedValue);
+			const valueBytes = new TextEncoder().encode(serializedValue);
 			const valueSha256 = await options.sha256(valueBytes);
 			const prior = base.revisions.get(entry.id);
 			const reuseValue =
 				prior !== undefined &&
 				prior.valueSha256 === valueSha256 &&
 				prior.valueByteLength === valueBytes.byteLength;
+			if (reuseValue) {
+				for (let index = 0; index < prior.valueChunkCount; index++) {
+					protectedKeys.add(keys.value(prior.valueRecordId, index));
+				}
+			}
 			const valueRecordId = reuseValue
 				? prior.valueRecordId
 				: `${attemptId}-${entryIndex}`;
@@ -201,14 +245,15 @@ export function createTransactionWriter<Metadata extends object, Value>(
 				reuseValue &&
 				canonicalJson(prior.metadata) === canonicalJson(entry.metadata);
 			if (unchanged) {
-				const key = revisionKey(options.namespace, prior.revisionId);
+				const key = `${options.namespace}-v2-entry-${prior.revisionId}`;
 				const raw = await options.storage.getItem(key);
 				if (raw === null) throw new Error(`Missing reusable revision: ${key}`);
 				references.push({
 					entryId: entry.id,
 					revisionKey: key,
-					revisionSha256: await options.sha256(textEncoder.encode(raw)),
+					revisionSha256: await options.sha256(new TextEncoder().encode(raw)),
 				});
+				protectedKeys.add(key);
 				continue;
 			}
 			const revisionId = `${attemptId}-${entryIndex}`;
@@ -229,7 +274,7 @@ export function createTransactionWriter<Metadata extends object, Value>(
 			references.push({
 				entryId: entry.id,
 				revisionKey: key,
-				revisionSha256: await options.sha256(textEncoder.encode(raw)),
+				revisionSha256: await options.sha256(new TextEncoder().encode(raw)),
 			});
 		}
 
@@ -247,11 +292,7 @@ export function createTransactionWriter<Metadata extends object, Value>(
 					? { nextPageKey: keys.manifest(attemptId, pageIndex + 1) }
 					: {}),
 			};
-			const pageSha256 = await hashCanonicalRecord(
-				withoutHash,
-				undefined,
-				options.sha256,
-			);
+			const pageSha256 = await hash(withoutHash, undefined, options.sha256);
 			pageHashes[pageIndex] = pageSha256;
 			records.set(
 				keys.manifest(attemptId, pageIndex),
@@ -260,8 +301,11 @@ export function createTransactionWriter<Metadata extends object, Value>(
 				),
 			);
 		}
+		for (const reference of references)
+			protectedKeys.add(reference.revisionKey);
 		return {
 			records,
+			protectedKeys,
 			root: {
 				formatVersion: 2 as const,
 				namespace: options.namespace,
@@ -269,13 +313,51 @@ export function createTransactionWriter<Metadata extends object, Value>(
 				manifestHeadKey: keys.manifest(attemptId, 0),
 				manifestPageCount: pageCount,
 				entryCount: references.length,
-				manifestSha256: await hashCanonicalRecord(
+				cleanupHeadKey: undefined as string | undefined,
+				manifestSha256: await hash(
 					{ snapshotId, pageHashes },
 					undefined,
 					options.sha256,
 				),
 			},
 		};
+	}
+
+	async function readCleanupPages(headKey: string | undefined) {
+		const pages: { key: string; garbageKey: string }[] = [];
+		const visited = new Set<string>();
+		let pageKey = headKey;
+		while (pageKey !== undefined && !visited.has(pageKey)) {
+			visited.add(pageKey);
+			const raw = await options.storage.getItem(pageKey);
+			if (raw === null) break;
+			try {
+				const page = schemas.cleanupPage.parse(JSON.parse(raw));
+				if (page.pageIndex !== pages.length) break;
+				const pageHash = await hash(
+					page as unknown as Record<string, unknown>,
+					'pageSha256',
+					options.sha256,
+				);
+				if (pageHash !== page.pageSha256) break;
+				pages.push({ key: pageKey, garbageKey: page.garbageKey });
+				pageKey = page.nextPageKey;
+			} catch {
+				break;
+			}
+		}
+		return pages;
+	}
+
+	async function runCleanup(headKey: string | undefined) {
+		const pages = await readCleanupPages(headKey);
+		let complete = true;
+		for (const { garbageKey } of pages) {
+			if (!(await deleteBestEffort(garbageKey))) complete = false;
+		}
+		if (complete) {
+			for (const { key } of pages) await deleteBestEffort(key);
+		}
 	}
 
 	async function validatePlan(
@@ -301,7 +383,7 @@ export function createTransactionWriter<Metadata extends object, Value>(
 				throw new Error('Invalid intent plan chain');
 			}
 			if (
-				(await hashCanonicalRecord(
+				(await hash(
 					page as unknown as Record<string, unknown>,
 					'pageSha256',
 					options.sha256,
@@ -312,8 +394,9 @@ export function createTransactionWriter<Metadata extends object, Value>(
 			actual.push(page);
 		}
 		if (
-			(await options.sha256(textEncoder.encode(canonicalJson(actual)))) !==
-			expectedHash
+			(await options.sha256(
+				new TextEncoder().encode(canonicalJson(actual)),
+			)) !== expectedHash
 		) {
 			throw new Error('Invalid intent plan hash');
 		}
@@ -356,7 +439,7 @@ export function createTransactionWriter<Metadata extends object, Value>(
 				if (raw !== null) {
 					try {
 						const page = schemas.intentPlanPage.parse(JSON.parse(raw));
-						const hash = await hashCanonicalRecord(
+						const pageHash = await hash(
 							page as unknown as Record<string, unknown>,
 							'pageSha256',
 							options.sha256,
@@ -368,7 +451,7 @@ export function createTransactionWriter<Metadata extends object, Value>(
 								(index + 1 < intent.planPageCount
 									? keys.intentPlan(intent.attemptId, index + 1)
 									: undefined) &&
-							hash === page.pageSha256
+							pageHash === page.pageSha256
 						) {
 							pages.push(page);
 						}
@@ -379,7 +462,7 @@ export function createTransactionWriter<Metadata extends object, Value>(
 				await deleteBestEffort(planKey);
 			}
 			const planHash = await options.sha256(
-				textEncoder.encode(canonicalJson(pages)),
+				new TextEncoder().encode(canonicalJson(pages)),
 			);
 			if (
 				pages.length === intent.planPageCount &&
@@ -399,7 +482,7 @@ export function createTransactionWriter<Metadata extends object, Value>(
 	async function deleteBestEffort(key: string): Promise<boolean> {
 		try {
 			await options.storage.deleteItem(key);
-			return true;
+			return (await options.storage.getItem(key)) === null;
 		} catch {
 			// Cleanup can be retried on the next open.
 			return false;
