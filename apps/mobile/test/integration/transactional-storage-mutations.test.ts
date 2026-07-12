@@ -333,6 +333,57 @@ void test('keeps delete logically committed when cleanup is a no-op and retries 
 	);
 });
 
+void test('intent recovery preserves pending cleanup pages for retry', async () => {
+	const durableOld = await seedOldState();
+	const successful = new FaultInjectingStringStorage(durableOld);
+	await createStore(successful).deleteEntry(first.id);
+	const operations = mutationOperations(successful);
+	const garbageDelete = operations.findIndex(
+		({ type, key }) =>
+			type === 'delete' &&
+			(key.includes('-v2-entry-') || key.includes('-v2-value-')),
+	);
+	const pendingTemplate = new FaultInjectingStringStorage(durableOld);
+	pendingTemplate.failOperation(garbageDelete + 1, 'delete-noop');
+	await createStore(pendingTemplate).deleteEntry(first.id);
+	const planDeletes = mutationOperations(pendingTemplate)
+		.map((operation, index) => ({ ...operation, operation: index + 1 }))
+		.filter(
+			({ type, key }) => type === 'delete' && key.includes('-v2-intent-plan-'),
+		);
+	assert.notEqual(garbageDelete, -1);
+	assert.ok(planDeletes.length > 0);
+
+	const storage = new FaultInjectingStringStorage(durableOld);
+	storage.failOperation(garbageDelete + 1, 'delete-noop');
+	for (const { operation } of planDeletes) {
+		storage.failOperation(operation, 'delete-noop');
+	}
+	await createStore(storage).deleteEntry(first.id);
+	const keys = buildV2Keys(namespace);
+	const root = JSON.parse((await storage.getItem(keys.root.a))!) as {
+		cleanupHeadKey?: string;
+	};
+	assert.notEqual(root.cleanupHeadKey, undefined);
+	assert.notEqual(await storage.getItem(root.cleanupHeadKey!), null);
+
+	storage.restart();
+	const reopened = createStore(storage);
+	assert.equal(await reopened.getEntry(first.id), null);
+	assert.notEqual(await storage.getItem(root.cleanupHeadKey!), null);
+	assert.equal((await reopened.ensureReady()).cleanupPending, true);
+
+	await reopened.retryCleanup();
+
+	assert.equal((await reopened.ensureReady()).cleanupPending, false);
+	assert.deepEqual(
+		Object.keys(storage.snapshotDurable()).filter(
+			(key) => key.includes('-v2-entry-') || key.includes('-v2-value-'),
+		),
+		[],
+	);
+});
+
 for (const fault of [
 	'throw-before',
 	'throw-after-visible',

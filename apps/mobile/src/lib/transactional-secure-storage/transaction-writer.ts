@@ -47,9 +47,7 @@ export function createTransactionWriter<Metadata extends object, Value>(
 		nextEntries,
 		targetSlots,
 		cleanupKeys,
-	}: CommitOptions<Metadata, Value>): Promise<
-		ValidatedSnapshot<Metadata, Value>
-	> {
+	}: CommitOptions<Metadata, Value>) {
 		let attemptId!: string;
 		let snapshotId!: string;
 		let staged!: Awaited<ReturnType<typeof stageRecords>>;
@@ -325,15 +323,20 @@ export function createTransactionWriter<Metadata extends object, Value>(
 
 	async function readCleanupPages(headKey: string | undefined) {
 		const pages: { key: string; garbageKey: string }[] = [];
-		const visited = new Set<string>();
+		let attemptId: string | undefined;
 		let pageKey = headKey;
-		while (pageKey !== undefined && !visited.has(pageKey)) {
-			visited.add(pageKey);
+		while (pageKey !== undefined) {
 			const raw = await options.storage.getItem(pageKey);
 			if (raw === null) break;
 			try {
 				const page = schemas.cleanupPage.parse(JSON.parse(raw));
-				if (page.pageIndex !== pages.length) break;
+				attemptId ??= page.attemptId;
+				if (
+					page.attemptId !== attemptId ||
+					page.pageIndex !== pages.length ||
+					pageKey !== keys.cleanup(attemptId, page.pageIndex)
+				)
+					break;
 				const pageHash = await hash(
 					page as unknown as Record<string, unknown>,
 					'pageSha256',
@@ -348,7 +351,6 @@ export function createTransactionWriter<Metadata extends object, Value>(
 		}
 		return pages;
 	}
-
 	async function runCleanup(headKey: string | undefined) {
 		const pages = await readCleanupPages(headKey);
 		let complete = true;
@@ -416,6 +418,10 @@ export function createTransactionWriter<Metadata extends object, Value>(
 			const candidate = await readRootCandidate(options, slot);
 			if (candidate.status === 'valid') {
 				for (const key of candidate.snapshot.reachableKeys) reachable.add(key);
+				for (const { key } of await readCleanupPages(
+					candidate.snapshot.root.cleanupHeadKey,
+				))
+					reachable.add(key);
 			}
 		}
 		const intents = new Map<string, TransactionIntentV2>();
