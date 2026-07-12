@@ -115,6 +115,16 @@ void test('replace-all and upsert publish a canonical snapshot and reuse an unch
 		).length,
 		revisionsBeforeRename + 1,
 	);
+	const durableKeys = Object.keys(storage.snapshotDurable());
+	assert.equal(
+		durableKeys.some(
+			(key) =>
+				key.includes('-v2-intent-plan-') ||
+				key === buildV2Keys(namespace).intent.a ||
+				key === buildV2Keys(namespace).intent.b,
+		),
+		false,
+	);
 });
 
 void test('serializes concurrent upserts without losing either change', async () => {

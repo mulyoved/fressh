@@ -59,6 +59,7 @@ export function createTransactionWriter<Metadata extends object, Value>(
 		let snapshotId!: string;
 		let staged!: Awaited<ReturnType<typeof stageRecords>>;
 		let rootRecords!: readonly { slot: RootSlot; raw: string }[];
+		let planPageCount!: number;
 		try {
 			attemptId = options.randomUUID();
 			snapshotId = attemptId;
@@ -101,6 +102,7 @@ export function createTransactionWriter<Metadata extends object, Value>(
 					textEncoder.encode(canonicalJson(planPages)),
 				),
 			});
+			planPageCount = intent.planPageCount;
 			rootRecords = targetSlots.map((slot, index) => ({
 				slot,
 				raw: canonicalJson(
@@ -158,13 +160,11 @@ export function createTransactionWriter<Metadata extends object, Value>(
 				'Secure storage root did not reopen after publication',
 			);
 		}
-		for (const key of [keys.intent.a, keys.intent.b]) {
-			try {
-				await options.storage.deleteItem(key);
-			} catch {
-				// A validated root makes a stale redundant intent harmless.
-			}
+		for (let pageIndex = 0; pageIndex < planPageCount; pageIndex++) {
+			await deleteBestEffort(keys.intentPlan(attemptId, pageIndex));
 		}
+		await deleteBestEffort(keys.intent.a);
+		await deleteBestEffort(keys.intent.b);
 		return reopened.snapshot;
 	}
 
