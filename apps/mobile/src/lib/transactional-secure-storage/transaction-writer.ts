@@ -11,7 +11,7 @@ import {
 } from './contracts';
 import {
 	buildV2Keys,
-	createRecordSchemas,
+	createRecordSchemas as schemasFor,
 	hashCanonicalRecord as hash,
 } from './records';
 import { readRootCandidate, type ValidatedSnapshot } from './snapshot-reader';
@@ -38,10 +38,7 @@ export function createTransactionWriter<Metadata extends object, Value>(
 	options: WriterOptions<Metadata, Value>,
 ) {
 	const keys = buildV2Keys(options.namespace);
-	const schemas = createRecordSchemas(
-		options.namespace,
-		options.metadataSchema,
-	);
+	const schemas = schemasFor(options.namespace, options.metadataSchema);
 
 	async function commitSnapshot({
 		base,
@@ -315,6 +312,9 @@ export function createTransactionWriter<Metadata extends object, Value>(
 				manifestPageCount: pageCount,
 				entryCount: references.length,
 				cleanupHeadKey: undefined as string | undefined,
+				legacyCleanupPageCount: base.root.legacyCleanupPageCount,
+				legacyCleanupPending: base.root.legacyCleanupPending,
+				legacyCleanupSha256: base.root.legacyCleanupSha256,
 				manifestSha256: await hash(
 					{ snapshotId, pageHashes },
 					undefined,

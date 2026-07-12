@@ -99,6 +99,9 @@ export type RootCommitV2 = {
 	entryCount: number;
 	manifestSha256: string;
 	cleanupHeadKey?: string;
+	legacyCleanupPageCount?: number;
+	legacyCleanupPending?: true;
+	legacyCleanupSha256?: string;
 };
 
 export type ManifestEntryRefV2 = {

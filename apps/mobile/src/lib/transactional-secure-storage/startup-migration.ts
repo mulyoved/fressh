@@ -56,6 +56,7 @@ export function createStartupMigration<Metadata extends object, Value>(options: 
 			records.set(keys.manifest(attemptId, index), canonicalJson(schemas.manifestPage.parse({ ...body, pageSha256 })));
 		}
 		const cleanupKeys: string[] = [];
+		const cleanupPageHashes: string[] = [];
 		if (snapshot.status === 'present') {
 			const inventory = [...snapshot.recordKeys.slice(1), snapshot.recordKeys[0]!];
 			for (let index = inventory.length - 1; index >= 0; index--) {
@@ -63,6 +64,7 @@ export function createStartupMigration<Metadata extends object, Value>(options: 
 					garbageKey: inventory[index]!,
 					...(index + 1 < inventory.length ? { nextPageKey: keys.cleanup(attemptId, index + 1) } : {}) };
 				const pageSha256 = await hash(body, undefined, options.sha256);
+				cleanupPageHashes[index] = pageSha256;
 				const key = keys.cleanup(attemptId, index);
 				cleanupKeys[index] = key;
 				records.set(key, canonicalJson(schemas.cleanupPage.parse({ ...body, pageSha256 })));
@@ -74,6 +76,11 @@ export function createStartupMigration<Metadata extends object, Value>(options: 
 			entryCount: references.length,
 			manifestSha256: await hash({ snapshotId: attemptId, pageHashes }, undefined, options.sha256),
 			...(cleanupKeys[0] === undefined ? {} : { cleanupHeadKey: cleanupKeys[0] }),
+			...(cleanupKeys[0] === undefined ? {} : {
+				legacyCleanupPageCount: cleanupKeys.length,
+				legacyCleanupPending: true as const,
+				legacyCleanupSha256: await hash({ pageHashes: cleanupPageHashes }, undefined, options.sha256),
+			}),
 		};
 		const plannedKeys = [...records.keys()];
 		const planPages = [];
@@ -106,18 +113,22 @@ export function createStartupMigration<Metadata extends object, Value>(options: 
 	}
 
 	function sameSnapshot(left: ValidatedSnapshot<Metadata, Value>, right: ValidatedSnapshot<Metadata, Value>) {
-		return left.root.snapshotId === right.root.snapshotId && left.root.manifestHeadKey === right.root.manifestHeadKey && left.root.manifestSha256 === right.root.manifestSha256 && left.root.cleanupHeadKey === right.root.cleanupHeadKey;
+		return left.root.snapshotId === right.root.snapshotId && left.root.manifestHeadKey === right.root.manifestHeadKey && left.root.manifestSha256 === right.root.manifestSha256 && left.root.cleanupHeadKey === right.root.cleanupHeadKey && left.root.legacyCleanupPageCount === right.root.legacyCleanupPageCount && left.root.legacyCleanupPending === right.root.legacyCleanupPending && left.root.legacyCleanupSha256 === right.root.legacyCleanupSha256;
 	}
 
 	async function publishCleanup(snapshot: ValidatedSnapshot<Metadata, Value>, inventory: readonly string[]) {
 		const attemptId = options.randomUUID();
 		const ordered = [...inventory.slice(1), inventory[0]!];
+		const pageHashes = new Array<string>(ordered.length);
 		for (let index = ordered.length - 1; index >= 0; index--) {
 			const body = { formatVersion: 2 as const, namespace: options.namespace, attemptId, pageIndex: index, garbageKey: ordered[index]!, ...(index + 1 < ordered.length ? { nextPageKey: keys.cleanup(attemptId, index + 1) } : {}) };
-			await writeValidated(keys.cleanup(attemptId, index), canonicalJson(schemas.cleanupPage.parse({ ...body, pageSha256: await hash(body, undefined, options.sha256) })));
+			const pageSha256 = await hash(body, undefined, options.sha256);
+			pageHashes[index] = pageSha256;
+			await writeValidated(keys.cleanup(attemptId, index), canonicalJson(schemas.cleanupPage.parse({ ...body, pageSha256 })));
 		}
+		const legacyCleanupSha256 = await hash({ pageHashes }, undefined, options.sha256);
 		for (const [slot, generation] of [['a', snapshot.root.commitGeneration + 1], ['b', snapshot.root.commitGeneration + 2]] as const) {
-			const raw = canonicalJson(schemas.rootCommit.parse({ ...snapshot.root, commitGeneration: generation, cleanupHeadKey: keys.cleanup(attemptId, 0) }));
+			const raw = canonicalJson(schemas.rootCommit.parse({ ...snapshot.root, commitGeneration: generation, cleanupHeadKey: keys.cleanup(attemptId, 0), legacyCleanupPageCount: ordered.length, legacyCleanupPending: true, legacyCleanupSha256 }));
 			await writeValidated(keys.root[slot], raw);
 			if ((await readRootCandidate(options, slot)).status !== 'valid') throw new Error('Cleanup root validation failed');
 		}
@@ -126,12 +137,28 @@ export function createStartupMigration<Metadata extends object, Value>(options: 
 		return selected.snapshot;
 	}
 
+	async function clearCleanup(snapshot: ValidatedSnapshot<Metadata, Value>) {
+		const root = { ...snapshot.root };
+		delete root.cleanupHeadKey;
+		delete root.legacyCleanupPageCount;
+		delete root.legacyCleanupPending;
+		delete root.legacyCleanupSha256;
+		for (const [slot, generation] of [['a', snapshot.root.commitGeneration + 1], ['b', snapshot.root.commitGeneration + 2]] as const) {
+			await writeValidated(keys.root[slot], canonicalJson(schemas.rootCommit.parse({ ...root, commitGeneration: generation })));
+			if ((await readRootCandidate(options, slot)).status !== 'valid') throw new Error('Cleared cleanup root validation failed');
+		}
+	}
+
 	async function cleanup(snapshot: ValidatedSnapshot<Metadata, Value>, legacy: LegacySnapshot<Metadata, Value> | undefined) {
 		if (snapshot.root.cleanupHeadKey === undefined) return false;
 		const inventory = legacy?.status === 'present' ? legacy.recordKeys : undefined;
 		const allowed = inventory === undefined ? undefined : new Set(inventory);
+		const anchored = snapshot.root.legacyCleanupPageCount !== undefined && snapshot.root.legacyCleanupSha256 !== undefined;
+		if (allowed === undefined && snapshot.root.legacyCleanupPending !== true) return (await options.storage.getItem(snapshot.root.cleanupHeadKey)) !== null;
+		if (allowed === undefined && !anchored) return true;
 		let key: string | undefined = snapshot.root.cleanupHeadKey;
 		const pages: { key: string; garbageKey: string }[] = [];
+		const pageHashes: string[] = [];
 		try {
 			while (key !== undefined) {
 				const raw = await options.storage.getItem(key);
@@ -139,31 +166,30 @@ export function createStartupMigration<Metadata extends object, Value>(options: 
 				const page = schemas.cleanupPage.parse(JSON.parse(raw));
 				if (key !== keys.cleanup(page.attemptId, page.pageIndex) || page.pageIndex !== pages.length || await hash(page as unknown as Record<string, unknown>, 'pageSha256', options.sha256) !== page.pageSha256) throw new Error('Invalid cleanup page');
 				pages.push({ key, garbageKey: page.garbageKey });
+				pageHashes.push(page.pageSha256);
 				key = page.nextPageKey;
 			}
 		} catch { pages.length = 0; }
-		if (allowed === undefined) return (await options.storage.getItem(snapshot.root.cleanupHeadKey)) !== null;
+		const anchorValid = anchored && pages.length === snapshot.root.legacyCleanupPageCount && await hash({ pageHashes }, undefined, options.sha256) === snapshot.root.legacyCleanupSha256;
+		if (allowed === undefined && !anchorValid) return true;
 		if (allowed !== undefined && (pages.length !== allowed.size || pages.some(({ garbageKey }) => !allowed.has(garbageKey)) || new Set(pages.map(({ garbageKey }) => garbageKey)).size !== allowed.size)) {
 			snapshot = await publishCleanup(snapshot, inventory!);
 			return cleanup(snapshot, legacy);
 		}
 		let complete = true;
-		const deleted: { key: string; raw: string }[] = [];
 		for (const page of pages) {
-			let prior: string | null = null;
 			try {
-				prior = await options.storage.getItem(page.garbageKey);
 				await options.storage.deleteItem(page.garbageKey);
 				if (await options.storage.getItem(page.garbageKey) !== null) throw new Error('Legacy delete was not observed');
-				if (prior !== null) deleted.push({ key: page.garbageKey, raw: prior });
 			} catch {
 				complete = false;
-				if (prior !== null) await options.storage.setItem(page.garbageKey, prior).catch(() => undefined);
-				for (const record of deleted) await options.storage.setItem(record.key, record.raw).catch(() => undefined);
 				break;
 			}
 		}
-		if (complete) for (const page of pages) await options.storage.deleteItem(page.key).catch(() => undefined);
+		if (complete) {
+			await clearCleanup(snapshot);
+			for (const page of pages) await options.storage.deleteItem(page.key).catch(() => undefined);
+		}
 		return !complete;
 	}
 

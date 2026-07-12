@@ -178,11 +178,11 @@ void test('a stale valid peer root is mirrored to the selected snapshot before l
 	const storage = await seedLegacy();
 	await createStore(storage).ensureReady();
 	await writeTransactionalStorageFixture({ namespace, metadataSchema, serializeValue: JSON.stringify, storage, sha256, slot: 'a', commitGeneration: 0, entries: [] });
+	const rootKeys = buildV2Keys(namespace);
 	storage.restart();
 	await createStore(storage).ensureReady();
-	const keys = buildV2Keys(namespace);
-	const a = JSON.parse((await storage.getItem(keys.root.a))!) as { snapshotId: string };
-	const b = JSON.parse((await storage.getItem(keys.root.b))!) as { snapshotId: string };
+	const a = JSON.parse((await storage.getItem(rootKeys.root.a))!) as { snapshotId: string };
+	const b = JSON.parse((await storage.getItem(rootKeys.root.b))!) as { snapshotId: string };
 	assert.equal(a.snapshotId, b.snapshotId);
 	assert.deepEqual(legacyKeys(storage), []);
 });
@@ -223,12 +223,50 @@ void test('cleanup verification read failure is best effort and retries on a lat
 	storage.restart();
 	const target = legacyKeys(storage).find((key) => key.includes('-entry-'))!;
 	storage.failMatchingRead(target, 2);
+	const operationsBeforeCleanup = storage.operationLog.length;
 	const reopened = createStore(storage);
 	assert.equal((await reopened.ensureReady()).cleanupPending, true);
 	assert.deepEqual((await reopened.listEntries()).map(({ id }) => id), ['alpha', 'beta']);
+	assert.equal(storage.operationLog.slice(operationsBeforeCleanup).some(({ type, key }) => type === 'set' && !key.includes('-v2-')), false);
 	storage.restart();
 	await createStore(storage).ensureReady();
 	assert.deepEqual(legacyKeys(storage), []);
+});
+
+void test('unavailable exact inventory performs no cleanup-page reads or legacy deletes', async () => {
+	const seeded = await seedLegacy();
+	await createStore(seeded).ensureReady();
+	seeded.restart();
+	const keys = buildV2Keys(namespace);
+	for (const slot of ['a', 'b'] as const) {
+		const root = JSON.parse((await seeded.getItem(keys.root[slot]))!) as Record<string, unknown>;
+		delete root.legacyCleanupPageCount;
+		delete root.legacyCleanupSha256;
+		await seeded.setItem(keys.root[slot], JSON.stringify(root));
+	}
+	const legacy = new Set(legacyKeys(seeded));
+	const observed: { type: 'get'; key: string }[] = [];
+	const storage = {
+		operationLog: seeded.operationLog,
+		getItem: async (key: string) => {
+			observed.push({ type: 'get', key });
+			if (legacy.has(key)) throw new Error('persistent legacy read failure');
+			return seeded.getItem(key);
+		},
+		setItem: seeded.setItem.bind(seeded),
+		deleteItem: seeded.deleteItem.bind(seeded),
+	};
+	const store = createTransactionalSecureStore({
+		namespace, metadataSchema, serializeValue: JSON.stringify,
+		parseValue: (raw) => JSON.parse(raw) as Value, storage,
+		legacy: createLegacyChunkedStorageReader({ storagePrefix: namespace, metadataSchema, parseValue: (raw) => JSON.parse(raw) as Value, storage }),
+		randomUUID: () => `migration-${++nextId}`, sha256,
+	});
+	assert.equal((await store.ensureReady()).cleanupPending, true);
+	assert.deepEqual((await store.listEntries()).map(({ id }) => id), ['alpha', 'beta']);
+	const unavailableAt = observed.findIndex(({ key }) => legacy.has(key));
+	const cleanupOperations = observed.slice(unavailableAt + 1).filter(({ key }) => key.includes('-v2-cleanup-'));
+	assert.deepEqual(cleanupOperations, []);
 });
 
 void test('same-namespace v1-shaped keys outside exact inventory are never cleanup-authorized', async () => {
@@ -252,14 +290,18 @@ void test('stale peer with unreadable legacy is mirrored but no cleanup is attem
 	const storage = await seedLegacy();
 	await createStore(storage).ensureReady();
 	await writeTransactionalStorageFixture({ namespace, metadataSchema, serializeValue: JSON.stringify, storage, sha256, slot: 'a', commitGeneration: 0, entries: [] });
+	const rootKeys = buildV2Keys(namespace);
+	const selectedRoot = JSON.parse((await storage.getItem(rootKeys.root.b))!) as Record<string, unknown>;
+	delete selectedRoot.legacyCleanupPageCount;
+	delete selectedRoot.legacyCleanupSha256;
+	await storage.setItem(rootKeys.root.b, JSON.stringify(selectedRoot));
 	storage.restart();
 	const legacyValue = legacyKeys(storage).find((key) => key.includes('-entry-'))!;
 	storage.failMatchingRead(legacyValue, 1);
 	const beforeLegacy = legacyKeys(storage);
 	await createStore(storage).ensureReady();
-	const keys = buildV2Keys(namespace);
-	const a = JSON.parse((await storage.getItem(keys.root.a))!) as { snapshotId: string };
-	const b = JSON.parse((await storage.getItem(keys.root.b))!) as { snapshotId: string };
+	const a = JSON.parse((await storage.getItem(rootKeys.root.a))!) as { snapshotId: string };
+	const b = JSON.parse((await storage.getItem(rootKeys.root.b))!) as { snapshotId: string };
 	assert.equal(a.snapshotId, b.snapshotId);
 	assert.deepEqual(legacyKeys(storage), beforeLegacy);
 });

@@ -1,18 +1,18 @@
 import { z } from 'zod';
-import type {
-	CleanupPageV2,
-	EntryRevisionV2,
-	IntentPlanPageV2,
-	ManifestPageV2,
-	RootCommitV2,
-	Sha256,
-	TransactionIntentV2,
-} from './contracts';
 import {
 	MAX_SECURE_STORE_VALUE_BYTES,
 	canonicalJson,
 	utf8ByteLength,
 } from './codec';
+import  {
+	type CleanupPageV2,
+	type EntryRevisionV2,
+	type IntentPlanPageV2,
+	type ManifestPageV2,
+	type RootCommitV2,
+	type Sha256,
+	type TransactionIntentV2,
+} from './contracts';
 
 const textEncoder = new TextEncoder();
 const keySafeString = z.string().min(1).regex(/^[A-Za-z0-9._-]+$/);
@@ -102,6 +102,11 @@ export function createRecordSchemas<Metadata extends object>(
 			entryCount: nonNegativeInteger,
 			manifestSha256: z.string(),
 			cleanupHeadKey: storageKey.optional(),
+			legacyCleanupPageCount: nonNegativeInteger.optional(),
+			legacyCleanupPending: z.literal(true).optional(),
+			legacyCleanupSha256: z.string().optional(),
+		}).superRefine((record, context) => {
+			if ((record.legacyCleanupPageCount === undefined) !== (record.legacyCleanupSha256 === undefined)) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Legacy cleanup anchor fields must appear together' });
 		}),
 	);
 	const manifestPage = payloadBounded(
