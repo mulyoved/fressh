@@ -22,6 +22,7 @@ import {
 	parseBackupPayload,
 	replaceAllFromBackup,
 	replaceAllPrivateKeys,
+	type BackupKeyEntry,
 	validateBackupPayload,
 } from '../../src/lib/device-migration';
 
@@ -390,17 +391,8 @@ void test('validateBackupPayload rejects connections that reference missing keys
 	);
 });
 
-void test('replaceAllPrivateKeys keeps existing entries when validation fails', async () => {
-	const keyStorage = makeBetterSecureStore({
-		storagePrefix: 'privateKey',
-		extraManifestFieldsSchema: keyMetadataSchema,
-		parseValue: (value) => value,
-		storage: createMemoryAsyncStorage().storage,
-		randomUUID: () => 'generated',
-		logger: noopLogger,
-	});
-
-	await keyStorage.upsertEntry(staleKeyEntry);
+void test('replaceAllPrivateKeys does not replace entries when validation fails', async () => {
+	const replacementCalls: BackupKeyEntry[][] = [];
 
 	await assert.rejects(
 		() =>
@@ -417,18 +409,35 @@ void test('replaceAllPrivateKeys keeps existing entries when validation fails', 
 						value: invalidPrivateKey,
 					},
 				],
-				storage: keyStorage,
+				storage: {
+					replaceAllEntries: async (entries) => {
+						replacementCalls.push(entries);
+					},
+				},
 				validatePrivateKey: validatePrivateKeyWithSshKeygen,
 			}),
 		/Invalid private key/,
 	);
 
-	assert.deepEqual(
-		(await keyStorage.listEntriesWithValues()).map(
-			({ id, metadata, value }) => ({ id, metadata, value }),
-		),
-		[staleKeyEntry],
-	);
+	assert.equal(replacementCalls.length, 0);
+});
+
+void test('replaceAllPrivateKeys replaces the full validated array once', async () => {
+	const replacementCalls: BackupKeyEntry[][] = [];
+	const entries = [keyEntry];
+
+	await replaceAllPrivateKeys({
+		entries,
+		storage: {
+			replaceAllEntries: async (replacement) => {
+				replacementCalls.push(replacement);
+			},
+		},
+		validatePrivateKey: validatePrivateKeyWithSshKeygen,
+	});
+
+	assert.equal(replacementCalls.length, 1);
+	assert.deepEqual(replacementCalls[0], entries);
 });
 
 void test('replaceAllFromBackup replaces stale keys and connections in memory storage', async () => {
@@ -472,7 +481,14 @@ void test('replaceAllFromBackup replaces stale keys and connections in memory st
 		replaceAllKeys: async (entries) => {
 			await replaceAllPrivateKeys({
 				entries,
-				storage: keyStorage,
+				storage: {
+					replaceAllEntries: async (replacement) => {
+						await keyStorage.clearAllEntries();
+						for (const entry of replacement) {
+							await keyStorage.upsertEntry(entry);
+						}
+					},
+				},
 				validatePrivateKey: validatePrivateKeyWithSshKeygen,
 			});
 		},
@@ -512,7 +528,14 @@ void test(
 			replaceAllKeys: async (entries) => {
 				await replaceAllPrivateKeys({
 					entries,
-					storage: keyStorage,
+					storage: {
+						replaceAllEntries: async (replacement) => {
+							await keyStorage.clearAllEntries();
+							for (const entry of replacement) {
+								await keyStorage.upsertEntry(entry);
+							}
+						},
+					},
 					validatePrivateKey: validatePrivateKeyWithSshKeygen,
 				});
 			},

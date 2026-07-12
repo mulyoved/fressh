@@ -41,8 +41,7 @@ export type BackupPayload = z.infer<typeof backupPayloadSchema>;
 export type BackupKeyEntry = z.infer<typeof backupKeyEntrySchema>;
 
 export type PrivateKeyReplacementStorage = {
-	clearAllEntries: () => Promise<void>;
-	upsertEntry: (entry: BackupKeyEntry) => Promise<void>;
+	replaceAllEntries(entries: BackupKeyEntry[]): Promise<void>;
 };
 
 function compareBackupKeyNormalizationOrder(
@@ -168,10 +167,7 @@ export async function replaceAllPrivateKeys(params: {
 	for (const entry of params.entries) {
 		params.validatePrivateKey(entry.value);
 	}
-	await params.storage.clearAllEntries();
-	for (const entry of params.entries) {
-		await params.storage.upsertEntry(entry);
-	}
+	await params.storage.replaceAllEntries(params.entries);
 }
 
 export function createReplaceAllPrivateKeyEntriesHandler(params: {
