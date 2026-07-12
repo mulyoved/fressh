@@ -55,54 +55,61 @@ export function createTransactionWriter<Metadata extends object, Value>(
 	}: CommitOptions<Metadata, Value>): Promise<
 		ValidatedSnapshot<Metadata, Value>
 	> {
-		const attemptId = options.randomUUID();
-		const snapshotId = attemptId;
-		const orderedEntries = [...nextEntries].sort((left, right) =>
-			left.id < right.id ? -1 : left.id > right.id ? 1 : 0,
-		);
-		const staged = await stageRecords(
-			base,
-			orderedEntries,
-			attemptId,
-			snapshotId,
-		);
-		const plannedKeys = [...staged.records.keys()];
-		const planPages = await Promise.all(
-			plannedKeys.map(async (plannedKey, pageIndex) => {
-				const withoutHash = {
-					formatVersion: 2 as const,
-					namespace: options.namespace,
-					attemptId,
-					pageIndex,
-					plannedKey,
-					...(pageIndex + 1 < plannedKeys.length
-						? { nextPageKey: keys.intentPlan(attemptId, pageIndex + 1) }
-						: {}),
-				};
-				return schemas.intentPlanPage.parse({
-					...withoutHash,
-					pageSha256: await hashCanonicalRecord(
-						withoutHash,
-						undefined,
-						options.sha256,
-					),
-				});
-			}),
-		);
-		const intent = schemas.transactionIntent.parse({
-			formatVersion: 2,
-			namespace: options.namespace,
-			attemptId,
-			targetRootSlots: targetSlots,
-			firstCommitGeneration: base.root.commitGeneration + 1,
-			snapshotId,
-			planPageCount: planPages.length,
-			planSha256: await options.sha256(
-				textEncoder.encode(canonicalJson(planPages)),
-			),
-		});
-
+		let attemptId!: string;
+		let snapshotId!: string;
+		let staged!: Awaited<ReturnType<typeof stageRecords>>;
+		let rootRecords!: readonly { slot: RootSlot; raw: string }[];
 		try {
+			attemptId = options.randomUUID();
+			snapshotId = attemptId;
+			const orderedEntries = [...nextEntries].sort((left, right) =>
+				left.id < right.id ? -1 : left.id > right.id ? 1 : 0,
+			);
+			staged = await stageRecords(base, orderedEntries, attemptId, snapshotId);
+			const plannedKeys = [...staged.records.keys()];
+			const planPages = await Promise.all(
+				plannedKeys.map(async (plannedKey, pageIndex) => {
+					const withoutHash = {
+						formatVersion: 2 as const,
+						namespace: options.namespace,
+						attemptId,
+						pageIndex,
+						plannedKey,
+						...(pageIndex + 1 < plannedKeys.length
+							? { nextPageKey: keys.intentPlan(attemptId, pageIndex + 1) }
+							: {}),
+					};
+					return schemas.intentPlanPage.parse({
+						...withoutHash,
+						pageSha256: await hashCanonicalRecord(
+							withoutHash,
+							undefined,
+							options.sha256,
+						),
+					});
+				}),
+			);
+			const intent = schemas.transactionIntent.parse({
+				formatVersion: 2,
+				namespace: options.namespace,
+				attemptId,
+				targetRootSlots: targetSlots,
+				firstCommitGeneration: base.root.commitGeneration + 1,
+				snapshotId,
+				planPageCount: planPages.length,
+				planSha256: await options.sha256(
+					textEncoder.encode(canonicalJson(planPages)),
+				),
+			});
+			rootRecords = targetSlots.map((slot, index) => ({
+				slot,
+				raw: canonicalJson(
+					schemas.rootCommit.parse({
+						...staged.root,
+						commitGeneration: base.root.commitGeneration + 1 + index,
+					}),
+				),
+			}));
 			const rawIntent = canonicalJson(intent);
 			await options.storage.setItem(keys.intent.a, rawIntent);
 			await options.storage.setItem(keys.intent.b, rawIntent);
@@ -133,14 +140,9 @@ export function createTransactionWriter<Metadata extends object, Value>(
 			);
 		}
 
-		let generation = base.root.commitGeneration + 1;
-		for (const slot of targetSlots) {
-			const root = schemas.rootCommit.parse({
-				...staged.root,
-				commitGeneration: generation++,
-			});
+		for (const { slot, raw } of rootRecords) {
 			try {
-				await options.storage.setItem(keys.root[slot], canonicalJson(root));
+				await options.storage.setItem(keys.root[slot], raw);
 			} catch (error) {
 				throw new SecureStorageWriteNotCommittedError(
 					`Secure storage root publication failed: ${String(error)}`,

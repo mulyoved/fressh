@@ -4,6 +4,7 @@ import test from 'node:test';
 import { z } from 'zod';
 import {
 	createTransactionalSecureStore,
+	SecureStorageWriteNotCommittedError,
 	type LegacySnapshotReader,
 	type SecureEntry,
 	type Sha256,
@@ -149,6 +150,39 @@ void test('recovers from either surviving redundant intent on reopen', async () 
 	assert.deepEqual(await createStore(storage).listEntries(), [first]);
 	assert.equal(await storage.getItem(keys.intent.a), null);
 	assert.equal(await storage.getItem(keys.intent.b), null);
+});
+
+void test('normalizes pre-root derivation failures without changing either root', async () => {
+	const storage = await seedEmptyPair();
+	const keys = buildV2Keys(namespace);
+	const rootsBefore = {
+		a: await storage.getItem(keys.root.a),
+		b: await storage.getItem(keys.root.b),
+	};
+	const store = createTransactionalSecureStore({
+		namespace,
+		metadataSchema,
+		serializeValue: () => {
+			throw new Error('serializer failed');
+		},
+		parseValue,
+		storage,
+		legacy,
+		randomUUID: () => `uuid-${++nextId}`,
+		sha256,
+	});
+
+	await assert.rejects(
+		store.upsertEntry(first),
+		SecureStorageWriteNotCommittedError,
+	);
+	assert.deepEqual(
+		{
+			a: await storage.getItem(keys.root.a),
+			b: await storage.getItem(keys.root.b),
+		},
+		rootsBefore,
+	);
 });
 
 for (const fault of [
