@@ -57,10 +57,11 @@ export function createStartupMigration<Metadata extends object, Value>(options: 
 		}
 		const cleanupKeys: string[] = [];
 		if (snapshot.status === 'present') {
-			for (let index = snapshot.recordKeys.length - 1; index >= 0; index--) {
+			const inventory = [...snapshot.recordKeys.slice(1), snapshot.recordKeys[0]!];
+			for (let index = inventory.length - 1; index >= 0; index--) {
 				const body = { formatVersion: 2 as const, namespace: options.namespace, attemptId, pageIndex: index,
-					garbageKey: snapshot.recordKeys[index]!,
-					...(index + 1 < snapshot.recordKeys.length ? { nextPageKey: keys.cleanup(attemptId, index + 1) } : {}) };
+					garbageKey: inventory[index]!,
+					...(index + 1 < inventory.length ? { nextPageKey: keys.cleanup(attemptId, index + 1) } : {}) };
 				const pageSha256 = await hash(body, undefined, options.sha256);
 				const key = keys.cleanup(attemptId, index);
 				cleanupKeys[index] = key;
@@ -129,8 +130,6 @@ export function createStartupMigration<Metadata extends object, Value>(options: 
 		if (snapshot.root.cleanupHeadKey === undefined) return false;
 		const inventory = legacy?.status === 'present' ? legacy.recordKeys : undefined;
 		const allowed = inventory === undefined ? undefined : new Set(inventory);
-		const escaped = options.namespace.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-		const legacyKey = new RegExp(`^(?:${escaped}-rootManifest|${escaped}-manifestChunk-.+|${escaped}-entry-.+-chunk-[0-9]+)$`);
 		let key: string | undefined = snapshot.root.cleanupHeadKey;
 		const pages: { key: string; garbageKey: string }[] = [];
 		try {
@@ -143,15 +142,26 @@ export function createStartupMigration<Metadata extends object, Value>(options: 
 				key = page.nextPageKey;
 			}
 		} catch { pages.length = 0; }
-		if (allowed === undefined && (pages.length === 0 || pages.some(({ garbageKey }) => !legacyKey.test(garbageKey)))) return (await options.storage.getItem(snapshot.root.cleanupHeadKey)) !== null;
+		if (allowed === undefined) return (await options.storage.getItem(snapshot.root.cleanupHeadKey)) !== null;
 		if (allowed !== undefined && (pages.length !== allowed.size || pages.some(({ garbageKey }) => !allowed.has(garbageKey)) || new Set(pages.map(({ garbageKey }) => garbageKey)).size !== allowed.size)) {
 			snapshot = await publishCleanup(snapshot, inventory!);
 			return cleanup(snapshot, legacy);
 		}
 		let complete = true;
+		const deleted: { key: string; raw: string }[] = [];
 		for (const page of pages) {
-			try { await options.storage.deleteItem(page.garbageKey); } catch { complete = false; }
-			if (await options.storage.getItem(page.garbageKey) !== null) complete = false;
+			let prior: string | null = null;
+			try {
+				prior = await options.storage.getItem(page.garbageKey);
+				await options.storage.deleteItem(page.garbageKey);
+				if (await options.storage.getItem(page.garbageKey) !== null) throw new Error('Legacy delete was not observed');
+				if (prior !== null) deleted.push({ key: page.garbageKey, raw: prior });
+			} catch {
+				complete = false;
+				if (prior !== null) await options.storage.setItem(page.garbageKey, prior).catch(() => undefined);
+				for (const record of deleted) await options.storage.setItem(record.key, record.raw).catch(() => undefined);
+				break;
+			}
 		}
 		if (complete) for (const page of pages) await options.storage.deleteItem(page.key).catch(() => undefined);
 		return !complete;

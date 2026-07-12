@@ -216,3 +216,50 @@ void test('silent no-op at every migration publication boundary is detected befo
 		assert.equal(legacyKeys(storage).length, 4);
 	}
 });
+
+void test('cleanup verification read failure is best effort and retries on a later launch', async () => {
+	const storage = await seedLegacy();
+	await createStore(storage).ensureReady();
+	storage.restart();
+	const target = legacyKeys(storage).find((key) => key.includes('-entry-'))!;
+	storage.failMatchingRead(target, 2);
+	const reopened = createStore(storage);
+	assert.equal((await reopened.ensureReady()).cleanupPending, true);
+	assert.deepEqual((await reopened.listEntries()).map(({ id }) => id), ['alpha', 'beta']);
+	storage.restart();
+	await createStore(storage).ensureReady();
+	assert.deepEqual(legacyKeys(storage), []);
+});
+
+void test('same-namespace v1-shaped keys outside exact inventory are never cleanup-authorized', async () => {
+	const storage = await seedLegacy();
+	const unrelated = `${namespace}-entry-never-migrated-chunk-0`;
+	await storage.setItem(unrelated, 'keep');
+	await createStore(storage).ensureReady();
+	storage.restart();
+	const root = JSON.parse((await storage.getItem(buildV2Keys(namespace).root.b))!) as { cleanupHeadKey: string };
+	const page = JSON.parse((await storage.getItem(root.cleanupHeadKey))!) as Record<string, unknown>;
+	page.garbageKey = unrelated;
+	page.pageSha256 = await sha256(new TextEncoder().encode(JSON.stringify(Object.fromEntries(Object.entries(page).filter(([key]) => key !== 'pageSha256')))));
+	await storage.setItem(root.cleanupHeadKey, JSON.stringify(page));
+	const legacyValue = legacyKeys(storage).find((key) => key.includes('-entry-') && key !== unrelated)!;
+	storage.failMatchingRead(legacyValue, 1);
+	await createStore(storage).ensureReady();
+	assert.equal(await storage.getItem(unrelated), 'keep');
+});
+
+void test('stale peer with unreadable legacy is mirrored but no cleanup is attempted', async () => {
+	const storage = await seedLegacy();
+	await createStore(storage).ensureReady();
+	await writeTransactionalStorageFixture({ namespace, metadataSchema, serializeValue: JSON.stringify, storage, sha256, slot: 'a', commitGeneration: 0, entries: [] });
+	storage.restart();
+	const legacyValue = legacyKeys(storage).find((key) => key.includes('-entry-'))!;
+	storage.failMatchingRead(legacyValue, 1);
+	const beforeLegacy = legacyKeys(storage);
+	await createStore(storage).ensureReady();
+	const keys = buildV2Keys(namespace);
+	const a = JSON.parse((await storage.getItem(keys.root.a))!) as { snapshotId: string };
+	const b = JSON.parse((await storage.getItem(keys.root.b))!) as { snapshotId: string };
+	assert.equal(a.snapshotId, b.snapshotId);
+	assert.deepEqual(legacyKeys(storage), beforeLegacy);
+});

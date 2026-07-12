@@ -99,7 +99,7 @@ export function createTransactionalSecureStore<Metadata extends object, Value>(
 			try { legacy = await options.legacy.read(); } catch { legacy = undefined; }
 		}
 		const other = await readRootCandidate(options, selected.slot === 'a' ? 'b' : 'a');
-		if (other.status !== 'valid' || (legacy?.status === 'present' && !startup.sameSnapshot(selected, other.snapshot))) await startup.mirror(selected);
+		if (other.status !== 'valid' || ((legacy?.status === 'present' || selected.root.cleanupHeadKey !== undefined) && !startup.sameSnapshot(selected, other.snapshot))) await startup.mirror(selected);
 		const cleanupPending = createdV2ThisInstance ? selected.root.cleanupHeadKey !== undefined : await startup.cleanup(selected, legacy);
 		return { status: state.type === 'recovered' ? 'recovered' as const : 'current' as const, cleanupPending };
 	}
