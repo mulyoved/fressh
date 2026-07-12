@@ -195,6 +195,32 @@ void test('normalizes pre-root derivation failures without changing either root'
 	);
 });
 
+void test('retains an intent header when committed plan cleanup fails', async () => {
+	const durable = (await seedEmptyPair()).snapshotDurable();
+	const successful = new FaultInjectingStringStorage(durable);
+	await createStore(successful).upsertEntry(first);
+	const firstPlanDelete = successful.operationLog
+		.filter(({ type }) => type !== 'get')
+		.findIndex(
+			({ type, key }) => type === 'delete' && key.includes('-v2-intent-plan-'),
+		);
+	assert.notEqual(firstPlanDelete, -1);
+
+	const storage = new FaultInjectingStringStorage(durable);
+	storage.failOperation(firstPlanDelete + 1, 'throw-before');
+	await createStore(storage).upsertEntry(first);
+	const durableKeys = Object.keys(storage.snapshotDurable());
+	const keys = buildV2Keys(namespace);
+	assert.equal(
+		durableKeys.some((key) => key.includes('-v2-intent-plan-')),
+		true,
+	);
+	assert.equal(
+		durableKeys.includes(keys.intent.a) || durableKeys.includes(keys.intent.b),
+		true,
+	);
+});
+
 for (const fault of [
 	'throw-before',
 	'throw-after-visible',

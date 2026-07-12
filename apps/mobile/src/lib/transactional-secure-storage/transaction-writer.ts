@@ -160,11 +160,16 @@ export function createTransactionWriter<Metadata extends object, Value>(
 				'Secure storage root did not reopen after publication',
 			);
 		}
+		let planCleanupComplete = true;
 		for (let pageIndex = 0; pageIndex < planPageCount; pageIndex++) {
-			await deleteBestEffort(keys.intentPlan(attemptId, pageIndex));
+			if (!(await deleteBestEffort(keys.intentPlan(attemptId, pageIndex)))) {
+				planCleanupComplete = false;
+			}
 		}
-		await deleteBestEffort(keys.intent.a);
-		await deleteBestEffort(keys.intent.b);
+		if (planCleanupComplete) {
+			await deleteBestEffort(keys.intent.a);
+			await deleteBestEffort(keys.intent.b);
+		}
 		return reopened.snapshot;
 	}
 
@@ -391,11 +396,13 @@ export function createTransactionWriter<Metadata extends object, Value>(
 		}
 	}
 
-	async function deleteBestEffort(key: string): Promise<void> {
+	async function deleteBestEffort(key: string): Promise<boolean> {
 		try {
 			await options.storage.deleteItem(key);
+			return true;
 		} catch {
 			// Cleanup can be retried on the next open.
+			return false;
 		}
 	}
 
