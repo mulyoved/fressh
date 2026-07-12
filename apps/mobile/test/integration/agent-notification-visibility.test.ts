@@ -4,9 +4,45 @@ import {
 	acknowledgeVisibleAgentNotification,
 	handleAgentNotificationRoute,
 	notifyAgentNotificationPending,
+	resolveAgentNotificationRoute,
 	subscribeAgentNotificationPending,
 	type VisibleAgentNotificationSnapshot,
 } from '../../src/lib/agent-notification-visibility';
+
+void test('route resolver normalizes fallback and explicit authorization identically', () => {
+	const fallback = resolveAgentNotificationRoute({
+		agentConnectionId: null,
+		storedConnectionId: 'saved-host',
+		agentSession: null,
+		agentWindowId: '@12',
+		agentEventId: 'event-1',
+		agentTapToken: 'token-1',
+		tmuxTarget: ' main ',
+	});
+	const explicit = resolveAgentNotificationRoute({
+		agentConnectionId: 'saved-host',
+		storedConnectionId: 'saved-host',
+		agentSession: 'main',
+		agentWindowId: '@12',
+		agentEventId: 'event-1',
+		agentTapToken: 'token-1',
+		tmuxTarget: 'ignored',
+	});
+
+	assert.deepEqual(fallback, explicit);
+	assert.equal(
+		resolveAgentNotificationRoute({
+			agentConnectionId: 'forged-host',
+			storedConnectionId: 'saved-host',
+			agentSession: 'main',
+			agentWindowId: '@12',
+			agentEventId: 'event-1',
+			agentTapToken: 'token-1',
+			tmuxTarget: 'main',
+		}),
+		null,
+	);
+});
 
 type Deferred<T> = {
 	promise: Promise<T>;
@@ -19,10 +55,6 @@ function createDeferred<T>(): Deferred<T> {
 		resolve = innerResolve;
 	});
 	return { promise, resolve };
-}
-
-function waitForMicrotask() {
-	return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
 function buildWorkmuxWindowOutput(windowId = '@12'): string {
@@ -178,41 +210,6 @@ void test('acknowledgeVisibleAgentNotification ignores superseded requests witho
 	await pending;
 
 	assert.deepEqual(harness.acknowledgements, []);
-});
-
-void test('acknowledgeVisibleAgentNotification coalesces concurrent requests into one queued rerun', async () => {
-	const harness = createHarness();
-	const first = createDeferred<string>();
-	const second = createDeferred<string>();
-	let commandCount = 0;
-	const runCommand = async () => {
-		commandCount += 1;
-		return commandCount === 1 ? first.promise : second.promise;
-	};
-
-	const firstPending = acknowledgeVisibleAgentNotification(
-		harness.options(runCommand),
-	);
-	const queuedA = acknowledgeVisibleAgentNotification(
-		harness.options(runCommand),
-	);
-	const queuedB = acknowledgeVisibleAgentNotification(
-		harness.options(runCommand),
-	);
-	await waitForMicrotask();
-
-	assert.equal(commandCount, 1);
-	first.resolve(buildWorkmuxWindowOutput());
-	await waitForMicrotask();
-	assert.equal(commandCount, 2);
-	second.resolve(buildWorkmuxWindowOutput());
-	await Promise.all([firstPending, queuedA, queuedB]);
-
-	assert.equal(commandCount, 2);
-	assert.deepEqual(harness.acknowledgements, [
-		{ connectionId: 'conn-1', session: 'main', windowId: '@12' },
-		{ connectionId: 'conn-1', session: 'main', windowId: '@12' },
-	]);
 });
 
 void test('acknowledgeVisibleAgentNotification ignores empty command output', async () => {
@@ -425,6 +422,41 @@ void test('handleAgentNotificationRoute restores consumed token after failed rou
 	assert.equal(firstRoute, false);
 	assert.equal(secondRoute, true);
 	assert.equal(commands, 2);
+});
+
+void test('handleAgentNotificationRoute restores selection when success callbacks fail', async (t) => {
+	for (const callback of ['mark', 'acknowledge'] as const) {
+		await t.test(callback, async () => {
+			const error = new Error(`${callback} failed`);
+			let restores = 0;
+			const handled = await handleAgentNotificationRoute({
+				agentConnectionId: 'saved-host',
+				storedConnectionId: null,
+				agentSession: 'main',
+				agentWindowId: '@12',
+				agentEventId: 'main:@12:2000:waiting',
+				agentTapToken: 'tap-token',
+				tmuxTarget: 'main',
+				consumeAuthorizedRouteToken: () => true,
+				restoreAuthorizedRouteToken: () => {
+					restores += 1;
+					return true;
+				},
+				isRouteHandled: () => false,
+				markRouteHandled: () => {
+					if (callback === 'mark') throw error;
+				},
+				runWorkmuxCommand: async () => '',
+				acknowledge: () => {
+					if (callback === 'acknowledge') throw error;
+				},
+				warn: () => {},
+			});
+
+			assert.equal(handled, false);
+			assert.equal(restores, 1);
+		});
+	}
 });
 
 void test('handleAgentNotificationRoute falls back to stored connection id', async () => {

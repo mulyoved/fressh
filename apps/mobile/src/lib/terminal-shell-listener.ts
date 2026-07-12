@@ -2,7 +2,7 @@ type MutableRef<T> = {
 	current: T;
 };
 
-type ShellListenerOwner = {
+export type ShellListenerOwner = {
 	removeListener: (id: bigint) => void;
 };
 

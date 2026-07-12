@@ -285,7 +285,7 @@ export type ActionContext = {
 	openConfigurator: () => void;
 	sendBytes: (bytes: Uint8Array<ArrayBuffer>) => void;
 	pasteClipboard: () => Promise<void>;
-	copySelection: () => void;
+	copySelection: () => void | PromiseLike<KeyboardActionOutcome>;
 	toggleCommandMenu?: () => void;
 	setNavScope?: (scope: WorkmuxNavScope) => void;
 	fitTerminalToDevice?: () => Promise<void> | void;
@@ -304,6 +304,12 @@ export type ActionContext = {
 		command: WorkmuxKeyboardCommand,
 	) => Promise<WorkmuxKeyboardCommandRunResult>;
 };
+
+export type KeyboardActionOutcome =
+	| { status: 'completed' }
+	| { status: 'superseded' }
+	| { status: 'unavailable' }
+	| { status: 'failed'; failure: { message: string } };
 
 export type RunActionOptions = {
 	workmuxNavScopeOverride?: WorkmuxNavScope;
@@ -336,7 +342,7 @@ export async function runAction(
 	actionId: ActionId,
 	context: ActionContext,
 	options: RunActionOptions = {},
-): Promise<void> {
+): Promise<void | KeyboardActionOutcome> {
 	const workmuxKeyboardCommand = getWorkmuxKeyboardActionCommand(actionId);
 	if (workmuxKeyboardCommand) {
 		await context.runWorkmuxKeyboardCommand?.(
@@ -379,8 +385,7 @@ export async function runAction(
 			return;
 		}
 		case 'COPY_SELECTION': {
-			context.copySelection();
-			return;
+			return await context.copySelection();
 		}
 		case 'OPEN_HOST_DIFFITY': {
 			context.openHostDiffity?.();

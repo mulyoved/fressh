@@ -7,7 +7,18 @@ import {
 	type DetectedOpenCandidate,
 } from '../../src/lib/detected-open-actions';
 
-const shellModalsSourcePath = join(process.cwd(), 'src/lib/shell-modals.tsx');
+const browserActionsHookSourcePath = join(
+	process.cwd(),
+	'src/lib/shell-controllers/browser-actions.tsx',
+);
+const browserActionsCoreSourcePath = join(
+	process.cwd(),
+	'src/lib/shell-controllers/browser-actions-core.ts',
+);
+const browserActionsFacadeSourcePath = join(
+	process.cwd(),
+	'src/lib/shell-controllers/browser-actions-facade.ts',
+);
 const shellDetailSourcePath = join(process.cwd(), 'src/app/shell/detail.tsx');
 
 function assertCallBefore(
@@ -26,33 +37,41 @@ function assertCallBefore(
 }
 
 void test('browser actions controller exposes detected open picker modal props', () => {
-	const source = readFileSync(shellModalsSourcePath, 'utf8');
+	const hookSource = readFileSync(browserActionsHookSourcePath, 'utf8');
+	const coreSource = readFileSync(browserActionsCoreSourcePath, 'utf8');
+	const facadeSource = readFileSync(browserActionsFacadeSourcePath, 'utf8');
 
-	assert.match(source, /export type DetectedOpenPickerModalProps = \{/);
 	assert.match(
-		source,
+		hookSource,
+		/export type \{[\s\S]*DetectedOpenPickerModalProps,[\s\S]*\} from '\.\/browser-actions-modal-props';/,
+	);
+	assert.match(
+		facadeSource,
 		/detectedOpenPickerProps: DetectedOpenPickerModalProps;/,
 	);
 	assert.match(
-		source,
-		/setDetectedOpenPickerState\(\{ candidates, context \}\);/,
+		coreSource,
+		/patch\(\{ detectedOpenPicker: \{ candidates, context \} \}\)/,
 	);
 	assert.match(
-		source,
+		hookSource,
 		/const detectedOpenPickerProps = useMemo<DetectedOpenPickerModalProps>/,
 	);
-	assert.match(source, /runGuardedDetectedOpenPickerSelectionRequest\(\{/);
-	assert.match(source, /hostDetectedOpenPickerSelectionRequestId\.next\(\)/);
-	const handleOpenDetectedIndex = source.indexOf('const handleOpenDetected');
-	const pickerInvalidationIndex = source.indexOf(
+	assert.match(coreSource, /runGuardedDetectedOpenPickerSelectionRequest\(\{/);
+	assert.match(
+		coreSource,
+		/hostDetectedOpenPickerSelectionRequestId\.next\(\)/,
+	);
+	const handleOpenDetectedIndex = coreSource.indexOf('openDetected: (mode)');
+	const pickerInvalidationIndex = coreSource.indexOf(
 		'hostDetectedOpenPickerSelectionRequestId.invalidate();',
 		handleOpenDetectedIndex,
 	);
-	const pickerClearIndex = source.indexOf(
-		'setDetectedOpenPickerState(null);',
+	const pickerClearIndex = coreSource.indexOf(
+		'patch({ detectedOpenPicker: null });',
 		handleOpenDetectedIndex,
 	);
-	const controllerRequestIndex = source.indexOf(
+	const controllerRequestIndex = coreSource.indexOf(
 		'const result = runDetectedOpenControllerRequest({',
 		handleOpenDetectedIndex,
 	);
@@ -64,10 +83,25 @@ void test('browser actions controller exposes detected open picker modal props',
 	assert.ok(pickerClearIndex < controllerRequestIndex);
 });
 
-void test('browser actions controller cancels detected open work before other browser actions', () => {
-	const source = readFileSync(shellModalsSourcePath, 'utf8');
+void test('browser actions hook keeps its public open command void-returning', () => {
+	const hookSource = readFileSync(browserActionsHookSourcePath, 'utf8');
+	const facadeSource = readFileSync(browserActionsFacadeSourcePath, 'utf8');
 
-	assert.match(source, /const resetDetectedOpenRequests = useCallback/);
+	assert.match(
+		hookSource,
+		/export type \{ BrowserActionsControllerHandle \} from '\.\/browser-actions-facade';/,
+	);
+	assert.match(
+		facadeSource,
+		/export type BrowserActionsControllerHandle = \{[\s\S]*?open: \(\) => void;/,
+	);
+	assert.match(facadeSource, /open: \(\) => void core\.open\(\)/);
+});
+
+void test('browser actions controller cancels detected open work before other browser actions', () => {
+	const source = readFileSync(browserActionsCoreSourcePath, 'utf8');
+
+	assert.match(source, /const resetDetectedOpen = \(\) =>/);
 	assert.match(source, /hostDetectedOpenRequestId\.invalidate\(\);/);
 	assert.match(source, /hostDetectedOpenInFlightRef\.current = false;/);
 	assert.match(
@@ -77,26 +111,20 @@ void test('browser actions controller cancels detected open work before other br
 
 	assertCallBefore(
 		source,
-		'const handleOpenGitHubTarget = useCallback',
-		'resetDetectedOpenRequests();',
+		'openGitHubTarget: (target)',
+		'resetDetectedOpen();',
 		'runGitHubTargetOpenRequest({',
 	);
 	assertCallBefore(
 		source,
-		'const handleOpenHostDiffity = useCallback',
-		'resetDetectedOpenRequests();',
+		'openDiffity: ()',
+		'resetDetectedOpen();',
 		'runHostDiffityOpenRequest({',
 	);
 	assertCallBefore(
 		source,
-		'const handleOpenHostUrlSlot = useCallback',
-		'resetDetectedOpenRequests();',
-		'runHostUrlReadRequest({',
-	);
-	assertCallBefore(
-		source,
-		'const handleEditHostUrlSlot = useCallback',
-		'resetDetectedOpenRequests();',
+		"const readUrlSlot = (mode: 'open' | 'edit'",
+		'resetDetectedOpen();',
 		'runHostUrlReadRequest({',
 	);
 });
