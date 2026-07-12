@@ -1,5 +1,7 @@
 import {
 	SecureStorageCorruptionError,
+	SecureStorageUnavailableError,
+	type LegacySnapshot,
 	type RootSlot,
 	type SecureEntry,
 	type TransactionalSecureStore,
@@ -10,7 +12,16 @@ import {
 	selectSnapshot,
 	type ValidatedSnapshot,
 } from './snapshot-reader';
+import { createStartupMigration } from './startup-migration';
 import { createTransactionWriter } from './transaction-writer';
+
+type StartupState<Metadata extends object, Value> =
+	| { type: 'fresh' }
+	| { type: 'legacy'; snapshot: LegacySnapshot<Metadata, Value> }
+	| { type: 'v2'; snapshot: ValidatedSnapshot<Metadata, Value> }
+	| { type: 'recovered'; snapshot: ValidatedSnapshot<Metadata, Value> }
+	| { type: 'unavailable'; error: SecureStorageUnavailableError }
+	| { type: 'corrupt'; error: SecureStorageCorruptionError };
 
 export function createTransactionalSecureStore<Metadata extends object, Value>(
 	options: TransactionalSecureStoreOptions<Metadata, Value>,
@@ -19,16 +30,28 @@ export function createTransactionalSecureStore<Metadata extends object, Value>(
 	const serializeMutation = <Result>(run: () => Promise<Result>) => {
 		const result = mutationTail.then(run, run);
 		mutationTail = result.then(
-			() => undefined,
-			() => undefined,
+			() => {
+				readyResult = undefined;
+			},
+			() => {
+				readyResult = undefined;
+			},
 		);
 		return result;
 	};
 	const writer = createTransactionWriter(options);
+	const startup = createStartupMigration(options);
+	let createdV2ThisInstance = false;
+	let readyResult: Promise<{ status: 'initialized' | 'migrated' | 'current' | 'recovered'; cleanupPending: boolean }> | undefined;
 	const openAfterMutations = () => mutationTail.then(open, open);
 
 	async function open(): Promise<ValidatedSnapshot<Metadata, Value>> {
-		await writer.recoverIntents();
+		readyResult ??= ensureReady();
+		await readyResult;
+		return openCurrent();
+	}
+
+	async function openCurrent(): Promise<ValidatedSnapshot<Metadata, Value>> {
 		const selection = await selectSnapshot(options);
 		if (selection.status !== 'selected') {
 			throw new SecureStorageCorruptionError(
@@ -38,6 +61,43 @@ export function createTransactionalSecureStore<Metadata extends object, Value>(
 			);
 		}
 		return selection.snapshot;
+	}
+
+	async function classify(): Promise<StartupState<Metadata, Value>> {
+		try {
+			const before = await selectSnapshot(options);
+			if (before.status === 'selected') {
+				await writer.recoverIntents();
+				const after = await selectSnapshot(options);
+				if (after.status !== 'selected') return { type: 'corrupt', error: new SecureStorageCorruptionError('Transactional secure storage has no valid root') };
+				return { type: before.snapshot.root.snapshotId === after.snapshot.root.snapshotId ? 'v2' : 'recovered', snapshot: after.snapshot };
+			}
+			await writer.recoverIntents();
+			const legacy = await options.legacy.read();
+			if (legacy.status === 'present') return { type: 'legacy', snapshot: legacy };
+			if (before.status === 'no-valid-state') return { type: 'corrupt', error: new SecureStorageCorruptionError('Transactional secure storage has no valid root') };
+			return { type: 'fresh' };
+		} catch (error) {
+			if (error instanceof SecureStorageUnavailableError) return { type: 'unavailable', error };
+			if (error instanceof SecureStorageCorruptionError) return { type: 'corrupt', error };
+			throw error;
+		}
+	}
+
+	async function ensureReady() {
+		const state = await classify();
+		if (state.type === 'unavailable' || state.type === 'corrupt') throw state.error;
+		if (state.type === 'fresh' || state.type === 'legacy') {
+			const legacy = state.type === 'legacy' ? state.snapshot : { status: 'absent' as const, entries: [], recordKeys: [] };
+			await startup.initialize(legacy);
+			createdV2ThisInstance = true;
+			return { status: state.type === 'fresh' ? 'initialized' as const : 'migrated' as const, cleanupPending: state.type === 'legacy' };
+		}
+		const selected = state.snapshot;
+		const other = await readRootCandidate(options, selected.slot === 'a' ? 'b' : 'a');
+		if (other.status !== 'valid') await startup.mirror(selected);
+		const cleanupPending = createdV2ThisInstance ? selected.root.cleanupHeadKey !== undefined : await startup.cleanup(selected);
+		return { status: state.type === 'recovered' ? 'recovered' as const : 'current' as const, cleanupPending };
 	}
 
 	function olderSlot(base: ValidatedSnapshot<Metadata, Value>): RootSlot {
@@ -77,11 +137,8 @@ export function createTransactionalSecureStore<Metadata extends object, Value>(
 
 	return {
 		async ensureReady() {
-			const snapshot = await openAfterMutations();
-			const cleanupPending =
-				snapshot.root.cleanupHeadKey !== undefined &&
-				(await options.storage.getItem(snapshot.root.cleanupHeadKey)) !== null;
-			return { status: 'current', cleanupPending };
+			readyResult ??= mutationTail.then(ensureReady, ensureReady);
+			return readyResult;
 		},
 		async getEntry(id) {
 			return (await openAfterMutations()).entries.get(id) ?? null;
