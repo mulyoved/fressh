@@ -196,9 +196,8 @@ async function initializeSecretsManager() {
 		recoverPendingRestore: () =>
 			recoverPendingRestore({
 				restoreJournal: secureStorageServices.restoreJournal,
-				listCurrentKeys: () => secureStorageServices.privateKeys.listEntries(),
-				listCurrentConnections: () =>
-					connectionStorage.listEntriesWithValues(),
+				listCurrentKeys: secureStorageServices.privateKeys.listEntries,
+				listCurrentConnections: connectionStorage.listEntriesWithValues,
 				replaceAllKeys: replaceAllPrivateKeyEntries,
 				replaceAllConnections,
 			}),

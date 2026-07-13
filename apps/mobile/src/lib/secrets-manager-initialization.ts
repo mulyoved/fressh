@@ -3,7 +3,9 @@ export async function initializeSecretsManagerServices<Result>(params: {
 	ensureConnectionsReady: () => Promise<void>;
 	recoverPendingRestore: () => Promise<Result>;
 }): Promise<Result> {
-	await params.initializeSecureStorage();
-	await params.ensureConnectionsReady();
+	await Promise.all([
+		params.initializeSecureStorage(),
+		params.ensureConnectionsReady(),
+	]);
 	return params.recoverPendingRestore();
 }

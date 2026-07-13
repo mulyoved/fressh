@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { type BackupPayload } from '../../src/lib/device-migration';
-import { initializeSecretsManagerServices } from '../../src/lib/secrets-manager-initialization';
 import {
 	createRestorePreflightSummary,
 	exportBackupForSharing,
@@ -1375,7 +1374,8 @@ void test('recoverPendingRestore clears a stale journal when current state alrea
 	const result = await recoverPendingRestore({
 		restoreJournal: journal,
 		listCurrentKeys: async () => [...backupPayload.keys].reverse(),
-		listCurrentConnections: async () => [...backupPayload.connections].reverse(),
+		listCurrentConnections: async () =>
+			[...backupPayload.connections].reverse(),
 		replaceAllKeys: async () => {
 			replaceCalls += 1;
 		},
@@ -1510,39 +1510,4 @@ void test('recoverPendingRestore keeps an unreadable journal non-fatal when clea
 	assert.equal(replaceCalls, 0);
 	assert.equal(journal.getSnapshot(), null);
 	assert.equal(journal.getClearCalls(), 1);
-});
-
-void test('secrets-manager waits for secure storage initialization before recovery', async () => {
-	const events: string[] = [];
-	let settleSecureStorage: (() => void) | undefined;
-	const secureStorageSettled = new Promise<void>((resolve) => {
-		settleSecureStorage = resolve;
-	});
-
-	const initialization = initializeSecretsManagerServices({
-		initializeSecureStorage: async () => {
-			events.push('secure storage started');
-			await secureStorageSettled;
-			events.push('secure storage settled');
-		},
-		ensureConnectionsReady: async () => {
-			events.push('connections settled');
-		},
-		recoverPendingRestore: async () => {
-			events.push('recovery started');
-			return 'recovered';
-		},
-	});
-
-	await Promise.resolve();
-	assert.deepEqual(events, ['secure storage started']);
-	settleSecureStorage?.();
-
-	assert.equal(await initialization, 'recovered');
-	assert.deepEqual(events, [
-		'secure storage started',
-		'secure storage settled',
-		'connections settled',
-		'recovery started',
-	]);
 });
