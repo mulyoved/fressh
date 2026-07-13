@@ -1514,7 +1514,7 @@ void test('recoverPendingRestore keeps an unreadable journal non-fatal when clea
 	assert.equal(journal.getClearCalls(), 1);
 });
 
-void test('secrets-manager wires recovery readers and propagates restore journal delete failures', () => {
+void test('secrets-manager initializes transactional secure storage before recovery', () => {
 	const source = readFileSync(
 		join(
 			dirname(fileURLToPath(import.meta.url)),
@@ -1522,17 +1522,29 @@ void test('secrets-manager wires recovery readers and propagates restore journal
 		),
 		'utf8',
 	);
+	const serviceConstruction = source.indexOf('createSecureStorageServices({');
+	const secureStorageInitialization = source.indexOf(
+		'await secureStorageServices.initialize();',
+	);
+	const recovery = source.indexOf(
+		'const recovery = await recoverPendingRestore({',
+	);
 
-	assert.match(
-		source,
-		/recoverPendingRestore\(\{\s*restoreJournal,\s*listCurrentKeys:\s*\(\)\s*=>\s*betterKeyStorage\.listEntriesWithValues\(\),\s*listCurrentConnections:\s*\(\)\s*=>\s*connectionStorage\.listEntriesWithValues\(\),/s,
+	assert.ok(serviceConstruction >= 0);
+	assert.ok(
+		secureStorageInitialization > serviceConstruction,
+		'secure storage must be initialized after its service is constructed',
+	);
+	assert.ok(
+		recovery > secureStorageInitialization,
+		'restore recovery must start after secure storage initialization',
 	);
 	assert.match(
-		source,
-		/load:\s*async\s*\(\)\s*=>\s*\{[\s\S]*logger\.warn\('Discarding malformed restore journal entry', error\);[\s\S]*await restoreJournalStore\.deleteEntry\('pending'\);[\s\S]*return null;[\s\S]*\}/s,
+		source.slice(recovery),
+		/restoreJournal: secureStorageServices\.restoreJournal/,
 	);
 	assert.match(
-		source,
-		/clear:\s*async\s*\(\)\s*=>\s*\{\s*await restoreJournalStore\.deleteEntry\('pending'\);\s*\}/s,
+		source.slice(recovery),
+		/listCurrentKeys: \(\) => secureStorageServices\.privateKeys\.listEntries\(\)/,
 	);
 });
