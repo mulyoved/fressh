@@ -143,6 +143,97 @@ void test('falls back when a value disappears after restart', async () => {
 	]);
 });
 
+async function assertHigherRootFallsBack(
+	corrupt: (
+		storage: FaultInjectingStringStorage,
+		higher: Awaited<ReturnType<typeof writeTransactionalStorageFixture>>,
+	) => Promise<void>,
+) {
+	const { storage, higher } = await seedPair();
+	await corrupt(storage, higher);
+	assert.deepEqual(values(await selectSnapshot(readerOptions(storage))), [
+		{ secret: 'old' },
+	]);
+}
+
+void test('falls back after malformed manifest JSON', async () => {
+	await assertHigherRootFallsBack(async (storage, higher) => {
+		await storage.setItem(higher.manifestKeys[0]!, '{');
+	});
+});
+
+void test('falls back after malformed revision JSON', async () => {
+	await assertHigherRootFallsBack(async (storage, higher) => {
+		await storage.setItem(higher.revisionKeys[0]!, '{');
+	});
+});
+
+void test('falls back after a manifest page-count mismatch', async () => {
+	await assertHigherRootFallsBack(async (storage, higher) => {
+		await mutateRecord(storage, higher.rootKey, (root) => {
+			root.manifestPageCount = 1;
+		});
+	});
+});
+
+void test('falls back after a manifest page contains two entries', async () => {
+	await assertHigherRootFallsBack(async (storage, higher) => {
+		const secondPage = JSON.parse(
+			(await storage.getItem(higher.manifestKeys[1]!))!,
+		) as { entries: unknown[] };
+		await mutateRecord(storage, higher.manifestKeys[0]!, (page) => {
+			(page.entries as unknown[]).push(secondPage.entries[0]);
+		});
+	});
+});
+
+void test('falls back after manifest entry IDs are reordered', async () => {
+	await assertHigherRootFallsBack(async (storage, higher) => {
+		await mutateRecord(storage, higher.manifestKeys[0]!, (page) => {
+			(page.entries as { entryId: string }[])[0]!.entryId = 'z-last';
+		});
+		await refreshFixtureHashes(storage, higher);
+	});
+});
+
+void test('falls back after a manifest page hash mismatch', async () => {
+	await assertHigherRootFallsBack(async (storage, higher) => {
+		await mutateRecord(storage, higher.manifestKeys[0]!, (page) => {
+			page.pageSha256 = 'wrong';
+		});
+	});
+});
+
+void test('falls back after a missing entry revision', async () => {
+	await assertHigherRootFallsBack(async (storage, higher) => {
+		await storage.deleteItem(higher.revisionKeys[0]!);
+	});
+});
+
+void test('falls back after a revision entry-ID mismatch', async () => {
+	await assertHigherRootFallsBack(async (storage, higher) => {
+		await mutateRecord(storage, higher.revisionKeys[0]!, (revision) => {
+			revision.entryId = 'different';
+		});
+		await refreshFixtureHashes(storage, higher);
+	});
+});
+
+void test('falls back after invalid base64 in a value chunk', async () => {
+	await assertHigherRootFallsBack(async (storage, higher) => {
+		await storage.setItem(higher.valueKeys[0]![0]!, '%%%not-base64%%%');
+	});
+});
+
+void test('falls back when a changed value-record ID has no derived chunk', async () => {
+	await assertHigherRootFallsBack(async (storage, higher) => {
+		await mutateRecord(storage, higher.revisionKeys[0]!, (revision) => {
+			revision.valueRecordId = 'missing-value-record';
+		});
+		await refreshFixtureHashes(storage, higher);
+	});
+});
+
 for (const [name, corrupt] of [
 	[
 		'duplicate entry IDs',

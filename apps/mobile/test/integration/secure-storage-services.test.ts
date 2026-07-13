@@ -118,6 +118,16 @@ void test('initialization migrates a v1 private key without changing its entry d
 	await services.initialize();
 
 	assert.deepEqual(await services.privateKeys.getEntry(expected.id), expected);
+
+	storage.restart();
+	const reopened = createSecureStorageServices({
+		storage,
+		sha256: async (bytes) => createHash('sha256').update(bytes).digest('hex'),
+		randomUUID: () => `service-${++nextId}`,
+		logger: noopLogger,
+	});
+	await reopened.initialize();
+	assert.deepEqual(await reopened.privateKeys.getEntry(expected.id), expected);
 });
 
 void test('restore journal migration preserves pending state across the first two instances', async () => {
@@ -146,6 +156,7 @@ void test('every restore journal migration write interruption leaves the pending
 	const offset = mutationCount(probe.storage);
 	await createServices(probe.storage).restoreJournal.load();
 	const migrationWrites = mutationCount(probe.storage) - offset;
+	assert.ok(migrationWrites > 0, 'migration fault matrix requires write boundaries');
 
 	for (let boundary = 1; boundary <= migrationWrites; boundary += 1) {
 		for (const fault of [

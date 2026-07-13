@@ -159,11 +159,21 @@ void test('recovers from either surviving redundant intent on reopen', async () 
 	await assert.rejects(createStore(storage).upsertEntry(second));
 	storage.restart();
 	const keys = buildV2Keys(namespace);
-	assert.notEqual(await storage.getItem(keys.intent.a), null);
+	const durable = storage.snapshotDurable();
+	const survivingIntent = durable[keys.intent.a];
+	assert.notEqual(survivingIntent, undefined);
 
-	assert.deepEqual(await createStore(storage).listEntries(), [first]);
-	assert.equal(await storage.getItem(keys.intent.a), null);
-	assert.equal(await storage.getItem(keys.intent.b), null);
+	for (const survivingSlot of ['a', 'b'] as const) {
+		const records = { ...durable };
+		delete records[keys.intent.a];
+		delete records[keys.intent.b];
+		records[keys.intent[survivingSlot]] = survivingIntent!;
+		const oneHeader = new FaultInjectingStringStorage(records);
+
+		assert.deepEqual(await createStore(oneHeader).listEntries(), [first]);
+		assert.equal(await oneHeader.getItem(keys.intent.a), null);
+		assert.equal(await oneHeader.getItem(keys.intent.b), null);
+	}
 });
 
 void test('normalizes pre-root derivation failures without changing either root', async () => {
