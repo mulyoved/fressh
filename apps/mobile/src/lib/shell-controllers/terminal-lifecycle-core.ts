@@ -213,21 +213,28 @@ export function createTerminalLifecycleController({
 		}
 	};
 
+	const isRuntimeCurrent = (
+		attemptGeneration: number,
+		attemptShell: TerminalLifecycleShell,
+		attemptRuntimeRevision: number,
+	): boolean =>
+		!disposed &&
+		generation === attemptGeneration &&
+		shell === attemptShell &&
+		runtimeRevision === attemptRuntimeRevision &&
+		publisher.getSnapshot().ready;
+
 	const isAttemptCurrent = (
 		attemptGeneration: number,
 		attemptShell: TerminalLifecycleShell,
 		attemptRuntimeRevision: number,
 		attemptXterm: LifecycleXterm,
-	): boolean => {
-		return (
-			!disposed &&
-			generation === attemptGeneration &&
-			shell === attemptShell &&
-			runtimeRevision === attemptRuntimeRevision &&
-			isCurrentXterm(attemptXterm) &&
-			publisher.getSnapshot().ready
-		);
-	};
+	): boolean =>
+		isRuntimeCurrent(
+			attemptGeneration,
+			attemptShell,
+			attemptRuntimeRevision,
+		) && isCurrentXterm(attemptXterm);
 
 	const attach = (): Promise<void> => {
 		if (disposed || !publisher.getSnapshot().ready) return Promise.resolve();
@@ -296,8 +303,28 @@ export function createTerminalLifecycleController({
 				cursor = { mode: 'seq', seq: result.nextSeq };
 			}
 
+			let listenerCommitted = false;
 			const listener = (event: ListenerEvent): void => {
-				if (!isCurrent()) return;
+				let currentXterm: LifecycleXterm | null;
+				if (!listenerCommitted) {
+					if (!isCurrent()) return;
+					currentXterm = xterm;
+				} else {
+					if (
+						!isRuntimeCurrent(
+							attemptGeneration,
+							attemptShell,
+							attemptRuntimeRevision,
+						)
+					)
+						return;
+					try {
+						currentXterm = getXterm();
+					} catch {
+						return;
+					}
+				}
+				if (!currentXterm) return;
 				if ('kind' in event) {
 					listenerProgress.droppedEvents += 1;
 					safeWarn('listener.dropped', {
@@ -311,7 +338,7 @@ export function createTerminalLifecycleController({
 				listenerProgress.bytes += event.bytes.byteLength;
 				listenerProgress.lastSeq = event.seq.toString();
 				try {
-					xterm.write(new Uint8Array(event.bytes));
+					currentXterm.write(new Uint8Array(event.bytes));
 				} catch (error) {
 					safeWarn('Failed to write shell output', error);
 				}
@@ -331,6 +358,7 @@ export function createTerminalLifecycleController({
 				owner: attemptShell,
 				runtimeRevision: attemptRuntimeRevision,
 			};
+			listenerCommitted = true;
 			if (useHead) firstAttachedRevision = attemptRuntimeRevision;
 			safeInfo(
 				useHead ? 'shell listener attached' : 'shell listener attached (live)',

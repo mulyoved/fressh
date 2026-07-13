@@ -311,6 +311,52 @@ void test('terminal lifecycle replays head buffer on first attach then uses live
 	assert.deepEqual(harness.shellA.listenerCursors[1], { mode: 'live' });
 });
 
+void test('attached listener writes to the current xterm after a benign handle replacement', async () => {
+	const harness = createHarness();
+	harness.core.setShell(
+		createShellTransportKey('connection-a', 7),
+		harness.shellA,
+	);
+	harness.core.handleInitialized('instance-1');
+	await harness.core.attach();
+
+	const listener = harness.shellA.listeners.get(1n);
+	assert.ok(listener);
+	listener({
+		seq: 10n,
+		tMs: 1,
+		stream: 'stdout',
+		bytes: new Uint8Array([3]).buffer,
+	});
+
+	const replacementWrites: number[][] = [];
+	harness.setXterm({
+		...harness.xterm,
+		write: (bytes: Uint8Array) => {
+			replacementWrites.push(Array.from(bytes));
+		},
+	});
+	listener({
+		seq: 11n,
+		tMs: 2,
+		stream: 'stdout',
+		bytes: new Uint8Array([4, 5]).buffer,
+	});
+
+	assert.equal(harness.core.isAttached(), true);
+	assert.deepEqual(
+		harness.calls.filter((call) => call.startsWith('write:')),
+		['write:3'],
+	);
+	assert.deepEqual(replacementWrites, [[4, 5]]);
+	assert.deepEqual(harness.core.getOutputDiagnostics()?.listener, {
+		events: 2,
+		bytes: 3,
+		lastSeq: '11',
+		droppedEvents: 0,
+	});
+});
+
 void test('a WebView reload starts fresh first-attach ownership even when its instance ID repeats', async () => {
 	const harness = createHarness();
 	harness.core.setShell(
@@ -400,6 +446,46 @@ void test('superseded async attach removes its late listener and cannot publish 
 	await attaching;
 	assert.deepEqual(harness.shellA.removedListenerIds, [44n]);
 	assert.equal(harness.core.getSnapshot().ready, false);
+});
+
+void test('listener keeps strict xterm identity until attachment ownership commits', async () => {
+	const harness = createHarness();
+	const listenerId = deferred<bigint>();
+	let pendingListener:
+		| Parameters<TerminalLifecycleShell['addListener']>[0]
+		| undefined;
+	harness.shellA.addListener = (listener, options) => {
+		pendingListener = listener;
+		harness.shellA.listenerCursors.push(options.cursor);
+		return listenerId.promise;
+	};
+	harness.core.setShell(
+		createShellTransportKey('connection-a', 7),
+		harness.shellA,
+	);
+	harness.core.handleInitialized('instance-1');
+	const attaching = harness.core.attach();
+	await Promise.resolve();
+	assert.ok(pendingListener);
+
+	harness.setXterm({ ...harness.xterm });
+	pendingListener({
+		seq: 10n,
+		tMs: 1,
+		stream: 'stdout',
+		bytes: new Uint8Array([6]).buffer,
+	});
+	assert.deepEqual(harness.core.getOutputDiagnostics()?.listener, {
+		events: 0,
+		bytes: 0,
+		lastSeq: null,
+		droppedEvents: 0,
+	});
+
+	listenerId.resolve(93n);
+	await attaching;
+	assert.deepEqual(harness.shellA.removedListenerIds, [93n]);
+	assert.equal(harness.core.isAttached(), false);
 });
 
 void test('duplicate attach requests share one listener attempt', async () => {
