@@ -24,6 +24,11 @@ export type XtermOutputDiagnosticsCounter = {
 	recordQueued(byteCount: number): void;
 	recordFlush(): void;
 	recordSent(byteCount: number): void;
+	recordSendAttempt(input: {
+		byteCount: number;
+		isFlush: boolean;
+		send(): boolean;
+	}): boolean;
 	recordWebViewProgress(progress: WebViewOutputProgress): void;
 	getSnapshot(): XtermOutputDiagnostics;
 };
@@ -41,17 +46,26 @@ export function createXtermOutputDiagnostics(): XtermOutputDiagnosticsCounter {
 		webViewCompletedWrites: 0,
 	};
 
+	const recordFlush = () => {
+		snapshot.rnFlushes += 1;
+	};
+	const recordSent = (byteCount: number) => {
+		snapshot.rnSentMessages += 1;
+		snapshot.rnSentBytes += byteCount;
+	};
+
 	return {
 		recordQueued: (byteCount) => {
 			snapshot.rnQueuedMessages += 1;
 			snapshot.rnQueuedBytes += byteCount;
 		},
-		recordFlush: () => {
-			snapshot.rnFlushes += 1;
-		},
-		recordSent: (byteCount) => {
-			snapshot.rnSentMessages += 1;
-			snapshot.rnSentBytes += byteCount;
+		recordFlush,
+		recordSent,
+		recordSendAttempt: ({ byteCount, isFlush, send }) => {
+			if (!send()) return false;
+			if (isFlush) recordFlush();
+			recordSent(byteCount);
+			return true;
 		},
 		recordWebViewProgress: (progress) => {
 			snapshot.webViewInstanceId = progress.instanceId;

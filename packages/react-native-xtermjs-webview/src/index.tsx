@@ -252,13 +252,14 @@ export function XtermJsWebView({
 
 	// ---- RN -> WebView message sender
 	const sendToWebView = useCallback(
-		(obj: BridgeOutboundMessage) => {
+		(obj: BridgeOutboundMessage): boolean => {
 			const webViewRef = webRef.current;
-			if (!webViewRef) return;
+			if (!webViewRef) return false;
 			const payload = JSON.stringify(obj);
 			logger?.debug?.(`sending msg to webview: ${payload}`);
 			const js = `window.dispatchEvent(new MessageEvent('message',{data:${payload}})); true;`;
 			webViewRef.injectJavaScript(js);
+			return true;
 		},
 		[logger],
 	);
@@ -276,9 +277,11 @@ export function XtermJsWebView({
 			cancelAnimationFrame(rafRef.current);
 			rafRef.current = null;
 		}
-		sendToWebView({ type: 'write', bStr });
-		outputDiagnostics.recordFlush();
-		outputDiagnostics.recordSent(byteCount);
+		outputDiagnostics.recordSendAttempt({
+			byteCount,
+			isFlush: true,
+			send: () => sendToWebView({ type: 'write', bStr }),
+		});
 	}, [outputDiagnostics, sendToWebView]);
 
 	const cancelPendingWrite = useCallback(() => {
@@ -324,8 +327,11 @@ export function XtermJsWebView({
 			outputDiagnostics.recordQueued(byteCount);
 			flush(); // Ensure any pending small buffered write is flushed before bulk write
 			const bStrs = chunks.map(binaryToBStr);
-			sendToWebView({ type: 'writeMany', chunks: bStrs });
-			outputDiagnostics.recordSent(byteCount);
+			outputDiagnostics.recordSendAttempt({
+				byteCount,
+				isFlush: false,
+				send: () => sendToWebView({ type: 'writeMany', chunks: bStrs }),
+			});
 		},
 		[flush, outputDiagnostics, sendToWebView],
 	);

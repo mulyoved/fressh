@@ -15,6 +15,11 @@ export type XtermOutputDiagnosticsCounter = {
     recordQueued(byteCount: number): void;
     recordFlush(): void;
     recordSent(byteCount: number): void;
+    recordSendAttempt(input: {
+        byteCount: number;
+        isFlush: boolean;
+        send(): boolean;
+    }): boolean;
     recordWebViewProgress(progress: WebViewOutputProgress): void;
     getSnapshot(): XtermOutputDiagnostics;
 };

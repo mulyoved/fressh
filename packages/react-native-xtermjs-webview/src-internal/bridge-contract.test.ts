@@ -443,6 +443,131 @@ void test('xterm output diagnostics separate queued, sent, and completed bytes',
 	});
 });
 
+void test('buffered flush stays queued when the WebView send is unavailable', () => {
+	const diagnostics = createXtermOutputDiagnostics();
+	diagnostics.recordQueued(10);
+	assert.equal(typeof diagnostics.recordSendAttempt, 'function');
+
+	assert.equal(
+		diagnostics.recordSendAttempt({
+			byteCount: 10,
+			isFlush: true,
+			send: () => false,
+		}),
+		false,
+	);
+
+	assert.deepEqual(diagnostics.getSnapshot(), {
+		webViewInstanceId: null,
+		rnQueuedMessages: 1,
+		rnQueuedBytes: 10,
+		rnFlushes: 0,
+		rnSentMessages: 0,
+		rnSentBytes: 0,
+		webViewReceivedMessages: 0,
+		webViewReceivedBytes: 0,
+		webViewCompletedWrites: 0,
+	});
+});
+
+void test('writeMany stays queued when the WebView send is unavailable', () => {
+	const diagnostics = createXtermOutputDiagnostics();
+	diagnostics.recordQueued(10);
+	assert.equal(typeof diagnostics.recordSendAttempt, 'function');
+
+	assert.equal(
+		diagnostics.recordSendAttempt({
+			byteCount: 10,
+			isFlush: false,
+			send: () => false,
+		}),
+		false,
+	);
+
+	assert.deepEqual(diagnostics.getSnapshot(), {
+		webViewInstanceId: null,
+		rnQueuedMessages: 1,
+		rnQueuedBytes: 10,
+		rnFlushes: 0,
+		rnSentMessages: 0,
+		rnSentBytes: 0,
+		webViewReceivedMessages: 0,
+		webViewReceivedBytes: 0,
+		webViewCompletedWrites: 0,
+	});
+});
+
+void test('output progress forwards only the active bridge generation', () => {
+	const progress: unknown[] = [];
+	const options = {
+		currentInstanceIdRef: { current: 'instance-1' },
+		expectedBridgeLoadIdRef: { current: 2 },
+		currentBridgeLoadTokenRef: { current: 'current-token' },
+		pendingSelectionRef: { current: new Map() },
+		autoFitFn: () => {},
+		setInitialized: () => {},
+		onOutputProgress: (event: unknown) => progress.push(event),
+	};
+
+	assert.equal(
+		handleXtermBridgeInboundMessage(
+			{
+				type: 'outputProgress',
+				instanceId: 'instance-1',
+				bridgeLoadId: 2,
+				bridgeLoadToken: 'current-token',
+				receivedMessages: 1,
+				receivedBytes: 10,
+				completedWrites: 1,
+			},
+			options,
+		),
+		true,
+	);
+	assert.equal(
+		handleXtermBridgeInboundMessage(
+			{
+				type: 'outputProgress',
+				instanceId: 'instance-1',
+				bridgeLoadId: 1,
+				bridgeLoadToken: 'stale-token',
+				receivedMessages: 2,
+				receivedBytes: 20,
+				completedWrites: 2,
+			},
+			options,
+		),
+		true,
+	);
+	assert.equal(
+		handleXtermBridgeInboundMessage(
+			{
+				type: 'outputProgress',
+				instanceId: 'instance-1',
+				bridgeLoadId: 2,
+				bridgeLoadToken: 'stale-token',
+				receivedMessages: 3,
+				receivedBytes: 30,
+				completedWrites: 3,
+			},
+			options,
+		),
+		true,
+	);
+
+	assert.deepEqual(progress, [
+		{
+			type: 'outputProgress',
+			instanceId: 'instance-1',
+			bridgeLoadId: 2,
+			bridgeLoadToken: 'current-token',
+			receivedMessages: 1,
+			receivedBytes: 10,
+			completedWrites: 1,
+		},
+	]);
+});
+
 void test('XtermJsWebView message handler clears pending selection timeout on response', () => {
 	const events: unknown[] = [];
 	const timeoutId = setTimeout(() => {}, 10_000);
