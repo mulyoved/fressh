@@ -26,10 +26,16 @@ Separate two kinds of freshness checks in the terminal lifecycle controller:
    identity check while asynchronous replay and listener registration are in
    progress. This prevents an obsolete attempt from committing ownership or
    writing replay into a replaced terminal runtime.
-2. **Attached-listener freshness** checks controller disposal, generation,
-   shell identity, runtime revision, and ready state, but does not compare the
-   current xterm handle by object identity. After this check passes, each live
-   event reads `getXterm()` and writes once to that current handle.
+2. **Attached-listener freshness** checks controller disposal, generation, shell
+   identity, runtime revision, and ready state, but does not compare the current
+   xterm handle by object identity. After this check passes, each live event
+   reads `getXterm()` and writes once to that current handle.
+
+The listener remains in attach-attempt mode until `addListener` returns, the
+strict captured-handle check passes, and attachment ownership is assigned. A
+callback delivered during registration therefore still requires the captured
+handle to be current and cannot write into a replacement handle from an
+uncommitted attempt.
 
 Runtime revision and generation remain the authority for a real WebView load,
 shell replacement, detach, or disposal. A harmless replacement of the
@@ -79,7 +85,9 @@ Add a lifecycle regression test that:
    listener counters advance.
 
 Existing tests for a handle replacement during an unfinished attach must keep
-passing, proving strict attach-attempt protection remains intact.
+passing, proving strict attach-attempt protection remains intact. Add a direct
+registration-race test that delivers an event after the handle changes but
+before the listener ID resolves; it must not write or advance listener counters.
 
 After unit and integration verification, build the Android preview APK locally,
 install it in place over `com.finalapp.vibe2`, and repeat the controlled Work

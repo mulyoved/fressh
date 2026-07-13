@@ -49,9 +49,9 @@ runner, Expo/EAS local Android preview build, ADB/logcat.
   `CreateTerminalLifecycleControllerInput.getXterm(): LifecycleXterm | null`.
 - Preserves: strict `isAttemptCurrent(..., attemptXterm)` behavior until
   listener ownership commits.
-- Produces: a committed listener callback that checks runtime/shell/generation
-  freshness, resolves `getXterm()` at event-delivery time, and writes once to
-  that current handle.
+- Produces: a listener callback that uses strict captured-handle freshness until
+  ownership commits, then checks runtime/shell/generation freshness, resolves
+  `getXterm()` at event-delivery time, and writes once to that current handle.
 
 - [ ] **Step 1: Add the post-attachment handle-replacement regression test**
 
@@ -105,6 +105,51 @@ void test('attached listener writes to the current xterm after a benign handle r
 });
 ```
 
+Add this characterization test beside the existing deferred-attachment tests to
+lock the strict pre-commit invariant:
+
+```ts
+void test('listener keeps strict xterm identity until attachment ownership commits', async () => {
+	const harness = createHarness();
+	const listenerId = deferred<bigint>();
+	let pendingListener:
+		| Parameters<TerminalLifecycleShell['addListener']>[0]
+		| undefined;
+	harness.shellA.addListener = (listener, options) => {
+		pendingListener = listener;
+		harness.shellA.listenerCursors.push(options.cursor);
+		return listenerId.promise;
+	};
+	harness.core.setShell(
+		createShellTransportKey('connection-a', 7),
+		harness.shellA,
+	);
+	harness.core.handleInitialized('instance-1');
+	const attaching = harness.core.attach();
+	await Promise.resolve();
+	assert.ok(pendingListener);
+
+	harness.setXterm({ ...harness.xterm });
+	pendingListener({
+		seq: 10n,
+		tMs: 1,
+		stream: 'stdout',
+		bytes: new Uint8Array([6]).buffer,
+	});
+	assert.deepEqual(harness.core.getOutputDiagnostics()?.listener, {
+		events: 0,
+		bytes: 0,
+		lastSeq: null,
+		droppedEvents: 0,
+	});
+
+	listenerId.resolve(93n);
+	await attaching;
+	assert.deepEqual(harness.shellA.removedListenerIds, [93n]);
+	assert.equal(harness.core.isAttached(), false);
+});
+```
+
 - [ ] **Step 2: Run the regression test and verify RED**
 
 Run:
@@ -152,19 +197,28 @@ unchanged so an unfinished attempt still requires the captured xterm handle.
 
 - [ ] **Step 4: Resolve the current handle inside the committed listener**
 
-Replace the permanent listener's captured-handle guard and write target with:
+Add a local commit flag before the listener. While it is false, callbacks keep
+the existing strict attach-attempt predicate and captured xterm target. Only
+after ownership commits does the callback use runtime freshness and resolve the
+current handle:
 
 ```ts
+let listenerCommitted = false;
 const listener = (event: ListenerEvent): void => {
-	if (
-		!isRuntimeCurrent(attemptGeneration, attemptShell, attemptRuntimeRevision)
-	)
-		return;
 	let currentXterm: LifecycleXterm | null;
-	try {
-		currentXterm = getXterm();
-	} catch {
-		return;
+	if (!listenerCommitted) {
+		if (!isCurrent()) return;
+		currentXterm = xterm;
+	} else {
+		if (
+			!isRuntimeCurrent(attemptGeneration, attemptShell, attemptRuntimeRevision)
+		)
+			return;
+		try {
+			currentXterm = getXterm();
+		} catch {
+			return;
+		}
 	}
 	if (!currentXterm) return;
 	if ('kind' in event) {
@@ -187,6 +241,19 @@ const listener = (event: ListenerEvent): void => {
 };
 ```
 
+After `addListener` resolves and the existing strict `isCurrent()` check passes,
+assign attachment ownership first and then commit the listener in the same
+synchronous continuation:
+
+```ts
+attachment = {
+	id,
+	owner: attemptShell,
+	runtimeRevision: attemptRuntimeRevision,
+};
+listenerCommitted = true;
+```
+
 Do not alter listener registration, cursor selection, replay, attachment
 ownership, WebView resize, or xterm package behavior.
 
@@ -200,8 +267,8 @@ pnpm --filter @fressh/mobile exec tsx --test \
   test/integration/shell-terminal-hook-runtime.test.ts
 ```
 
-Expected: all focused tests pass, including the new post-attachment replacement
-test and the existing unfinished-attach stale-handle tests.
+Expected: all focused tests pass, including both new handle-replacement tests
+and the existing unfinished-attach stale-handle tests.
 
 - [ ] **Step 6: Run mobile regression checks**
 
@@ -289,32 +356,100 @@ Launch the app through its resolved activity, allow the existing saved
 connection to open, and inspect the Android UI hierarchy. Proceed only if it
 contains exactly one enabled accessibility button labeled `Work`.
 
-Clear logcat, tap the verified button once, wait for one successful Work result,
-then capture only the app process and structured markers:
+Clear logcat, tap the verified button once, wait for the matching `after`
+diagnostic snapshot, and confirm the workspace changed visually without
+recording terminal text. Capture only the app process and content-free
+diagnostic/attachment markers:
 
 ```bash
 adb -s 100.113.210.6:41631 logcat -c
 pid=$(adb -s 100.113.210.6:41631 shell pidof -s com.finalapp.vibe2)
-adb -s 100.113.210.6:41631 logcat -d -v threadtime --pid="$pid" \
-  | rg 'Terminal output diagnostics|Workmux keyboard command result|shell listener attached' \
+adb -s 100.113.210.6:41631 logcat -d -v raw --pid="$pid" \
+  | node -e '
+const fs = require("node:fs");
+const input = fs.readFileSync(0, "utf8");
+const marker = "Terminal output diagnostics";
+const snapshots = [];
+let cursor = 0;
+
+while (true) {
+	const markerAt = input.indexOf(marker, cursor);
+	if (markerAt < 0) break;
+	const objectAt = input.indexOf("{", markerAt + marker.length);
+	if (objectAt < 0) throw new Error("diagnostic object missing");
+	let depth = 0;
+	let inString = false;
+	let escaped = false;
+	let objectEnd = -1;
+	for (let index = objectAt; index < input.length; index += 1) {
+		const character = input[index];
+		if (inString) {
+			if (escaped) escaped = false;
+			else if (character === "\\") escaped = true;
+			else if (character === "\"") inString = false;
+			continue;
+		}
+		if (character === "\"") inString = true;
+		else if (character === "{") depth += 1;
+		else if (character === "}" && --depth === 0) {
+			objectEnd = index + 1;
+			break;
+		}
+	}
+	if (objectEnd < 0) throw new Error("diagnostic object incomplete");
+	const diagnostic = JSON.parse(input.slice(objectAt, objectEnd));
+	const rejectForbiddenKeys = (value) => {
+		if (!value || typeof value !== "object") return;
+		for (const [key, child] of Object.entries(value)) {
+			if (["argv", "bStr", "chunks"].includes(key)) {
+				throw new Error(`forbidden diagnostic key: ${key}`);
+			}
+			rejectForbiddenKeys(child);
+		}
+	};
+	rejectForbiddenKeys(diagnostic);
+	snapshots.push(diagnostic);
+	cursor = objectEnd;
+}
+
+if (snapshots.length !== 2) {
+	throw new Error(`expected 2 diagnostic snapshots, got ${snapshots.length}`);
+}
+const listenerAttachments = (
+	input.match(/shell listener attached/g) ?? []
+).length;
+process.stdout.write(
+	JSON.stringify({ snapshots, listenerAttachments }, null, 2),
+);
+' \
   > /tmp/fressh-terminal-current-handle-fix.log
 ```
 
-Expected: one matching before/after pair with a successful Work result and no
-`shell listener attached` record during the Work operation. Do not copy command
-arguments or terminal payloads into any artifact.
+Expected: one matching before/after pair and no `shell listener attached` record
+during the Work operation. The extractor reads logcat through standard input,
+selects only the two structured diagnostic objects, rejects prohibited keys, and
+writes only its safe JSON result. It never writes the complete Work command
+record to disk. Verify the saved file contains neither command/result records
+nor terminal payload fields before using it as evidence:
+
+```bash
+if rg -n 'Workmux keyboard command|"argv"|"bStr"|"chunks"' \
+  /tmp/fressh-terminal-current-handle-fix.log; then
+	exit 1
+fi
+```
 
 - [ ] **Step 5: Record exact proof that every output boundary advanced**
 
 Create
 `docs/debugging/2026-07-13-terminal-listener-current-handle-fix-evidence.md`
 with the title `Terminal listener current-handle fix evidence`. Its
-`Reproduction` section must record the installed package version and update
-time, successful Work duration, and stable connection/channel/runtime/WebView
-identities. It must state that app data and tmux state were preserved and that
-no terminal content was recorded. It must also state that no listener
-reattachment was logged during the Work operation and record only the yes/no
-result of the visual workspace-change check, not terminal text.
+`Reproduction` section must record the installed package version and update time
+and stable connection/channel/runtime/WebView identities. It must state that app
+data and tmux state were preserved and that no terminal content was recorded. It
+must also state that no listener reattachment was logged during the Work
+operation and record only the yes/no result of the visual workspace-change
+check, not terminal text.
 
 Add a `Boundary counters` table with columns `Boundary`, `Before`, `After`, and
 `Advanced?`. Copy the exact captured decimal values into rows named
