@@ -152,7 +152,7 @@ export function createTransactionalSecureStore<Metadata extends object, Value>(
 			};
 		}
 
-		const selected = state.snapshot;
+		let selected = state.snapshot;
 		let legacy: LegacySnapshot<Metadata, Value> | undefined;
 		if (!createdV2ThisInstance) {
 			try {
@@ -161,13 +161,35 @@ export function createTransactionalSecureStore<Metadata extends object, Value>(
 				legacy = undefined;
 			}
 		}
+		if (selected.root.cleanup !== undefined) {
+			const cleanup = await cleanupChain.read(selected.root.cleanup);
+			if (cleanup.status === 'invalid') {
+				if (legacy?.status !== 'present') {
+					return {
+						status:
+							state.type === 'recovered'
+								? ('recovered' as const)
+								: ('current' as const),
+						cleanupPending: true,
+					};
+				}
+				selected = await replaceCleanup(selected, [
+					...legacy.recordKeys.slice(1),
+					legacy.recordKeys[0]!,
+				]);
+			}
+		}
 		const other = await readRootCandidate(options, olderSlot(selected));
 		if (
 			other.status !== 'valid' ||
 			((legacy?.status === 'present' || selected.root.cleanup !== undefined) &&
 				!startup.sameSnapshot(selected, other.snapshot))
 		) {
-			await startup.mirror(selected);
+			selected = await writer.commitSnapshot({
+				base: selected,
+				nextEntries: [...selected.entries.values()],
+				targetSlots: [olderSlot(selected)],
+			});
 		}
 		const cleanupPending = createdV2ThisInstance
 			? selected.root.cleanup !== undefined
@@ -237,11 +259,15 @@ export function createTransactionalSecureStore<Metadata extends object, Value>(
 			}
 			return true;
 		}
-		const allowedKeys = new Set(legacy.recordKeys);
 		let cleanup = await cleanupChain.read(snapshot.root.cleanup);
+		let anchoredGarbage =
+			cleanup.status === 'valid'
+				? new Set(cleanup.pages.map(({ garbageKey }) => garbageKey))
+				: undefined;
+		const currentGarbage = anchoredGarbage;
 		if (
-			cleanup.status !== 'valid' ||
-			!cleanupChain.exactlyMatches(cleanup.pages, allowedKeys)
+			currentGarbage === undefined ||
+			!legacy.recordKeys.every((key) => currentGarbage.has(key))
 		) {
 			snapshot = await replaceCleanup(snapshot, [
 				...legacy.recordKeys.slice(1),
@@ -249,8 +275,12 @@ export function createTransactionalSecureStore<Metadata extends object, Value>(
 			]);
 			cleanup = await cleanupChain.read(snapshot.root.cleanup!);
 			if (cleanup.status !== 'valid') return true;
+			anchoredGarbage = new Set(
+				cleanup.pages.map(({ garbageKey }) => garbageKey),
+			);
 		}
-		return !(await finalizeCleanup(snapshot, allowedKeys));
+		if (anchoredGarbage === undefined) return true;
+		return !(await finalizeCleanup(snapshot, anchoredGarbage));
 	}
 
 	async function mutate(
@@ -270,29 +300,24 @@ export function createTransactionalSecureStore<Metadata extends object, Value>(
 		const base = await open();
 		const entries = new Map(base.entries);
 		entries.delete(id);
-		const cleanupKeys = new Set(base.reachableKeys);
-		const older = await readRootCandidate(options, olderSlot(base));
-		if (older.status === 'valid') {
-			for (const key of older.snapshot.reachableKeys) cleanupKeys.add(key);
-		}
-		const replacement = base.root.cleanup === undefined ? [...cleanupKeys] : undefined;
 		const reopened = await writer.commitSnapshot({
 			base,
 			nextEntries: [...entries.values()],
 			targetSlots: [olderSlot(base), base.slot],
-			cleanupKeys: replacement,
 		});
-		if (!createdV2ThisInstance && replacement !== undefined) {
-			const descriptor = reopened.root.cleanup;
-			if (descriptor !== undefined) {
-				const cleanup = await cleanupChain.read(descriptor);
-				if (cleanup.status === 'valid') {
-					await finalizeCleanup(
-						reopened,
-						new Set(cleanup.pages.map(({ garbageKey }) => garbageKey)),
-					).catch(() => false);
+		if (!createdV2ThisInstance) {
+			await (async () => {
+				const descriptor = reopened.root.cleanup;
+				if (descriptor !== undefined) {
+					const cleanup = await cleanupChain.read(descriptor);
+					if (cleanup.status === 'valid') {
+						await finalizeCleanup(
+							reopened,
+							new Set(cleanup.pages.map(({ garbageKey }) => garbageKey)),
+						);
+					}
 				}
-			}
+			})().catch(() => false);
 		}
 	}
 

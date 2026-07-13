@@ -1,6 +1,7 @@
 import { type ZodType } from 'zod';
 import { canonicalJson } from './codec';
 import {
+	SecureStorageUnavailableError,
 	type AsyncStringStorage,
 	type CleanupDescriptorV2,
 	type Sha256,
@@ -71,36 +72,44 @@ export function createCleanupChain<Metadata extends object>(
 		const pageHashes: string[] = [];
 		let attemptId: string | undefined;
 		let pageKey: string | undefined = descriptor.headKey;
-		try {
-			for (let pageIndex = 0; pageIndex < descriptor.pageCount; pageIndex++) {
-				if (pageKey === undefined) return { status: 'invalid' };
-				const raw = await options.storage.getItem(pageKey);
-				if (raw === null) return { status: 'invalid' };
-				const page = schemas.cleanupPage.parse(JSON.parse(raw));
-				attemptId ??= page.attemptId;
-				if (
-					page.attemptId !== attemptId ||
-					page.pageIndex !== pageIndex ||
-					pageKey !== keys.cleanup(attemptId, pageIndex) ||
-					page.nextPageKey !==
-						(pageIndex + 1 < descriptor.pageCount
-							? keys.cleanup(attemptId, pageIndex + 1)
-							: undefined)
-				) {
-					return { status: 'invalid' };
-				}
-				const pageHash = await hash(
-					page as unknown as Record<string, unknown>,
-					'pageSha256',
-					options.sha256,
+		for (let pageIndex = 0; pageIndex < descriptor.pageCount; pageIndex++) {
+			if (pageKey === undefined) return { status: 'invalid' };
+			let raw: string | null;
+			try {
+				raw = await options.storage.getItem(pageKey);
+			} catch (error) {
+				throw new SecureStorageUnavailableError(
+					`Secure storage read failed for ${pageKey}: ${String(error)}`,
 				);
-				if (pageHash !== page.pageSha256) return { status: 'invalid' };
-				pages.push({ key: pageKey, garbageKey: page.garbageKey });
-				pageHashes.push(pageHash);
-				pageKey = page.nextPageKey;
 			}
-		} catch {
-			return { status: 'invalid' };
+			if (raw === null) return { status: 'invalid' };
+			let page;
+			try {
+				page = schemas.cleanupPage.parse(JSON.parse(raw));
+			} catch {
+				return { status: 'invalid' };
+			}
+			attemptId ??= page.attemptId;
+			if (
+				page.attemptId !== attemptId ||
+				page.pageIndex !== pageIndex ||
+				pageKey !== keys.cleanup(attemptId, pageIndex) ||
+				page.nextPageKey !==
+					(pageIndex + 1 < descriptor.pageCount
+						? keys.cleanup(attemptId, pageIndex + 1)
+						: undefined)
+			) {
+				return { status: 'invalid' };
+			}
+			const pageHash = await hash(
+				page as unknown as Record<string, unknown>,
+				'pageSha256',
+				options.sha256,
+			);
+			if (pageHash !== page.pageSha256) return { status: 'invalid' };
+			pages.push({ key: pageKey, garbageKey: page.garbageKey });
+			pageHashes.push(pageHash);
+			pageKey = page.nextPageKey;
 		}
 		if (
 			(await hash({ pageHashes }, undefined, options.sha256)) !== descriptor.sha256

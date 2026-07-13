@@ -6,6 +6,7 @@ import { buildChunkedStoreKeys, makeBetterSecureStore } from '../../src/lib/chun
 import { createTransactionalSecureStore, SecureStorageCorruptionError, type Sha256 } from '../../src/lib/transactional-secure-storage';
 import { createLegacyChunkedStorageReader } from '../../src/lib/transactional-secure-storage/legacy-reader';
 import { buildV2Keys } from '../../src/lib/transactional-secure-storage/records';
+import { readRootCandidate } from '../../src/lib/transactional-secure-storage/snapshot-reader';
 import { FaultInjectingStringStorage, type StorageFault } from './helpers/fault-injecting-string-storage';
 import { writeTransactionalStorageFixture } from './helpers/transactional-storage-fixtures';
 
@@ -51,6 +52,49 @@ function legacyKeys(storage: FaultInjectingStringStorage) {
 	return Object.keys(storage.snapshotDurable()).filter((key) => !key.includes('-v2-')).sort();
 }
 
+async function reachableV2Keys(storage: FaultInjectingStringStorage) {
+	const reachable = new Set<string>();
+	for (const slot of ['a', 'b'] as const) {
+		const candidate = await readRootCandidate(
+			{
+				namespace,
+				metadataSchema,
+				parseValue: (raw) => JSON.parse(raw) as Value,
+				storage,
+				sha256,
+			},
+			slot,
+		);
+		if (candidate.status !== 'valid') continue;
+		for (const key of candidate.snapshot.reachableKeys) reachable.add(key);
+	}
+	return reachable;
+}
+
+function cleanupGarbageKeys(records: Record<string, string>) {
+	const keys = buildV2Keys(namespace);
+	const garbage = new Set<string>();
+	for (const rootKey of [keys.root.a, keys.root.b]) {
+		const rawRoot = records[rootKey];
+		if (rawRoot === undefined) continue;
+		let pageKey = (JSON.parse(rawRoot) as { cleanup?: { headKey: string } })
+			.cleanup?.headKey;
+		const visited = new Set<string>();
+		while (pageKey !== undefined && !visited.has(pageKey)) {
+			visited.add(pageKey);
+			const rawPage = records[pageKey];
+			if (rawPage === undefined) break;
+			const page = JSON.parse(rawPage) as {
+				garbageKey: string;
+				nextPageKey?: string;
+			};
+			garbage.add(page.garbageKey);
+			pageKey = page.nextPageKey;
+		}
+	}
+	return garbage;
+}
+
 void test('fresh storage initializes two roots and an empty present v1 manifest migrates', async () => {
 	const fresh = new FaultInjectingStringStorage();
 	assert.equal((await createStore(fresh).ensureReady()).status, 'initialized');
@@ -73,6 +117,53 @@ void test('first instance migrates readable entries but only a fresh reopen clea
 	storage.restart();
 	assert.equal((await createStore(storage).ensureReady()).status, 'current');
 	assert.deepEqual(legacyKeys(storage), []);
+});
+
+void test('delete during pending migration cleanup anchors both legacy and newly unreachable v2 records', async () => {
+	const storage = await seedLegacy();
+	const firstInstance = createStore(storage);
+	await firstInstance.ensureReady();
+	const immutableBeforeDelete = Object.keys(storage.snapshotDurable()).filter(
+		(key) => /-v2-(?:manifest|entry|value)-/.test(key),
+	);
+
+	await firstInstance.deleteEntry('alpha');
+	const reachableAfterDelete = await reachableV2Keys(storage);
+	const removedByDelete = immutableBeforeDelete.filter(
+		(key) => !reachableAfterDelete.has(key),
+	);
+	assert.ok(removedByDelete.some((key) => key.includes('-v2-entry-')));
+	assert.ok(removedByDelete.some((key) => key.includes('-v2-value-')));
+	let garbage = cleanupGarbageKeys(storage.snapshotDurable());
+	assert.equal(
+		removedByDelete.every((key) => garbage.has(key)),
+		true,
+		'deferred migration cleanup must retain newly unreachable v2 records',
+	);
+	assert.ok(legacyKeys(storage).length > 0);
+
+	await firstInstance.upsertEntry({
+		id: 'gamma',
+		metadata: { label: 'Gamma' },
+		value: { privateKey: 'three' },
+	});
+	garbage = cleanupGarbageKeys(storage.snapshotDurable());
+	assert.equal(removedByDelete.every((key) => garbage.has(key)), true);
+	storage.restart();
+	const reopened = createStore(storage);
+	assert.deepEqual(
+		(await reopened.listEntries()).map(({ id }) => id),
+		['beta', 'gamma'],
+	);
+	assert.deepEqual(legacyKeys(storage), []);
+	for (const key of removedByDelete) assert.equal(await storage.getItem(key), null);
+	const reachableAfterCleanup = await reachableV2Keys(storage);
+	assert.equal(
+		Object.keys(storage.snapshotDurable())
+			.filter((key) => /-v2-(?:manifest|entry|value)-/.test(key))
+			.every((key) => reachableAfterCleanup.has(key)),
+		true,
+	);
 });
 
 void test('every migration write interruption preserves durable v1 and can retry after restart', async () => {
@@ -123,6 +214,44 @@ void test('cleanup failures leave v2 readable and carry all legacy keys until re
 	storage.restart();
 	await createStore(storage).ensureReady();
 	assert.deepEqual(legacyKeys(storage), []);
+});
+
+void test('cleanup hash-provider failure cannot authorize deletion or rebuild', async () => {
+	const storage = await seedLegacy();
+	await createStore(storage).ensureReady();
+	storage.restart();
+	const before = storage.snapshotDurable();
+	const operationStart = storage.operationLog.length;
+	const failingSha256: Sha256 = async (bytes) => {
+		if (new TextDecoder().decode(bytes).includes('"garbageKey"')) {
+			throw new Error('cleanup hash provider failed');
+		}
+		return sha256(bytes);
+	};
+	const store = createTransactionalSecureStore({
+		namespace,
+		metadataSchema,
+		serializeValue: JSON.stringify,
+		parseValue: (raw) => JSON.parse(raw) as Value,
+		storage,
+		legacy: createLegacyChunkedStorageReader({
+			storagePrefix: namespace,
+			metadataSchema,
+			parseValue: (raw) => JSON.parse(raw) as Value,
+			storage,
+		}),
+		randomUUID: () => `migration-${++nextId}`,
+		sha256: failingSha256,
+	});
+
+	await assert.rejects(store.ensureReady(), /cleanup hash provider failed/);
+	assert.deepEqual(storage.snapshotDurable(), before);
+	assert.equal(
+		storage.operationLog
+			.slice(operationStart)
+			.some(({ type }) => type === 'set' || type === 'delete'),
+		false,
+	);
 });
 
 void test('malformed present v1 never becomes empty v2 and invalid v2 falls back only to readable legacy', async () => {
@@ -449,14 +578,23 @@ void test('anchored partial legacy cleanup survives every later mutation and ret
 		const reopened = createStore(storage);
 		assert.equal((await reopened.ensureReady()).cleanupPending, true);
 		const roots = buildV2Keys(namespace).root;
-		const anchoredBefore = JSON.parse((await storage.getItem(roots.b))!) as { cleanup: { headKey: string; pageCount: number; sha256: string } };
+		type RootWithCleanup = {
+			cleanup?: { headKey: string; pageCount: number; sha256: string };
+		};
+		const anchoredGarbageBefore = cleanupGarbageKeys(storage.snapshotDurable());
 		const legacyBeforeMutation = legacyKeys(storage);
 		await run(reopened);
-		const rootA = JSON.parse((await storage.getItem(roots.a))!) as typeof anchoredBefore;
-		const rootB = JSON.parse((await storage.getItem(roots.b))!) as typeof anchoredBefore;
+		const rootA = JSON.parse((await storage.getItem(roots.a))!) as RootWithCleanup;
+		const rootB = JSON.parse((await storage.getItem(roots.b))!) as RootWithCleanup;
 		const current = rootA.cleanup !== undefined ? rootA : rootB;
 		if (current.cleanup !== undefined) {
-			assert.deepEqual(current.cleanup, anchoredBefore.cleanup);
+			const anchoredGarbageAfter = cleanupGarbageKeys(storage.snapshotDurable());
+			assert.equal(
+				[...anchoredGarbageBefore].every((key) =>
+					anchoredGarbageAfter.has(key),
+				),
+				true,
+			);
 			assert.deepEqual(legacyKeys(storage), legacyBeforeMutation);
 		} else {
 			assert.deepEqual(legacyKeys(storage), [unrelated]);

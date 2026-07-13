@@ -31,7 +31,7 @@ type CommitOptions<Metadata extends object, Value> = {
 	base: ValidatedSnapshot<Metadata, Value>;
 	nextEntries: readonly SecureEntry<Metadata, Value>[];
 	targetSlots: readonly RootSlot[];
-	/** Undefined preserves the current descriptor; an array replaces it. */
+	/** An explicit array replaces an unreadable or completed prior inventory. */
 	cleanupKeys?: readonly string[];
 };
 
@@ -58,27 +58,63 @@ export function createTransactionWriter<Metadata extends object, Value>(
 		try {
 			attemptId = options.randomUUID();
 			snapshotId = attemptId;
+			const candidates = new Map<
+				RootSlot,
+				Awaited<ReturnType<typeof readRootCandidate<Metadata, Value>>>
+			>();
+			for (const slot of ['a', 'b'] as const) {
+				candidates.set(slot, await readRootCandidate(options, slot));
+			}
 			const orderedEntries = [...nextEntries].sort((left, right) =>
 				left.id < right.id ? -1 : left.id > right.id ? 1 : 0,
 			);
 			staged = await stageSnapshot(base, orderedEntries, attemptId, snapshotId);
-			if (cleanupKeys === undefined) {
-				staged.root.cleanup = base.root.cleanup;
-			} else {
-				const garbageKeys = [...new Set(cleanupKeys)].filter(
-					(key) =>
-						!staged.protectedKeys.has(key) &&
-						key !== keys.root.a &&
-						key !== keys.root.b &&
-						key !== keys.intent.a &&
-						key !== keys.intent.b,
-				);
-				staged.root.cleanup = await cleanupChain.stage(
-					staged.records,
-					attemptId,
-					garbageKeys,
-				);
+			if (staged.root.snapshotId !== attemptId) {
+				snapshotId = staged.root.snapshotId;
 			}
+			const garbageKeys = new Set(cleanupKeys ?? []);
+			const cleanupPages = new Map<RootSlot, readonly { key: string; garbageKey: string }[]>();
+			if (cleanupKeys === undefined) {
+				for (const slot of ['a', 'b'] as const) {
+					const candidate = candidates.get(slot)!;
+					if (candidate.status !== 'valid') continue;
+					const descriptor = candidate.snapshot.root.cleanup;
+					if (descriptor === undefined) continue;
+					const cleanup = await cleanupChain.read(descriptor);
+					if (cleanup.status !== 'valid') continue;
+					cleanupPages.set(slot, cleanup.pages);
+					for (const { garbageKey } of cleanup.pages) garbageKeys.add(garbageKey);
+				}
+			}
+			for (const slot of targetSlots) {
+				const candidate = candidates.get(slot)!;
+				if (candidate.status !== 'valid') continue;
+				for (const key of candidate.snapshot.reachableKeys) garbageKeys.add(key);
+				if (cleanupKeys === undefined) {
+					for (const { key } of cleanupPages.get(slot) ?? []) garbageKeys.add(key);
+				}
+			}
+			const protectedKeys = new Set<string>([
+				keys.root.a,
+				keys.root.b,
+				keys.intent.a,
+				keys.intent.b,
+			]);
+			for (const slot of ['a', 'b'] as const) {
+				if (targetSlots.includes(slot)) {
+					for (const key of staged.reachableKeys) protectedKeys.add(key);
+					continue;
+				}
+				const candidate = candidates.get(slot)!;
+				if (candidate.status !== 'valid') continue;
+				for (const key of candidate.snapshot.reachableKeys) protectedKeys.add(key);
+				for (const { key } of cleanupPages.get(slot) ?? []) protectedKeys.add(key);
+			}
+			staged.root.cleanup = await cleanupChain.stage(
+				staged.records,
+				attemptId,
+				[...garbageKeys].filter((key) => !protectedKeys.has(key)),
+			);
 			const journal = await intentJournal.write({
 				attemptId,
 				targetRootSlots: targetSlots,
@@ -136,8 +172,37 @@ export function createTransactionWriter<Metadata extends object, Value>(
 		attemptId: string,
 		snapshotId: string,
 	) {
+		const baseEntries = [...base.entries.values()].sort((left, right) =>
+			left.id < right.id ? -1 : left.id > right.id ? 1 : 0,
+		);
+		if (
+			entries.length === baseEntries.length &&
+			entries.every(
+				(entry, index) =>
+					entry.id === baseEntries[index]!.id &&
+					canonicalJson(entry.metadata) ===
+						canonicalJson(baseEntries[index]!.metadata) &&
+					options.serializeValue(entry.value) ===
+						options.serializeValue(baseEntries[index]!.value),
+			)
+		) {
+			return {
+				records: new Map<string, string>(),
+				reachableKeys: new Set(base.reachableKeys),
+				root: {
+					formatVersion: 2 as const,
+					namespace: options.namespace,
+					snapshotId: base.root.snapshotId,
+					manifestHeadKey: base.root.manifestHeadKey,
+					manifestPageCount: base.root.manifestPageCount,
+					entryCount: base.root.entryCount,
+					manifestSha256: base.root.manifestSha256,
+					cleanup: base.root.cleanup,
+				},
+			};
+		}
 		const records = new Map<string, string>();
-		const protectedKeys = new Set<string>();
+		const reachableKeys = new Set<string>();
 		const references: ManifestEntryRefV2[] = [];
 		for (const [entryIndex, entry] of entries.entries()) {
 			const serializedValue = options.serializeValue(entry.value);
@@ -151,7 +216,7 @@ export function createTransactionWriter<Metadata extends object, Value>(
 				prior.valueByteLength === valueBytes.byteLength;
 			if (reuseValue) {
 				for (let chunkIndex = 0; chunkIndex < prior.valueChunkCount; chunkIndex++) {
-					protectedKeys.add(keys.value(prior.valueRecordId, chunkIndex));
+					reachableKeys.add(keys.value(prior.valueRecordId, chunkIndex));
 				}
 			}
 			const valueRecordId = reuseValue
@@ -159,7 +224,9 @@ export function createTransactionWriter<Metadata extends object, Value>(
 				: `${attemptId}-${entryIndex}`;
 			const chunks = reuseValue ? [] : encodeValueChunks(serializedValue);
 			for (const [chunkIndex, chunk] of chunks.entries()) {
-				records.set(keys.value(valueRecordId, chunkIndex), chunk);
+				const valueKey = keys.value(valueRecordId, chunkIndex);
+				records.set(valueKey, chunk);
+				reachableKeys.add(valueKey);
 			}
 			const unchanged =
 				reuseValue &&
@@ -177,7 +244,7 @@ export function createTransactionWriter<Metadata extends object, Value>(
 					revisionKey: priorReference.key,
 					revisionSha256: priorReference.sha256,
 				});
-				protectedKeys.add(priorReference.key);
+				reachableKeys.add(priorReference.key);
 				continue;
 			}
 			const revisionId = `${attemptId}-${entryIndex}`;
@@ -195,6 +262,7 @@ export function createTransactionWriter<Metadata extends object, Value>(
 			const revisionKey = keys.entry(attemptId, entryIndex);
 			const raw = canonicalJson(revision);
 			records.set(revisionKey, raw);
+			reachableKeys.add(revisionKey);
 			references.push({
 				entryId: entry.id,
 				revisionKey,
@@ -222,11 +290,12 @@ export function createTransactionWriter<Metadata extends object, Value>(
 				keys.manifest(attemptId, pageIndex),
 				canonicalJson(schemas.manifestPage.parse({ ...body, pageSha256 })),
 			);
+			reachableKeys.add(keys.manifest(attemptId, pageIndex));
 		}
-		for (const reference of references) protectedKeys.add(reference.revisionKey);
+		for (const reference of references) reachableKeys.add(reference.revisionKey);
 		return {
 			records,
-			protectedKeys,
+			reachableKeys,
 			root: {
 				formatVersion: 2 as const,
 				namespace: options.namespace,

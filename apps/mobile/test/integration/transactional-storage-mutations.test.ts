@@ -4,12 +4,15 @@ import test from 'node:test';
 import { z } from 'zod';
 import {
 	createTransactionalSecureStore,
+	SecureStorageUnavailableError,
 	SecureStorageWriteNotCommittedError,
+	type AsyncStringStorage,
 	type LegacySnapshotReader,
 	type SecureEntry,
 	type Sha256,
 } from '../../src/lib/transactional-secure-storage';
 import { buildV2Keys } from '../../src/lib/transactional-secure-storage/records';
+import { readRootCandidate } from '../../src/lib/transactional-secure-storage/snapshot-reader';
 import {
 	FaultInjectingStringStorage,
 	type StorageFault,
@@ -45,7 +48,7 @@ const second: Entry = {
 
 let nextId = 0;
 
-function createStore(storage: FaultInjectingStringStorage) {
+function createStore(storage: AsyncStringStorage) {
 	return createTransactionalSecureStore({
 		namespace,
 		metadataSchema,
@@ -56,6 +59,43 @@ function createStore(storage: FaultInjectingStringStorage) {
 		randomUUID: () => `uuid-${++nextId}`,
 		sha256,
 	});
+}
+
+async function reachableKeys(storage: AsyncStringStorage) {
+	const reachable = new Set<string>();
+	for (const slot of ['a', 'b'] as const) {
+		const candidate = await readRootCandidate(
+			{ namespace, metadataSchema, parseValue, storage, sha256 },
+			slot,
+		);
+		if (candidate.status !== 'valid') continue;
+		for (const key of candidate.snapshot.reachableKeys) reachable.add(key);
+	}
+	return reachable;
+}
+
+function cleanupGarbageKeys(records: Record<string, string>) {
+	const keys = buildV2Keys(namespace);
+	const garbage = new Set<string>();
+	for (const rootKey of [keys.root.a, keys.root.b]) {
+		const rawRoot = records[rootKey];
+		if (rawRoot === undefined) continue;
+		let pageKey = (JSON.parse(rawRoot) as { cleanup?: { headKey: string } })
+			.cleanup?.headKey;
+		const visited = new Set<string>();
+		while (pageKey !== undefined && !visited.has(pageKey)) {
+			visited.add(pageKey);
+			const rawPage = records[pageKey];
+			if (rawPage === undefined) break;
+			const page = JSON.parse(rawPage) as {
+				garbageKey: string;
+				nextPageKey?: string;
+			};
+			garbage.add(page.garbageKey);
+			pageKey = page.nextPageKey;
+		}
+	}
+	return garbage;
 }
 
 async function seedEmptyPair() {
@@ -128,6 +168,52 @@ void test('replace-all and upsert publish a canonical snapshot and reuse an unch
 				key === buildV2Keys(namespace).intent.b,
 		),
 		false,
+	);
+});
+
+void test('repeated value rotations inventory and eventually remove every unreachable immutable record', async () => {
+	const storage = await seedEmptyPair();
+	const store = createStore(storage);
+	await store.upsertEntry(first);
+	for (const secret of ['two', 'three', 'four']) {
+		await store.upsertEntry({ ...first, value: { secret } });
+	}
+	await store.replaceAllEntries([
+		{ ...first, value: { secret: 'five' } },
+		second,
+	]);
+	await store.replaceAllEntries([
+		{ ...first, value: { secret: 'six' } },
+		second,
+	]);
+
+	const beforeCleanup = storage.snapshotDurable();
+	const reachable = await reachableKeys(storage);
+	const immutable = Object.keys(beforeCleanup).filter((key) =>
+		/-v2-(?:manifest|entry|value)-/.test(key),
+	);
+	const unreachable = immutable.filter((key) => !reachable.has(key));
+	const garbage = cleanupGarbageKeys(beforeCleanup);
+	assert.ok(unreachable.length > 0);
+	assert.equal(
+		unreachable.every((key) => garbage.has(key)),
+		true,
+		'no overwritten immutable record may become undiscoverable',
+	);
+	assert.equal(
+		[...garbage].every((key) => !reachable.has(key)),
+		true,
+		'cleanup must exclude both-root reachable and shared reused records',
+	);
+
+	await store.retryCleanup();
+	const afterCleanup = storage.snapshotDurable();
+	const reachableAfterCleanup = await reachableKeys(storage);
+	assert.equal(
+		Object.keys(afterCleanup)
+			.filter((key) => /-v2-(?:manifest|entry|value)-/.test(key))
+			.every((key) => reachableAfterCleanup.has(key)),
+		true,
 	);
 });
 
@@ -278,19 +364,20 @@ void test('delete publishes both roots before deleting unreachable value records
 			({ type, key }) =>
 				type === 'set' && (key === keys.root.a || key === keys.root.b),
 		);
-	assert.equal(rootWrites.length, 4);
+	assert.ok(rootWrites.length >= 4);
+	const deleteRootWrites = rootWrites.slice(-4);
 	assert.deepEqual(
-		rootWrites.slice(0, 2).map(({ key }) => key),
-		[keys.root.b, keys.root.a],
+		new Set(deleteRootWrites.slice(0, 2).map(({ key }) => key)),
+		new Set([keys.root.a, keys.root.b]),
 	);
-	assert.ok(rootWrites[0]!.index < rootWrites[1]!.index);
+	assert.ok(deleteRootWrites[0]!.index < deleteRootWrites[1]!.index);
 	const firstGarbageDelete = operations.findIndex(
 		({ type, key }) =>
 			type === 'delete' &&
 			(key.includes('-v2-entry-') || key.includes('-v2-value-')),
 	);
-	assert.ok(firstGarbageDelete > rootWrites[1]!.index);
-	assert.ok(rootWrites[2]!.index > firstGarbageDelete);
+	assert.ok(firstGarbageDelete > deleteRootWrites[1]!.index);
+	assert.ok(deleteRootWrites[2]!.index > firstGarbageDelete);
 
 	const roots = await Promise.all([
 		storage.getItem(keys.root.a),
@@ -422,6 +509,72 @@ void test('intent recovery preserves pending cleanup pages for retry', async () 
 		),
 		[],
 	);
+});
+
+void test('a transient cleanup-page read failure preserves the rooted chain and retained intent', async () => {
+	const durableOld = await seedOldState();
+	const successful = new FaultInjectingStringStorage(durableOld);
+	await createStore(successful).deleteEntry(first.id);
+	const operations = mutationOperations(successful);
+	const garbageDelete = operations.findIndex(
+		({ type, key }) =>
+			type === 'delete' &&
+			(key.includes('-v2-entry-') || key.includes('-v2-value-')),
+	);
+	const pendingTemplate = new FaultInjectingStringStorage(durableOld);
+	pendingTemplate.failOperation(garbageDelete + 1, 'delete-noop');
+	await createStore(pendingTemplate).deleteEntry(first.id);
+	const planDeletes = mutationOperations(pendingTemplate)
+		.map((operation, index) => ({ ...operation, operation: index + 1 }))
+		.filter(
+			({ type, key }) =>
+				type === 'delete' && key.includes('-v2-intent-plan-'),
+		);
+
+	const storage = new FaultInjectingStringStorage(durableOld);
+	storage.failOperation(garbageDelete + 1, 'delete-noop');
+	for (const { operation } of planDeletes) {
+		storage.failOperation(operation, 'delete-noop');
+	}
+	await createStore(storage).deleteEntry(first.id);
+	storage.restart();
+	const keys = buildV2Keys(namespace);
+	const root = JSON.parse((await storage.getItem(keys.root.a))!) as {
+		cleanup: { headKey: string };
+	};
+	const beforeOpen = storage.snapshotDurable();
+	let failCleanupRead = true;
+	const transientStorage: AsyncStringStorage = {
+		getItem: async (key) => {
+			if (failCleanupRead && key === root.cleanup.headKey) {
+				throw new Error('transient cleanup read failure');
+			}
+			return storage.getItem(key);
+		},
+		setItem: storage.setItem.bind(storage),
+		deleteItem: storage.deleteItem.bind(storage),
+	};
+	const operationStart = storage.operationLog.length;
+
+	await assert.rejects(
+		createStore(transientStorage).ensureReady(),
+		SecureStorageUnavailableError,
+	);
+	assert.deepEqual(storage.snapshotDurable(), beforeOpen);
+	assert.equal(
+		storage.operationLog
+			.slice(operationStart)
+			.some(({ type }) => type === 'delete'),
+		false,
+	);
+
+	failCleanupRead = false;
+	storage.restart();
+	const reopened = createStore(transientStorage);
+	assert.equal(await reopened.getEntry(first.id), null);
+	assert.notEqual(await storage.getItem(root.cleanup.headKey), null);
+	await reopened.retryCleanup();
+	assert.equal((await reopened.ensureReady()).cleanupPending, false);
 });
 
 void test('does not fail a durable delete when cleanup-head reading fails', async () => {

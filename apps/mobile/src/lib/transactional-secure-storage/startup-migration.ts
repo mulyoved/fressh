@@ -4,7 +4,6 @@ import { canonicalJson, encodeValueChunks } from './codec';
 import {
 	type AsyncStringStorage,
 	type LegacySnapshot,
-	type RootSlot,
 	type Sha256,
 } from './contracts';
 import { createIntentJournal } from './intent-journal';
@@ -138,20 +137,6 @@ export function createStartupMigration<Metadata extends object, Value>(
 		await intentJournal.complete(attemptId, journal.pageCount);
 	}
 
-	async function mirror(snapshot: ValidatedSnapshot<Metadata, Value>) {
-		const other: RootSlot = snapshot.slot === 'a' ? 'b' : 'a';
-		const raw = await options.storage.getItem(keys.root[snapshot.slot]);
-		if (raw === null) throw new Error('Selected root disappeared');
-		await writeValidated(keys.root[other], raw);
-		const candidate = await readRootCandidate(options, other);
-		if (
-			candidate.status !== 'valid' ||
-			candidate.snapshot.root.snapshotId !== snapshot.root.snapshotId
-		) {
-			throw new Error('Mirrored root validation failed');
-		}
-	}
-
 	function sameSnapshot(
 		left: ValidatedSnapshot<Metadata, Value>,
 		right: ValidatedSnapshot<Metadata, Value>,
@@ -171,5 +156,5 @@ export function createStartupMigration<Metadata extends object, Value>(
 		}
 	}
 
-	return { initialize, mirror, sameSnapshot };
+	return { initialize, sameSnapshot };
 }
