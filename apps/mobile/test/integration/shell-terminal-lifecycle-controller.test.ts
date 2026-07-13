@@ -46,6 +46,17 @@ function createHarness(
 	}[] = [];
 	const transportCalls: string[] = [];
 	const sizeCalls: string[] = [];
+	const xtermDiagnostics = {
+		webViewInstanceId: 'bridge-instance-1',
+		rnQueuedMessages: 3,
+		rnQueuedBytes: 30,
+		rnFlushes: 1,
+		rnSentMessages: 2,
+		rnSentBytes: 20,
+		webViewReceivedMessages: 2,
+		webViewReceivedBytes: 20,
+		webViewCompletedWrites: 2,
+	};
 	let systemKeyboardEnabled = platformOS === 'android';
 	let selectionModeEnabled = false;
 	let nextListenerId = 1n;
@@ -67,6 +78,15 @@ function createHarness(
 			listenerCursors: [] as unknown[],
 			removedListenerIds: [] as bigint[],
 			listeners: new Map(),
+			bufferStats: () => ({
+				ringBytesCount: 0n,
+				usedBytes: 0n,
+				headSeq: 0n,
+				tailSeq: 0n,
+				droppedBytesTotal: 0n,
+				chunksCount: 0n,
+			}),
+			currentSeq: () => 0,
 			readBuffer(cursor: { mode: string }) {
 				this.readModes.push(cursor.mode);
 				return {
@@ -99,6 +119,7 @@ function createHarness(
 	};
 
 	const xterm = {
+		getOutputDiagnostics: () => ({ ...xtermDiagnostics }),
 		write: (bytes: Uint8Array) => {
 			calls.push(`write:${Array.from(bytes)}`);
 		},
@@ -175,6 +196,102 @@ function createHarness(
 		},
 	};
 }
+
+void test('terminal lifecycle snapshots native, listener, and xterm output progress without payloads', async () => {
+	const harness = createHarness();
+	harness.shellA.bufferStats = () => ({
+		ringBytesCount: 1_000n,
+		usedBytes: 20n,
+		headSeq: 4n,
+		tailSeq: 8n,
+		droppedBytesTotal: 0n,
+		chunksCount: 5n,
+	});
+	harness.shellA.currentSeq = () => 9;
+	harness.core.setShell(
+		createShellTransportKey('connection-a', 7),
+		harness.shellA,
+	);
+	harness.core.handleInitialized('instance-1');
+	await harness.core.attach();
+	const listener = harness.shellA.listeners.get(1n);
+	assert.ok(listener);
+	listener({
+		seq: 8n,
+		tMs: 1,
+		stream: 'stdout',
+		bytes: new Uint8Array([1, 2]).buffer,
+	});
+	listener({
+		seq: 9n,
+		tMs: 2,
+		stream: 'stdout',
+		bytes: new Uint8Array([3]).buffer,
+	});
+
+	const snapshot = harness.core.getOutputDiagnostics();
+	assert.deepEqual(snapshot, {
+		connectionId: 'connection-a',
+		channelId: 7,
+		runtimeInstanceId: 'instance-1',
+		native: {
+			currentSeq: '9',
+			ringBytesCount: '1000',
+			usedBytes: '20',
+			headSeq: '4',
+			tailSeq: '8',
+			droppedBytesTotal: '0',
+			chunksCount: '5',
+		},
+		listener: { events: 2, bytes: 3, lastSeq: '9', droppedEvents: 0 },
+		xterm: harness.xterm.getOutputDiagnostics(),
+	});
+	assert.deepEqual(harness.core.getOutputDiagnostics(), snapshot);
+	assert.notEqual(harness.core.getOutputDiagnostics(), snapshot);
+});
+
+void test('terminal lifecycle resets listener progress only with the runtime revision and never serializes event bytes', async () => {
+	const harness = createHarness();
+	const keyA = createShellTransportKey('connection-a', 7);
+	harness.core.setShell(keyA, harness.shellA);
+	harness.core.handleInitialized('instance-1');
+	await harness.core.attach();
+	const listener = harness.shellA.listeners.get(1n);
+	assert.ok(listener);
+	const sentinel = 'DO_NOT_LOG_TERMINAL_PAYLOAD_4f9d';
+	listener({
+		seq: 10n,
+		tMs: 1,
+		stream: 'stdout',
+		bytes: new TextEncoder().encode(sentinel).buffer,
+	});
+	listener({ kind: 'dropped', fromSeq: 11n, toSeq: 12n });
+	assert.deepEqual(harness.core.getOutputDiagnostics()?.listener, {
+		events: 1,
+		bytes: sentinel.length,
+		lastSeq: '10',
+		droppedEvents: 1,
+	});
+	assert.doesNotMatch(
+		JSON.stringify(harness.core.getOutputDiagnostics()),
+		new RegExp(sentinel),
+	);
+
+	harness.core.setShell(keyA, harness.shellA);
+	assert.equal(harness.core.getOutputDiagnostics()?.listener.events, 1);
+	harness.core.setShell(
+		createShellTransportKey('connection-b', 8),
+		harness.shellB,
+	);
+	harness.core.handleInitialized('instance-2');
+	await harness.core.attach();
+	assert.deepEqual(harness.core.getOutputDiagnostics()?.listener, {
+		events: 0,
+		bytes: 0,
+		lastSeq: null,
+		droppedEvents: 0,
+	});
+});
 
 void test('terminal lifecycle replays head buffer on first attach then uses live cursor', async () => {
 	const harness = createHarness();
@@ -973,6 +1090,15 @@ void test('dispose stales the real transport lease before removal warning can se
 	const shell: TerminalLifecycleShell = {
 		connectionId: 'connection-a',
 		channelId: 7,
+		bufferStats: () => ({
+			ringBytesCount: 0n,
+			usedBytes: 0n,
+			headSeq: 0n,
+			tailSeq: 0n,
+			droppedBytesTotal: 0n,
+			chunksCount: 0n,
+		}),
+		currentSeq: () => 0,
 		readBuffer: () => ({ chunks: [], nextSeq: 1n }),
 		addListener: () => 1n,
 		removeListener: () => {
@@ -981,6 +1107,17 @@ void test('dispose stales the real transport lease before removal warning can se
 		},
 	};
 	const xterm = {
+		getOutputDiagnostics: () => ({
+			webViewInstanceId: null,
+			rnQueuedMessages: 0,
+			rnQueuedBytes: 0,
+			rnFlushes: 0,
+			rnSentMessages: 0,
+			rnSentBytes: 0,
+			webViewReceivedMessages: 0,
+			webViewReceivedBytes: 0,
+			webViewCompletedWrites: 0,
+		}),
 		write: () => {},
 		writeMany: () => {},
 		flush: () => {},

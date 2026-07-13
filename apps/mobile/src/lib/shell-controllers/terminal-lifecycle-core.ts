@@ -3,6 +3,7 @@ import type {
 	BufferReadResult,
 	Cursor,
 	ListenerEvent,
+	SshShell,
 } from '@fressh/react-native-uniffi-russh';
 // eslint-disable-next-line import/consistent-type-specifier-style -- Avoid loading the React Native WebView package in Node core tests.
 import type { XtermWebViewHandle } from '@fressh/react-native-xtermjs-webview';
@@ -14,6 +15,7 @@ import {
 } from './controller-core';
 // eslint-disable-next-line import/consistent-type-specifier-style -- A pure type import must not become a runtime dependency in Node tests.
 import type { ShellTransportKey } from './source-keys';
+import { type TerminalOutputDiagnosticSnapshot } from './terminal-output-diagnostics';
 // eslint-disable-next-line import/consistent-type-specifier-style -- A pure type import keeps the transport implementation out of core tests.
 import type { TerminalRuntimeKey } from './terminal-transport';
 
@@ -22,6 +24,8 @@ type MaybePromise<T> = T | Promise<T>;
 export type TerminalLifecycleShell = ShellListenerOwner & {
 	readonly connectionId: string;
 	readonly channelId: number;
+	bufferStats(): ReturnType<SshShell['bufferStats']>;
+	currentSeq(): ReturnType<SshShell['currentSeq']>;
 	readBuffer(cursor: Cursor): MaybePromise<BufferReadResult>;
 	addListener(
 		listener: (event: ListenerEvent) => void,
@@ -51,6 +55,7 @@ export type TerminalLifecycleController =
 		detach(): void;
 		getRuntimeKey(): TerminalRuntimeKey | null;
 		getRuntimeInstanceId(): string | null;
+		getOutputDiagnostics(): TerminalOutputDiagnosticSnapshot | null;
 		isCurrentInstance(instanceId: string): boolean;
 		isAttached(): boolean;
 	};
@@ -75,6 +80,7 @@ type LifecycleXterm = Pick<
 	| 'write'
 	| 'writeMany'
 	| 'flush'
+	| 'getOutputDiagnostics'
 	| 'focus'
 	| 'setSystemKeyboardEnabled'
 	| 'setSelectionModeEnabled'
@@ -141,6 +147,22 @@ export function createTerminalLifecycleController({
 	let hasNotifiedRuntime = false;
 	let lastNotifiedRuntimeKey: TerminalRuntimeKey | null = null;
 	let lastNotifiedInstanceId: string | null = null;
+	let listenerProgress = {
+		events: 0,
+		bytes: 0,
+		lastSeq: null as string | null,
+		droppedEvents: 0,
+	};
+
+	const advanceRuntimeRevision = (): void => {
+		runtimeRevision += 1;
+		listenerProgress = {
+			events: 0,
+			bytes: 0,
+			lastSeq: null,
+			droppedEvents: 0,
+		};
+	};
 
 	const safeInfo = (message: string, details?: unknown): void => {
 		try {
@@ -254,8 +276,13 @@ export function createTerminalLifecycleController({
 				if (!isCurrent()) return;
 				safeInfo('readBuffer(head)', {
 					chunks: result.chunks.length,
-					nextSeq: result.nextSeq,
-					dropped: result.dropped,
+					nextSeq: result.nextSeq.toString(),
+					dropped: result.dropped
+						? {
+								fromSeq: result.dropped.fromSeq.toString(),
+								toSeq: result.dropped.toSeq.toString(),
+							}
+						: undefined,
 				});
 				if (!isCurrent()) return;
 				if (result.chunks.length > 0) {
@@ -272,9 +299,17 @@ export function createTerminalLifecycleController({
 			const listener = (event: ListenerEvent): void => {
 				if (!isCurrent()) return;
 				if ('kind' in event) {
-					safeWarn('listener.dropped', event);
+					listenerProgress.droppedEvents += 1;
+					safeWarn('listener.dropped', {
+						kind: event.kind,
+						fromSeq: event.fromSeq.toString(),
+						toSeq: event.toSeq.toString(),
+					});
 					return;
 				}
+				listenerProgress.events += 1;
+				listenerProgress.bytes += event.bytes.byteLength;
+				listenerProgress.lastSeq = event.seq.toString();
 				try {
 					xterm.write(new Uint8Array(event.bytes));
 				} catch (error) {
@@ -365,7 +400,7 @@ export function createTerminalLifecycleController({
 
 	const invalidateRuntime = (reason: ControllerInvalidationReason): void => {
 		const operationGeneration = ++generation;
-		runtimeRevision += 1;
+		advanceRuntimeRevision();
 		runtimeInstanceId = null;
 		runtimeKey = null;
 		const oldAttachment = takeAttachment();
@@ -402,7 +437,7 @@ export function createTerminalLifecycleController({
 			const transportChanged = transportKey !== nextTransportKey;
 			transportKey = nextTransportKey;
 			shell = normalizedShell;
-			if (transportChanged) runtimeRevision += 1;
+			if (transportChanged) advanceRuntimeRevision();
 			if (runtimeInstanceId && nextTransportKey) {
 				runtimeKey = createRuntimeKey(nextTransportKey, runtimeInstanceId);
 			} else {
@@ -425,7 +460,7 @@ export function createTerminalLifecycleController({
 		handleInitialized: (instanceId) => {
 			if (disposed) return;
 			const operationGeneration = ++generation;
-			runtimeRevision += 1;
+			advanceRuntimeRevision();
 			firstAttachedRevision = null;
 			runtimeInstanceId = instanceId;
 			runtimeKey = transportKey
@@ -452,6 +487,28 @@ export function createTerminalLifecycleController({
 		detach,
 		getRuntimeKey: () => runtimeKey,
 		getRuntimeInstanceId: () => runtimeInstanceId,
+		getOutputDiagnostics: () => {
+			const currentShell = shell;
+			if (!currentShell) return null;
+			const native = currentShell.bufferStats();
+			const xterm = getXterm()?.getOutputDiagnostics() ?? null;
+			return {
+				connectionId: currentShell.connectionId,
+				channelId: currentShell.channelId,
+				runtimeInstanceId,
+				native: {
+					currentSeq: currentShell.currentSeq().toString(),
+					ringBytesCount: native.ringBytesCount.toString(),
+					usedBytes: native.usedBytes.toString(),
+					headSeq: native.headSeq.toString(),
+					tailSeq: native.tailSeq.toString(),
+					droppedBytesTotal: native.droppedBytesTotal.toString(),
+					chunksCount: native.chunksCount.toString(),
+				},
+				listener: { ...listenerProgress },
+				xterm: xterm === null ? null : { ...xterm },
+			};
+		},
 		isCurrentInstance: (instanceId) => runtimeInstanceId === instanceId,
 		isAttached: () => attachment !== null,
 		invalidate: (reason) => {
@@ -462,7 +519,7 @@ export function createTerminalLifecycleController({
 			if (disposed) return;
 			disposed = true;
 			generation += 1;
-			runtimeRevision += 1;
+			advanceRuntimeRevision();
 			runtimeInstanceId = null;
 			runtimeKey = null;
 			const oldAttachment = takeAttachment();

@@ -113,6 +113,7 @@ export function createScrollbackHarness(
 	const terminalView = {
 		getRuntimeKey: () => null,
 		getRuntimeInstanceId: () => null,
+		getOutputDiagnostics: () => null,
 		isCurrentInstance: () => true,
 		fit: () => {},
 		setSystemKeyboardEnabled: () => {},

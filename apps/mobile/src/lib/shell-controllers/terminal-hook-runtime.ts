@@ -13,6 +13,7 @@ import {
 	type TerminalLifecycleController,
 	type TerminalLifecycleLogger,
 } from './terminal-lifecycle-core';
+import { type TerminalOutputDiagnosticSnapshot } from './terminal-output-diagnostics';
 import {
 	createTerminalSizeController,
 	type CreateTerminalSizeControllerInput,
@@ -44,6 +45,7 @@ export type ShellTerminalRuntimeDependencies = {
 export type ShellTerminalRuntimeView = {
 	getRuntimeKey(): TerminalRuntimeKey | null;
 	getRuntimeInstanceId(): string | null;
+	getOutputDiagnostics(): TerminalOutputDiagnosticSnapshot | null;
 	isCurrentInstance(instanceId: string): boolean;
 	fit(): void;
 	setSystemKeyboardEnabled(enabled: boolean): void;
@@ -184,6 +186,7 @@ export function createShellTerminalHookRuntime(input: {
 	const view: ShellTerminalRuntimeView = {
 		getRuntimeKey: lifecycle.getRuntimeKey,
 		getRuntimeInstanceId: lifecycle.getRuntimeInstanceId,
+		getOutputDiagnostics: lifecycle.getOutputDiagnostics,
 		isCurrentInstance: lifecycle.isCurrentInstance,
 		fit: () => input.xtermRef.current?.fit(),
 		setSystemKeyboardEnabled: (enabled) =>

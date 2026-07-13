@@ -2,9 +2,25 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { type ShellConfigState } from '../../src/lib/shell-config-store';
 import {
-	createShellKeyboardRemoteCore,
+	createShellKeyboardRemoteCore as createShellKeyboardRemoteCoreImpl,
+	type CreateShellKeyboardRemoteCoreOptions,
 	type ShellKeyboardRemoteTargetContext,
 } from '../../src/lib/shell-controllers/keyboard-remote-core';
+
+type KeyboardRemoteTestOptions = Omit<
+	CreateShellKeyboardRemoteCoreOptions,
+	'readTerminalOutputDiagnostics'
+> &
+	Partial<
+		Pick<CreateShellKeyboardRemoteCoreOptions, 'readTerminalOutputDiagnostics'>
+	>;
+
+function createShellKeyboardRemoteCore(options: KeyboardRemoteTestOptions) {
+	return createShellKeyboardRemoteCoreImpl({
+		readTerminalOutputDiagnostics: () => null,
+		...options,
+	});
+}
 
 function deferred<Value>() {
 	let resolve!: (value: Value) => void;
@@ -124,6 +140,35 @@ function remoteStateSnapshot(version = 'current') {
 	return { shellConfigState: configState(version) };
 }
 
+function outputSnapshot(instanceId: string) {
+	return {
+		connectionId: 'connection:main',
+		channelId: 1,
+		runtimeInstanceId: instanceId,
+		native: {
+			currentSeq: '9',
+			ringBytesCount: '1000',
+			usedBytes: '20',
+			headSeq: '4',
+			tailSeq: '8',
+			droppedBytesTotal: '0',
+			chunksCount: '5',
+		},
+		listener: { events: 2, bytes: 3, lastSeq: '9', droppedEvents: 0 },
+		xterm: {
+			webViewInstanceId: instanceId,
+			rnQueuedMessages: 2,
+			rnQueuedBytes: 3,
+			rnFlushes: 0,
+			rnSentMessages: 2,
+			rnSentBytes: 3,
+			webViewReceivedMessages: 2,
+			webViewReceivedBytes: 3,
+			webViewCompletedWrites: 2,
+		},
+	};
+}
+
 void test('keyboard remote core suppresses stale status failure', async () => {
 	const harness = createKeyboardRemoteHarness();
 	const pending = harness.core.runWorkmuxCommand({ type: 'status-cycle' });
@@ -206,6 +251,163 @@ void test('keyboard remote core instruments failed Workmux command results', asy
 	assert.deepEqual(info, [
 		'Workmux keyboard command start',
 		'Workmux keyboard command result',
+	]);
+});
+
+void test('keyboard remote core snapshots terminal output before and after a resolved Work command', async () => {
+	const before = outputSnapshot('instance-before');
+	const after = outputSnapshot('instance-after');
+	const snapshots = [before, after];
+	const order: string[] = [];
+	const info: { message: string; details?: unknown }[] = [];
+	const target = createKeyboardRemoteHarness().target('main');
+	target.workmuxControlChannel = {
+		...target.workmuxControlChannel,
+		command: async () => {
+			order.push('command');
+			return { success: true, output: 'cycled' };
+		},
+	};
+	const core = createShellKeyboardRemoteCore({
+		initialTargetContext: target,
+		getActivitySnapshot: () => ({
+			focused: true,
+			appActive: true,
+			interactive: true,
+			generation: 0,
+		}),
+		getNavScope: () => 'visible',
+		keyboardState: {
+			getSnapshot: () => remoteStateSnapshot(),
+			setShellConfigState: () => {},
+		},
+		reloadRuntimeShellConfig: async () => configState('remote'),
+		closeCommandMenu: () => {},
+		showAlert: () => {},
+		invalidateShellTransport: () => {},
+		readTerminalOutputDiagnostics: () => {
+			order.push(`read:${snapshots.length}`);
+			return snapshots.shift() ?? null;
+		},
+		logger: {
+			info: (message, details) => {
+				info.push({ message, details });
+				if (message === 'Terminal output diagnostics') {
+					order.push(`log:${(details as { phase: string }).phase}`);
+				}
+			},
+			warn: () => {},
+		},
+	});
+
+	assert.deepEqual(await core.runWorkmuxCommand({ type: 'status-cycle' }), {
+		status: 'handled',
+	});
+	assert.deepEqual(
+		info.filter((entry) => entry.message === 'Terminal output diagnostics'),
+		[
+			{
+				message: 'Terminal output diagnostics',
+				details: { phase: 'before', snapshot: before },
+			},
+			{
+				message: 'Terminal output diagnostics',
+				details: { phase: 'after', snapshot: after },
+			},
+		],
+	);
+	assert.deepEqual(order, [
+		'read:2',
+		'log:before',
+		'command',
+		'read:1',
+		'log:after',
+	]);
+});
+
+void test('keyboard remote core snapshots terminal output after a rejected Work command', async () => {
+	const before = outputSnapshot('instance-before');
+	const after = outputSnapshot('instance-after');
+	const snapshots = [before, after];
+	const diagnostics: unknown[] = [];
+	const target = createKeyboardRemoteHarness().target('main');
+	target.workmuxControlChannel = {
+		...target.workmuxControlChannel,
+		command: async () => {
+			throw new Error('transport failed');
+		},
+	};
+	const core = createShellKeyboardRemoteCore({
+		initialTargetContext: target,
+		getActivitySnapshot: () => ({
+			focused: true,
+			appActive: true,
+			interactive: true,
+			generation: 0,
+		}),
+		getNavScope: () => 'visible',
+		keyboardState: {
+			getSnapshot: () => remoteStateSnapshot(),
+			setShellConfigState: () => {},
+		},
+		reloadRuntimeShellConfig: async () => configState('remote'),
+		closeCommandMenu: () => {},
+		showAlert: () => {},
+		invalidateShellTransport: () => {},
+		readTerminalOutputDiagnostics: () => snapshots.shift() ?? null,
+		logger: {
+			info: (message, details) => {
+				if (message === 'Terminal output diagnostics')
+					diagnostics.push(details);
+			},
+			warn: () => {},
+		},
+	});
+
+	assert.deepEqual(await core.runWorkmuxCommand({ type: 'status-cycle' }), {
+		status: 'handled',
+	});
+	assert.deepEqual(diagnostics, [
+		{ phase: 'before', snapshot: before },
+		{ phase: 'after', snapshot: after },
+	]);
+});
+
+void test('keyboard remote core contains terminal diagnostic sampling failures', async () => {
+	const harness = createKeyboardRemoteHarness();
+	const warnings: string[] = [];
+	const core = createShellKeyboardRemoteCore({
+		initialTargetContext: harness.initialTarget,
+		getActivitySnapshot: () => ({
+			focused: true,
+			appActive: true,
+			interactive: true,
+			generation: 0,
+		}),
+		getNavScope: () => 'visible',
+		keyboardState: {
+			getSnapshot: () => remoteStateSnapshot(),
+			setShellConfigState: () => {},
+		},
+		reloadRuntimeShellConfig: async () => configState('remote'),
+		closeCommandMenu: () => {},
+		showAlert: () => {},
+		invalidateShellTransport: () => {},
+		readTerminalOutputDiagnostics: () => {
+			throw new Error('bufferStats failed');
+		},
+		logger: {
+			info: () => {},
+			warn: (message) => warnings.push(message),
+		},
+	});
+	const pending = core.runWorkmuxCommand({ type: 'status-cycle' });
+	harness.command.resolve({ success: true, output: 'cycled' });
+
+	assert.deepEqual(await pending, { status: 'handled' });
+	assert.deepEqual(warnings, [
+		'Failed to read terminal output diagnostics',
+		'Failed to read terminal output diagnostics',
 	]);
 });
 
