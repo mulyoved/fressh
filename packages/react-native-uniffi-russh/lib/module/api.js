@@ -38,6 +38,34 @@ import * as GeneratedRussh from "./index.js";
 
 export const DEFAULT_RUN_COMMAND_MAX_OUTPUT_BYTES = Number(GeneratedRussh.defaultRunCommandMaxOutputBytes());
 export const MAX_RUN_COMMAND_MAX_OUTPUT_BYTES = Number(GeneratedRussh.maxRunCommandMaxOutputBytes());
+function traceStack(label) {
+  return (new Error(label).stack ?? '').split('\n').slice(1, 10);
+}
+function describeSignal(signal) {
+  if (!signal) {
+    return {
+      hasSignal: false,
+      aborted: false,
+      reason: undefined
+    };
+  }
+  const reason = signal.reason;
+  return {
+    hasSignal: true,
+    aborted: signal.aborted,
+    reason: reason === undefined ? undefined : reason instanceof Error ? {
+      name: reason.name,
+      message: reason.message
+    } : String(reason)
+  };
+}
+function isRusshApiTraceEnabled() {
+  return process.env.FRESSH_RUSSH_TRACE !== undefined;
+}
+function traceRusshApi(message, meta) {
+  if (!isRusshApiTraceEnabled()) return;
+  console.info(`RusshApiTrace ${message}`, meta);
+}
 function maxOutputBytesToGenerated(maxOutputBytes) {
   if (maxOutputBytes === undefined) {
     return undefined;
@@ -171,15 +199,23 @@ function wrapShellSession(shell) {
     sendData: (data, o) => shell.sendData(data, o?.signal ? {
       signal: o.signal
     } : undefined),
-    close: o => shell.close(o?.signal ? {
-      signal: o.signal
-    } : undefined),
+    close: o => {
+      traceRusshApi('shell close requested', {
+        connectionId: info.connectionId,
+        channelId: info.channelId,
+        signal: describeSignal(o?.signal),
+        stack: traceStack('RusshApiTrace shell close requested')
+      });
+      return shell.close(o?.signal ? {
+        signal: o.signal
+      } : undefined);
+    },
     resizePty: (cols, rows, o) => shell.resizePty(cols, rows, o?.pixelWidth ?? undefined, o?.pixelHeight ?? undefined, o?.signal ? {
       signal: o.signal
     } : undefined),
     // setBufferPolicy,
-    bufferStats: shell.bufferStats,
-    currentSeq: () => Number(shell.currentSeq()),
+    bufferStats: () => shell.bufferStats(),
+    currentSeq: () => shell.currentSeq(),
     readBuffer,
     addListener,
     removeListener: id => shell.removeListener(id)
@@ -266,37 +302,89 @@ function wrapConnection(conn) {
       command,
       maxOutputBytes
     }, asyncOpts) => {
-      const result = await conn.runCommand({
-        command,
-        maxOutputBytes: maxOutputBytesToGenerated(maxOutputBytes)
-      }, asyncOpts?.signal ? {
-        signal: asyncOpts.signal
-      } : undefined);
-      return {
-        stdout: result.stdout,
-        stderr: result.stderr,
-        exitStatus: result.exitStatus ?? null,
-        exitSignal: result.exitSignal ?? null
-      };
+      const startedAtMs = Date.now();
+      traceRusshApi('runCommand requested', {
+        connectionId: info.connectionId,
+        commandLen: command.length,
+        maxOutputBytes,
+        signal: describeSignal(asyncOpts?.signal)
+      });
+      try {
+        const result = await conn.runCommand({
+          command,
+          maxOutputBytes: maxOutputBytesToGenerated(maxOutputBytes)
+        }, asyncOpts?.signal ? {
+          signal: asyncOpts.signal
+        } : undefined);
+        traceRusshApi('runCommand resolved', {
+          connectionId: info.connectionId,
+          elapsedMs: Date.now() - startedAtMs,
+          stdoutBytes: result.stdout.byteLength,
+          stderrBytes: result.stderr.byteLength,
+          exitStatus: result.exitStatus ?? null,
+          exitSignal: result.exitSignal ?? null
+        });
+        return {
+          stdout: result.stdout,
+          stderr: result.stderr,
+          exitStatus: result.exitStatus ?? null,
+          exitSignal: result.exitSignal ?? null
+        };
+      } catch (error) {
+        traceRusshApi('runCommand rejected', {
+          connectionId: info.connectionId,
+          elapsedMs: Date.now() - startedAtMs,
+          error: error instanceof Error ? error.message : String(error)
+        });
+        throw error;
+      }
     },
     startCommandStream: async ({
       command,
       onEvent,
       abortSignal
     }) => {
-      const stream = await conn.startCommandStream({
-        command,
-        onEventCallback: {
-          onEvent: event => onEvent(toCommandStreamEvent(event))
-        }
-      }, abortSignal ? {
-        signal: abortSignal
-      } : undefined);
-      return wrapCommandStream(stream);
+      const startedAtMs = Date.now();
+      traceRusshApi('startCommandStream requested', {
+        connectionId: info.connectionId,
+        commandLen: command.length,
+        signal: describeSignal(abortSignal)
+      });
+      try {
+        const stream = await conn.startCommandStream({
+          command,
+          onEventCallback: {
+            onEvent: event => onEvent(toCommandStreamEvent(event))
+          }
+        }, abortSignal ? {
+          signal: abortSignal
+        } : undefined);
+        const wrapped = wrapCommandStream(stream);
+        traceRusshApi('startCommandStream resolved', {
+          connectionId: info.connectionId,
+          channelId: wrapped.channelId,
+          elapsedMs: Date.now() - startedAtMs
+        });
+        return wrapped;
+      } catch (error) {
+        traceRusshApi('startCommandStream rejected', {
+          connectionId: info.connectionId,
+          elapsedMs: Date.now() - startedAtMs,
+          error: error instanceof Error ? error.message : String(error)
+        });
+        throw error;
+      }
     },
-    disconnect: opts => conn.disconnect(opts?.signal ? {
-      signal: opts.signal
-    } : undefined)
+    disconnect: opts => {
+      traceRusshApi('connection disconnect requested', {
+        connectionId: info.connectionId,
+        signal: describeSignal(opts?.signal),
+        stack: traceStack('RusshApiTrace connection disconnect requested')
+      });
+      return conn.disconnect(opts?.signal ? {
+        signal: opts.signal
+      } : undefined);
+    }
   };
 }
 async function connect({

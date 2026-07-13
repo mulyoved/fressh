@@ -86,7 +86,7 @@ function createHarness(
 				droppedBytesTotal: 0n,
 				chunksCount: 0n,
 			}),
-			currentSeq: () => 0,
+			currentSeq: () => 0n,
 			readBuffer(cursor: { mode: string }) {
 				this.readModes.push(cursor.mode);
 				return {
@@ -199,6 +199,7 @@ function createHarness(
 
 void test('terminal lifecycle snapshots native, listener, and xterm output progress without payloads', async () => {
 	const harness = createHarness();
+	const exactCurrentSeq = 9_007_199_254_740_993n;
 	harness.shellA.bufferStats = () => ({
 		ringBytesCount: 1_000n,
 		usedBytes: 20n,
@@ -207,7 +208,7 @@ void test('terminal lifecycle snapshots native, listener, and xterm output progr
 		droppedBytesTotal: 0n,
 		chunksCount: 5n,
 	});
-	harness.shellA.currentSeq = () => 9;
+	harness.shellA.currentSeq = () => exactCurrentSeq;
 	harness.core.setShell(
 		createShellTransportKey('connection-a', 7),
 		harness.shellA,
@@ -235,7 +236,7 @@ void test('terminal lifecycle snapshots native, listener, and xterm output progr
 		channelId: 7,
 		runtimeInstanceId: 'instance-1',
 		native: {
-			currentSeq: '9',
+			currentSeq: '9007199254740993',
 			ringBytesCount: '1000',
 			usedBytes: '20',
 			headSeq: '4',
@@ -1098,7 +1099,7 @@ void test('dispose stales the real transport lease before removal warning can se
 			droppedBytesTotal: 0n,
 			chunksCount: 0n,
 		}),
-		currentSeq: () => 0,
+		currentSeq: () => 0n,
 		readBuffer: () => ({ chunks: [], nextSeq: 1n }),
 		addListener: () => 1n,
 		removeListener: () => {
