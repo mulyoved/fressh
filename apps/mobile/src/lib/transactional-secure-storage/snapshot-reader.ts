@@ -23,8 +23,14 @@ export type ValidatedSnapshot<Metadata extends object, Value> = {
 	slot: RootSlot;
 	root: RootCommitV2;
 	entries: ReadonlyMap<string, SecureEntry<Metadata, Value>>;
-	revisions: ReadonlyMap<string, EntryRevisionV2<Metadata>>;
+	revisions: ReadonlyMap<string, ValidatedRevisionReference<Metadata>>;
 	reachableKeys: ReadonlySet<string>;
+};
+
+export type ValidatedRevisionReference<Metadata extends object> = {
+	key: string;
+	record: EntryRevisionV2<Metadata>;
+	sha256: string;
 };
 
 type ReaderOptions<Metadata extends object, Value> = {
@@ -37,13 +43,17 @@ type ReaderOptions<Metadata extends object, Value> = {
 
 export type RootCandidate<Metadata extends object, Value> =
 	| { status: 'absent' }
-	| { status: 'invalid' }
+	| { status: 'invalid'; commitGeneration?: number }
 	| { status: 'valid'; snapshot: ValidatedSnapshot<Metadata, Value> };
 
 export type SnapshotSelection<Metadata extends object, Value> =
 	| { status: 'absent' }
 	| { status: 'no-valid-state' }
-	| { status: 'selected'; snapshot: ValidatedSnapshot<Metadata, Value> };
+	| {
+			status: 'selected';
+			provenance: 'current' | 'fallback';
+			snapshot: ValidatedSnapshot<Metadata, Value>;
+	  };
 
 class InvalidSnapshotError extends Error {}
 
@@ -109,9 +119,11 @@ export async function readRootCandidate<Metadata extends object, Value>(
 	const rootKey = keys.root[slot];
 	const rawRoot = await readStorage(options.storage, rootKey);
 	if (rawRoot === null) return { status: 'absent' };
+	let commitGeneration: number | undefined;
 
 	try {
 		const root = parseRecord(rawRoot, schemas.rootCommit, rootKey);
+		commitGeneration = root.commitGeneration;
 		const reachableKeys = new Set<string>([rootKey]);
 		const visitedManifestKeys = new Set<string>();
 		const pageHashes: string[] = [];
@@ -154,7 +166,7 @@ export async function readRootCandidate<Metadata extends object, Value>(
 		if (aggregateHash !== root.manifestSha256) invalid('Manifest hash mismatch');
 
 		const entries = new Map<string, SecureEntry<Metadata, Value>>();
-		const revisions = new Map<string, EntryRevisionV2<Metadata>>();
+		const revisions = new Map<string, ValidatedRevisionReference<Metadata>>();
 		let previousId: string | undefined;
 		for (const reference of references) {
 			if (previousId !== undefined && reference.entryId <= previousId) {
@@ -174,6 +186,9 @@ export async function readRootCandidate<Metadata extends object, Value>(
 			);
 			if (revisionHash !== reference.revisionSha256) invalid('Revision hash mismatch');
 			if (revision.entryId !== reference.entryId) invalid('Revision entry ID mismatch');
+			if (reference.revisionKey !== `${options.namespace}-v2-entry-${revision.revisionId}`) {
+				invalid('Revision key ownership mismatch');
+			}
 
 			const chunks: Uint8Array[] = [];
 			for (
@@ -207,7 +222,11 @@ export async function readRootCandidate<Metadata extends object, Value>(
 				metadata: revision.metadata,
 				value,
 			});
-			revisions.set(reference.entryId, revision);
+			revisions.set(reference.entryId, {
+				key: reference.revisionKey,
+				record: revision,
+				sha256: revisionHash,
+			});
 		}
 
 		return {
@@ -216,7 +235,9 @@ export async function readRootCandidate<Metadata extends object, Value>(
 		};
 	} catch (error) {
 		if (error instanceof SecureStorageUnavailableError) throw error;
-		if (error instanceof InvalidSnapshotError) return { status: 'invalid' };
+		if (error instanceof InvalidSnapshotError) {
+			return { status: 'invalid', commitGeneration };
+		}
 		throw error;
 	}
 }
@@ -239,7 +260,18 @@ export async function selectSnapshot<Metadata extends object, Value>(
 				left.snapshot.root.commitGeneration,
 		);
 	if (valid[0] !== undefined) {
-		return { status: 'selected', snapshot: valid[0].snapshot };
+		const selected = valid[0].snapshot;
+		const fellBack = candidates.some(
+			(candidate) =>
+				candidate.status === 'invalid' &&
+				candidate.commitGeneration !== undefined &&
+				candidate.commitGeneration > selected.root.commitGeneration,
+		);
+		return {
+			status: 'selected',
+			provenance: fellBack ? 'fallback' : 'current',
+			snapshot: selected,
+		};
 	}
 	return candidates.every(({ status }) => status === 'absent')
 		? { status: 'absent' }

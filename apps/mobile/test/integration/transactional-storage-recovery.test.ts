@@ -28,13 +28,12 @@ function entry(id: string, secret: string) {
 	return { id, metadata: { label: id }, value: { secret } };
 }
 
-void test('snapshot recovery rejects incomplete anchored legacy cleanup roots', async () => {
+void test('snapshot recovery rejects incomplete generic cleanup descriptors', async () => {
 	for (const fields of [
-		{ legacyCleanupPending: true },
-		{ legacyCleanupPageCount: 1, legacyCleanupSha256: 'cleanup-hash' },
-		{ cleanupHeadKey: 'cleanup', legacyCleanupPending: true },
-		{ cleanupHeadKey: 'cleanup', legacyCleanupPending: true, legacyCleanupPageCount: 1 },
-		{ cleanupHeadKey: 'cleanup', legacyCleanupPending: true, legacyCleanupSha256: 'cleanup-hash' },
+		{ cleanup: { headKey: 'cleanup' } },
+		{ cleanup: { pageCount: 1, sha256: 'cleanup-hash' } },
+		{ cleanup: { headKey: 'cleanup', pageCount: 1 } },
+		{ cleanup: { headKey: 'cleanup', sha256: 'cleanup-hash' } },
 	]) {
 		const storage = new FaultInjectingStringStorage();
 		await writeTransactionalStorageFixture({ ...readerOptions(storage), serializeValue, slot: 'a', commitGeneration: 1, entries: [] });
@@ -214,6 +213,15 @@ void test('falls back after a revision entry-ID mismatch', async () => {
 	await assertHigherRootFallsBack(async (storage, higher) => {
 		await mutateRecord(storage, higher.revisionKeys[0]!, (revision) => {
 			revision.entryId = 'different';
+		});
+		await refreshFixtureHashes(storage, higher);
+	});
+});
+
+void test('falls back when a revision record does not own its manifest key', async () => {
+	await assertHigherRootFallsBack(async (storage, higher) => {
+		await mutateRecord(storage, higher.revisionKeys[0]!, (revision) => {
+			revision.revisionId = 'different-revision-owner';
 		});
 		await refreshFixtureHashes(storage, higher);
 	});

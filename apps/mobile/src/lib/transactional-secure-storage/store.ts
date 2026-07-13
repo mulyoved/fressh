@@ -1,3 +1,4 @@
+import { createCleanupChain } from './cleanup-chain';
 import {
 	SecureStorageCorruptionError,
 	SecureStorageUnavailableError,
@@ -7,6 +8,7 @@ import {
 	type TransactionalSecureStore,
 	type TransactionalSecureStoreOptions,
 } from './contracts';
+import { createIntentJournal } from './intent-journal';
 import {
 	readRootCandidate,
 	selectSnapshot,
@@ -26,7 +28,19 @@ type StartupState<Metadata extends object, Value> =
 export function createTransactionalSecureStore<Metadata extends object, Value>(
 	options: TransactionalSecureStoreOptions<Metadata, Value>,
 ): TransactionalSecureStore<Metadata, Value> {
+	const writer = createTransactionWriter(options);
+	const startup = createStartupMigration(options);
+	const cleanupChain = createCleanupChain(options);
+	const intentJournal = createIntentJournal(options);
+	let createdV2ThisInstance = false;
 	let mutationTail: Promise<void> = Promise.resolve();
+	let readyResult:
+		| Promise<{
+				status: 'initialized' | 'migrated' | 'current' | 'recovered';
+				cleanupPending: boolean;
+		  }>
+		| undefined;
+
 	const serializeMutation = <Result>(run: () => Promise<Result>) => {
 		const result = mutationTail.then(run, run);
 		mutationTail = result.then(
@@ -39,10 +53,6 @@ export function createTransactionalSecureStore<Metadata extends object, Value>(
 		);
 		return result;
 	};
-	const writer = createTransactionWriter(options);
-	const startup = createStartupMigration(options);
-	let createdV2ThisInstance = false;
-	let readyResult: Promise<{ status: 'initialized' | 'migrated' | 'current' | 'recovered'; cleanupPending: boolean }> | undefined;
 	const openAfterMutations = () => mutationTail.then(open, open);
 
 	async function open(): Promise<ValidatedSnapshot<Metadata, Value>> {
@@ -63,23 +73,64 @@ export function createTransactionalSecureStore<Metadata extends object, Value>(
 		return selection.snapshot;
 	}
 
+	async function recoverIntents() {
+		const protectedKeys = new Set<string>();
+		for (const slot of ['a', 'b'] as const) {
+			const candidate = await readRootCandidate(options, slot);
+			if (candidate.status !== 'valid') continue;
+			for (const key of candidate.snapshot.reachableKeys) protectedKeys.add(key);
+			const descriptor = candidate.snapshot.root.cleanup;
+			if (descriptor === undefined) continue;
+			const cleanup = await cleanupChain.read(descriptor);
+			if (cleanup.status === 'valid') {
+				for (const { key } of cleanup.pages) protectedKeys.add(key);
+			}
+		}
+		await intentJournal.recover(protectedKeys);
+	}
+
 	async function classify(): Promise<StartupState<Metadata, Value>> {
 		try {
 			const before = await selectSnapshot(options);
 			if (before.status === 'selected') {
-				await writer.recoverIntents();
+				await recoverIntents();
 				const after = await selectSnapshot(options);
-				if (after.status !== 'selected') return { type: 'corrupt', error: new SecureStorageCorruptionError('Transactional secure storage has no valid root') };
-				return { type: before.snapshot.root.snapshotId === after.snapshot.root.snapshotId ? 'v2' : 'recovered', snapshot: after.snapshot };
+				if (after.status !== 'selected') {
+					return {
+						type: 'corrupt',
+						error: new SecureStorageCorruptionError(
+							'Transactional secure storage has no valid root',
+						),
+					};
+				}
+				return {
+					type:
+						before.provenance === 'fallback' ||
+						before.snapshot.root.snapshotId !== after.snapshot.root.snapshotId
+							? 'recovered'
+							: 'v2',
+					snapshot: after.snapshot,
+				};
 			}
-			await writer.recoverIntents();
+			await recoverIntents();
 			const legacy = await options.legacy.read();
 			if (legacy.status === 'present') return { type: 'legacy', snapshot: legacy };
-			if (before.status === 'no-valid-state') return { type: 'corrupt', error: new SecureStorageCorruptionError('Transactional secure storage has no valid root') };
+			if (before.status === 'no-valid-state') {
+				return {
+					type: 'corrupt',
+					error: new SecureStorageCorruptionError(
+						'Transactional secure storage has no valid root',
+					),
+				};
+			}
 			return { type: 'fresh' };
 		} catch (error) {
-			if (error instanceof SecureStorageUnavailableError) return { type: 'unavailable', error };
-			if (error instanceof SecureStorageCorruptionError) return { type: 'corrupt', error };
+			if (error instanceof SecureStorageUnavailableError) {
+				return { type: 'unavailable', error };
+			}
+			if (error instanceof SecureStorageCorruptionError) {
+				return { type: 'corrupt', error };
+			}
 			throw error;
 		}
 	}
@@ -88,57 +139,174 @@ export function createTransactionalSecureStore<Metadata extends object, Value>(
 		const state = await classify();
 		if (state.type === 'unavailable' || state.type === 'corrupt') throw state.error;
 		if (state.type === 'fresh' || state.type === 'legacy') {
-			const legacy = state.type === 'legacy' ? state.snapshot : { status: 'absent' as const, entries: [], recordKeys: [] };
+			const legacy =
+				state.type === 'legacy'
+					? state.snapshot
+					: { status: 'absent' as const, entries: [], recordKeys: [] };
 			await startup.initialize(legacy);
 			createdV2ThisInstance = true;
-			return { status: state.type === 'fresh' ? 'initialized' as const : 'migrated' as const, cleanupPending: state.type === 'legacy' };
+			return {
+				status:
+					state.type === 'fresh' ? ('initialized' as const) : ('migrated' as const),
+				cleanupPending: state.type === 'legacy',
+			};
 		}
+
 		const selected = state.snapshot;
 		let legacy: LegacySnapshot<Metadata, Value> | undefined;
 		if (!createdV2ThisInstance) {
-			try { legacy = await options.legacy.read(); } catch { legacy = undefined; }
+			try {
+				legacy = await options.legacy.read();
+			} catch {
+				legacy = undefined;
+			}
 		}
-		const other = await readRootCandidate(options, selected.slot === 'a' ? 'b' : 'a');
-		if (other.status !== 'valid' || ((legacy?.status === 'present' || selected.root.legacyCleanupPending === true) && !startup.sameSnapshot(selected, other.snapshot))) await startup.mirror(selected);
-		const cleanupPending = createdV2ThisInstance ? selected.root.cleanupHeadKey !== undefined : await startup.cleanup(selected, legacy);
-		return { status: state.type === 'recovered' ? 'recovered' as const : 'current' as const, cleanupPending };
+		const other = await readRootCandidate(options, olderSlot(selected));
+		if (
+			other.status !== 'valid' ||
+			((legacy?.status === 'present' || selected.root.cleanup !== undefined) &&
+				!startup.sameSnapshot(selected, other.snapshot))
+		) {
+			await startup.mirror(selected);
+		}
+		const cleanupPending = createdV2ThisInstance
+			? selected.root.cleanup !== undefined
+			: await reconcileLegacyCleanup(selected, legacy);
+		return {
+			status:
+				state.type === 'recovered' ? ('recovered' as const) : ('current' as const),
+			cleanupPending,
+		};
 	}
 
 	function olderSlot(base: ValidatedSnapshot<Metadata, Value>): RootSlot {
 		return base.slot === 'a' ? 'b' : 'a';
 	}
 
+	async function replaceCleanup(
+		base: ValidatedSnapshot<Metadata, Value>,
+		cleanupKeys: readonly string[],
+	) {
+		return writer.commitSnapshot({
+			base,
+			nextEntries: [...base.entries.values()],
+			targetSlots: [olderSlot(base), base.slot],
+			cleanupKeys,
+		});
+	}
+
+	async function finalizeCleanup(
+		snapshot: ValidatedSnapshot<Metadata, Value>,
+		allowedKeys: ReadonlySet<string>,
+	): Promise<boolean> {
+		const descriptor = snapshot.root.cleanup;
+		if (descriptor === undefined) return true;
+		const cleanup = await cleanupChain.read(descriptor);
+		if (
+			cleanup.status !== 'valid' ||
+			!cleanupChain.exactlyMatches(cleanup.pages, allowedKeys)
+		) {
+			return false;
+		}
+		if (!(await cleanupChain.deleteGarbage(cleanup.pages, allowedKeys))) {
+			return false;
+		}
+		const cleared = await replaceCleanup(snapshot, []);
+		if (cleared.root.cleanup !== undefined) return false;
+		await cleanupChain.deletePagesBestEffort(cleanup.pages);
+		return true;
+	}
+
+	async function reconcileLegacyCleanup(
+		snapshot: ValidatedSnapshot<Metadata, Value>,
+		legacy: LegacySnapshot<Metadata, Value> | undefined,
+	) {
+		if (snapshot.root.cleanup === undefined) return false;
+		if (legacy?.status !== 'present') {
+			if (legacy === undefined) {
+				const cleanup = await cleanupChain.read(snapshot.root.cleanup);
+				if (
+					cleanup.status === 'valid' &&
+					(await cleanupChain.hasObservedDeletion(cleanup.pages))
+				) {
+					return !(await finalizeCleanup(
+						snapshot,
+						new Set(cleanup.pages.map(({ garbageKey }) => garbageKey)),
+					));
+				}
+			}
+			return true;
+		}
+		const allowedKeys = new Set(legacy.recordKeys);
+		let cleanup = await cleanupChain.read(snapshot.root.cleanup);
+		if (
+			cleanup.status !== 'valid' ||
+			!cleanupChain.exactlyMatches(cleanup.pages, allowedKeys)
+		) {
+			snapshot = await replaceCleanup(snapshot, [
+				...legacy.recordKeys.slice(1),
+				legacy.recordKeys[0]!,
+			]);
+			cleanup = await cleanupChain.read(snapshot.root.cleanup!);
+			if (cleanup.status !== 'valid') return true;
+		}
+		return !(await finalizeCleanup(snapshot, allowedKeys));
+	}
+
 	async function mutate(
 		nextEntries: (
 			base: ValidatedSnapshot<Metadata, Value>,
 		) => readonly SecureEntry<Metadata, Value>[],
-	): Promise<void> {
+	) {
 		const base = await open();
 		await writer.commitSnapshot({
 			base,
 			nextEntries: nextEntries(base),
 			targetSlots: [olderSlot(base)],
-			cleanupKeys: [],
-			deferCleanup: createdV2ThisInstance,
 		});
 	}
 
-	async function deleteOrRetry(id?: string): Promise<void> {
+	async function deleteEntry(id: string) {
 		const base = await open();
 		const entries = new Map(base.entries);
-		if (id !== undefined) entries.delete(id);
+		entries.delete(id);
 		const cleanupKeys = new Set(base.reachableKeys);
 		const older = await readRootCandidate(options, olderSlot(base));
 		if (older.status === 'valid') {
 			for (const key of older.snapshot.reachableKeys) cleanupKeys.add(key);
 		}
-		await writer.commitSnapshot({
+		const replacement = base.root.cleanup === undefined ? [...cleanupKeys] : undefined;
+		const reopened = await writer.commitSnapshot({
 			base,
 			nextEntries: [...entries.values()],
 			targetSlots: [olderSlot(base), base.slot],
-			cleanupKeys: [...cleanupKeys],
-			deferCleanup: createdV2ThisInstance,
+			cleanupKeys: replacement,
 		});
+		if (!createdV2ThisInstance && replacement !== undefined) {
+			const descriptor = reopened.root.cleanup;
+			if (descriptor !== undefined) {
+				const cleanup = await cleanupChain.read(descriptor);
+				if (cleanup.status === 'valid') {
+					await finalizeCleanup(
+						reopened,
+						new Set(cleanup.pages.map(({ garbageKey }) => garbageKey)),
+					).catch(() => false);
+				}
+			}
+		}
+	}
+
+	async function retryCleanup() {
+		if (createdV2ThisInstance) return;
+		const base = await open();
+		const descriptor = base.root.cleanup;
+		if (descriptor === undefined) return;
+		const cleanup = await cleanupChain.read(descriptor);
+		if (cleanup.status !== 'valid') return;
+		await finalizeCleanup(
+			base,
+			new Set(cleanup.pages.map(({ garbageKey }) => garbageKey)),
+		);
 	}
 
 	return {
@@ -172,10 +340,10 @@ export function createTransactionalSecureStore<Metadata extends object, Value>(
 			return serializeMutation(() => mutate(() => entries));
 		},
 		deleteEntry(id) {
-			return serializeMutation(() => deleteOrRetry(id));
+			return serializeMutation(() => deleteEntry(id));
 		},
 		retryCleanup() {
-			return serializeMutation(() => deleteOrRetry());
+			return serializeMutation(retryCleanup);
 		},
 	};
 }

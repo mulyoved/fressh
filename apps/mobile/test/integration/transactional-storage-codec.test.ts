@@ -292,16 +292,35 @@ void test('manifest and plan aggregate hashes use their exact canonical inputs',
 	]);
 });
 
-void test('root commits reject incomplete anchored legacy cleanup states', () => {
+void test('root commits use one complete generic anchored cleanup descriptor', () => {
 	const base = recordFixtures.rootCommit;
-	for (const fields of [
-		{ legacyCleanupPending: true },
-		{ legacyCleanupPageCount: 1, legacyCleanupSha256: 'cleanup-hash' },
-		{ legacyCleanupPending: true, legacyCleanupPageCount: 1, legacyCleanupSha256: 'cleanup-hash' },
-		{ cleanupHeadKey: 'cleanup', legacyCleanupPending: true },
-		{ cleanupHeadKey: 'cleanup', legacyCleanupPending: true, legacyCleanupPageCount: 1 },
-		{ cleanupHeadKey: 'cleanup', legacyCleanupPending: true, legacyCleanupSha256: 'cleanup-hash' },
-	]) assert.equal(schemas.rootCommit.safeParse({ ...base, ...fields }).success, false);
-	assert.equal(schemas.rootCommit.safeParse({ ...base, cleanupHeadKey: 'ordinary-cleanup' }).success, true);
-	assert.equal(schemas.rootCommit.safeParse({ ...base, cleanupHeadKey: 'legacy-cleanup', legacyCleanupPending: true, legacyCleanupPageCount: 1, legacyCleanupSha256: 'cleanup-hash' }).success, true);
+	for (const cleanup of [
+		{ headKey: 'cleanup' },
+		{ pageCount: 1, sha256: 'cleanup-hash' },
+		{ headKey: 'cleanup', pageCount: 1 },
+		{ headKey: 'cleanup', sha256: 'cleanup-hash' },
+	]) {
+		assert.equal(
+			schemas.rootCommit.safeParse({ ...base, cleanup }).success,
+			false,
+		);
+	}
+	assert.equal(
+		schemas.rootCommit.safeParse({
+			...base,
+			cleanup: { headKey: 'cleanup', pageCount: 1, sha256: 'cleanup-hash' },
+		}).success,
+		true,
+	);
+	assert.equal(
+		schemas.rootCommit.safeParse({ ...base, cleanupHeadKey: 'old-mode' }).success,
+		false,
+	);
+	assert.equal(
+		schemas.rootCommit.safeParse({
+			...base,
+			cleanup: { headKey: 'cleanup', pageCount: 0, sha256: 'cleanup-hash' },
+		}).success,
+		false,
+	);
 });

@@ -131,6 +131,35 @@ void test('replace-all and upsert publish a canonical snapshot and reuse an unch
 	);
 });
 
+void test('an unchanged mutation reuses only its validated revision key', async () => {
+	const storage = await seedEmptyPair();
+	const store = createStore(storage);
+	await store.upsertEntry(first);
+	const validatedRevisionKeys = new Set(
+		Object.keys(storage.snapshotDurable()).filter((key) =>
+			key.includes('-v2-entry-'),
+		),
+	);
+	storage.operationLog.length = 0;
+
+	await store.upsertEntry(first);
+
+	const revisionReads = storage.operationLog.filter(
+		({ type, key }) => type === 'get' && key.includes('-v2-entry-'),
+	);
+	assert.ok(revisionReads.length > 0);
+	assert.equal(
+		revisionReads.every(({ key }) => validatedRevisionKeys.has(key)),
+		true,
+	);
+	assert.equal(
+		storage.operationLog.some(
+			({ type, key }) => type === 'set' && key.includes('-v2-entry-'),
+		),
+		false,
+	);
+});
+
 void test('serializes concurrent upserts without losing either change', async () => {
 	const storage = await seedEmptyPair();
 	const store = createStore(storage);
@@ -249,9 +278,9 @@ void test('delete publishes both roots before deleting unreachable value records
 			({ type, key }) =>
 				type === 'set' && (key === keys.root.a || key === keys.root.b),
 		);
-	assert.equal(rootWrites.length, 2);
+	assert.equal(rootWrites.length, 4);
 	assert.deepEqual(
-		rootWrites.map(({ key }) => key),
+		rootWrites.slice(0, 2).map(({ key }) => key),
 		[keys.root.b, keys.root.a],
 	);
 	assert.ok(rootWrites[0]!.index < rootWrites[1]!.index);
@@ -261,6 +290,7 @@ void test('delete publishes both roots before deleting unreachable value records
 			(key.includes('-v2-entry-') || key.includes('-v2-value-')),
 	);
 	assert.ok(firstGarbageDelete > rootWrites[1]!.index);
+	assert.ok(rootWrites[2]!.index > firstGarbageDelete);
 
 	const roots = await Promise.all([
 		storage.getItem(keys.root.a),
@@ -372,15 +402,15 @@ void test('intent recovery preserves pending cleanup pages for retry', async () 
 	await createStore(storage).deleteEntry(first.id);
 	const keys = buildV2Keys(namespace);
 	const root = JSON.parse((await storage.getItem(keys.root.a))!) as {
-		cleanupHeadKey?: string;
+		cleanup?: { headKey: string };
 	};
-	assert.notEqual(root.cleanupHeadKey, undefined);
-	assert.notEqual(await storage.getItem(root.cleanupHeadKey!), null);
+	assert.notEqual(root.cleanup, undefined);
+	assert.notEqual(await storage.getItem(root.cleanup!.headKey), null);
 
 	storage.restart();
 	const reopened = createStore(storage);
 	assert.equal(await reopened.getEntry(first.id), null);
-	assert.notEqual(await storage.getItem(root.cleanupHeadKey!), null);
+	assert.notEqual(await storage.getItem(root.cleanup!.headKey), null);
 	assert.equal((await reopened.ensureReady()).cleanupPending, true);
 
 	await reopened.retryCleanup();
@@ -399,10 +429,13 @@ void test('does not fail a durable delete when cleanup-head reading fails', asyn
 	const successful = new FaultInjectingStringStorage(durableOld);
 	await createStore(successful).deleteEntry(first.id);
 	const keys = buildV2Keys(namespace);
-	const lastRootWrite = successful.operationLog.findLastIndex(
-		({ type, key }) =>
-			type === 'set' && (key === keys.root.a || key === keys.root.b),
-	);
+	const logicalRootWrites = successful.operationLog
+		.map((operation, index) => ({ ...operation, index }))
+		.filter(
+			({ type, key }) =>
+				type === 'set' && (key === keys.root.a || key === keys.root.b),
+		);
+	const lastRootWrite = logicalRootWrites[1]!.index;
 	const postRootCleanupRead = successful.operationLog.findIndex(
 		({ type, key }, index) =>
 			index > lastRootWrite && type === 'get' && key.includes('-v2-cleanup-'),

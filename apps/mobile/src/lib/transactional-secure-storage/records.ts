@@ -92,6 +92,11 @@ export function createRecordSchemas<Metadata extends object>(
 			pageSha256: z.string(),
 		}),
 	);
+	const cleanupDescriptor = z.strictObject({
+		headKey: storageKey,
+		pageCount: z.number().int().positive(),
+		sha256: z.string(),
+	});
 	const rootCommit = payloadBounded(
 		z.strictObject({
 			...common,
@@ -101,13 +106,7 @@ export function createRecordSchemas<Metadata extends object>(
 			manifestPageCount: nonNegativeInteger,
 			entryCount: nonNegativeInteger,
 			manifestSha256: z.string(),
-			cleanupHeadKey: storageKey.optional(),
-			legacyCleanupPageCount: nonNegativeInteger.optional(),
-			legacyCleanupPending: z.literal(true).optional(),
-			legacyCleanupSha256: z.string().optional(),
-		}).superRefine((record, context) => {
-			const legacyFields = [record.legacyCleanupPending, record.legacyCleanupPageCount, record.legacyCleanupSha256];
-			if (legacyFields.some((field) => field !== undefined) && (legacyFields.some((field) => field === undefined) || record.cleanupHeadKey === undefined)) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Anchored legacy cleanup fields and head must appear together' });
+			cleanup: cleanupDescriptor.optional(),
 		}),
 	);
 	const manifestPage = payloadBounded(

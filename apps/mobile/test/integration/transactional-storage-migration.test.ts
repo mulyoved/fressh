@@ -134,14 +134,145 @@ void test('malformed present v1 never becomes empty v2 and invalid v2 falls back
 	await assert.rejects(createStore(storage).ensureReady(), SecureStorageCorruptionError);
 });
 
+void test('reports recovered when opening falls back from a corrupt newer root', async () => {
+	const storage = new FaultInjectingStringStorage();
+	const lower = await writeTransactionalStorageFixture({
+		namespace,
+		metadataSchema,
+		serializeValue: JSON.stringify,
+		storage,
+		sha256,
+		slot: 'a',
+		commitGeneration: 1,
+		entries: [{ id: 'alpha', metadata: { label: 'Alpha' }, value: { privateKey: 'one' } }],
+	});
+	const higher = await writeTransactionalStorageFixture({
+		namespace,
+		metadataSchema,
+		serializeValue: JSON.stringify,
+		storage,
+		sha256,
+		slot: 'b',
+		commitGeneration: 2,
+		entries: [{ id: 'beta', metadata: { label: 'Beta' }, value: { privateKey: 'two' } }],
+	});
+	await storage.deleteItem(higher.manifestKeys[0]!);
+
+	assert.equal((await createStore(storage).ensureReady()).status, 'recovered');
+	assert.notEqual(await storage.getItem(lower.manifestKeys[0]!), null);
+});
+
+void test('rebuilds anchored cleanup through intents before writing replacement pages', async () => {
+	const storage = await seedLegacy();
+	await createStore(storage).ensureReady();
+	storage.restart();
+	const root = JSON.parse(
+		(await storage.getItem(buildV2Keys(namespace).root.b))!,
+	) as { cleanup: { headKey: string } };
+	await storage.setItem(root.cleanup.headKey, '{');
+	const brokenCleanup = storage.snapshotDurable();
+	const originalCleanupKeys = new Set(
+		Object.keys(brokenCleanup).filter((key) => key.includes('-v2-cleanup-')),
+	);
+	storage.operationLog.length = 0;
+
+	await createStore(storage).ensureReady();
+
+	const keys = buildV2Keys(namespace);
+	const firstCleanupWrite = storage.operationLog.findIndex(
+		({ type, key }) => type === 'set' && key.includes('-v2-cleanup-'),
+	);
+	const intentAWritten = storage.operationLog.findIndex(
+		({ type, key }) => type === 'set' && key === keys.intent.a,
+	);
+	const intentBWritten = storage.operationLog.findIndex(
+		({ type, key }) => type === 'set' && key === keys.intent.b,
+	);
+	assert.ok(firstCleanupWrite > 0);
+	assert.ok(intentAWritten >= 0 && intentAWritten < firstCleanupWrite);
+	assert.ok(intentBWritten >= 0 && intentBWritten < firstCleanupWrite);
+	const publicationEnd = storage.operationLog
+		.filter(({ type }) => type !== 'get')
+		.map((operation, index) => ({ ...operation, boundary: index + 1 }))
+		.filter(
+			({ type, key }) =>
+				type === 'set' && (key === keys.root.a || key === keys.root.b),
+		)[1]!.boundary;
+
+	for (const fault of [
+		'throw-before',
+		'throw-after-visible',
+		'volatile-success',
+	] as const satisfies readonly StorageFault[]) {
+		for (let boundary = 1; boundary <= publicationEnd; boundary++) {
+			const interrupted = new FaultInjectingStringStorage(brokenCleanup);
+			interrupted.failOperation(boundary, fault);
+			await createStore(interrupted).ensureReady().catch(() => undefined);
+			interrupted.restart();
+
+			const durable = interrupted.snapshotDurable();
+			const discoverable = collectCleanupDiscoveryKeys(durable);
+			for (const cleanupKey of Object.keys(durable).filter(
+				(key) =>
+					key.includes('-v2-cleanup-') && !originalCleanupKeys.has(key),
+			)) {
+				assert.ok(
+					discoverable.has(cleanupKey),
+					`${fault} boundary ${boundary} orphaned ${cleanupKey}`,
+				);
+			}
+			assert.deepEqual(
+				(await createStore(interrupted).listEntries()).map(({ id }) => id),
+				['alpha', 'beta'],
+			);
+		}
+	}
+});
+
+function collectCleanupDiscoveryKeys(records: Record<string, string>) {
+	const keys = buildV2Keys(namespace);
+	const discovered = new Set<string>();
+	for (const rootKey of [keys.root.a, keys.root.b]) {
+		try {
+			let pageKey = (
+				JSON.parse(records[rootKey]!) as { cleanup?: { headKey: string } }
+			).cleanup?.headKey;
+			while (pageKey !== undefined && !discovered.has(pageKey)) {
+				discovered.add(pageKey);
+				pageKey = (JSON.parse(records[pageKey]!) as { nextPageKey?: string })
+					.nextPageKey;
+			}
+		} catch {
+			// Invalid roots/pages do not make records reachable.
+		}
+	}
+	for (const intentKey of [keys.intent.a, keys.intent.b]) {
+		try {
+			const intent = JSON.parse(records[intentKey]!) as {
+				attemptId: string;
+				planPageCount: number;
+			};
+			for (let pageIndex = 0; pageIndex < intent.planPageCount; pageIndex++) {
+				const plan = JSON.parse(
+					records[keys.intentPlan(intent.attemptId, pageIndex)]!,
+				) as { plannedKey: string };
+				discovered.add(plan.plannedKey);
+			}
+		} catch {
+			// An incomplete plan cannot authorize deletion, but no staged page may exist yet.
+		}
+	}
+	return discovered;
+}
+
 void test('stale and disagreeing intent headers are removed before a new migration attempt', async () => {
 	const storage = await seedLegacy();
 	const keys = buildV2Keys(namespace);
 	await storage.setItem(keys.intent.a, '{');
 	await storage.setItem(keys.intent.b, JSON.stringify({ unrelated: true }));
 	await createStore(storage).ensureReady();
-	assert.doesNotThrow(() => JSON.parse(storage.snapshotDurable()[keys.intent.a]!));
-	assert.equal(await storage.getItem(keys.intent.a), await storage.getItem(keys.intent.b));
+	assert.equal(await storage.getItem(keys.intent.a), null);
+	assert.equal(await storage.getItem(keys.intent.b), null);
 });
 
 void test('every first-instance mutation path preserves all durable v1 records', async () => {
@@ -166,9 +297,9 @@ void test('missing or malformed legacy cleanup pages are rebuilt from readable v
 		const storage = await seedLegacy();
 		await createStore(storage).ensureReady();
 		storage.restart();
-		const root = JSON.parse((await storage.getItem(buildV2Keys(namespace).root.b))!) as { cleanupHeadKey: string };
-		if (replacement === null) await storage.deleteItem(root.cleanupHeadKey);
-		else await storage.setItem(root.cleanupHeadKey, replacement);
+		const root = JSON.parse((await storage.getItem(buildV2Keys(namespace).root.b))!) as { cleanup: { headKey: string } };
+		if (replacement === null) await storage.deleteItem(root.cleanup.headKey);
+		else await storage.setItem(root.cleanup.headKey, replacement);
 		await createStore(storage).ensureReady();
 		assert.deepEqual(legacyKeys(storage), []);
 	}
@@ -192,11 +323,11 @@ void test('recomputed cleanup pages cannot delete keys outside the exact readabl
 	await storage.setItem('unrelated-app-secret', 'keep');
 	await createStore(storage).ensureReady();
 	storage.restart();
-	const root = JSON.parse((await storage.getItem(buildV2Keys(namespace).root.b))!) as { cleanupHeadKey: string };
-	const page = JSON.parse((await storage.getItem(root.cleanupHeadKey))!) as Record<string, unknown>;
+	const root = JSON.parse((await storage.getItem(buildV2Keys(namespace).root.b))!) as { cleanup: { headKey: string } };
+	const page = JSON.parse((await storage.getItem(root.cleanup.headKey))!) as Record<string, unknown>;
 	page.garbageKey = 'unrelated-app-secret';
 	page.pageSha256 = await sha256(new TextEncoder().encode(JSON.stringify(Object.fromEntries(Object.entries(page).filter(([key]) => key !== 'pageSha256')))));
-	await storage.setItem(root.cleanupHeadKey, JSON.stringify(page));
+	await storage.setItem(root.cleanup.headKey, JSON.stringify(page));
 	await createStore(storage).ensureReady();
 	assert.equal(await storage.getItem('unrelated-app-secret'), 'keep');
 	assert.deepEqual(legacyKeys(storage), ['unrelated-app-secret']);
@@ -240,10 +371,7 @@ void test('unavailable exact inventory performs no cleanup-page reads or legacy 
 	const keys = buildV2Keys(namespace);
 	for (const slot of ['a', 'b'] as const) {
 		const root = JSON.parse((await seeded.getItem(keys.root[slot]))!) as Record<string, unknown>;
-		delete root.legacyCleanupPageCount;
-		delete root.legacyCleanupPending;
-		delete root.legacyCleanupSha256;
-		delete root.cleanupHeadKey;
+		delete root.cleanup;
 		await seeded.setItem(keys.root[slot], JSON.stringify(root));
 	}
 	const legacy = new Set(legacyKeys(seeded));
@@ -277,11 +405,11 @@ void test('same-namespace v1-shaped keys outside exact inventory are never clean
 	await storage.setItem(unrelated, 'keep');
 	await createStore(storage).ensureReady();
 	storage.restart();
-	const root = JSON.parse((await storage.getItem(buildV2Keys(namespace).root.b))!) as { cleanupHeadKey: string };
-	const page = JSON.parse((await storage.getItem(root.cleanupHeadKey))!) as Record<string, unknown>;
+	const root = JSON.parse((await storage.getItem(buildV2Keys(namespace).root.b))!) as { cleanup: { headKey: string } };
+	const page = JSON.parse((await storage.getItem(root.cleanup.headKey))!) as Record<string, unknown>;
 	page.garbageKey = unrelated;
 	page.pageSha256 = await sha256(new TextEncoder().encode(JSON.stringify(Object.fromEntries(Object.entries(page).filter(([key]) => key !== 'pageSha256')))));
-	await storage.setItem(root.cleanupHeadKey, JSON.stringify(page));
+	await storage.setItem(root.cleanup.headKey, JSON.stringify(page));
 	const legacyValue = legacyKeys(storage).find((key) => key.includes('-entry-') && key !== unrelated)!;
 	storage.failMatchingRead(legacyValue, 1);
 	await createStore(storage).ensureReady();
@@ -293,10 +421,6 @@ void test('stale peer with unreadable legacy is mirrored but no cleanup is attem
 	await createStore(storage).ensureReady();
 	await writeTransactionalStorageFixture({ namespace, metadataSchema, serializeValue: JSON.stringify, storage, sha256, slot: 'a', commitGeneration: 0, entries: [] });
 	const rootKeys = buildV2Keys(namespace);
-	const selectedRoot = JSON.parse((await storage.getItem(rootKeys.root.b))!) as Record<string, unknown>;
-	delete selectedRoot.legacyCleanupPageCount;
-	delete selectedRoot.legacyCleanupSha256;
-	await storage.setItem(rootKeys.root.b, JSON.stringify(selectedRoot));
 	storage.restart();
 	const legacyValue = legacyKeys(storage).find((key) => key.includes('-entry-'))!;
 	storage.failMatchingRead(legacyValue, 1);
@@ -325,14 +449,18 @@ void test('anchored partial legacy cleanup survives every later mutation and ret
 		const reopened = createStore(storage);
 		assert.equal((await reopened.ensureReady()).cleanupPending, true);
 		const roots = buildV2Keys(namespace).root;
-		const anchoredBefore = JSON.parse((await storage.getItem(roots.b))!) as { cleanupHeadKey: string; legacyCleanupPageCount: number; legacyCleanupPending: true; legacyCleanupSha256: string };
+		const anchoredBefore = JSON.parse((await storage.getItem(roots.b))!) as { cleanup: { headKey: string; pageCount: number; sha256: string } };
 		const legacyBeforeMutation = legacyKeys(storage);
 		await run(reopened);
 		const rootA = JSON.parse((await storage.getItem(roots.a))!) as typeof anchoredBefore;
 		const rootB = JSON.parse((await storage.getItem(roots.b))!) as typeof anchoredBefore;
-		const current = rootA.legacyCleanupPending === true ? rootA : rootB;
-		assert.deepEqual({ head: current.cleanupHeadKey, count: current.legacyCleanupPageCount, sha: current.legacyCleanupSha256 }, { head: anchoredBefore.cleanupHeadKey, count: anchoredBefore.legacyCleanupPageCount, sha: anchoredBefore.legacyCleanupSha256 });
-		assert.deepEqual(legacyKeys(storage), legacyBeforeMutation);
+		const current = rootA.cleanup !== undefined ? rootA : rootB;
+		if (current.cleanup !== undefined) {
+			assert.deepEqual(current.cleanup, anchoredBefore.cleanup);
+			assert.deepEqual(legacyKeys(storage), legacyBeforeMutation);
+		} else {
+			assert.deepEqual(legacyKeys(storage), [unrelated]);
+		}
 		storage.restart();
 		await createStore(storage).ensureReady();
 		assert.equal(await storage.getItem(unrelated), 'keep');
