@@ -9,6 +9,7 @@ import {
 	handleScrollbackBatchBridgeMessage,
 	mapScrollbackBatchMessage,
 } from '../src/bridge';
+import { createXtermOutputDiagnostics } from '../src/output-diagnostics';
 import {
 	createScrollbackEnterRequestFailureHandler,
 	handleXtermBridgeInboundMessage,
@@ -238,6 +239,7 @@ void test('XtermJsWebView message handler routes current instance events and dro
 				events.push(['scrollback-enter', event]);
 			},
 			onScrollbackBatch: (event) => events.push(['scroll-batch', event]),
+			onOutputProgress: (event) => events.push(['output-progress', event]),
 		});
 
 	assert.equal(handle({ type: 'initialized', instanceId: 'instance-1' }), true);
@@ -326,6 +328,26 @@ void test('XtermJsWebView message handler routes current instance events and dro
 	);
 	assert.equal(
 		handle({
+			type: 'outputProgress',
+			instanceId: 'instance-1',
+			receivedMessages: 2,
+			receivedBytes: 17,
+			completedWrites: 1,
+		}),
+		true,
+	);
+	assert.equal(
+		handle({
+			type: 'outputProgress',
+			instanceId: 'stale-instance',
+			receivedMessages: 9,
+			receivedBytes: 99,
+			completedWrites: 8,
+		}),
+		true,
+	);
+	assert.equal(
+		handle({
 			type: 'scrollbackEnterRequested',
 			instanceId: 'stale-instance',
 			requestId: 8,
@@ -384,7 +406,41 @@ void test('XtermJsWebView message handler routes current instance events and dro
 				instanceId: 'instance-1',
 			},
 		],
+		[
+			'output-progress',
+			{
+				type: 'outputProgress',
+				instanceId: 'instance-1',
+				receivedMessages: 2,
+				receivedBytes: 17,
+				completedWrites: 1,
+			},
+		],
 	]);
+});
+
+void test('xterm output diagnostics separate queued, sent, and completed bytes', () => {
+	const diagnostics = createXtermOutputDiagnostics();
+	diagnostics.recordQueued(10);
+	diagnostics.recordFlush();
+	diagnostics.recordSent(10);
+	diagnostics.recordWebViewProgress({
+		instanceId: 'instance-1',
+		receivedMessages: 1,
+		receivedBytes: 10,
+		completedWrites: 1,
+	});
+	assert.deepEqual(diagnostics.getSnapshot(), {
+		webViewInstanceId: 'instance-1',
+		rnQueuedMessages: 1,
+		rnQueuedBytes: 10,
+		rnFlushes: 1,
+		rnSentMessages: 1,
+		rnSentBytes: 10,
+		webViewReceivedMessages: 1,
+		webViewReceivedBytes: 10,
+		webViewCompletedWrites: 1,
+	});
 });
 
 void test('XtermJsWebView message handler clears pending selection timeout on response', () => {
@@ -1184,6 +1240,7 @@ void test('public tmux ack handle sends the legacy tmux ack type', () => {
 		write: () => {},
 		writeMany: () => {},
 		flush: () => {},
+		getOutputDiagnostics: createXtermOutputDiagnostics().getSnapshot,
 		sendToWebView,
 		webRef: { current: null },
 		setSystemKeyboardEnabled: () => {},
@@ -1204,6 +1261,41 @@ void test('public tmux ack handle sends the legacy tmux ack type', () => {
 			instanceId: 'current-instance',
 		},
 	]);
+});
+
+void test('public handle returns a copied output diagnostics snapshot', () => {
+	const snapshot = {
+		webViewInstanceId: 'instance-1',
+		rnQueuedMessages: 1,
+		rnQueuedBytes: 10,
+		rnFlushes: 1,
+		rnSentMessages: 1,
+		rnSentBytes: 10,
+		webViewReceivedMessages: 1,
+		webViewReceivedBytes: 10,
+		webViewCompletedWrites: 1,
+	};
+	const sendToWebView = () => {};
+	const handle = createXtermWebViewHandle({
+		write: () => {},
+		writeMany: () => {},
+		flush: () => {},
+		getOutputDiagnostics: () => snapshot,
+		sendToWebView,
+		webRef: { current: null },
+		setSystemKeyboardEnabled: () => {},
+		setSelectionModeEnabled: () => {},
+		getSelection: () => Promise.resolve(''),
+		autoFitFn: () => {},
+		appliedSizeRef: { current: null },
+		fit: () => {},
+		...createXtermWebViewAckSenders(sendToWebView),
+	});
+
+	const first = handle.getOutputDiagnostics();
+	first.rnQueuedBytes = 999;
+
+	assert.equal(handle.getOutputDiagnostics().rnQueuedBytes, 10);
 });
 
 void test('XtermJsWebView message handler reports rejected scrollback enter callbacks', async () => {

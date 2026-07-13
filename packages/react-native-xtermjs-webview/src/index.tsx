@@ -22,6 +22,7 @@ import {
 	type TmuxScrollBatchEvent,
 } from './bridge';
 import { jetBrainsMonoTtfBase64 } from './jetbrains-mono';
+import { createXtermOutputDiagnostics } from './output-diagnostics';
 import { createDefaultXtermOptions } from './terminal-options';
 import {
 	createScrollbackEnterRequestFailureHandler,
@@ -40,6 +41,7 @@ export type {
 	TouchScrollConfig,
 	XtermWebViewHandle,
 };
+export type { XtermOutputDiagnostics } from './output-diagnostics';
 
 type StrictOmit<T, K extends keyof T> = Omit<T, K>;
 type ITerminalOptions = import('@xterm/xterm').ITerminalOptions;
@@ -246,6 +248,7 @@ export function XtermJsWebView({
 	const remountingForBridgeLoadRef = useRef(false);
 	const currentBridgeLoadTokenRef = useRef<string | null>(null);
 	const awaitingBridgeDocumentStartRef = useRef(false);
+	const outputDiagnostics = useMemo(() => createXtermOutputDiagnostics(), []);
 
 	// ---- RN -> WebView message sender
 	const sendToWebView = useCallback(
@@ -266,6 +269,7 @@ export function XtermJsWebView({
 
 	const flush = useCallback(() => {
 		if (!bufRef.current) return;
+		const byteCount = bufRef.current.byteLength;
 		const bStr = binaryToBStr(bufRef.current);
 		bufRef.current = null;
 		if (rafRef.current != null) {
@@ -273,7 +277,9 @@ export function XtermJsWebView({
 			rafRef.current = null;
 		}
 		sendToWebView({ type: 'write', bStr });
-	}, [sendToWebView]);
+		outputDiagnostics.recordFlush();
+		outputDiagnostics.recordSent(byteCount);
+	}, [outputDiagnostics, sendToWebView]);
 
 	const cancelPendingWrite = useCallback(() => {
 		if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
@@ -292,6 +298,7 @@ export function XtermJsWebView({
 	const write = useCallback(
 		(data: Uint8Array) => {
 			if (!data || data.length === 0) return;
+			outputDiagnostics.recordQueued(data.byteLength);
 			if (!bufRef.current) {
 				bufRef.current = data;
 			} else {
@@ -304,17 +311,23 @@ export function XtermJsWebView({
 			if ((bufRef.current?.length ?? 0) >= coalescingThreshold) flush();
 			else schedule();
 		},
-		[coalescingThreshold, flush, schedule],
+		[coalescingThreshold, flush, outputDiagnostics, schedule],
 	);
 
 	const writeMany = useCallback(
 		(chunks: Uint8Array[]) => {
 			if (!chunks || chunks.length === 0) return;
+			const byteCount = chunks.reduce(
+				(total, chunk) => total + chunk.byteLength,
+				0,
+			);
+			outputDiagnostics.recordQueued(byteCount);
 			flush(); // Ensure any pending small buffered write is flushed before bulk write
 			const bStrs = chunks.map(binaryToBStr);
 			sendToWebView({ type: 'writeMany', chunks: bStrs });
+			outputDiagnostics.recordSent(byteCount);
 		},
-		[flush, sendToWebView],
+		[flush, outputDiagnostics, sendToWebView],
 	);
 
 	// Cleanup pending rAF on unmount
@@ -405,6 +418,7 @@ export function XtermJsWebView({
 			write,
 			writeMany,
 			flush,
+			getOutputDiagnostics: outputDiagnostics.getSnapshot,
 			sendToWebView,
 			webRef,
 			setSystemKeyboardEnabled,
@@ -488,6 +502,7 @@ export function XtermJsWebView({
 						onScrollbackEnterRequested: resolvedOnScrollbackEnterRequested,
 						onScrollbackEnterRequestFailure,
 						onScrollbackBatch: resolvedOnScrollbackBatch,
+						onOutputProgress: outputDiagnostics.recordWebViewProgress,
 					})
 				) {
 					return;
@@ -515,6 +530,7 @@ export function XtermJsWebView({
 			resolvedOnScrollbackEnterRequested,
 			onScrollbackEnterRequestFailure,
 			resolvedOnScrollbackBatch,
+			outputDiagnostics,
 		],
 	);
 

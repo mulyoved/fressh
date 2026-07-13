@@ -1,4 +1,5 @@
-import  { type BridgeOutboundMessage } from './bridge';
+import { type BridgeOutboundMessage } from './bridge';
+import { type XtermOutputDiagnostics } from './output-diagnostics';
 
 type TerminalSize = { cols: number; rows: number };
 type FocusableWebViewRef = {
@@ -10,6 +11,7 @@ export type XtermWebViewHandle = {
 	write: (data: Uint8Array) => void;
 	writeMany: (chunks: Uint8Array[]) => void;
 	flush: () => void;
+	getOutputDiagnostics: () => XtermOutputDiagnostics;
 	clear: () => void;
 	focus: () => void;
 	setSystemKeyboardEnabled: (enabled: boolean) => void;
@@ -30,6 +32,7 @@ export type XtermWebViewHandleDeps = {
 	write: XtermWebViewHandle['write'];
 	writeMany: XtermWebViewHandle['writeMany'];
 	flush: XtermWebViewHandle['flush'];
+	getOutputDiagnostics: XtermWebViewHandle['getOutputDiagnostics'];
 	sendToWebView: (message: BridgeOutboundMessage) => void;
 	webRef: FocusableWebViewRef;
 	setSystemKeyboardEnabled: XtermWebViewHandle['setSystemKeyboardEnabled'];
@@ -70,6 +73,7 @@ export function createXtermWebViewHandle({
 	write,
 	writeMany,
 	flush,
+	getOutputDiagnostics,
 	sendToWebView,
 	webRef,
 	setSystemKeyboardEnabled,
@@ -85,6 +89,7 @@ export function createXtermWebViewHandle({
 		write,
 		writeMany,
 		flush,
+		getOutputDiagnostics: () => ({ ...getOutputDiagnostics() }),
 		clear: () => sendToWebView({ type: 'clear' }),
 		focus: () => {
 			sendToWebView({ type: 'focus' });
