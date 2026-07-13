@@ -1,9 +1,7 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
 import test from 'node:test';
-import { fileURLToPath } from 'node:url';
 import { type BackupPayload } from '../../src/lib/device-migration';
+import { initializeSecretsManagerServices } from '../../src/lib/secrets-manager-initialization';
 import {
 	createRestorePreflightSummary,
 	exportBackupForSharing,
@@ -1514,37 +1512,37 @@ void test('recoverPendingRestore keeps an unreadable journal non-fatal when clea
 	assert.equal(journal.getClearCalls(), 1);
 });
 
-void test('secrets-manager initializes transactional secure storage before recovery', () => {
-	const source = readFileSync(
-		join(
-			dirname(fileURLToPath(import.meta.url)),
-			'../../src/lib/secrets-manager.ts',
-		),
-		'utf8',
-	);
-	const serviceConstruction = source.indexOf('createSecureStorageServices({');
-	const secureStorageInitialization = source.indexOf(
-		'await secureStorageServices.initialize();',
-	);
-	const recovery = source.indexOf(
-		'const recovery = await recoverPendingRestore({',
-	);
+void test('secrets-manager waits for secure storage initialization before recovery', async () => {
+	const events: string[] = [];
+	let settleSecureStorage: (() => void) | undefined;
+	const secureStorageSettled = new Promise<void>((resolve) => {
+		settleSecureStorage = resolve;
+	});
 
-	assert.ok(serviceConstruction >= 0);
-	assert.ok(
-		secureStorageInitialization > serviceConstruction,
-		'secure storage must be initialized after its service is constructed',
-	);
-	assert.ok(
-		recovery > secureStorageInitialization,
-		'restore recovery must start after secure storage initialization',
-	);
-	assert.match(
-		source.slice(recovery),
-		/restoreJournal: secureStorageServices\.restoreJournal/,
-	);
-	assert.match(
-		source.slice(recovery),
-		/listCurrentKeys: \(\) => secureStorageServices\.privateKeys\.listEntries\(\)/,
-	);
+	const initialization = initializeSecretsManagerServices({
+		initializeSecureStorage: async () => {
+			events.push('secure storage started');
+			await secureStorageSettled;
+			events.push('secure storage settled');
+		},
+		ensureConnectionsReady: async () => {
+			events.push('connections settled');
+		},
+		recoverPendingRestore: async () => {
+			events.push('recovery started');
+			return 'recovered';
+		},
+	});
+
+	await Promise.resolve();
+	assert.deepEqual(events, ['secure storage started']);
+	settleSecureStorage?.();
+
+	assert.equal(await initialization, 'recovered');
+	assert.deepEqual(events, [
+		'secure storage started',
+		'secure storage settled',
+		'connections settled',
+		'recovery started',
+	]);
 });

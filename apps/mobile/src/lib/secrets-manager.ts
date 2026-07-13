@@ -18,6 +18,7 @@ import {
 } from './device-migration';
 import { createDeletePrivateKeyHandler } from './key-usage';
 import { rootLogger } from './logger';
+import { initializeSecretsManagerServices } from './secrets-manager-initialization';
 import {
 	createSecureStorageServices,
 	type KeyMetadata,
@@ -189,14 +190,18 @@ const getConnectionQueryOptions = (id: string) =>
 	});
 
 async function initializeSecretsManager() {
-	await secureStorageServices.initialize();
-	await connectionStorage.ensureReady();
-	const recovery = await recoverPendingRestore({
-		restoreJournal: secureStorageServices.restoreJournal,
-		listCurrentKeys: () => secureStorageServices.privateKeys.listEntries(),
-		listCurrentConnections: () => connectionStorage.listEntriesWithValues(),
-		replaceAllKeys: replaceAllPrivateKeyEntries,
-		replaceAllConnections,
+	const recovery = await initializeSecretsManagerServices({
+		initializeSecureStorage: secureStorageServices.initialize,
+		ensureConnectionsReady: connectionStorage.ensureReady,
+		recoverPendingRestore: () =>
+			recoverPendingRestore({
+				restoreJournal: secureStorageServices.restoreJournal,
+				listCurrentKeys: () => secureStorageServices.privateKeys.listEntries(),
+				listCurrentConnections: () =>
+					connectionStorage.listEntriesWithValues(),
+				replaceAllKeys: replaceAllPrivateKeyEntries,
+				replaceAllConnections,
+			}),
 	});
 	if (recovery.restored) {
 		logger.warn('Recovered pending security center restore', recovery);
