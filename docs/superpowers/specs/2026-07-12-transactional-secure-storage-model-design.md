@@ -194,9 +194,10 @@ records never invalidate an otherwise complete data snapshot.
 
 ### Manifest pages
 
-A manifest is an immutable linked chain of bounded pages. Each page contains an
-ordered set of entry revision references plus the next page key. The last page
-has no next key.
+A manifest is an immutable linked chain of bounded pages. The record shape uses
+an entry-reference array, but the implementation deliberately stores zero or one
+entry reference per page. This removes page-packing branches and guarantees the
+metadata bound directly. The last page has no next page key.
 
 ```ts
 type ManifestEntryRefV2 = {

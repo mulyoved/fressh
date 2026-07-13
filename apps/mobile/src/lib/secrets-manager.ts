@@ -3,7 +3,7 @@ import { queryOptions } from '@tanstack/react-query';
 import * as Crypto from 'expo-crypto';
 import * as SecureStore from 'expo-secure-store';
 import { MMKV } from 'react-native-mmkv';
-import * as z from 'zod';
+import type * as z from 'zod';
 import { makeBetterSecureStore } from './chunked-storage';
 import {
 	connectionMetadataSchema,
@@ -18,10 +18,12 @@ import {
 } from './device-migration';
 import { createDeletePrivateKeyHandler } from './key-usage';
 import { rootLogger } from './logger';
+import { initializeSecretsManagerServices } from './secrets-manager-initialization';
 import {
-	recoverPendingRestore,
-	type RestoreJournalStorage,
-} from './security-center-flow';
+	createSecureStorageServices,
+	type KeyMetadata,
+} from './secure-storage-services';
+import { recoverPendingRestore } from './security-center-flow';
 import { queryClient, type StrictOmit } from './utils';
 
 export {
@@ -38,63 +40,22 @@ const secureStoreAdapter = {
 	deleteItem: (key: string) => SecureStore.deleteItemAsync(key),
 };
 
-const keyMetadataSchema = z.object({
-	priority: z.number(),
-	createdAtMs: z.int(),
-	// Optional display name for the key
-	label: z.string().optional(),
-	// Optional default flag
-	isDefault: z.boolean().optional(),
-});
-export type KeyMetadata = z.infer<typeof keyMetadataSchema>;
+export type { KeyMetadata } from './secure-storage-services';
 
-const betterKeyStorage = makeBetterSecureStore<KeyMetadata>({
-	storagePrefix: 'privateKey',
-	extraManifestFieldsSchema: keyMetadataSchema,
-	parseValue: (value) => value,
+const secureStorageServices = createSecureStorageServices({
 	storage: secureStoreAdapter,
+	sha256: async (bytes) => {
+		const digest = await Crypto.digest(
+			Crypto.CryptoDigestAlgorithm.SHA256,
+			bytes as Uint8Array<ArrayBuffer>,
+		);
+		return Array.from(new Uint8Array(digest), (byte) =>
+			byte.toString(16).padStart(2, '0'),
+		).join('');
+	},
 	randomUUID: () => Crypto.randomUUID(),
 	logger,
 });
-
-const restoreJournalStore = makeBetterSecureStore({
-	storagePrefix: 'securityCenterRestoreJournal',
-	parseValue: (value) => value,
-	storage: secureStoreAdapter,
-	randomUUID: () => Crypto.randomUUID(),
-	logger,
-});
-
-const restoreJournal: RestoreJournalStorage = {
-	load: async () => {
-		let entry: Awaited<ReturnType<typeof restoreJournalStore.getEntry>>;
-		try {
-			entry = await restoreJournalStore.getEntry('pending');
-		} catch (error) {
-			if (error instanceof Error && error.message === 'Entry not found') {
-				return null;
-			}
-			throw error;
-		}
-		try {
-			return JSON.parse(entry.value) as unknown;
-		} catch (error) {
-			logger.warn('Discarding malformed restore journal entry', error);
-			await restoreJournalStore.deleteEntry('pending');
-			return null;
-		}
-	},
-	save: async (state) => {
-		await restoreJournalStore.upsertEntry({
-			id: 'pending',
-			metadata: {},
-			value: JSON.stringify(state),
-		});
-	},
-	clear: async () => {
-		await restoreJournalStore.deleteEntry('pending');
-	},
-};
 
 function validatePrivateKey(value: string) {
 	const validateKeyResult = RnRussh.validatePrivateKey(value);
@@ -117,13 +78,10 @@ async function upsertPrivateKey(params: {
 		`${params.keyId ? 'Upserting' : 'Creating'} private key ${keyId}`,
 	);
 	// Preserve createdAtMs if the entry already exists
-	const existing = await betterKeyStorage
-		.getEntry(keyId)
-		.catch(() => undefined);
-	const createdAtMs =
-		existing?.manifestEntry.metadata.createdAtMs ?? Date.now();
+	const existing = await secureStorageServices.privateKeys.getEntry(keyId);
+	const createdAtMs = existing?.metadata.createdAtMs ?? Date.now();
 
-	await betterKeyStorage.upsertEntry({
+	await secureStorageServices.privateKeys.upsertEntry({
 		id: keyId,
 		metadata: {
 			...params.metadata,
@@ -140,7 +98,7 @@ const keyQueryKey = 'keys';
 const listKeysQueryOptions = queryOptions({
 	queryKey: [keyQueryKey],
 	queryFn: async () => {
-		const results = await betterKeyStorage.listEntriesWithValues();
+		const results = await secureStorageServices.privateKeys.listEntries();
 		logger.info(`Listed ${results.length} private keys`);
 		return results;
 	},
@@ -149,11 +107,11 @@ const listKeysQueryOptions = queryOptions({
 const getKeyQueryOptions = (keyId: string) =>
 	queryOptions({
 		queryKey: [keyQueryKey, keyId],
-		queryFn: () => betterKeyStorage.getEntry(keyId),
+		queryFn: () => secureStorageServices.privateKeys.getEntry(keyId),
 	});
 
 const deletePrivateKey = createDeletePrivateKeyHandler({
-	deleteKey: (keyId) => betterKeyStorage.deleteEntry(keyId),
+	deleteKey: (keyId) => secureStorageServices.privateKeys.deleteEntry(keyId),
 	listConnections: () => connectionStorage.listEntriesWithValues(),
 	invalidateKeysQuery: () =>
 		queryClient.invalidateQueries({ queryKey: [keyQueryKey] }),
@@ -163,7 +121,7 @@ const replaceAllPrivateKeyEntries = createReplaceAllPrivateKeyEntriesHandler({
 	replaceAllKeys: async (entries) => {
 		await replaceAllPrivateKeys({
 			entries,
-			storage: betterKeyStorage,
+			storage: secureStorageServices.privateKeys,
 			validatePrivateKey,
 		});
 	},
@@ -232,13 +190,17 @@ const getConnectionQueryOptions = (id: string) =>
 	});
 
 async function initializeSecretsManager() {
-	await connectionStorage.ensureReady();
-	const recovery = await recoverPendingRestore({
-		restoreJournal,
-		listCurrentKeys: () => betterKeyStorage.listEntriesWithValues(),
-		listCurrentConnections: () => connectionStorage.listEntriesWithValues(),
-		replaceAllKeys: replaceAllPrivateKeyEntries,
-		replaceAllConnections,
+	const recovery = await initializeSecretsManagerServices({
+		initializeSecureStorage: secureStorageServices.initialize,
+		ensureConnectionsReady: connectionStorage.ensureReady,
+		recoverPendingRestore: () =>
+			recoverPendingRestore({
+				restoreJournal: secureStorageServices.restoreJournal,
+				listCurrentKeys: secureStorageServices.privateKeys.listEntries,
+				listCurrentConnections: connectionStorage.listEntriesWithValues,
+				replaceAllKeys: replaceAllPrivateKeyEntries,
+				replaceAllConnections,
+			}),
 	});
 	if (recovery.restored) {
 		logger.warn('Recovered pending security center restore', recovery);
@@ -251,8 +213,12 @@ export const secretsManager = {
 		utils: {
 			upsertPrivateKey,
 			deletePrivateKey,
-			listEntriesWithValues: betterKeyStorage.listEntriesWithValues,
-			getPrivateKey: (keyId: string) => betterKeyStorage.getEntry(keyId),
+			listEntriesWithValues: secureStorageServices.privateKeys.listEntries,
+			getPrivateKey: async (keyId: string) => {
+				const entry = await secureStorageServices.privateKeys.getEntry(keyId);
+				if (entry === null) throw new Error('Entry not found');
+				return entry;
+			},
 			replaceAllEntries: replaceAllPrivateKeyEntries,
 		},
 		query: {
@@ -275,7 +241,7 @@ export const secretsManager = {
 	},
 	securityCenter: {
 		utils: {
-			restoreJournal,
+			restoreJournal: secureStorageServices.restoreJournal,
 		},
 	},
 };

@@ -39,8 +39,10 @@ The problem deserves a transactional fix, but the design is a mini-database on
 top of SecureStore: two roots, dual intent keys, bounded manifest and intent
 pages, SHA-256 content hashing, canonical JSON, cleanup pages, and several
 focused modules and tests — all to store **a handful of SSH keys and one
-restore-journal entry**. Manifest pages contain an ordered set of entry
-references; the design is not one manifest page per entry.
+restore-journal entry**. The implementation deliberately stores at most one
+entry reference per manifest page. This creates more records but removes
+page-packing branches and keeps validation direct; that trade-off is accepted
+for the small private-key and restore-journal namespaces.
 
 A simpler copy-on-write scheme (write the complete new snapshot under new keys,
 then flip a single root pointer, never delete before the flip) would eliminate
