@@ -12,7 +12,11 @@ import {
 	type Sha256,
 } from '../../src/lib/transactional-secure-storage';
 import { buildV2Keys } from '../../src/lib/transactional-secure-storage/records';
-import { readRootCandidate } from '../../src/lib/transactional-secure-storage/snapshot-reader';
+import {
+	readRootCandidate,
+	selectSnapshot,
+} from '../../src/lib/transactional-secure-storage/snapshot-reader';
+import { createTransactionWriter } from '../../src/lib/transactional-secure-storage/transaction-writer';
 import {
 	FaultInjectingStringStorage,
 	type StorageFault,
@@ -98,6 +102,89 @@ function cleanupGarbageKeys(records: Record<string, string>) {
 	return garbage;
 }
 
+function cleanupPagesForRoot(records: Record<string, string>, rootKey: string) {
+	const pages = new Set<string>();
+	const rawRoot = records[rootKey];
+	if (rawRoot === undefined) return pages;
+	let pageKey = (JSON.parse(rawRoot) as { cleanup?: { headKey: string } })
+		.cleanup?.headKey;
+	while (pageKey !== undefined && !pages.has(pageKey)) {
+		pages.add(pageKey);
+		const rawPage = records[pageKey];
+		if (rawPage === undefined) break;
+		pageKey = (JSON.parse(rawPage) as { nextPageKey?: string }).nextPageKey;
+	}
+	return pages;
+}
+
+function durableCleanupPageKeys(records: Record<string, string>) {
+	return Object.keys(records).filter((key) => key.includes('-v2-cleanup-'));
+}
+
+function discoverableCleanupPageKeys(records: Record<string, string>) {
+	const keys = buildV2Keys(namespace);
+	const discovered = new Set([
+		...cleanupPagesForRoot(records, keys.root.a),
+		...cleanupPagesForRoot(records, keys.root.b),
+	]);
+	for (const intentKey of [keys.intent.a, keys.intent.b]) {
+		const rawIntent = records[intentKey];
+		if (rawIntent === undefined) continue;
+		const intent = JSON.parse(rawIntent) as {
+			attemptId: string;
+			planPageCount: number;
+		};
+		for (let pageIndex = 0; pageIndex < intent.planPageCount; pageIndex++) {
+			const rawPlan = records[keys.intentPlan(intent.attemptId, pageIndex)];
+			if (rawPlan === undefined) continue;
+			const { plannedKey } = JSON.parse(rawPlan) as { plannedKey: string };
+			if (plannedKey.includes('-v2-cleanup-')) discovered.add(plannedKey);
+		}
+	}
+	return discovered;
+}
+
+async function commitBothRoots(storage: FaultInjectingStringStorage) {
+	const selection = await selectSnapshot({
+		namespace,
+		metadataSchema,
+		parseValue,
+		storage,
+		sha256,
+	});
+	assert.equal(selection.status, 'selected');
+	if (selection.status !== 'selected') throw new Error('Missing selected snapshot');
+	return createTransactionWriter({
+		namespace,
+		metadataSchema,
+		serializeValue,
+		parseValue,
+		storage,
+		randomUUID: () => `uuid-${++nextId}`,
+		sha256,
+	}).commitSnapshot({
+		base: selection.snapshot,
+		nextEntries: [...selection.snapshot.entries.values()],
+		targetSlots: ['a', 'b'],
+	});
+}
+
+async function seedDistinctCleanupRoots() {
+	const storage = new FaultInjectingStringStorage();
+	const store = createStore(storage);
+	await store.ensureReady();
+	for (const secret of ['one', 'two', 'three', 'four']) {
+		await store.upsertEntry({ ...first, value: { secret } });
+	}
+	const records = storage.snapshotDurable();
+	const keys = buildV2Keys(namespace);
+	const pagesA = cleanupPagesForRoot(records, keys.root.a);
+	const pagesB = cleanupPagesForRoot(records, keys.root.b);
+	assert.ok(pagesA.size > 0 && pagesB.size > 0);
+	assert.notDeepEqual(pagesA, pagesB);
+	return storage;
+}
+
 async function seedEmptyPair() {
 	const storage = new FaultInjectingStringStorage();
 	for (const [slot, commitGeneration] of [
@@ -173,17 +260,23 @@ void test('replace-all and upsert publish a canonical snapshot and reuse an unch
 
 void test('repeated value rotations inventory and eventually remove every unreachable immutable record', async () => {
 	const storage = await seedEmptyPair();
-	const store = createStore(storage);
+	let store = createStore(storage);
 	await store.upsertEntry(first);
-	for (const secret of ['two', 'three', 'four']) {
+	for (const secret of ['two', 'three', 'four', 'five', 'six', 'seven']) {
+		storage.restart();
+		store = createStore(storage);
 		await store.upsertEntry({ ...first, value: { secret } });
 	}
+	storage.restart();
+	store = createStore(storage);
 	await store.replaceAllEntries([
-		{ ...first, value: { secret: 'five' } },
+		{ ...first, value: { secret: 'eight' } },
 		second,
 	]);
+	storage.restart();
+	store = createStore(storage);
 	await store.replaceAllEntries([
-		{ ...first, value: { secret: 'six' } },
+		{ ...first, value: { secret: 'nine' } },
 		second,
 	]);
 
@@ -205,6 +298,22 @@ void test('repeated value rotations inventory and eventually remove every unreac
 		true,
 		'cleanup must exclude both-root reachable and shared reused records',
 	);
+	assert.equal(
+		[...garbage].some((key) => key.includes('-v2-cleanup-')),
+		false,
+		'cleanup metadata must never recursively become logical garbage',
+	);
+	const keys = buildV2Keys(namespace);
+	const pageCounts = [keys.root.a, keys.root.b].map((rootKey) => {
+		const root = JSON.parse(beforeCleanup[rootKey]!) as {
+			cleanup?: { pageCount: number };
+		};
+		return root.cleanup?.pageCount ?? 0;
+	});
+	assert.ok(
+		Math.max(...pageCounts) <= unreachable.length,
+		'cleanup pages must be bounded by logical unreachable records',
+	);
 
 	await store.retryCleanup();
 	const afterCleanup = storage.snapshotDurable();
@@ -215,6 +324,91 @@ void test('repeated value rotations inventory and eventually remove every unreac
 			.every((key) => reachableAfterCleanup.has(key)),
 		true,
 	);
+	assert.deepEqual(durableCleanupPageKeys(afterCleanup), []);
+});
+
+void test('both displaced cleanup descriptors retire only after both replacement roots validate', async () => {
+	const storage = await seedDistinctCleanupRoots();
+	const keys = buildV2Keys(namespace);
+	const before = storage.snapshotDurable();
+	const displacedPages = new Set([
+		...cleanupPagesForRoot(before, keys.root.a),
+		...cleanupPagesForRoot(before, keys.root.b),
+	]);
+	storage.operationLog.length = 0;
+
+	await commitBothRoots(storage);
+
+	for (const pageKey of displacedPages) {
+		assert.equal(await storage.getItem(pageKey), null);
+	}
+	const firstRetirement = storage.operationLog.findIndex(
+		({ type, key }) => type === 'delete' && displacedPages.has(key),
+	);
+	assert.notEqual(firstRetirement, -1);
+	const lastRootWrite = storage.operationLog
+		.map((operation, index) => ({ ...operation, index }))
+		.filter(
+			({ type, key }) =>
+				type === 'set' && (key === keys.root.a || key === keys.root.b),
+		)
+		.at(-1)!.index;
+	assert.ok(firstRetirement > lastRootWrite);
+	for (const rootKey of [keys.root.a, keys.root.b]) {
+		assert.equal(
+			storage.operationLog.some(
+				({ type, key }, index) =>
+					index > lastRootWrite &&
+					index < firstRetirement &&
+					type === 'get' &&
+					key === rootKey,
+			),
+			true,
+		);
+	}
+});
+
+void test('failed cleanup metadata retirement stays harmless and never amplifies later chains', async () => {
+	const seeded = (await seedDistinctCleanupRoots()).snapshotDurable();
+	const keys = buildV2Keys(namespace);
+	const displacedPages = new Set([
+		...cleanupPagesForRoot(seeded, keys.root.a),
+		...cleanupPagesForRoot(seeded, keys.root.b),
+	]);
+	const probe = new FaultInjectingStringStorage(seeded);
+	await commitBothRoots(probe);
+	const retirementBoundary = mutationOperations(probe).findIndex(
+		({ type, key }) => type === 'delete' && displacedPages.has(key),
+	);
+	assert.notEqual(retirementBoundary, -1);
+
+	const storage = new FaultInjectingStringStorage(seeded);
+	storage.failOperation(retirementBoundary + 1, 'delete-noop');
+	await commitBothRoots(storage);
+	const orphanedPages = [...displacedPages].filter(
+		(key) => storage.snapshotDurable()[key] !== undefined,
+	);
+	assert.equal(orphanedPages.length, 1);
+	await commitBothRoots(storage);
+
+	const records = storage.snapshotDurable();
+	const reachable = await reachableKeys(storage);
+	const logicalUnreachable = Object.keys(records).filter(
+		(key) =>
+			/-v2-(?:manifest|entry|value)-/.test(key) && !reachable.has(key),
+	);
+	const garbage = cleanupGarbageKeys(records);
+	assert.equal(
+		orphanedPages.some((key) => garbage.has(key)),
+		false,
+	);
+	const pageCounts = [keys.root.a, keys.root.b].map((rootKey) => {
+		const root = JSON.parse(records[rootKey]!) as {
+			cleanup?: { pageCount: number };
+		};
+		return root.cleanup?.pageCount ?? 0;
+	});
+	assert.ok(Math.max(...pageCounts) <= logicalUnreachable.length);
 });
 
 void test('an unchanged mutation reuses only its validated revision key', async () => {
@@ -497,7 +691,15 @@ void test('intent recovery preserves pending cleanup pages for retry', async () 
 	storage.restart();
 	const reopened = createStore(storage);
 	assert.equal(await reopened.getEntry(first.id), null);
-	assert.notEqual(await storage.getItem(root.cleanup!.headKey), null);
+	const afterRecovery = storage.snapshotDurable();
+	const referencedCleanupPages = new Set([
+		...cleanupPagesForRoot(afterRecovery, keys.root.a),
+		...cleanupPagesForRoot(afterRecovery, keys.root.b),
+	]);
+	assert.ok(referencedCleanupPages.size > 0);
+	for (const pageKey of referencedCleanupPages) {
+		assert.notEqual(await storage.getItem(pageKey), null);
+	}
 	assert.equal((await reopened.ensureReady()).cleanupPending, true);
 
 	await reopened.retryCleanup();
@@ -507,6 +709,10 @@ void test('intent recovery preserves pending cleanup pages for retry', async () 
 		Object.keys(storage.snapshotDurable()).filter(
 			(key) => key.includes('-v2-entry-') || key.includes('-v2-value-'),
 		),
+		[],
+	);
+	assert.deepEqual(
+		[...discoverableCleanupPageKeys(storage.snapshotDurable())],
 		[],
 	);
 });
@@ -572,9 +778,21 @@ void test('a transient cleanup-page read failure preserves the rooted chain and 
 	storage.restart();
 	const reopened = createStore(transientStorage);
 	assert.equal(await reopened.getEntry(first.id), null);
-	assert.notEqual(await storage.getItem(root.cleanup.headKey), null);
+	const afterRecovery = storage.snapshotDurable();
+	const referencedCleanupPages = new Set([
+		...cleanupPagesForRoot(afterRecovery, keys.root.a),
+		...cleanupPagesForRoot(afterRecovery, keys.root.b),
+	]);
+	assert.ok(referencedCleanupPages.size > 0);
+	for (const pageKey of referencedCleanupPages) {
+		assert.notEqual(await storage.getItem(pageKey), null);
+	}
 	await reopened.retryCleanup();
 	assert.equal((await reopened.ensureReady()).cleanupPending, false);
+	assert.deepEqual(
+		[...discoverableCleanupPageKeys(storage.snapshotDurable())],
+		[],
+	);
 });
 
 void test('does not fail a durable delete when cleanup-head reading fails', async () => {

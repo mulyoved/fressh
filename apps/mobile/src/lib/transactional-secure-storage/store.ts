@@ -182,7 +182,9 @@ export function createTransactionalSecureStore<Metadata extends object, Value>(
 		const other = await readRootCandidate(options, olderSlot(selected));
 		if (
 			other.status !== 'valid' ||
-			((legacy?.status === 'present' || selected.root.cleanup !== undefined) &&
+			((legacy?.status === 'present' ||
+				selected.root.cleanup !== undefined ||
+				other.snapshot.root.cleanup !== undefined) &&
 				!startup.sameSnapshot(selected, other.snapshot))
 		) {
 			selected = await writer.commitSnapshot({

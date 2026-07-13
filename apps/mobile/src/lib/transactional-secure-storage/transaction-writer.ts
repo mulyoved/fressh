@@ -1,5 +1,8 @@
 import { type ZodType } from 'zod';
-import { createCleanupChain } from './cleanup-chain';
+import {
+	createCleanupChain,
+	type ValidatedCleanupPage,
+} from './cleanup-chain';
 import { canonicalJson, encodeValueChunks } from './codec';
 import {
 	SecureStorageWriteNotCommittedError as WriteError,
@@ -55,6 +58,7 @@ export function createTransactionWriter<Metadata extends object, Value>(
 		let staged!: Awaited<ReturnType<typeof stageSnapshot>>;
 		let rootRecords!: readonly { slot: RootSlot; raw: string }[];
 		let planPageCount!: number;
+		let retiredCleanupPages!: readonly ValidatedCleanupPage[];
 		try {
 			attemptId = options.randomUUID();
 			snapshotId = attemptId;
@@ -73,16 +77,16 @@ export function createTransactionWriter<Metadata extends object, Value>(
 				snapshotId = staged.root.snapshotId;
 			}
 			const garbageKeys = new Set(cleanupKeys ?? []);
-			const cleanupPages = new Map<RootSlot, readonly { key: string; garbageKey: string }[]>();
-			if (cleanupKeys === undefined) {
-				for (const slot of ['a', 'b'] as const) {
-					const candidate = candidates.get(slot)!;
-					if (candidate.status !== 'valid') continue;
-					const descriptor = candidate.snapshot.root.cleanup;
-					if (descriptor === undefined) continue;
-					const cleanup = await cleanupChain.read(descriptor);
-					if (cleanup.status !== 'valid') continue;
-					cleanupPages.set(slot, cleanup.pages);
+			const cleanupPages = new Map<RootSlot, readonly ValidatedCleanupPage[]>();
+			for (const slot of ['a', 'b'] as const) {
+				const candidate = candidates.get(slot)!;
+				if (candidate.status !== 'valid') continue;
+				const descriptor = candidate.snapshot.root.cleanup;
+				if (descriptor === undefined) continue;
+				const cleanup = await cleanupChain.read(descriptor);
+				if (cleanup.status !== 'valid') continue;
+				cleanupPages.set(slot, cleanup.pages);
+				if (cleanupKeys === undefined) {
 					for (const { garbageKey } of cleanup.pages) garbageKeys.add(garbageKey);
 				}
 			}
@@ -90,9 +94,6 @@ export function createTransactionWriter<Metadata extends object, Value>(
 				const candidate = candidates.get(slot)!;
 				if (candidate.status !== 'valid') continue;
 				for (const key of candidate.snapshot.reachableKeys) garbageKeys.add(key);
-				if (cleanupKeys === undefined) {
-					for (const { key } of cleanupPages.get(slot) ?? []) garbageKeys.add(key);
-				}
 			}
 			const protectedKeys = new Set<string>([
 				keys.root.a,
@@ -115,6 +116,20 @@ export function createTransactionWriter<Metadata extends object, Value>(
 				attemptId,
 				[...garbageKeys].filter((key) => !protectedKeys.has(key)),
 			);
+			const liveCleanupPageKeys = new Set<string>();
+			for (const slot of ['a', 'b'] as const) {
+				if (targetSlots.includes(slot)) continue;
+				for (const { key } of cleanupPages.get(slot) ?? []) {
+					liveCleanupPageKeys.add(key);
+				}
+			}
+			const retirement = new Map<string, ValidatedCleanupPage>();
+			for (const slot of targetSlots) {
+				for (const page of cleanupPages.get(slot) ?? []) {
+					if (!liveCleanupPageKeys.has(page.key)) retirement.set(page.key, page);
+				}
+			}
+			retiredCleanupPages = [...retirement.values()];
 			const journal = await intentJournal.write({
 				attemptId,
 				targetRootSlots: targetSlots,
@@ -152,9 +167,12 @@ export function createTransactionWriter<Metadata extends object, Value>(
 		let reopened!: ValidatedSnapshot<Metadata, Value>;
 		for (const slot of targetSlots) {
 			const candidate = await readRootCandidate(options, slot);
+			const expectedRoot = rootRecords.find(
+				(rootRecord) => rootRecord.slot === slot,
+			)!.raw;
 			if (
 				candidate.status !== 'valid' ||
-				candidate.snapshot.root.snapshotId !== snapshotId
+				canonicalJson(candidate.snapshot.root) !== expectedRoot
 			) {
 				throw new WriteError(
 					'Secure storage root did not reopen after publication',
@@ -163,6 +181,7 @@ export function createTransactionWriter<Metadata extends object, Value>(
 			reopened = candidate.snapshot;
 		}
 		await intentJournal.complete(attemptId, planPageCount);
+		await cleanupChain.deletePagesBestEffort(retiredCleanupPages);
 		return reopened;
 	}
 
