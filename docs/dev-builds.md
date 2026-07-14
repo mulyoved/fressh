@@ -124,6 +124,11 @@ EAS_SKIP_AUTO_FINGERPRINT=1 \
 pnpm exec eas build --local --profile preview --platform android
 ```
 
+The root `.easignore` excludes `apps/mobile/android/`. This is required: EAS
+must regenerate Android from `app.config.ts` so every config plugin runs. If the
+local generated Android directory enters the build archive, EAS skips prebuild
+and can package stale or missing native modules.
+
 Use `EAS_SKIP_AUTO_FINGERPRINT=1` for normal local iteration; fingerprinting is
 useful for CI/release diagnostics but often adds time without changing the APK
 result.
