@@ -5,6 +5,7 @@ export type ShellModalId =
 	| 'configure'
 	| 'browser-actions'
 	| 'feature-request'
+	| 'worktree-workspace'
 	| 'skill-selector';
 
 export type ShellModalClose = (context: {

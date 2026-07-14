@@ -2,6 +2,28 @@ import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
+import { createShellModalArbiter } from '../../src/lib/shell-controllers/modal-arbiter';
+import { createWorktreeWorkspaceControllerAdapter } from '../../src/lib/shell-controllers/worktree-workspace-adapter';
+
+function createWorktreeAdapter(
+	arbiter: ReturnType<typeof createShellModalArbiter>,
+) {
+	return createWorktreeWorkspaceControllerAdapter({
+		getCommittedDependencies: () => ({
+			connection: {},
+			tmuxEnabled: true,
+			sessionName: 'main',
+			sourceKey: 'source-a',
+			workmuxControlChannel: {
+				command: async () => ({ success: true, output: '' }),
+				operation: async () => ({ success: true, output: '' }),
+			},
+			arbiter,
+		}),
+		reportPrecondition: () => {},
+		logger: { error: () => {} },
+	});
+}
 
 function extractBlock(source: string, start: string, end: string): string {
 	const startIndex = source.indexOf(start);
@@ -119,5 +141,86 @@ void test('shell detail tracks tmux-only lifecycle changes separately from targe
 			),
 		),
 		false,
+	);
+});
+
+void test('worktree workspace arbiter admission closes every conflicting shell modal first', () => {
+	const events: string[] = [];
+	const arbiter = createShellModalArbiter();
+	const conflicts = [
+		'command-menu',
+		'commander',
+		'text-entry',
+		'configure',
+		'browser-actions',
+		'feature-request',
+		'skill-selector',
+	] as const;
+	for (const conflict of conflicts) {
+		arbiter.register(conflict, ({ opening }) => {
+			assert.equal(opening, 'worktree-workspace');
+			events.push(`close:${conflict}`);
+		});
+	}
+
+	const adapter = createWorktreeAdapter(arbiter);
+	assert.equal(
+		adapter.requestOpen(() => events.push('open:worktree-workspace')),
+		true,
+	);
+	assert.deepEqual(events, [
+		...conflicts.map((conflict) => `close:${conflict}`),
+		'open:worktree-workspace',
+	]);
+});
+
+void test('worktree workspace arbiter admission stops when a conflicting modal blocks close', () => {
+	const events: string[] = [];
+	const arbiter = createShellModalArbiter();
+	arbiter.register('command-menu', () => {
+		events.push('close:command-menu');
+	});
+	arbiter.register('commander', () => {
+		events.push('block:commander');
+		return false;
+	});
+	arbiter.register('text-entry', () => {
+		events.push('close:text-entry');
+	});
+
+	const adapter = createWorktreeAdapter(arbiter);
+	assert.equal(
+		adapter.requestOpen(() => events.push('opened')),
+		false,
+	);
+	assert.deepEqual(events, ['close:command-menu', 'block:commander']);
+});
+
+void test('worktree workspace hook owns committed source lifecycle without terminal input', () => {
+	const source = readFileSync(
+		join(process.cwd(), 'src/lib/shell-controllers/worktree-workspace.tsx'),
+		'utf8',
+	);
+	const adapterSource = readFileSync(
+		join(
+			process.cwd(),
+			'src/lib/shell-controllers/worktree-workspace-adapter.ts',
+		),
+		'utf8',
+	);
+	assert.match(
+		source,
+		/getCommittedDependencies: \(\) => committedDepsRef\.current/,
+	);
+	assert.match(
+		source,
+		/syncControllerSource\(\{[\s\S]*?dependencies: deps,[\s\S]*?core,[\s\S]*?\}\)/,
+	);
+	assert.match(source, /createReplaySafeControllerLifecycle\(core\)/);
+	assert.match(source, /adapter\.registerClose\(core\.close\)/);
+	assert.match(source, /Alert\.alert\('Worktree Workspace', failure\.message/);
+	assert.doesNotMatch(
+		`${source}\n${adapterSource}`,
+		/sendTextRaw|sendBytes|runCommandSteps|terminal-transport/,
 	);
 });
