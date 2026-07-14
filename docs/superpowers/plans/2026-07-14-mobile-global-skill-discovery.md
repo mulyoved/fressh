@@ -495,22 +495,27 @@ dependency checks, duplicate-code checks, mobile lint, and mobile type checking.
 ```bash
 git diff --check
 git status --short
-git log -3 --oneline
+git log -4 --oneline
 ```
 
 Expected: `git diff --check` has no output; `git status --short` is empty; the
-history contains the design commit plus the two focused implementation commits.
+history contains the design commit, plan commit, and two focused implementation
+commits.
 
-- [ ] **Step 5: Push the validated `dev` branch**
+- [ ] **Step 5: Fast-forward and push the validated `dev` branch**
 
 ```bash
 git branch --show-current
-git push origin dev
+git -C /home/muly/code/fressh status --short
+git -C /home/muly/code/fressh merge --ff-only fix/mobile-global-skill-discovery
+git -C /home/muly/code/fressh push origin dev
 ```
 
-Expected: the branch command prints `dev`, and the push advances `origin/dev`
-with the design and implementation commits. Stop instead of pushing if the
-branch is not `dev`.
+Expected: the branch command prints `fix/mobile-global-skill-discovery`, the
+primary `dev` checkout is clean, the fast-forward succeeds, and the push
+advances `origin/dev` with the design, plan, and implementation commits. Stop
+instead of merging if either branch or checkout does not match these
+expectations.
 
 - [ ] **Step 6: Publish the JavaScript change to preview**
 
