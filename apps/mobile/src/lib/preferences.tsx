@@ -69,10 +69,7 @@ export const preferences = {
 			set: (enabled: boolean) => {
 				storage.set(preferences.agentAlerts.vibration._key, enabled);
 			},
-			useAgentAlertVibrationPref: (): [
-				boolean,
-				(enabled: boolean) => void,
-			] => {
+			useAgentAlertVibrationPref: (): [boolean, (enabled: boolean) => void] => {
 				const [enabled, setEnabled] = useMMKVBoolean(
 					preferences.agentAlerts.vibration._key,
 				);

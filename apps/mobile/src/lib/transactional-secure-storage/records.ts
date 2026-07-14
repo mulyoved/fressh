@@ -4,7 +4,7 @@ import {
 	canonicalJson,
 	utf8ByteLength,
 } from './codec';
-import  {
+import {
 	type CleanupPageV2,
 	type EntryRevisionV2,
 	type IntentPlanPageV2,
@@ -15,7 +15,10 @@ import  {
 } from './contracts';
 
 const textEncoder = new TextEncoder();
-const keySafeString = z.string().min(1).regex(/^[A-Za-z0-9._-]+$/);
+const keySafeString = z
+	.string()
+	.min(1)
+	.regex(/^[A-Za-z0-9._-]+$/);
 const storageKey = keySafeString;
 const nonNegativeInteger = z.number().int().nonnegative();
 
@@ -66,14 +69,19 @@ export function createRecordSchemas<Metadata extends object>(
 			.strictObject({
 				...common,
 				attemptId: keySafeString,
-				targetRootSlots: z.array(z.enum(['a', 'b'])).min(1).max(2),
+				targetRootSlots: z
+					.array(z.enum(['a', 'b']))
+					.min(1)
+					.max(2),
 				firstCommitGeneration: nonNegativeInteger,
 				snapshotId: keySafeString,
 				planPageCount: nonNegativeInteger,
 				planSha256: z.string(),
 			})
 			.superRefine((record, context) => {
-				if (new Set(record.targetRootSlots).size !== record.targetRootSlots.length) {
+				if (
+					new Set(record.targetRootSlots).size !== record.targetRootSlots.length
+				) {
 					context.addIssue({
 						code: z.ZodIssueCode.custom,
 						path: ['targetRootSlots'],

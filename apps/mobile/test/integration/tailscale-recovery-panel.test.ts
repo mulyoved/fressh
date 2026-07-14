@@ -110,7 +110,10 @@ void test('Tailscale recovery panel model keeps recovering actions disabled', ()
 	assert.equal(typeof model.handlers?.openTailscale, 'function');
 	assert.equal(typeof model.handlers?.retry, 'function');
 	assert.equal(typeof model.handlers?.reset, 'function');
-	assert.equal(model.presentation.primaryBackgroundColor, colors.primaryDisabled);
+	assert.equal(
+		model.presentation.primaryBackgroundColor,
+		colors.primaryDisabled,
+	);
 	assert.deepEqual(
 		model.presentation.actions.map((action) => ({
 			id: action.id,

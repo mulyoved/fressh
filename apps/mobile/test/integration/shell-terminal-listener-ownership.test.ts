@@ -123,8 +123,7 @@ for (const { name, invalidate } of committedListenerInvalidations) {
 	void test(`committed listener rejects a retained callback after ${name}`, async () => {
 		const { harness, listener } = await createCommittedListenerHarness();
 		invalidate(harness);
-		const listenerDiagnostics =
-			harness.core.getOutputDiagnostics()?.listener;
+		const listenerDiagnostics = harness.core.getOutputDiagnostics()?.listener;
 		const calls = [...harness.calls];
 		const payload = `DO_NOT_LOG_STALE_LISTENER_PAYLOAD_${name}`;
 
@@ -142,7 +141,10 @@ for (const { name, invalidate } of committedListenerInvalidations) {
 			harness.core.getOutputDiagnostics()?.listener,
 			listenerDiagnostics,
 		);
-		assert.equal(harness.calls.some((call) => call.includes(payload)), false);
+		assert.equal(
+			harness.calls.some((call) => call.includes(payload)),
+			false,
+		);
 	});
 }
 
@@ -166,7 +168,10 @@ void test('committed listener suppresses a null current xterm and recovers on th
 		harness.core.getOutputDiagnostics()?.listener,
 		listenerDiagnostics,
 	);
-	assert.equal(harness.calls.some((call) => call.includes(payload)), false);
+	assert.equal(
+		harness.calls.some((call) => call.includes(payload)),
+		false,
+	);
 
 	const restoredWrites: number[][] = [];
 	harness.setXterm({
@@ -209,7 +214,10 @@ void test('committed listener contains a throwing current-xterm lookup and recov
 		harness.core.getOutputDiagnostics()?.listener,
 		listenerDiagnostics,
 	);
-	assert.equal(harness.calls.some((call) => call.includes(payload)), false);
+	assert.equal(
+		harness.calls.some((call) => call.includes(payload)),
+		false,
+	);
 
 	const restoredWrites: number[][] = [];
 	harness.setXterm({

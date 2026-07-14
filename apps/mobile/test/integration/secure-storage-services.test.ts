@@ -156,7 +156,10 @@ void test('every restore journal migration write interruption leaves the pending
 	const offset = mutationCount(probe.storage);
 	await createServices(probe.storage).restoreJournal.load();
 	const migrationWrites = mutationCount(probe.storage) - offset;
-	assert.ok(migrationWrites > 0, 'migration fault matrix requires write boundaries');
+	assert.ok(
+		migrationWrites > 0,
+		'migration fault matrix requires write boundaries',
+	);
 
 	for (let boundary = 1; boundary <= migrationWrites; boundary += 1) {
 		for (const fault of [

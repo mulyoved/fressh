@@ -78,7 +78,8 @@ export function createTransactionalSecureStore<Metadata extends object, Value>(
 		for (const slot of ['a', 'b'] as const) {
 			const candidate = await readRootCandidate(options, slot);
 			if (candidate.status !== 'valid') continue;
-			for (const key of candidate.snapshot.reachableKeys) protectedKeys.add(key);
+			for (const key of candidate.snapshot.reachableKeys)
+				protectedKeys.add(key);
 			const descriptor = candidate.snapshot.root.cleanup;
 			if (descriptor === undefined) continue;
 			const cleanup = await cleanupChain.read(descriptor);
@@ -114,7 +115,8 @@ export function createTransactionalSecureStore<Metadata extends object, Value>(
 			}
 			await recoverIntents();
 			const legacy = await options.legacy.read();
-			if (legacy.status === 'present') return { type: 'legacy', snapshot: legacy };
+			if (legacy.status === 'present')
+				return { type: 'legacy', snapshot: legacy };
 			if (before.status === 'no-valid-state') {
 				return {
 					type: 'corrupt',
@@ -137,7 +139,8 @@ export function createTransactionalSecureStore<Metadata extends object, Value>(
 
 	async function ensureReady() {
 		const state = await classify();
-		if (state.type === 'unavailable' || state.type === 'corrupt') throw state.error;
+		if (state.type === 'unavailable' || state.type === 'corrupt')
+			throw state.error;
 		if (state.type === 'fresh' || state.type === 'legacy') {
 			const legacy =
 				state.type === 'legacy'
@@ -147,7 +150,9 @@ export function createTransactionalSecureStore<Metadata extends object, Value>(
 			createdV2ThisInstance = true;
 			return {
 				status:
-					state.type === 'fresh' ? ('initialized' as const) : ('migrated' as const),
+					state.type === 'fresh'
+						? ('initialized' as const)
+						: ('migrated' as const),
 				cleanupPending: state.type === 'legacy',
 			};
 		}
@@ -198,7 +203,9 @@ export function createTransactionalSecureStore<Metadata extends object, Value>(
 			: await reconcileLegacyCleanup(selected, legacy);
 		return {
 			status:
-				state.type === 'recovered' ? ('recovered' as const) : ('current' as const),
+				state.type === 'recovered'
+					? ('recovered' as const)
+					: ('current' as const),
 			cleanupPending,
 		};
 	}

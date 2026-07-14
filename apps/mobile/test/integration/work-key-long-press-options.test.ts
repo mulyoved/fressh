@@ -39,8 +39,14 @@ void test('widenWorkmuxNavScope caps the mode ladder at all', () => {
 });
 
 void test('getWorkmuxScopeForActionId resolves only scope setter actions', () => {
-	assert.equal(getWorkmuxScopeForActionId('WORKMUX_NAV_SCOPE_ACTIVE'), 'active');
-	assert.equal(getWorkmuxScopeForActionId('WORKMUX_NAV_SCOPE_VISIBLE'), 'visible');
+	assert.equal(
+		getWorkmuxScopeForActionId('WORKMUX_NAV_SCOPE_ACTIVE'),
+		'active',
+	);
+	assert.equal(
+		getWorkmuxScopeForActionId('WORKMUX_NAV_SCOPE_VISIBLE'),
+		'visible',
+	);
 	assert.equal(getWorkmuxScopeForActionId('WORKMUX_NAV_SCOPE_ALL'), 'all');
 	assert.equal(getWorkmuxScopeForActionId('WORKMUX_NAV_NEXT'), null);
 	assert.equal(getWorkmuxScopeForActionId('OPEN_ADVANCED_KEYBOARD'), null);
@@ -86,7 +92,10 @@ void test('Work-shaped slots missing required scope setters do not resolve dynam
 	};
 
 	assert.equal(isWorkKeyNavSlot(partialScopeWorkSlot), false);
-	assert.equal(getWorkKeyLongPressOptions(partialScopeWorkSlot, 'active'), null);
+	assert.equal(
+		getWorkKeyLongPressOptions(partialScopeWorkSlot, 'active'),
+		null,
+	);
 });
 
 void test('Work key options for active mode include previous active and widened busy nav', () => {

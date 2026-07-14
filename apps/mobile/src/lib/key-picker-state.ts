@@ -31,7 +31,9 @@ export function getKeyPickerViewState(params: {
 
 	return {
 		selectedId,
-		display: selectedKey ? (selectedKey.metadata.label ?? selectedKey.id) : 'None',
+		display: selectedKey
+			? (selectedKey.metadata.label ?? selectedKey.id)
+			: 'None',
 		showEmptyState: !selectedKey,
 	};
 }

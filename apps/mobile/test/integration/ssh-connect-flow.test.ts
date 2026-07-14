@@ -323,7 +323,10 @@ void test('connectAndRememberConnection handles aborted connect signal without r
 	const connectSignal = {
 		aborted: false,
 		reason: undefined,
-		addEventListener: (_type: string, listener: EventListenerOrEventListenerObject) => {
+		addEventListener: (
+			_type: string,
+			listener: EventListenerOrEventListenerObject,
+		) => {
 			listeners.add(listener as () => void);
 		},
 		removeEventListener: (

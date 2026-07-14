@@ -620,7 +620,12 @@ void test('buildWorkmuxAppNavArgv appends --scope for next/prev', () => {
 
 void test('buildWorkmuxAppNavArgv omits --scope when scope is undefined', () => {
 	assert.deepEqual(buildWorkmuxAppNavArgv('main', 'next-all'), [
-		'tmux', 'app', 'nav', 'next-all', '--session', 'main',
+		'tmux',
+		'app',
+		'nav',
+		'next-all',
+		'--session',
+		'main',
 	]);
 });
 

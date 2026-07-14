@@ -191,27 +191,25 @@ export const tailscaleDiagnosticEvents = {
 		platformOS: string;
 		readiness: TailscaleReadyResult;
 		message?: string;
-	}): TailscaleEnsureReadyEvent =>
-		({
-			kind: 'tailscale.ensure-ready.result',
-			source: input.source,
-			message: input.message,
-			platformOS: input.platformOS,
-			readiness: copyTailscaleReadyResult(input.readiness),
-		}),
+	}): TailscaleEnsureReadyEvent => ({
+		kind: 'tailscale.ensure-ready.result',
+		source: input.source,
+		message: input.message,
+		platformOS: input.platformOS,
+		readiness: copyTailscaleReadyResult(input.readiness),
+	}),
 	recoveryResult: (input: {
 		source: ConnectionDiagnosticSource;
 		recoveryResult: TailscaleRecoverAfterFailureResult;
 		message?: string;
-	}): TailscaleRecoveryResultEvent =>
-		({
-			kind: 'tailscale.recovery.result',
-			source: input.source,
-			message: input.message,
-			recoveryResult: copyTailscaleRecoverAfterFailureResult(
-				input.recoveryResult,
-			),
-		}),
+	}): TailscaleRecoveryResultEvent => ({
+		kind: 'tailscale.recovery.result',
+		source: input.source,
+		message: input.message,
+		recoveryResult: copyTailscaleRecoverAfterFailureResult(
+			input.recoveryResult,
+		),
+	}),
 } as const;
 
 export function formatTailscaleDiagnosticEventFields(

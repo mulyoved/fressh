@@ -124,7 +124,9 @@ function tmuxAttachFailedResult(
 	};
 }
 
-function abortedResult(reason: unknown = 'caller-aborted'): SavedEntryConnectResult {
+function abortedResult(
+	reason: unknown = 'caller-aborted',
+): SavedEntryConnectResult {
 	return {
 		status: 'aborted',
 		reason,

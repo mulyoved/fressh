@@ -68,7 +68,10 @@ export function createSecureStorageServices(params: {
 			try {
 				return JSON.parse(entry.value) as unknown;
 			} catch (error) {
-				params.logger?.warn('Discarding malformed restore journal entry', error);
+				params.logger?.warn(
+					'Discarding malformed restore journal entry',
+					error,
+				);
 				await restoreJournalStore.deleteEntry('pending');
 				return null;
 			}

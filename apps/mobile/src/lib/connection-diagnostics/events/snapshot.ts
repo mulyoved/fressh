@@ -81,10 +81,11 @@ function snapshotDiagnosticValueInternal(
 		try {
 			for (const key of Object.keys(value)) {
 				try {
-					copy[safeDiagnosticString(key, key)] = snapshotDiagnosticValueInternal(
-						(value as Record<string, unknown>)[key],
-						path,
-					);
+					copy[safeDiagnosticString(key, key)] =
+						snapshotDiagnosticValueInternal(
+							(value as Record<string, unknown>)[key],
+							path,
+						);
 				} catch {
 					copy[safeDiagnosticString(key, key)] = UNREADABLE_VALUE_MESSAGE;
 				}

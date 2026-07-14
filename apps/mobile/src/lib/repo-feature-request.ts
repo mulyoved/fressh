@@ -7,11 +7,12 @@ export type PinnedFeatureRequestRepo = {
 	repository: string;
 };
 
-export const PINNED_FEATURE_REQUEST_REPOS: readonly PinnedFeatureRequestRepo[] = [
-	{ label: 'Cube9', repository: 'cube-9/cube9' },
-	{ label: 'Fresh', repository: 'mulyoved/fressh' },
-	{ label: 'Pro Skills', repository: 'mulyoved/skills' },
-] as const;
+export const PINNED_FEATURE_REQUEST_REPOS: readonly PinnedFeatureRequestRepo[] =
+	[
+		{ label: 'Cube9', repository: 'cube-9/cube9' },
+		{ label: 'Fresh', repository: 'mulyoved/fressh' },
+		{ label: 'Pro Skills', repository: 'mulyoved/skills' },
+	] as const;
 
 for (const entry of PINNED_FEATURE_REQUEST_REPOS) {
 	if (!githubRepositoryPattern.test(entry.repository)) {
@@ -90,15 +91,12 @@ export function parseGitHubRepositoryResolutionOutput(
 
 export const GITHUB_REPOSITORY_TARGETS = ['issues', 'pulls'] as const;
 
-export type GitHubRepositoryTarget =
-	(typeof GITHUB_REPOSITORY_TARGETS)[number];
+export type GitHubRepositoryTarget = (typeof GITHUB_REPOSITORY_TARGETS)[number];
 
 export function isGitHubRepositoryTarget(
 	value: string,
 ): value is GitHubRepositoryTarget {
-	return GITHUB_REPOSITORY_TARGETS.includes(
-		value as GitHubRepositoryTarget,
-	);
+	return GITHUB_REPOSITORY_TARGETS.includes(value as GitHubRepositoryTarget);
 }
 
 export function buildGitHubRepositoryTargetUrl(

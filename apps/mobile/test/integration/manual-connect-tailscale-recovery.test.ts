@@ -169,8 +169,7 @@ void test('manual connect shows network attention before SSH when network is una
 			onAttention: (message) => attentions.push(message),
 		}),
 		(error: unknown) =>
-			error instanceof Error &&
-			error.message === NETWORK_UNAVAILABLE_MESSAGE,
+			error instanceof Error && error.message === NETWORK_UNAVAILABLE_MESSAGE,
 	);
 
 	assert.deepEqual(attempts, []);

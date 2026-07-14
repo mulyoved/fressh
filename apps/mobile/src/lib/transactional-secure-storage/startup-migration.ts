@@ -28,7 +28,10 @@ export function createStartupMigration<Metadata extends object, Value>(
 	options: Options<Metadata, Value>,
 ) {
 	const keys = buildV2Keys(options.namespace);
-	const schemas = createRecordSchemas(options.namespace, options.metadataSchema);
+	const schemas = createRecordSchemas(
+		options.namespace,
+		options.metadataSchema,
+	);
 	const cleanupChain = createCleanupChain(options);
 	const intentJournal = createIntentJournal(options);
 	const encoder = new TextEncoder();
@@ -92,11 +95,10 @@ export function createStartupMigration<Metadata extends object, Value>(
 		}
 		const cleanup =
 			snapshot.status === 'present'
-				? await cleanupChain.stage(
-						records,
-						attemptId,
-						[...snapshot.recordKeys.slice(1), snapshot.recordKeys[0]!],
-					)
+				? await cleanupChain.stage(records, attemptId, [
+						...snapshot.recordKeys.slice(1),
+						snapshot.recordKeys[0]!,
+					])
 				: undefined;
 		const rootBase = {
 			formatVersion: 2 as const,

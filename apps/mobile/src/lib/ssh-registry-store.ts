@@ -134,9 +134,7 @@ export function createSshRegistryStore(
 					},
 				});
 				const originalCloseFn = shell.close.bind(shell);
-				const close: SshShell['close'] = async (
-					opts?: ShellCloseOptions,
-				) => {
+				const close: SshShell['close'] = async (opts?: ShellCloseOptions) => {
 					const closeStoreKey =
 						`${connection.connectionId}-${shell.channelId}` as const;
 					logger.debug('shell close requested', {

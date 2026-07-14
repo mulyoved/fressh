@@ -145,13 +145,13 @@ export function AutoConnectManager() {
 	const foregroundStartFailureCountRef = React.useRef(0);
 	const [foregroundStartRetryNonce, setForegroundStartRetryNonce] =
 		React.useState(0);
-	const attemptAutoConnectRef = React.useRef<
-		(
-			signal?: AbortSignal,
-			reconnectContext?: AutoConnectReconnectContext,
-		) => Promise<boolean | AutoConnectReconnectAttemptResult>
-		| null
-	>(null);
+	const attemptAutoConnectRef =
+		React.useRef<
+			(
+				signal?: AbortSignal,
+				reconnectContext?: AutoConnectReconnectContext,
+			) => Promise<boolean | AutoConnectReconnectAttemptResult> | null
+		>(null);
 	const reconnectControllerRef =
 		React.useRef<AutoConnectReconnectController | null>(null);
 	const activeDiagnosticTraceRef =
@@ -404,9 +404,7 @@ export function AutoConnectManager() {
 					runContext,
 				});
 				const connected =
-					typeof result === 'boolean'
-						? result
-						: result.status === 'connected';
+					typeof result === 'boolean' ? result : result.status === 'connected';
 				if (ownsTrace) {
 					finishTrace(trace, connected ? 'connected' : 'failed');
 				}
@@ -479,11 +477,10 @@ export function AutoConnectManager() {
 			attemptAutoConnect: async (signal) => {
 				const reconnectContext =
 					reconnectContextCycleRef.current.getReconnectContextForReconnectAttempt();
-				const result =
-					(await attemptAutoConnectRef.current?.(
-						signal,
-						reconnectContext ?? undefined,
-					)) ?? { status: 'retry' };
+				const result = (await attemptAutoConnectRef.current?.(
+					signal,
+					reconnectContext ?? undefined,
+				)) ?? { status: 'retry' };
 				reconnectContextCycleRef.current.settleReconnectAttempt(result);
 				return result;
 			},
@@ -725,21 +722,20 @@ export function AutoConnectManager() {
 					stopReconnectCycle('app-backgrounded');
 				}
 				return;
-				}
-				if (!wasActive && isActiveRef.current) {
-					if (shells.length === 0) {
-						const shouldScheduleResumeReconnect =
-							installResumeReconnectContext({
-							reconnectContextState: reconnectContextCycleRef.current,
-							reconnectRunning:
-								reconnectControllerRef.current?.isRunning() === true,
-							pathname: '/shell/detail',
-							shells: previousShellsRef.current,
-							connections: previousConnectionsRef.current,
-						});
-						if (!shouldScheduleResumeReconnect) return;
-						scheduleReconnect('app-resume-no-shell');
-					} else {
+			}
+			if (!wasActive && isActiveRef.current) {
+				if (shells.length === 0) {
+					const shouldScheduleResumeReconnect = installResumeReconnectContext({
+						reconnectContextState: reconnectContextCycleRef.current,
+						reconnectRunning:
+							reconnectControllerRef.current?.isRunning() === true,
+						pathname: '/shell/detail',
+						shells: previousShellsRef.current,
+						connections: previousConnectionsRef.current,
+					});
+					if (!shouldScheduleResumeReconnect) return;
+					scheduleReconnect('app-resume-no-shell');
+				} else {
 					void runAutoConnectOnce();
 				}
 			}

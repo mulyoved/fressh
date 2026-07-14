@@ -31,13 +31,9 @@ mnt/*
 # Rust build cache (rebuilt on EAS)
 **/rust/target/
 
-# Android build artifacts (should be regenerated on EAS)
-apps/mobile/android/.gradle/
-apps/mobile/android/.kotlin/
-apps/mobile/android/.cxx/
-apps/mobile/android/build/
-apps/mobile/android/app/build/
-apps/mobile/android/local.properties
+# Generated native Android project. Excluding the whole directory makes EAS run
+# Expo prebuild and apply every config plugin from apps/mobile/app.config.ts.
+apps/mobile/android/
 
 # Git directory
 .git

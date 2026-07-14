@@ -32,9 +32,7 @@ void test('ssh registry invalidates unhealthy shell transport immediately', asyn
 	assert.deepEqual(Object.keys(store.getState().connections), ['conn-1']);
 	assert.deepEqual(Object.keys(store.getState().shells), ['conn-1-7']);
 
-	const invalidated = store
-		.getState()
-		.invalidateShellTransport('conn-1', 7);
+	const invalidated = store.getState().invalidateShellTransport('conn-1', 7);
 
 	assert.equal(invalidated, true);
 	assert.deepEqual(Object.keys(store.getState().connections), ['conn-1']);

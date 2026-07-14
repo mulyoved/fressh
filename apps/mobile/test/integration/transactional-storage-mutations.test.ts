@@ -153,7 +153,8 @@ async function commitBothRoots(storage: FaultInjectingStringStorage) {
 		sha256,
 	});
 	assert.equal(selection.status, 'selected');
-	if (selection.status !== 'selected') throw new Error('Missing selected snapshot');
+	if (selection.status !== 'selected')
+		throw new Error('Missing selected snapshot');
 	return createTransactionWriter({
 		namespace,
 		metadataSchema,
@@ -394,8 +395,7 @@ void test('failed cleanup metadata retirement stays harmless and never amplifies
 	const records = storage.snapshotDurable();
 	const reachable = await reachableKeys(storage);
 	const logicalUnreachable = Object.keys(records).filter(
-		(key) =>
-			/-v2-(?:manifest|entry|value)-/.test(key) && !reachable.has(key),
+		(key) => /-v2-(?:manifest|entry|value)-/.test(key) && !reachable.has(key),
 	);
 	const garbage = cleanupGarbageKeys(records);
 	assert.equal(
@@ -733,8 +733,7 @@ void test('a transient cleanup-page read failure preserves the rooted chain and 
 	const planDeletes = mutationOperations(pendingTemplate)
 		.map((operation, index) => ({ ...operation, operation: index + 1 }))
 		.filter(
-			({ type, key }) =>
-				type === 'delete' && key.includes('-v2-intent-plan-'),
+			({ type, key }) => type === 'delete' && key.includes('-v2-intent-plan-'),
 		);
 
 	const storage = new FaultInjectingStringStorage(durableOld);

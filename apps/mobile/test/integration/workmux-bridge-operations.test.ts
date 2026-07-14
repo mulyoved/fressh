@@ -127,12 +127,7 @@ void test('maps Workmux nav select argv', () => {
 
 void test('maps status cycle argv', () => {
 	assert.deepEqual(
-		buildMdevBridgeOperationFromWorkmuxArgv([
-			'tmux',
-			'nav',
-			'cycle',
-			'main:',
-		]),
+		buildMdevBridgeOperationFromWorkmuxArgv(['tmux', 'nav', 'cycle', 'main:']),
 		{
 			operation: 'tmux.nav',
 			params: { action: 'cycle', target: 'main:' },
@@ -202,7 +197,14 @@ void test('rejects blank Codex restart target locally', () => {
 void test('maps scoped next/prev nav argv to bridge params with scope', () => {
 	assert.deepEqual(
 		buildMdevBridgeOperationFromWorkmuxArgv([
-			'tmux', 'app', 'nav', 'next', '--session', 'main', '--scope', 'visible',
+			'tmux',
+			'app',
+			'nav',
+			'next',
+			'--session',
+			'main',
+			'--scope',
+			'visible',
 		]),
 		{
 			operation: 'tmux.app.nav',
@@ -211,7 +213,14 @@ void test('maps scoped next/prev nav argv to bridge params with scope', () => {
 	);
 	assert.deepEqual(
 		buildMdevBridgeOperationFromWorkmuxArgv([
-			'tmux', 'app', 'nav', 'prev', '--session', 'main', '--scope', 'active',
+			'tmux',
+			'app',
+			'nav',
+			'prev',
+			'--session',
+			'main',
+			'--scope',
+			'active',
 		]),
 		{
 			operation: 'tmux.app.nav',
@@ -224,7 +233,14 @@ void test('rejects scoped nav argv for non next/prev actions', () => {
 	assert.throws(
 		() =>
 			buildMdevBridgeOperationFromWorkmuxArgv([
-				'tmux', 'app', 'nav', 'next-all', '--session', 'main', '--scope', 'all',
+				'tmux',
+				'app',
+				'nav',
+				'next-all',
+				'--session',
+				'main',
+				'--scope',
+				'all',
 			]),
 		/Unsupported Workmux bridge command/,
 	);
@@ -234,7 +250,14 @@ void test('rejects scoped nav argv with an invalid scope', () => {
 	assert.throws(
 		() =>
 			buildMdevBridgeOperationFromWorkmuxArgv([
-				'tmux', 'app', 'nav', 'next', '--session', 'main', '--scope', 'nope',
+				'tmux',
+				'app',
+				'nav',
+				'next',
+				'--session',
+				'main',
+				'--scope',
+				'nope',
 			]),
 		/Unsupported Workmux bridge command/,
 	);

@@ -20,7 +20,10 @@ void test('Connect tab owns the inline Tailscale recovery panel', () => {
 	assert.notEqual(titleIndex, -1);
 	assert.notEqual(panelIndex, -1);
 	assert.notEqual(formIndex, -1);
-	assert.ok(titleIndex < panelIndex, 'title should appear before recovery panel');
+	assert.ok(
+		titleIndex < panelIndex,
+		'title should appear before recovery panel',
+	);
 	assert.ok(
 		panelIndex < formIndex,
 		'recovery panel should appear before connection form',

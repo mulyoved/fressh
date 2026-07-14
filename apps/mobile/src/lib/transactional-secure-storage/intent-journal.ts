@@ -23,7 +23,10 @@ export function createIntentJournal<Metadata extends object>(
 	options: IntentJournalOptions<Metadata>,
 ) {
 	const keys = buildV2Keys(options.namespace);
-	const schemas = createRecordSchemas(options.namespace, options.metadataSchema);
+	const schemas = createRecordSchemas(
+		options.namespace,
+		options.metadataSchema,
+	);
 	const encoder = new TextEncoder();
 
 	async function write(params: {
@@ -62,9 +65,7 @@ export function createIntentJournal<Metadata extends object>(
 			firstCommitGeneration: params.firstCommitGeneration,
 			snapshotId: params.snapshotId,
 			planPageCount: pages.length,
-			planSha256: await options.sha256(
-				encoder.encode(canonicalJson(pages)),
-			),
+			planSha256: await options.sha256(encoder.encode(canonicalJson(pages))),
 		});
 		const rawIntent = canonicalJson(intent);
 		await options.storage.setItem(keys.intent.a, rawIntent);
@@ -73,7 +74,8 @@ export function createIntentJournal<Metadata extends object>(
 			const raw = await options.storage.getItem(keys.intent[slot]);
 			if (
 				raw === null ||
-				canonicalJson(schemas.transactionIntent.parse(JSON.parse(raw))) !== rawIntent
+				canonicalJson(schemas.transactionIntent.parse(JSON.parse(raw))) !==
+					rawIntent
 			) {
 				throw new Error('Transaction intent validation failed');
 			}
