@@ -124,6 +124,11 @@ EAS_SKIP_AUTO_FINGERPRINT=1 \
 pnpm exec eas build --local --profile preview --platform android
 ```
 
+The `preview` profile in `apps/mobile/eas.json` supplies the validated Gradle
+memory policy through
+`GRADLE_OPTS=-Dorg.gradle.jvmargs=-Xmx4096m -XX:MaxMetaspaceSize=1024m`.
+Callers do not need to provide additional shell state for this policy.
+
 The root `.easignore` excludes `apps/mobile/android/`. This is required: EAS
 must regenerate Android from `app.config.ts` so every config plugin runs. If the
 local generated Android directory enters the build archive, EAS skips prebuild

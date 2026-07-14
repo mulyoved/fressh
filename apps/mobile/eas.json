@@ -19,7 +19,8 @@
 			"distribution": "internal",
 			"channel": "preview",
 			"env": {
-				"NODE_ENV": "production"
+				"NODE_ENV": "production",
+				"GRADLE_OPTS": "-Dorg.gradle.jvmargs=-Xmx4096m -XX:MaxMetaspaceSize=1024m"
 			},
 			"android": {
 				"buildType": "apk"

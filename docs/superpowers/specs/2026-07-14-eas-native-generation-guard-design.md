@@ -59,4 +59,3 @@ ignore rule can cause EAS to skip prebuild and package stale native code.
 
 Do not uninstall Fressh, clear its data, or run destructive e2e state resets.
 If the APK signer differs from the installed app, stop before installation.
-
