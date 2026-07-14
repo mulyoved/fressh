@@ -3,8 +3,8 @@
 ## Goal
 
 Make the mobile terminal `$` skill selector show both skills installed in the
-active repository and user-installed global Codex skills. Repository skills
-must take precedence when the same skill name exists in both scopes.
+active repository and user-installed global Codex skills. Repository skills must
+take precedence when the same skill name exists in both scopes.
 
 ## Root Cause
 
@@ -35,8 +35,8 @@ selection, or terminal insertion behavior.
 ## Discovery and Precedence
 
 Extend the existing Python discovery payload created by
-`buildSkillDiscoveryCommand`. Resolve the repository root exactly as today,
-then append the home-directory global root after both repository roots.
+`buildSkillDiscoveryCommand`. Resolve the repository root exactly as today, then
+append the home-directory global root after both repository roots.
 
 The parser continues to deduplicate case-insensitively by skill name and keep
 the first record. Root order therefore defines precedence:
@@ -46,8 +46,8 @@ the first record. Root order therefore defines precedence:
 3. User-global `.codex` skill.
 
 This preserves existing repository precedence and ensures a repository can
-override a global skill intentionally. The returned list remains sorted by
-skill name after deduplication.
+override a global skill intentionally. The returned list remains sorted by skill
+name after deduplication.
 
 Python's path reads follow normal skill-directory symlinks, which is required
 because user-installed global skills may be represented by symlinks. The scan
