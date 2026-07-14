@@ -175,7 +175,7 @@ function findDirectTmuxOccurrences(text: string): DirectBoundaryOccurrence[] {
 		String.raw`(?:(?:exec|command|sudo)\s+|(?:timeout|gtimeout)\s+\S+\s+|bash\s+-lc\s+["']|env\s+` +
 		shellAssignment +
 		')?';
-	const tmuxExecutable = String.raw`(?:tmux|(?:/[^\s;&|()]+)+/tmux)(?=\s|["'\x60]|$)`;
+	const tmuxExecutable = String.raw`(?:tmux|(?:/[^\s;&|()]+)+/tmux)(?=[\s"'\x60;&|()<>]|$)`;
 	const tmuxGlobalOption = String.raw`(?:-(?:2|C|D|l|N|u|v|V)|-(?:L|S|f)\s+\S+)`;
 	const tmuxGlobalOptions = String.raw`(?:\s+` + tmuxGlobalOption + ')*';
 	const tmuxSubcommand = String.raw`\s+(?:[A-Za-z][A-Za-z0-9_-]*\b|\$\{)`;
@@ -389,6 +389,22 @@ void test('direct tmux command detector matches dynamic tmux command assembly', 
 	`;
 
 	assert.equal(containsDirectTmuxCommand(source), true);
+});
+
+void test('direct tmux command detector matches shell metacharacter terminators', () => {
+	const directShellCommands = [
+		"const command = 'tmux;'",
+		"const command = 'sudo tmux&& echo ready'",
+		"const command = 'command tmux|cat'",
+		"const command = '/usr/bin/tmux)'",
+		"const command = 'tmux('",
+		"const command = 'tmux<input'",
+		"const command = 'tmux>output'",
+	];
+
+	for (const command of directShellCommands) {
+		assert.equal(containsDirectTmuxCommand(command), true, command);
+	}
 });
 
 void test('direct tmux command detector ignores mdev and prose', () => {
