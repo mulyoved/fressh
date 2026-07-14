@@ -175,7 +175,7 @@ function findDirectTmuxOccurrences(text: string): DirectBoundaryOccurrence[] {
 		String.raw`(?:(?:exec|command|sudo)\s+|(?:timeout|gtimeout)\s+\S+\s+|bash\s+-lc\s+["']|env\s+` +
 		shellAssignment +
 		')?';
-	const tmuxExecutable = String.raw`(?:tmux\b|(?:/[^\s;&|()]+)+/tmux\b)`;
+	const tmuxExecutable = String.raw`(?:tmux|(?:/[^\s;&|()]+)+/tmux)(?=\s|["'\x60]|$)`;
 	const tmuxGlobalOption = String.raw`(?:-(?:2|C|D|l|N|u|v|V)|-(?:L|S|f)\s+\S+)`;
 	const tmuxGlobalOptions = String.raw`(?:\s+` + tmuxGlobalOption + ')*';
 	const tmuxSubcommand = String.raw`\s+(?:[A-Za-z][A-Za-z0-9_-]*\b|\$\{)`;
@@ -410,6 +410,12 @@ void test('direct tmux command detector ignores mdev and prose', () => {
 	for (const text of allowedText) {
 		assert.equal(containsDirectTmuxCommand(text), false, text);
 	}
+});
+
+void test('direct tmux command detector ignores structured operation IDs', () => {
+	const source = "const operation = 'tmux.worktree.new';";
+
+	assert.equal(containsDirectTmuxCommand(source), false);
 });
 
 void test('direct invoke-rc command detector matches shell command strings', () => {
