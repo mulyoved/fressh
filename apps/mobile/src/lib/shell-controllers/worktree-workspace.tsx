@@ -27,11 +27,16 @@ import {
 	createWorktreeWorkspaceCore,
 	type WorktreeWorkspaceCoreDependencies,
 } from './worktree-workspace-core';
+import {
+	buildWorktreeWorkspaceModalControllerProps,
+	type WorktreeWorkspaceModalControllerProps,
+} from './worktree-workspace-modal-props';
 
 const logger = rootLogger.extend('WorktreeWorkspaceController');
 
 export type WorktreeWorkspaceControllerHandle = Readonly<{
 	state: WorktreeWorkspaceState;
+	modalProps: WorktreeWorkspaceModalControllerProps;
 	openNew(): void;
 	openClose(): void;
 	retry(): void;
@@ -110,10 +115,32 @@ export function useWorktreeWorkspaceController<TConnection>(
 	const create = useCallback((branch: string) => core.create(branch), [core]);
 	const confirmClose = useCallback(() => core.confirmClose(), [core]);
 	const close = useCallback(() => core.close(), [core]);
+	const modalRetry = useCallback(() => retry(), [retry]);
+	const modalClose = useCallback(() => close(), [close]);
+	const modalCreate = useCallback(
+		(branch: string) => {
+			void create(branch);
+		},
+		[create],
+	);
+	const modalConfirm = useCallback(() => {
+		void confirmClose();
+	}, [confirmClose]);
+	const modalProps = useMemo(
+		() =>
+			buildWorktreeWorkspaceModalControllerProps(state, {
+				onRetry: modalRetry,
+				onClose: modalClose,
+				onCreate: modalCreate,
+				onConfirm: modalConfirm,
+			}),
+		[state, modalRetry, modalClose, modalCreate, modalConfirm],
+	);
 
 	return useMemo(
 		() => ({
 			state,
+			modalProps,
 			openNew,
 			openClose,
 			retry,
@@ -121,6 +148,6 @@ export function useWorktreeWorkspaceController<TConnection>(
 			confirmClose,
 			close,
 		}),
-		[state, openNew, openClose, retry, create, confirmClose, close],
+		[state, modalProps, openNew, openClose, retry, create, confirmClose, close],
 	);
 }
