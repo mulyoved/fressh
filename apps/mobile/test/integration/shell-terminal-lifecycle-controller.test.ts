@@ -8,9 +8,7 @@ import {
 	type TerminalLifecycleShell,
 } from '../../src/lib/shell-controllers/terminal-lifecycle-core';
 import { createShellTerminalTransport } from '../../src/lib/shell-controllers/terminal-transport';
-import {
-	createHarness,
-} from './shell-terminal-lifecycle-test-harness';
+import { createHarness } from './shell-terminal-lifecycle-test-harness';
 
 void test('terminal lifecycle snapshots native, listener, and xterm output progress without payloads', async () => {
 	const harness = createHarness();

@@ -53,7 +53,9 @@ function errorTag(error: unknown): string | null {
 	return typeof tag === 'string' ? tag : null;
 }
 
-export function classifyReconnectFailure(error: unknown): ReconnectFailureStatus {
+export function classifyReconnectFailure(
+	error: unknown,
+): ReconnectFailureStatus {
 	const tag = errorTag(error);
 	if (tag === 'TmuxAttachFailed') return 'failedTmuxAttach';
 	if (tag === 'Auth') return 'failedAuth';
@@ -72,9 +74,7 @@ function reconnectFailureMessage(
 
 function reconnectCleanupFailureMessage(error: unknown): string {
 	const detail = reconnectFailureMessage(error, 'cleanup-failed');
-	return detail === 'cleanup-failed'
-		? detail
-		: `cleanup-failed: ${detail}`;
+	return detail === 'cleanup-failed' ? detail : `cleanup-failed: ${detail}`;
 }
 
 function emitReconnectSetupFailed({
@@ -152,7 +152,7 @@ export async function resolveReconnectSavedEntry({
 }): Promise<SavedConnectionEntry | null> {
 	const droppedConnection =
 		reconnectContext.droppedConnectionId !== undefined
-			? connections[reconnectContext.droppedConnectionId] ?? null
+			? (connections[reconnectContext.droppedConnectionId] ?? null)
 			: null;
 	const storedConnectionId =
 		reconnectContext.droppedStoredConnectionId ??
@@ -352,9 +352,7 @@ async function runSavedEntryReconnectAttempt({
 		};
 	}
 
-	let resolvedSecurityResult: ConnectionRunOperationResult<
-		ResolvedKeySecurity | null
-	>;
+	let resolvedSecurityResult: ConnectionRunOperationResult<ResolvedKeySecurity | null>;
 	try {
 		resolvedSecurityResult = await resolvePreparedSavedEntrySecurity({
 			runContext,
@@ -416,13 +414,15 @@ async function runSavedEntryReconnectAttempt({
 							source: 'saved-entry',
 							connection: currentPrepared.latestEntryConnection,
 							trigger: 'reconnect',
-							tmuxSessionName: currentPrepared.normalizedDetails.tmuxSessionName,
+							tmuxSessionName:
+								currentPrepared.normalizedDetails.tmuxSessionName,
 						})
 					: autoConnectEvents.savedEntryConnectStarted({
 							source: 'saved-entry',
 							trigger: 'reconnect',
 							connection: currentPrepared.latestEntryConnection,
-							tmuxSessionName: currentPrepared.normalizedDetails.tmuxSessionName,
+							tmuxSessionName:
+								currentPrepared.normalizedDetails.tmuxSessionName,
 						}),
 			);
 		},
@@ -435,7 +435,8 @@ async function runSavedEntryReconnectAttempt({
 							connection: currentPrepared.latestEntryConnection,
 							error,
 							trigger: 'reconnect',
-							tmuxSessionName: currentPrepared.normalizedDetails.tmuxSessionName,
+							tmuxSessionName:
+								currentPrepared.normalizedDetails.tmuxSessionName,
 							failureClass: classifyReconnectFailure(error),
 						})
 					: autoConnectEvents.savedEntryConnectThrew({
@@ -443,7 +444,8 @@ async function runSavedEntryReconnectAttempt({
 							connection: currentPrepared.latestEntryConnection,
 							error,
 							trigger: 'reconnect',
-							tmuxSessionName: currentPrepared.normalizedDetails.tmuxSessionName,
+							tmuxSessionName:
+								currentPrepared.normalizedDetails.tmuxSessionName,
 							failureClass: classifyReconnectFailure(error),
 						}),
 			);
@@ -495,9 +497,7 @@ export async function attemptReconnectThroughSavedEntry({
 	clearTailscaleAttention: () => void;
 	logger: Logger;
 }): Promise<AutoConnectReconnectAttemptResult | boolean> {
-	let reconnectEntryResult: ConnectionRunOperationResult<
-		SavedConnectionEntry | null
-	>;
+	let reconnectEntryResult: ConnectionRunOperationResult<SavedConnectionEntry | null>;
 	try {
 		reconnectEntryResult = await runContext.runOperation(
 			'operation',

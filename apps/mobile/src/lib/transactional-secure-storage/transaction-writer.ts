@@ -1,8 +1,5 @@
 import { type ZodType } from 'zod';
-import {
-	createCleanupChain,
-	type ValidatedCleanupPage,
-} from './cleanup-chain';
+import { createCleanupChain, type ValidatedCleanupPage } from './cleanup-chain';
 import { canonicalJson, encodeValueChunks } from './codec';
 import {
 	SecureStorageWriteNotCommittedError as WriteError,
@@ -42,7 +39,10 @@ export function createTransactionWriter<Metadata extends object, Value>(
 	options: WriterOptions<Metadata, Value>,
 ) {
 	const keys = buildV2Keys(options.namespace);
-	const schemas = createRecordSchemas(options.namespace, options.metadataSchema);
+	const schemas = createRecordSchemas(
+		options.namespace,
+		options.metadataSchema,
+	);
 	const cleanupChain = createCleanupChain(options);
 	const intentJournal = createIntentJournal(options);
 	const encoder = new TextEncoder();
@@ -87,13 +87,15 @@ export function createTransactionWriter<Metadata extends object, Value>(
 				if (cleanup.status !== 'valid') continue;
 				cleanupPages.set(slot, cleanup.pages);
 				if (cleanupKeys === undefined) {
-					for (const { garbageKey } of cleanup.pages) garbageKeys.add(garbageKey);
+					for (const { garbageKey } of cleanup.pages)
+						garbageKeys.add(garbageKey);
 				}
 			}
 			for (const slot of targetSlots) {
 				const candidate = candidates.get(slot)!;
 				if (candidate.status !== 'valid') continue;
-				for (const key of candidate.snapshot.reachableKeys) garbageKeys.add(key);
+				for (const key of candidate.snapshot.reachableKeys)
+					garbageKeys.add(key);
 			}
 			const protectedKeys = new Set<string>([
 				keys.root.a,
@@ -108,8 +110,10 @@ export function createTransactionWriter<Metadata extends object, Value>(
 				}
 				const candidate = candidates.get(slot)!;
 				if (candidate.status !== 'valid') continue;
-				for (const key of candidate.snapshot.reachableKeys) protectedKeys.add(key);
-				for (const { key } of cleanupPages.get(slot) ?? []) protectedKeys.add(key);
+				for (const key of candidate.snapshot.reachableKeys)
+					protectedKeys.add(key);
+				for (const { key } of cleanupPages.get(slot) ?? [])
+					protectedKeys.add(key);
 			}
 			staged.root.cleanup = await cleanupChain.stage(
 				staged.records,
@@ -126,7 +130,8 @@ export function createTransactionWriter<Metadata extends object, Value>(
 			const retirement = new Map<string, ValidatedCleanupPage>();
 			for (const slot of targetSlots) {
 				for (const page of cleanupPages.get(slot) ?? []) {
-					if (!liveCleanupPageKeys.has(page.key)) retirement.set(page.key, page);
+					if (!liveCleanupPageKeys.has(page.key))
+						retirement.set(page.key, page);
 				}
 			}
 			retiredCleanupPages = [...retirement.values()];
@@ -234,7 +239,11 @@ export function createTransactionWriter<Metadata extends object, Value>(
 				prior.valueSha256 === valueSha256 &&
 				prior.valueByteLength === valueBytes.byteLength;
 			if (reuseValue) {
-				for (let chunkIndex = 0; chunkIndex < prior.valueChunkCount; chunkIndex++) {
+				for (
+					let chunkIndex = 0;
+					chunkIndex < prior.valueChunkCount;
+					chunkIndex++
+				) {
 					reachableKeys.add(keys.value(prior.valueRecordId, chunkIndex));
 				}
 			}
@@ -255,7 +264,9 @@ export function createTransactionWriter<Metadata extends object, Value>(
 				if (raw === null) {
 					throw new Error(`Missing reusable revision: ${priorReference.key}`);
 				}
-				if ((await options.sha256(encoder.encode(raw))) !== priorReference.sha256) {
+				if (
+					(await options.sha256(encoder.encode(raw))) !== priorReference.sha256
+				) {
 					throw new Error(`Changed reusable revision: ${priorReference.key}`);
 				}
 				references.push({
@@ -311,7 +322,8 @@ export function createTransactionWriter<Metadata extends object, Value>(
 			);
 			reachableKeys.add(keys.manifest(attemptId, pageIndex));
 		}
-		for (const reference of references) reachableKeys.add(reference.revisionKey);
+		for (const reference of references)
+			reachableKeys.add(reference.revisionKey);
 		return {
 			records,
 			reachableKeys,

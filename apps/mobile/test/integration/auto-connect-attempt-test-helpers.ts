@@ -118,7 +118,9 @@ async function loadSavedConnectionsForTest({
 		(entry): entry is SavedConnectionEntry => entry !== null,
 	);
 	if (entries.length === 0) return null;
-	return Array.from(new Map(entries.map((entry) => [entry.id, entry])).values());
+	return Array.from(
+		new Map(entries.map((entry) => [entry.id, entry])).values(),
+	);
 }
 
 export async function attemptAutoConnectSource(args: LegacyAttemptSourceArgs) {

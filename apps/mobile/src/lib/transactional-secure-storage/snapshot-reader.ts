@@ -115,7 +115,10 @@ export async function readRootCandidate<Metadata extends object, Value>(
 	slot: RootSlot,
 ): Promise<RootCandidate<Metadata, Value>> {
 	const keys = buildV2Keys(options.namespace);
-	const schemas = createRecordSchemas(options.namespace, options.metadataSchema);
+	const schemas = createRecordSchemas(
+		options.namespace,
+		options.metadataSchema,
+	);
 	const rootKey = keys.root[slot];
 	const rawRoot = await readStorage(options.storage, rootKey);
 	if (rawRoot === null) return { status: 'absent' };
@@ -127,7 +130,11 @@ export async function readRootCandidate<Metadata extends object, Value>(
 		const reachableKeys = new Set<string>([rootKey]);
 		const visitedManifestKeys = new Set<string>();
 		const pageHashes: string[] = [];
-		const references: { entryId: string; revisionKey: string; revisionSha256: string }[] = [];
+		const references: {
+			entryId: string;
+			revisionKey: string;
+			revisionSha256: string;
+		}[] = [];
 		let manifestKey: string | undefined = root.manifestHeadKey;
 
 		for (let pageIndex = 0; pageIndex < root.manifestPageCount; pageIndex++) {
@@ -163,7 +170,8 @@ export async function readRootCandidate<Metadata extends object, Value>(
 			undefined,
 			options.sha256,
 		);
-		if (aggregateHash !== root.manifestSha256) invalid('Manifest hash mismatch');
+		if (aggregateHash !== root.manifestSha256)
+			invalid('Manifest hash mismatch');
 
 		const entries = new Map<string, SecureEntry<Metadata, Value>>();
 		const revisions = new Map<string, ValidatedRevisionReference<Metadata>>();
@@ -174,8 +182,12 @@ export async function readRootCandidate<Metadata extends object, Value>(
 			}
 			previousId = reference.entryId;
 			reachableKeys.add(reference.revisionKey);
-			const rawRevision = await readStorage(options.storage, reference.revisionKey);
-			if (rawRevision === null) invalid(`Missing revision: ${reference.revisionKey}`);
+			const rawRevision = await readStorage(
+				options.storage,
+				reference.revisionKey,
+			);
+			if (rawRevision === null)
+				invalid(`Missing revision: ${reference.revisionKey}`);
 			const revision = parseRecord(
 				rawRevision,
 				schemas.entryRevision,
@@ -184,9 +196,14 @@ export async function readRootCandidate<Metadata extends object, Value>(
 			const revisionHash = await options.sha256(
 				textEncoder.encode(canonicalJson(revision)),
 			);
-			if (revisionHash !== reference.revisionSha256) invalid('Revision hash mismatch');
-			if (revision.entryId !== reference.entryId) invalid('Revision entry ID mismatch');
-			if (reference.revisionKey !== `${options.namespace}-v2-entry-${revision.revisionId}`) {
+			if (revisionHash !== reference.revisionSha256)
+				invalid('Revision hash mismatch');
+			if (revision.entryId !== reference.entryId)
+				invalid('Revision entry ID mismatch');
+			if (
+				reference.revisionKey !==
+				`${options.namespace}-v2-entry-${revision.revisionId}`
+			) {
 				invalid('Revision key ownership mismatch');
 			}
 
@@ -251,7 +268,9 @@ export async function selectSnapshot<Metadata extends object, Value>(
 	];
 	const valid = candidates
 		.filter(
-			(candidate): candidate is Extract<typeof candidate, { status: 'valid' }> =>
+			(
+				candidate,
+			): candidate is Extract<typeof candidate, { status: 'valid' }> =>
 				candidate.status === 'valid',
 		)
 		.sort(

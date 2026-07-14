@@ -31,7 +31,11 @@ void test('shell Workmux keyboard failure policy shows ordinary active failures'
 });
 
 void test('shell Workmux keyboard failure policy treats transport failures as reconnect signals', () => {
-	for (const failureClass of ['timeout', 'remoteClosed', 'sendFailed'] as const) {
+	for (const failureClass of [
+		'timeout',
+		'remoteClosed',
+		'sendFailed',
+	] as const) {
 		assert.equal(
 			shouldTreatShellWorkmuxKeyboardFailureAsTransportUnhealthy({
 				failureClass,
@@ -87,7 +91,10 @@ void test('shell Workmux keyboard command converts failed bridge results into ty
 		}),
 		(error: unknown) => {
 			assert.equal(error instanceof WorkmuxCommandFailure, true);
-			assert.equal((error as WorkmuxCommandFailure).message, 'mdev bridge stream closed.');
+			assert.equal(
+				(error as WorkmuxCommandFailure).message,
+				'mdev bridge stream closed.',
+			);
 			assert.equal(
 				(error as WorkmuxCommandFailure).failureClass,
 				'disposedByReconnect',

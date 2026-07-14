@@ -40,14 +40,10 @@ export default function Tab() {
 			setUpdateStatus('Downloading update…');
 			await Updates.fetchUpdateAsync();
 			setUpdateStatus('Update ready. Restart to apply.');
-			Alert.alert(
-				'Update ready',
-				'Restart the app now to apply the update?',
-				[
-					{ text: 'Later', style: 'cancel' },
-					{ text: 'Restart', onPress: () => void Updates.reloadAsync() },
-				],
-			);
+			Alert.alert('Update ready', 'Restart the app now to apply the update?', [
+				{ text: 'Later', style: 'cancel' },
+				{ text: 'Restart', onPress: () => void Updates.reloadAsync() },
+			]);
 		} catch (error) {
 			setUpdateStatus(null);
 			setUpdateError(

@@ -77,7 +77,7 @@ function isNotInModeValue(value: unknown): boolean {
 export function isScrollTraceEnabled(): boolean {
 	return (
 		configuredScrollTraceEnabled ??
-		(process.env.EXPO_PUBLIC_FRESSH_ENABLE_SCROLL_TRACE === 'true')
+		process.env.EXPO_PUBLIC_FRESSH_ENABLE_SCROLL_TRACE === 'true'
 	);
 }
 

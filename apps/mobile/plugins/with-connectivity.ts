@@ -45,10 +45,7 @@ async function readAndroidTemplateSource(filename: string) {
 
 const withConnectivityManifest: ConfigPlugin = (config) =>
 	withAndroidManifest(config, (config) => {
-		AndroidConfig.Permissions.ensurePermissions(
-			config.modResults,
-			PERMISSIONS,
-		);
+		AndroidConfig.Permissions.ensurePermissions(config.modResults, PERMISSIONS);
 		return config;
 	});
 

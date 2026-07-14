@@ -168,9 +168,7 @@ export function createAutoConnectReconnectController({
 					}),
 		);
 
-	const traceCompletedOutcome = (
-		result: AutoConnectReconnectAttemptResult,
-	) => {
+	const traceCompletedOutcome = (result: AutoConnectReconnectAttemptResult) => {
 		if (result.status === 'retry') return;
 		traceEvent(
 			reconnectEvents.completed({

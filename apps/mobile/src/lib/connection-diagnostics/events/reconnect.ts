@@ -133,25 +133,23 @@ export const reconnectEvents = {
 		reason: string;
 		windowMs: number;
 		message?: string;
-	}): ReconnectStartedEvent =>
-		({
-			kind: 'reconnect.started',
-			source: input.source,
-			message: input.message,
-			reason: input.reason,
-			windowMs: input.windowMs,
-		}),
+	}): ReconnectStartedEvent => ({
+		kind: 'reconnect.started',
+		source: input.source,
+		message: input.message,
+		reason: input.reason,
+		windowMs: input.windowMs,
+	}),
 	stopped: (input: {
 		source: ConnectionDiagnosticSource;
 		reason: string;
 		message?: string;
-	}): ReconnectStoppedEvent =>
-		({
-			kind: 'reconnect.stopped',
-			source: input.source,
-			message: input.message,
-			reason: input.reason,
-		}),
+	}): ReconnectStoppedEvent => ({
+		kind: 'reconnect.stopped',
+		source: input.source,
+		message: input.message,
+		reason: input.reason,
+	}),
 	startBlocked: (input: {
 		source: ConnectionDiagnosticSource;
 		reason: string;
@@ -159,90 +157,83 @@ export const reconnectEvents = {
 		isReconnecting?: boolean;
 		resetInFlight?: boolean;
 		message?: string;
-	}): ReconnectStartBlockedEvent =>
-		({
-			kind: 'reconnect.start.blocked',
-			source: input.source,
-			message: input.message,
-			reason: input.reason,
-			isAutoConnecting: input.isAutoConnecting,
-			isReconnecting: input.isReconnecting,
-			resetInFlight: input.resetInFlight,
-		}),
+	}): ReconnectStartBlockedEvent => ({
+		kind: 'reconnect.start.blocked',
+		source: input.source,
+		message: input.message,
+		reason: input.reason,
+		isAutoConnecting: input.isAutoConnecting,
+		isReconnecting: input.isReconnecting,
+		resetInFlight: input.resetInFlight,
+	}),
 	retryScheduled: (input: {
 		source: ConnectionDiagnosticSource;
 		attemptIndex: number;
 		delayMs: number;
 		message?: string;
-	}): ReconnectRetryScheduledEvent =>
-		({
-			kind: 'reconnect.retry.scheduled',
-			source: input.source,
-			message: input.message,
-			attemptIndex: input.attemptIndex,
-			delayMs: input.delayMs,
-		}),
+	}): ReconnectRetryScheduledEvent => ({
+		kind: 'reconnect.retry.scheduled',
+		source: input.source,
+		message: input.message,
+		attemptIndex: input.attemptIndex,
+		delayMs: input.delayMs,
+	}),
 	attemptStarted: (input: {
 		source: ConnectionDiagnosticSource;
 		reconnectElapsedMs: number;
 		message?: string;
-	}): ReconnectAttemptStartedEvent =>
-		({
-			kind: 'reconnect.attempt.started',
-			source: input.source,
-			message: input.message,
-			reconnectElapsedMs: input.reconnectElapsedMs,
-		}),
+	}): ReconnectAttemptStartedEvent => ({
+		kind: 'reconnect.attempt.started',
+		source: input.source,
+		message: input.message,
+		reconnectElapsedMs: input.reconnectElapsedMs,
+	}),
 	attemptConnected: (input: {
 		source: ConnectionDiagnosticSource;
 		reconnectElapsedMs: number;
 		message?: string;
-	}): ReconnectAttemptConnectedEvent =>
-		({
-			kind: 'reconnect.attempt.connected',
-			source: input.source,
-			message: input.message,
-			reconnectElapsedMs: input.reconnectElapsedMs,
-		}),
+	}): ReconnectAttemptConnectedEvent => ({
+		kind: 'reconnect.attempt.connected',
+		source: input.source,
+		message: input.message,
+		reconnectElapsedMs: input.reconnectElapsedMs,
+	}),
 	attemptFailed: (input: {
 		source: ConnectionDiagnosticSource;
 		reconnectElapsedMs: number;
 		message?: string;
-	}): ReconnectAttemptFailedEvent =>
-		({
-			kind: 'reconnect.attempt.failed',
-			source: input.source,
-			message: input.message,
-			reconnectElapsedMs: input.reconnectElapsedMs,
-		}),
+	}): ReconnectAttemptFailedEvent => ({
+		kind: 'reconnect.attempt.failed',
+		source: input.source,
+		message: input.message,
+		reconnectElapsedMs: input.reconnectElapsedMs,
+	}),
 	timeout: (input: {
 		source: ConnectionDiagnosticSource;
 		reconnectElapsedMs: number;
 		windowMs: number;
 		message?: string;
-	}): ReconnectTimeoutEvent =>
-		({
-			kind: 'reconnect.timeout',
-			source: input.source,
-			message: input.message,
-			reconnectElapsedMs: input.reconnectElapsedMs,
-			windowMs: input.windowMs,
-		}),
+	}): ReconnectTimeoutEvent => ({
+		kind: 'reconnect.timeout',
+		source: input.source,
+		message: input.message,
+		reconnectElapsedMs: input.reconnectElapsedMs,
+		windowMs: input.windowMs,
+	}),
 	shellDropped: (input: {
 		source: ConnectionDiagnosticSource;
 		connectionId?: string;
 		channelId?: number;
 		networkDisappeared?: boolean;
 		message?: string;
-	}): ReconnectShellDroppedEvent =>
-		({
-			kind: 'reconnect.shell-dropped',
-			source: input.source,
-			message: input.message,
-			connectionId: input.connectionId,
-			channelId: input.channelId,
-			networkDisappeared: input.networkDisappeared,
-		}),
+	}): ReconnectShellDroppedEvent => ({
+		kind: 'reconnect.shell-dropped',
+		source: input.source,
+		message: input.message,
+		connectionId: input.connectionId,
+		channelId: input.channelId,
+		networkDisappeared: input.networkDisappeared,
+	}),
 	transportInvalidated: (input: {
 		source: ConnectionDiagnosticSource;
 		connectionId?: string;
@@ -251,56 +242,52 @@ export const reconnectEvents = {
 		bridgeDisposed: boolean;
 		bridgeRequestInFlight: boolean;
 		message?: string;
-	}): ReconnectTransportInvalidatedEvent =>
-		({
-			kind: 'reconnect.transport.invalidated',
-			source: input.source,
-			message: input.message,
-			connectionId: input.connectionId,
-			channelId: input.channelId,
-			hadShell: input.hadShell,
-			bridgeDisposed: input.bridgeDisposed,
-			bridgeRequestInFlight: input.bridgeRequestInFlight,
-		}),
+	}): ReconnectTransportInvalidatedEvent => ({
+		kind: 'reconnect.transport.invalidated',
+		source: input.source,
+		message: input.message,
+		connectionId: input.connectionId,
+		channelId: input.channelId,
+		hadShell: input.hadShell,
+		bridgeDisposed: input.bridgeDisposed,
+		bridgeRequestInFlight: input.bridgeRequestInFlight,
+	}),
 	completed: (input: {
 		source: ConnectionDiagnosticSource;
 		outcome: ReconnectCompletionOutcome;
 		destination: ReconnectDestination;
 		message?: string;
-	}): ReconnectCompletedEvent =>
-		({
-			kind: 'reconnect.completed',
-			source: input.source,
-			message: input.message,
-			outcome: input.outcome,
-			destination: input.destination,
-		}),
+	}): ReconnectCompletedEvent => ({
+		kind: 'reconnect.completed',
+		source: input.source,
+		message: input.message,
+		outcome: input.outcome,
+		destination: input.destination,
+	}),
 	staleInput: (input: {
 		source: ConnectionDiagnosticSource;
 		connectionId?: string;
 		channelId?: number;
 		message?: string;
-	}): ReconnectStaleInputEvent =>
-		({
-			kind: 'reconnect.stale-input',
-			source: input.source,
-			message: input.message,
-			connectionId: input.connectionId,
-			channelId: input.channelId,
-		}),
+	}): ReconnectStaleInputEvent => ({
+		kind: 'reconnect.stale-input',
+		source: input.source,
+		message: input.message,
+		connectionId: input.connectionId,
+		channelId: input.channelId,
+	}),
 	uiTransition: (input: {
 		source: ConnectionDiagnosticSource;
 		from: ReconnectUiTransitionEvent['from'];
 		to: ReconnectUiTransitionEvent['to'];
 		message?: string;
-	}): ReconnectUiTransitionEvent =>
-		({
-			kind: 'reconnect.ui.transition',
-			source: input.source,
-			message: input.message,
-			from: input.from,
-			to: input.to,
-		}),
+	}): ReconnectUiTransitionEvent => ({
+		kind: 'reconnect.ui.transition',
+		source: input.source,
+		message: input.message,
+		from: input.from,
+		to: input.to,
+	}),
 } as const;
 
 export function formatReconnectEventFields(event: ReconnectEvent): string[] {

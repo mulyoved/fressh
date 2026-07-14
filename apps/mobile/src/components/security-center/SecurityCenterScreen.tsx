@@ -37,8 +37,7 @@ export function SecurityCenterScreen() {
 					listCurrentKeys: secretsManager.keys.utils.listEntriesWithValues,
 					listCurrentConnections:
 						secretsManager.connections.utils.listEntriesWithValues,
-					restoreJournal:
-						secretsManager.securityCenter.utils.restoreJournal,
+					restoreJournal: secretsManager.securityCenter.utils.restoreJournal,
 					replaceAllKeys: secretsManager.keys.utils.replaceAllEntries,
 					replaceAllConnections:
 						secretsManager.connections.utils.replaceAllEntries,

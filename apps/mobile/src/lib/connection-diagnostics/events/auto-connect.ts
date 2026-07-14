@@ -177,87 +177,80 @@ export const autoConnectEvents = {
 		channelId: number;
 		pathname: string;
 		message?: string;
-	}): AutoConnectLatestShellSelectedEvent =>
-		({
-			kind: 'auto-connect.latest-shell.selected',
-			source: input.source,
-			message: input.message,
-			connection: copyConnectionIdentity(input.connection),
-			channelId: input.channelId,
-			pathname: input.pathname,
-		}),
+	}): AutoConnectLatestShellSelectedEvent => ({
+		kind: 'auto-connect.latest-shell.selected',
+		source: input.source,
+		message: input.message,
+		connection: copyConnectionIdentity(input.connection),
+		channelId: input.channelId,
+		pathname: input.pathname,
+	}),
 	latestShellMissing: (input: {
 		source: ConnectionDiagnosticSource;
 		pathname: string;
 		message?: string;
-	}): AutoConnectLatestShellMissingEvent =>
-		({
-			kind: 'auto-connect.latest-shell.missing',
-			source: input.source,
-			message: input.message,
-			pathname: input.pathname,
-		}),
+	}): AutoConnectLatestShellMissingEvent => ({
+		kind: 'auto-connect.latest-shell.missing',
+		source: input.source,
+		message: input.message,
+		pathname: input.pathname,
+	}),
 	activeConnectionSelected: (input: {
 		source: ConnectionDiagnosticSource;
 		connection: ConnectionDiagnosticConnectionIdentity;
 		message?: string;
-	}): AutoConnectActiveConnectionSelectedEvent =>
-		({
-			kind: 'auto-connect.active-connection.selected',
-			source: input.source,
-			message: input.message,
-			connection: copyConnectionIdentity(input.connection),
-		}),
+	}): AutoConnectActiveConnectionSelectedEvent => ({
+		kind: 'auto-connect.active-connection.selected',
+		source: input.source,
+		message: input.message,
+		connection: copyConnectionIdentity(input.connection),
+	}),
 	activeConnectionMissing: (input: {
 		source: ConnectionDiagnosticSource;
 		message?: string;
-	}): AutoConnectActiveConnectionMissingEvent =>
-		({
-			kind: 'auto-connect.active-connection.missing',
-			source: input.source,
-			message: input.message,
-		}),
+	}): AutoConnectActiveConnectionMissingEvent => ({
+		kind: 'auto-connect.active-connection.missing',
+		source: input.source,
+		message: input.message,
+	}),
 	activeConnectionShellStarted: (input: {
 		source: ConnectionDiagnosticSource;
 		connection: ConnectionDiagnosticConnectionIdentity;
 		message?: string;
-	}): AutoConnectActiveConnectionShellStartedEvent =>
-		({
-			kind: 'auto-connect.active-connection.shell-started',
-			source: input.source,
-			message: input.message,
-			connection: copyConnectionIdentity(input.connection),
-		}),
+	}): AutoConnectActiveConnectionShellStartedEvent => ({
+		kind: 'auto-connect.active-connection.shell-started',
+		source: input.source,
+		message: input.message,
+		connection: copyConnectionIdentity(input.connection),
+	}),
 	activeConnectionShellConnected: (input: {
 		source: ConnectionDiagnosticSource;
 		connection: ConnectionDiagnosticConnectionIdentity;
 		channelId: number;
 		pathname?: string;
 		message?: string;
-	}): AutoConnectActiveConnectionShellConnectedEvent =>
-		({
-			kind: 'auto-connect.active-connection.shell-connected',
-			source: input.source,
-			message: input.message,
-			connection: copyConnectionIdentity(input.connection),
-			channelId: input.channelId,
-			pathname: input.pathname,
-		}),
+	}): AutoConnectActiveConnectionShellConnectedEvent => ({
+		kind: 'auto-connect.active-connection.shell-connected',
+		source: input.source,
+		message: input.message,
+		connection: copyConnectionIdentity(input.connection),
+		channelId: input.channelId,
+		pathname: input.pathname,
+	}),
 	activeConnectionShellFailed: (input: {
 		source: ConnectionDiagnosticSource;
 		connection: ConnectionDiagnosticConnectionIdentity;
 		error: unknown;
 		tmuxSessionName?: string;
 		message?: string;
-	}): AutoConnectActiveConnectionShellFailedEvent =>
-		({
-			kind: 'auto-connect.active-connection.shell-failed',
-			source: input.source,
-			message: input.message,
-			connection: copyConnectionIdentity(input.connection),
-			error: serializeConnectionDiagnosticError(input.error),
-			tmuxSessionName: input.tmuxSessionName,
-		}),
+	}): AutoConnectActiveConnectionShellFailedEvent => ({
+		kind: 'auto-connect.active-connection.shell-failed',
+		source: input.source,
+		message: input.message,
+		connection: copyConnectionIdentity(input.connection),
+		error: serializeConnectionDiagnosticError(input.error),
+		tmuxSessionName: input.tmuxSessionName,
+	}),
 	activeConnectionTmuxAttachFailed: (input: {
 		source: ConnectionDiagnosticSource;
 		connection: ConnectionDiagnosticConnectionIdentity;
@@ -265,16 +258,15 @@ export const autoConnectEvents = {
 		tmuxAttachFailureReason: string | null;
 		tmuxSessionName: string;
 		message?: string;
-	}): AutoConnectActiveConnectionTmuxAttachFailedEvent =>
-		({
-			kind: 'auto-connect.active-connection.tmux-attach-failed',
-			source: input.source,
-			message: input.message,
-			connection: copyConnectionIdentity(input.connection),
-			error: serializeConnectionDiagnosticError(input.error),
-			tmuxAttachFailureReason: input.tmuxAttachFailureReason,
-			tmuxSessionName: input.tmuxSessionName,
-		}),
+	}): AutoConnectActiveConnectionTmuxAttachFailedEvent => ({
+		kind: 'auto-connect.active-connection.tmux-attach-failed',
+		source: input.source,
+		message: input.message,
+		connection: copyConnectionIdentity(input.connection),
+		error: serializeConnectionDiagnosticError(input.error),
+		tmuxAttachFailureReason: input.tmuxAttachFailureReason,
+		tmuxSessionName: input.tmuxSessionName,
+	}),
 	savedEntryConnectStarted: (input: {
 		source: ConnectionDiagnosticSource;
 		connection?: ConnectionDiagnosticConnectionIdentity;
@@ -284,18 +276,17 @@ export const autoConnectEvents = {
 		tmuxSessionName?: string;
 		failureClass?: string;
 		message?: string;
-	}): AutoConnectSavedEntryConnectStartedEvent =>
-		({
-			kind: 'auto-connect.saved-entry.connect.started',
-			source: input.source,
-			message: input.message,
-			connection: copyOptionalConnectionIdentity(input.connection),
-			trigger: input.trigger,
-			host: input.host ?? input.connection?.host,
-			port: input.port ?? input.connection?.port,
-			tmuxSessionName: input.tmuxSessionName,
-			failureClass: input.failureClass,
-		}),
+	}): AutoConnectSavedEntryConnectStartedEvent => ({
+		kind: 'auto-connect.saved-entry.connect.started',
+		source: input.source,
+		message: input.message,
+		connection: copyOptionalConnectionIdentity(input.connection),
+		trigger: input.trigger,
+		host: input.host ?? input.connection?.host,
+		port: input.port ?? input.connection?.port,
+		tmuxSessionName: input.tmuxSessionName,
+		failureClass: input.failureClass,
+	}),
 	savedEntryConnectConnected: (input: {
 		source: ConnectionDiagnosticSource;
 		connection: ConnectionDiagnosticConnectionIdentity;
@@ -308,21 +299,20 @@ export const autoConnectEvents = {
 		tmuxSessionName?: string;
 		failureClass?: string;
 		message?: string;
-	}): AutoConnectSavedEntryConnectConnectedEvent =>
-		({
-			kind: 'auto-connect.saved-entry.connect.connected',
-			source: input.source,
-			message: input.message,
-			connection: copyConnectionIdentity(input.connection),
-			connectionId: input.connectionId,
-			channelId: input.channelId,
-			storedConnectionId: input.storedConnectionId,
-			trigger: input.trigger,
-			host: input.host ?? input.connection.host,
-			port: input.port ?? input.connection.port,
-			tmuxSessionName: input.tmuxSessionName,
-			failureClass: input.failureClass,
-		}),
+	}): AutoConnectSavedEntryConnectConnectedEvent => ({
+		kind: 'auto-connect.saved-entry.connect.connected',
+		source: input.source,
+		message: input.message,
+		connection: copyConnectionIdentity(input.connection),
+		connectionId: input.connectionId,
+		channelId: input.channelId,
+		storedConnectionId: input.storedConnectionId,
+		trigger: input.trigger,
+		host: input.host ?? input.connection.host,
+		port: input.port ?? input.connection.port,
+		tmuxSessionName: input.tmuxSessionName,
+		failureClass: input.failureClass,
+	}),
 	savedEntryConnectFailed: (input: {
 		source: ConnectionDiagnosticSource;
 		connection?: ConnectionDiagnosticConnectionIdentity;
@@ -334,20 +324,19 @@ export const autoConnectEvents = {
 		tmuxSessionName?: string;
 		failureClass?: string;
 		message?: string;
-	}): AutoConnectSavedEntryConnectFailedEvent =>
-		({
-			kind: 'auto-connect.saved-entry.connect.failed',
-			source: input.source,
-			message: input.message,
-			connection: copyOptionalConnectionIdentity(input.connection),
-			connectionId: input.connectionId,
-			storedConnectionId: input.storedConnectionId,
-			trigger: input.trigger,
-			host: input.host ?? input.connection?.host,
-			port: input.port ?? input.connection?.port,
-			tmuxSessionName: input.tmuxSessionName,
-			failureClass: input.failureClass,
-		}),
+	}): AutoConnectSavedEntryConnectFailedEvent => ({
+		kind: 'auto-connect.saved-entry.connect.failed',
+		source: input.source,
+		message: input.message,
+		connection: copyOptionalConnectionIdentity(input.connection),
+		connectionId: input.connectionId,
+		storedConnectionId: input.storedConnectionId,
+		trigger: input.trigger,
+		host: input.host ?? input.connection?.host,
+		port: input.port ?? input.connection?.port,
+		tmuxSessionName: input.tmuxSessionName,
+		failureClass: input.failureClass,
+	}),
 	savedEntryConnectThrew: (input: {
 		source: ConnectionDiagnosticSource;
 		connection?: ConnectionDiagnosticConnectionIdentity;
@@ -358,19 +347,18 @@ export const autoConnectEvents = {
 		tmuxSessionName?: string;
 		failureClass?: string;
 		message?: string;
-	}): AutoConnectSavedEntryConnectThrewEvent =>
-		({
-			kind: 'auto-connect.saved-entry.connect.threw',
-			source: input.source,
-			message: input.message,
-			connection: copyOptionalConnectionIdentity(input.connection),
-			error: serializeConnectionDiagnosticError(input.error),
-			trigger: input.trigger,
-			host: input.host ?? input.connection?.host,
-			port: input.port ?? input.connection?.port,
-			tmuxSessionName: input.tmuxSessionName,
-			failureClass: input.failureClass,
-		}),
+	}): AutoConnectSavedEntryConnectThrewEvent => ({
+		kind: 'auto-connect.saved-entry.connect.threw',
+		source: input.source,
+		message: input.message,
+		connection: copyOptionalConnectionIdentity(input.connection),
+		error: serializeConnectionDiagnosticError(input.error),
+		trigger: input.trigger,
+		host: input.host ?? input.connection?.host,
+		port: input.port ?? input.connection?.port,
+		tmuxSessionName: input.tmuxSessionName,
+		failureClass: input.failureClass,
+	}),
 	savedEntryConnectTmuxAttachFailed: (input: {
 		source: ConnectionDiagnosticSource;
 		connection: ConnectionDiagnosticConnectionIdentity;
@@ -383,21 +371,20 @@ export const autoConnectEvents = {
 		port?: number;
 		failureClass?: string;
 		message?: string;
-	}): AutoConnectSavedEntryConnectTmuxAttachFailedEvent =>
-		({
-			kind: 'auto-connect.saved-entry.connect.tmux-attach-failed',
-			source: input.source,
-			message: input.message,
-			connection: copyConnectionIdentity(input.connection),
-			connectionId: input.connectionId,
-			tmuxAttachFailureReason: input.tmuxAttachFailureReason,
-			tmuxSessionName: input.tmuxSessionName,
-			storedConnectionId: input.storedConnectionId,
-			trigger: input.trigger,
-			host: input.host ?? input.connection.host,
-			port: input.port ?? input.connection.port,
-			failureClass: input.failureClass,
-		}),
+	}): AutoConnectSavedEntryConnectTmuxAttachFailedEvent => ({
+		kind: 'auto-connect.saved-entry.connect.tmux-attach-failed',
+		source: input.source,
+		message: input.message,
+		connection: copyConnectionIdentity(input.connection),
+		connectionId: input.connectionId,
+		tmuxAttachFailureReason: input.tmuxAttachFailureReason,
+		tmuxSessionName: input.tmuxSessionName,
+		storedConnectionId: input.storedConnectionId,
+		trigger: input.trigger,
+		host: input.host ?? input.connection.host,
+		port: input.port ?? input.connection.port,
+		failureClass: input.failureClass,
+	}),
 	savedEntryRetryStarted: (input: {
 		source: ConnectionDiagnosticSource;
 		connection?: ConnectionDiagnosticConnectionIdentity;
@@ -407,18 +394,17 @@ export const autoConnectEvents = {
 		tmuxSessionName?: string;
 		failureClass?: string;
 		message?: string;
-	}): AutoConnectSavedEntryRetryStartedEvent =>
-		({
-			kind: 'auto-connect.saved-entry.retry.started',
-			source: input.source,
-			message: input.message,
-			connection: copyOptionalConnectionIdentity(input.connection),
-			trigger: input.trigger,
-			host: input.host ?? input.connection?.host,
-			port: input.port ?? input.connection?.port,
-			tmuxSessionName: input.tmuxSessionName,
-			failureClass: input.failureClass,
-		}),
+	}): AutoConnectSavedEntryRetryStartedEvent => ({
+		kind: 'auto-connect.saved-entry.retry.started',
+		source: input.source,
+		message: input.message,
+		connection: copyOptionalConnectionIdentity(input.connection),
+		trigger: input.trigger,
+		host: input.host ?? input.connection?.host,
+		port: input.port ?? input.connection?.port,
+		tmuxSessionName: input.tmuxSessionName,
+		failureClass: input.failureClass,
+	}),
 	savedEntryRetryThrew: (input: {
 		source: ConnectionDiagnosticSource;
 		connection?: ConnectionDiagnosticConnectionIdentity;
@@ -429,19 +415,18 @@ export const autoConnectEvents = {
 		tmuxSessionName?: string;
 		failureClass?: string;
 		message?: string;
-	}): AutoConnectSavedEntryRetryThrewEvent =>
-		({
-			kind: 'auto-connect.saved-entry.retry.threw',
-			source: input.source,
-			message: input.message,
-			connection: copyOptionalConnectionIdentity(input.connection),
-			error: serializeConnectionDiagnosticError(input.error),
-			trigger: input.trigger,
-			host: input.host ?? input.connection?.host,
-			port: input.port ?? input.connection?.port,
-			tmuxSessionName: input.tmuxSessionName,
-			failureClass: input.failureClass,
-		}),
+	}): AutoConnectSavedEntryRetryThrewEvent => ({
+		kind: 'auto-connect.saved-entry.retry.threw',
+		source: input.source,
+		message: input.message,
+		connection: copyOptionalConnectionIdentity(input.connection),
+		error: serializeConnectionDiagnosticError(input.error),
+		trigger: input.trigger,
+		host: input.host ?? input.connection?.host,
+		port: input.port ?? input.connection?.port,
+		tmuxSessionName: input.tmuxSessionName,
+		failureClass: input.failureClass,
+	}),
 } as const;
 
 export function formatAutoConnectEventFields(

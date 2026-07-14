@@ -58,10 +58,9 @@ void test('Tailscale recovery UI store clears visible state back to hidden', () 
 	markTailscaleRecoveryUiNeedsAttention('Open Tailscale.');
 	clearTailscaleRecoveryUiState();
 
-	assert.deepEqual(
-		useTailscaleRecoveryUiStore.getState().recoveryState,
-		{ phase: 'hidden' },
-	);
+	assert.deepEqual(useTailscaleRecoveryUiStore.getState().recoveryState, {
+		phase: 'hidden',
+	});
 });
 
 void test('registerTailscaleRecoveryUiActions stores handlers and clears them on cleanup', () => {

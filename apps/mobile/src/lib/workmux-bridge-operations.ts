@@ -26,7 +26,9 @@ const WORKMUX_APP_NAV_ACTIONS = new Set([
 ]);
 
 function unsupported(argv: string[]): never {
-	throw new Error(`Unsupported Workmux bridge command: ${JSON.stringify(argv)}`);
+	throw new Error(
+		`Unsupported Workmux bridge command: ${JSON.stringify(argv)}`,
+	);
 }
 
 function argAt(argv: string[], index: number): string {
@@ -66,22 +68,14 @@ export function buildMdevBridgeOperationFromWorkmuxArgv(
 	const [scope, area, command] = argv;
 
 	if (scope === TMUX_SCOPE && area === 'app') {
-		if (
-			command === 'context' &&
-			argv.length === 5 &&
-			argv[3] === '--session'
-		) {
+		if (command === 'context' && argv.length === 5 && argv[3] === '--session') {
 			return {
 				operation: WORKMUX_REQUIRED_MDEV_BRIDGE_OPERATIONS[0],
 				params: { session: argAt(argv, 4) },
 			};
 		}
 
-		if (
-			command === 'window' &&
-			argv.length === 5 &&
-			argv[3] === '--session'
-		) {
+		if (command === 'window' && argv.length === 5 && argv[3] === '--session') {
 			return {
 				operation: WORKMUX_REQUIRED_MDEV_BRIDGE_OPERATIONS[1],
 				params: { session: argAt(argv, 4) },
@@ -101,11 +95,7 @@ export function buildMdevBridgeOperationFromWorkmuxArgv(
 			};
 		}
 
-		if (
-			command === 'focus' &&
-			argv.length === 6 &&
-			argv[4] === '--session'
-		) {
+		if (command === 'focus' && argv.length === 6 && argv[4] === '--session') {
 			return {
 				operation: WORKMUX_REQUIRED_MDEV_BRIDGE_OPERATIONS[2],
 				params: { roleOrDirection: argAt(argv, 3), session: argAt(argv, 5) },

@@ -49,14 +49,16 @@ const restoreJournalStateSchema = z
 			path: ['recoveryTarget'],
 		});
 	})
-	.transform((value): RestoreJournalState => ({
-		phase: value.phase ?? 'pending',
-		recoveryTarget:
-			value.recoveryTarget ??
-			(value.recoveryState === 'apply-previous' ? 'previous' : 'target'),
-		previous: value.previous,
-		target: value.target,
-	}));
+	.transform(
+		(value): RestoreJournalState => ({
+			phase: value.phase ?? 'pending',
+			recoveryTarget:
+				value.recoveryTarget ??
+				(value.recoveryState === 'apply-previous' ? 'previous' : 'target'),
+			previous: value.previous,
+			target: value.target,
+		}),
+	);
 
 export type RestoreJournalStorage = {
 	load: () => Promise<unknown | null>;
@@ -101,11 +103,11 @@ async function clearInvalidRestoreJournal(params: {
 			state: null,
 			clearedInvalidJournal: true as const,
 		};
-		} catch {
-			return {
-				state: null,
-				clearedInvalidJournal: false as const,
-				invalidJournalRetained: true as const,
+	} catch {
+		return {
+			state: null,
+			clearedInvalidJournal: false as const,
+			invalidJournalRetained: true as const,
 		};
 	}
 }
@@ -414,48 +416,47 @@ export async function restoreBackupPayload(params: {
 					},
 				);
 			}
-				await finalizeRestoreJournal({
-					restoreJournal: params.restoreJournal,
-					completedState: {
-						recoveryTarget: 'target',
-						previous: previousSnapshot,
-						target: params.payload,
-					},
-					context: 'reapplying target snapshot',
-					cause: new Error(
-						`Rollback failed: ${
-							rollbackError instanceof Error
-								? rollbackError.message
-								: 'Unknown rollback error.'
-						}`,
-						{ cause: error },
-					),
-				});
-				return {
-					...reapplied,
-					recoveredConsistency: true as const,
-				};
-			}
 			await finalizeRestoreJournal({
 				restoreJournal: params.restoreJournal,
 				completedState: {
-					recoveryTarget: 'previous',
+					recoveryTarget: 'target',
 					previous: previousSnapshot,
 					target: params.payload,
 				},
-				context: 'restoring previous snapshot',
-				cause:
-					rollbackTransitionError
-						? createRestoreJournalTransitionError({
-								target: 'previous',
-								error: rollbackTransitionError,
-								cause: error,
-							})
-						: error,
+				context: 'reapplying target snapshot',
+				cause: new Error(
+					`Rollback failed: ${
+						rollbackError instanceof Error
+							? rollbackError.message
+							: 'Unknown rollback error.'
+					}`,
+					{ cause: error },
+				),
 			});
-			if (rollbackTransitionError) {
-				throw createRestoreJournalTransitionError({
-					target: 'previous',
+			return {
+				...reapplied,
+				recoveredConsistency: true as const,
+			};
+		}
+		await finalizeRestoreJournal({
+			restoreJournal: params.restoreJournal,
+			completedState: {
+				recoveryTarget: 'previous',
+				previous: previousSnapshot,
+				target: params.payload,
+			},
+			context: 'restoring previous snapshot',
+			cause: rollbackTransitionError
+				? createRestoreJournalTransitionError({
+						target: 'previous',
+						error: rollbackTransitionError,
+						cause: error,
+					})
+				: error,
+		});
+		if (rollbackTransitionError) {
+			throw createRestoreJournalTransitionError({
+				target: 'previous',
 				error: rollbackTransitionError,
 				cause: error,
 			});

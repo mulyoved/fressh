@@ -31,7 +31,10 @@ export async function writeTransactionalStorageFixture<
 	entries: readonly SecureEntry<Metadata, Value>[];
 }) {
 	const keys = buildV2Keys(options.namespace);
-	const schemas = createRecordSchemas(options.namespace, options.metadataSchema);
+	const schemas = createRecordSchemas(
+		options.namespace,
+		options.metadataSchema,
+	);
 	const attemptId = `attempt-${options.slot}-${options.commitGeneration}`;
 	const snapshotId = `snapshot-${options.slot}-${options.commitGeneration}`;
 	const pageHashes: string[] = [];
@@ -94,7 +97,9 @@ export async function writeTransactionalStorageFixture<
 		pageHashes.push(pageSha256);
 		await options.storage.setItem(
 			manifestKey,
-			canonicalJson(schemas.manifestPage.parse({ ...pageWithoutHash, pageSha256 })),
+			canonicalJson(
+				schemas.manifestPage.parse({ ...pageWithoutHash, pageSha256 }),
+			),
 		);
 	}
 
@@ -116,7 +121,9 @@ export async function writeTransactionalStorageFixture<
 		pageHashes.push(pageSha256);
 		await options.storage.setItem(
 			manifestKey,
-			canonicalJson(schemas.manifestPage.parse({ ...pageWithoutHash, pageSha256 })),
+			canonicalJson(
+				schemas.manifestPage.parse({ ...pageWithoutHash, pageSha256 }),
+			),
 		);
 	}
 

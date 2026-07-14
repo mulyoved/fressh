@@ -54,7 +54,8 @@ export function createManualTerminalFitRunner<Connection>(
 
 			const terminalSizeAfterFit = deps.waitForTerminalSizeAfterFit?.();
 			xterm.fit();
-			const terminalSize = (await terminalSizeAfterFit) ?? deps.getTerminalSize();
+			const terminalSize =
+				(await terminalSizeAfterFit) ?? deps.getTerminalSize();
 			if (!terminalSize) {
 				deps.showFailure(
 					'Fit terminal failed',

@@ -80,9 +80,7 @@ export const useSshConnMutation = (opts?: {
 					onClearAttention: clearTailscaleRecoveryUiState,
 					logger,
 				});
-				trace.finish(
-					result.status === 'connected' ? 'connected' : 'failed',
-				);
+				trace.finish(result.status === 'connected' ? 'connected' : 'failed');
 			} catch (error) {
 				trace.finish('failed');
 				logger.error('Error connecting to SSH server', error);

@@ -58,7 +58,10 @@ void test('steps macros parse and delegate to the scheduled step runner', () => 
 		},
 	);
 
-	assert.deepEqual(receivedSteps, parsed?.type === 'steps' ? parsed.steps : null);
+	assert.deepEqual(
+		receivedSteps,
+		parsed?.type === 'steps' ? parsed.steps : null,
+	);
 	assert.deepEqual(sentTexts, []);
 	assert.deepEqual(sentBytes, []);
 	assert.deepEqual(actions, []);

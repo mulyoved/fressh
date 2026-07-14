@@ -61,7 +61,10 @@ void test('buildV2Keys creates the exact deterministic storage keys', () => {
 	assert.equal(keys.cleanup('attempt', 6), 'privateKey-v2-cleanup-attempt-6');
 });
 
-const schemas = createRecordSchemas('privateKey', z.strictObject({ label: z.string() }));
+const schemas = createRecordSchemas(
+	'privateKey',
+	z.strictObject({ label: z.string() }),
+);
 const oversizedNamespace = 'x'.repeat(1801);
 const oversizedSchemas = createRecordSchemas(
 	oversizedNamespace,
@@ -125,7 +128,9 @@ const recordFixtures = {
 	},
 } as const;
 
-for (const name of Object.keys(recordFixtures) as (keyof typeof recordFixtures)[]) {
+for (const name of Object.keys(
+	recordFixtures,
+) as (keyof typeof recordFixtures)[]) {
 	void test(`${name} schema is strict, namespace-bound, and payload-bounded`, () => {
 		const schema = schemas[name];
 		const fixture = recordFixtures[name];
@@ -134,7 +139,10 @@ for (const name of Object.keys(recordFixtures) as (keyof typeof recordFixtures)[
 			schema.safeParse({ ...fixture, namespace: 'other' }).success,
 			false,
 		);
-		assert.equal(schema.safeParse({ ...fixture, unknown: true }).success, false);
+		assert.equal(
+			schema.safeParse({ ...fixture, unknown: true }).success,
+			false,
+		);
 		assert.equal(
 			oversizedSchemas[name].safeParse({
 				...fixture,
@@ -313,7 +321,8 @@ void test('root commits use one complete generic anchored cleanup descriptor', (
 		true,
 	);
 	assert.equal(
-		schemas.rootCommit.safeParse({ ...base, cleanupHeadKey: 'old-mode' }).success,
+		schemas.rootCommit.safeParse({ ...base, cleanupHeadKey: 'old-mode' })
+			.success,
 		false,
 	);
 	assert.equal(

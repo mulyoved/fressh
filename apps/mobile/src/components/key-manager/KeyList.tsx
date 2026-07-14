@@ -334,9 +334,7 @@ function KeyRow(props: {
 	const listConnectionsQuery = useQuery(secretsManager.connections.query.list);
 	const entryQuery = useQuery(secretsManager.keys.query.get(props.entryId));
 	const entry = entryQuery.data;
-	const [label, setLabel] = React.useState(
-		entry?.metadata.label ?? '',
-	);
+	const [label, setLabel] = React.useState(entry?.metadata.label ?? '');
 	const [showPublicKey, setShowPublicKey] = React.useState(false);
 	const [copied, setCopied] = React.useState(false);
 

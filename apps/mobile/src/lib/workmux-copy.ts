@@ -18,7 +18,9 @@ export function getWorkmuxAttachErrorCopy(
 } {
 	const trimmedReason = failureReason?.trim();
 	return {
-		title: trimmedReason ? 'Workmux attach failed' : 'Workmux session not found',
+		title: trimmedReason
+			? 'Workmux attach failed'
+			: 'Workmux session not found',
 		body: trimmedReason
 			? `We could not attach to Workmux session "${sessionName}". Remote error: ${trimmedReason}`
 			: `We could not attach to Workmux session "${sessionName}". Create it on the server and try again.`,

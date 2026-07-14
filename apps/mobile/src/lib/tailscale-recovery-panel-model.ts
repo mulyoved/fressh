@@ -1,6 +1,4 @@
-import {
-	type TailscaleRecoveryUiActions,
-} from './tailscale-recovery-ui-store';
+import { type TailscaleRecoveryUiActions } from './tailscale-recovery-ui-store';
 import {
 	getTailscaleRecoveryBannerPresentation,
 	type TailscaleRecoveryBannerState,

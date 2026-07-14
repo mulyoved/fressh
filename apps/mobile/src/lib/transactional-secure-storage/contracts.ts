@@ -51,10 +51,7 @@ export class SecureStorageUnavailableError extends Error {}
 export class SecureStorageCorruptionError extends Error {}
 export class SecureStorageWriteNotCommittedError extends Error {}
 
-export type TransactionalSecureStoreOptions<
-	Metadata extends object,
-	Value,
-> = {
+export type TransactionalSecureStoreOptions<Metadata extends object, Value> = {
 	namespace: string;
 	metadataSchema: z.ZodType<Metadata>;
 	serializeValue(value: Value): string;

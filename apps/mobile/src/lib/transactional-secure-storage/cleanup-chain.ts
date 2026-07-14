@@ -28,7 +28,10 @@ export function createCleanupChain<Metadata extends object>(
 	options: CleanupChainOptions<Metadata>,
 ) {
 	const keys = buildV2Keys(options.namespace);
-	const schemas = createRecordSchemas(options.namespace, options.metadataSchema);
+	const schemas = createRecordSchemas(
+		options.namespace,
+		options.metadataSchema,
+	);
 
 	async function stage(
 		records: Map<string, string>,
@@ -112,7 +115,8 @@ export function createCleanupChain<Metadata extends object>(
 			pageKey = page.nextPageKey;
 		}
 		if (
-			(await hash({ pageHashes }, undefined, options.sha256)) !== descriptor.sha256
+			(await hash({ pageHashes }, undefined, options.sha256)) !==
+			descriptor.sha256
 		) {
 			return { status: 'invalid' };
 		}
@@ -125,7 +129,8 @@ export function createCleanupChain<Metadata extends object>(
 	) {
 		return (
 			pages.length === allowedKeys.size &&
-			new Set(pages.map(({ garbageKey }) => garbageKey)).size === pages.length &&
+			new Set(pages.map(({ garbageKey }) => garbageKey)).size ===
+				pages.length &&
 			pages.every(({ garbageKey }) => allowedKeys.has(garbageKey))
 		);
 	}

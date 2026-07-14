@@ -38,7 +38,9 @@ function tmuxAttachFailedResult(
 	};
 }
 
-function abortedResult(reason: unknown = 'caller-aborted'): SavedEntryConnectResult {
+function abortedResult(
+	reason: unknown = 'caller-aborted',
+): SavedEntryConnectResult {
 	return {
 		status: 'aborted',
 		reason,
@@ -89,7 +91,11 @@ function harness(opts?: {
 				tmuxFailures.push(result.result);
 				return { connected: false };
 			case 'aborted':
-				return { connected: false, aborted: true, reason: result.result.reason };
+				return {
+					connected: false,
+					aborted: true,
+					reason: result.result.reason,
+				};
 			case 'blocked':
 			case 'recoveryNotAttempted':
 				if (result.attentionMessage !== null) {

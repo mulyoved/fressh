@@ -23,6 +23,7 @@ adb install -r path/to/app-preview.apk
 ```
 
 Important signing rule for `com.finalapp.vibe2`:
+
 - Keep one signing lane (EAS preview for normal dev).
 - Do not mix APKs signed by different certs on the same package ID.
 - Before uninstall/reinstall, export backup JSON from
@@ -35,8 +36,8 @@ cd apps/mobile
 pnpm exec eas update --channel preview --message "Describe change"
 ```
 
-Preview builds run standalone and do not require Expo Go or Metro for the
-normal workflow. For the full workflow (native rebuilds, OTA policy), see
+Preview builds run standalone and do not require Expo Go or Metro for the normal
+workflow. For the full workflow (native rebuilds, OTA policy), see
 [`docs/dev-builds.md`](../../docs/dev-builds.md).
 
 ### Development notes
