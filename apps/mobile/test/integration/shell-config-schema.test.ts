@@ -21,6 +21,8 @@ void test('bundled runtime shell config parses with keyboards and command menus'
 	assert.ok(config.updatedAt);
 	assert.ok(config.keyboards.length > 0);
 	assert.ok(config.commandMenus.length > 0);
+	assert.equal(config.version, '2026-07-14.2');
+	assert.equal(config.updatedAt, '2026-07-14T15:00:00.000Z');
 	assert.ok(rawConfig.keyboardRouting);
 	assert.deepEqual(
 		(
@@ -291,6 +293,25 @@ void test('runtime shell config accepts command menu action entries', () => {
 			actionId: 'DEBUG_CONNECTION_IN_CODEX',
 		},
 	]);
+});
+
+void test('runtime shell config accepts native worktree workspace action ids', () => {
+	const config = JSON.parse(bundledConfigText) as Record<string, unknown>;
+	config.commandMenus = [
+		{
+			type: 'action',
+			label: 'New Worktree Workspace',
+			actionId: 'OPEN_NEW_WORKTREE_WORKSPACE',
+		},
+		{
+			type: 'action',
+			label: 'Close Worktree Workspace',
+			actionId: 'OPEN_CLOSE_WORKTREE_WORKSPACE',
+		},
+	];
+
+	const parsed = parseShellConfigData(config);
+	assert.deepEqual(parsed.commandMenus, config.commandMenus);
 });
 
 void test('runtime shell config rejects unsupported command menu action ids', () => {

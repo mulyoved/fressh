@@ -30,6 +30,8 @@ import { type ShellTerminalRuntimeView } from './terminal-hook-runtime';
 export type ShellKeyboardModalCommands = {
 	toggleCommandMenu(): void;
 	openCommander(): void;
+	openNewWorktreeWorkspace(): void;
+	openCloseWorktreeWorkspace(): void;
 	openSkillSelector(): void;
 	openBrowserActions(): void;
 	openFeatureRequest(): void;
@@ -197,6 +199,10 @@ export function createShellKeyboardControllerAdapter(input: {
 			toggleCommandMenu: () =>
 				input.getPorts().modalCommands.toggleCommandMenu(),
 			openCommander: () => input.getPorts().modalCommands.openCommander(),
+			openNewWorktreeWorkspace: () =>
+				input.getPorts().modalCommands.openNewWorktreeWorkspace(),
+			openCloseWorktreeWorkspace: () =>
+				input.getPorts().modalCommands.openCloseWorktreeWorkspace(),
 			openSkillSelector: () =>
 				input.getPorts().modalCommands.openSkillSelector(),
 			openBrowserActions: () =>

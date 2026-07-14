@@ -96,6 +96,8 @@ export type CreateShellDetailKeyboardModalCommandsInput = {
 	openCommandMenu(): void;
 	closeCommandMenu(): void;
 	openCommander(): void;
+	openNewWorktreeWorkspace(): void;
+	openCloseWorktreeWorkspace(): void;
 	openBrowserActions(): void;
 	openFeatureRequest(): void;
 	openConfigurator(): void;
@@ -104,6 +106,8 @@ export type CreateShellDetailKeyboardModalCommandsInput = {
 export type ShellDetailKeyboardModalCommands = {
 	toggleCommandMenu(): void;
 	openCommander(): void;
+	openNewWorktreeWorkspace(): void;
+	openCloseWorktreeWorkspace(): void;
 	openSkillSelector(): void;
 	openBrowserActions(): void;
 	openFeatureRequest(): void;
@@ -133,6 +137,8 @@ export function createShellDetailKeyboardModalCommands(
 			input.closeTextEntry();
 			input.openCommander();
 		},
+		openNewWorktreeWorkspace: () => input.openNewWorktreeWorkspace(),
+		openCloseWorktreeWorkspace: () => input.openCloseWorktreeWorkspace(),
 		openSkillSelector: () => input.late.openSkillSelector(),
 		openBrowserActions: () => input.openBrowserActions(),
 		openFeatureRequest: () => input.openFeatureRequest(),

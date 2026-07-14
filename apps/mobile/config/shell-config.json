@@ -1,6 +1,6 @@
 {
-	"version": "2026-07-14.1",
-	"updatedAt": "2026-07-14T10:12:06.000Z",
+	"version": "2026-07-14.2",
+	"updatedAt": "2026-07-14T15:00:00.000Z",
 	"defaultKeyboardId": "phone_base",
 	"activeKeyboardIds": [
 		"phone_base",
@@ -1122,6 +1122,16 @@
 							"type": "enter"
 						}
 					]
+				},
+				{
+					"type": "action",
+					"label": "New Worktree Workspace",
+					"actionId": "OPEN_NEW_WORKTREE_WORKSPACE"
+				},
+				{
+					"type": "action",
+					"label": "Close Worktree Workspace",
+					"actionId": "OPEN_CLOSE_WORKTREE_WORKSPACE"
 				},
 				{
 					"type": "preset",

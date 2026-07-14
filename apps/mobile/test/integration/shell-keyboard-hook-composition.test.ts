@@ -58,6 +58,8 @@ function createAdapterHarness() {
 		openFeatureRequest: () => {},
 		openWisprTextEditor: () => {},
 		openConfigurator: () => {},
+		openNewWorktreeWorkspace: () => events.push(`worktree-new:${identity}`),
+		openCloseWorktreeWorkspace: () => events.push(`worktree-close:${identity}`),
 		closeCommandMenu: () => {},
 	});
 	const stateCore = {
@@ -228,10 +230,21 @@ void test('production adapter reads latest ports and guards deferred paste autho
 	const harness = createAdapterHarness();
 	const copyCallback = harness.adapter.onCopySelection;
 	await harness.adapter.runAction('OPEN_COMMANDER');
+	await harness.adapter.runAction('OPEN_NEW_WORKTREE_WORKSPACE');
+	await harness.adapter.runAction('OPEN_CLOSE_WORKTREE_WORKSPACE');
 	harness.replacePorts();
 	assert.strictEqual(harness.adapter.onCopySelection, copyCallback);
 	await harness.adapter.runAction('OPEN_COMMANDER');
-	assert.deepEqual(harness.events, ['commander:old', 'commander:new']);
+	await harness.adapter.runAction('OPEN_NEW_WORKTREE_WORKSPACE');
+	await harness.adapter.runAction('OPEN_CLOSE_WORKTREE_WORKSPACE');
+	assert.deepEqual(harness.events, [
+		'commander:old',
+		'worktree-new:old',
+		'worktree-close:old',
+		'commander:new',
+		'worktree-new:new',
+		'worktree-close:new',
+	]);
 
 	let resolveRead!: (text: string) => void;
 	harness.setClipboardRead(

@@ -605,6 +605,35 @@ void test('mdev command menu exposes terminal fit action', () => {
 	]);
 });
 
+void test('bundled config exposes native worktree workspace actions with committed metadata', () => {
+	const config = getBundledShellConfig();
+	const mdevMenu = config.commandMenus.find(
+		(entry) => entry.type === 'submenu' && entry.label === 'mdev',
+	);
+	assert.ok(mdevMenu);
+	assert.equal(mdevMenu.type, 'submenu');
+	assert.equal(config.version, '2026-07-14.2');
+	assert.equal(config.updatedAt, '2026-07-14T15:00:00.000Z');
+
+	const renameIndex = mdevMenu.entries.findIndex(
+		(entry) => entry.label === 'Rename Workspace',
+	);
+	assert.notEqual(renameIndex, -1);
+	assert.deepEqual(mdevMenu.entries.slice(renameIndex + 1, renameIndex + 3), [
+		{
+			type: 'action',
+			label: 'New Worktree Workspace',
+			actionId: 'OPEN_NEW_WORKTREE_WORKSPACE',
+		},
+		{
+			type: 'action',
+			label: 'Close Worktree Workspace',
+			actionId: 'OPEN_CLOSE_WORKTREE_WORKSPACE',
+		},
+	]);
+	assert.equal(mdevMenu.entries[renameIndex + 3]?.label, 'codex auth refresh');
+});
+
 void test('advanced keyboard omits consolidated host URL setter actions', () => {
 	const config = getBundledShellConfig();
 	const advancedKeyboard = config.keyboards.find(

@@ -132,6 +132,55 @@ void test('command menu action delegates to the action context', async () => {
 	assert.equal(toggled, 1);
 });
 
+void test('native worktree workspace actions delegate only to matching controller callbacks', async () => {
+	let openedNew = 0;
+	let openedClose = 0;
+	const fail = (port: string): never => {
+		throw new Error(`Worktree workspace actions must not use ${port}`);
+	};
+	const context = {
+		availableKeyboardIds: new Set(),
+		selectKeyboard: () => {},
+		rotateKeyboard: () => {},
+		openConfigurator: () => {},
+		sendBytes: () => fail('terminal bytes'),
+		pasteClipboard: async () => fail('clipboard paste'),
+		copySelection: () => {},
+		openNewWorktreeWorkspace: () => {
+			openedNew += 1;
+		},
+		openCloseWorktreeWorkspace: () => {
+			openedClose += 1;
+		},
+		runWorkmuxKeyboardCommand: async () => fail('Workmux keyboard commands'),
+	} as Parameters<typeof runAction>[1];
+
+	await runAction('OPEN_NEW_WORKTREE_WORKSPACE', context);
+	assert.deepEqual(
+		{ openedNew, openedClose },
+		{ openedNew: 1, openedClose: 0 },
+	);
+
+	await runAction('OPEN_CLOSE_WORKTREE_WORKSPACE', context);
+	assert.deepEqual(
+		{ openedNew, openedClose },
+		{ openedNew: 1, openedClose: 1 },
+	);
+	assert.equal(KNOWN_ACTION_IDS.includes('OPEN_NEW_WORKTREE_WORKSPACE'), true);
+	assert.equal(
+		KNOWN_ACTION_IDS.includes('OPEN_CLOSE_WORKTREE_WORKSPACE'),
+		true,
+	);
+	assert.equal(
+		CONFIG_SUPPORTED_ACTION_IDS.includes('OPEN_NEW_WORKTREE_WORKSPACE'),
+		true,
+	);
+	assert.equal(
+		CONFIG_SUPPORTED_ACTION_IDS.includes('OPEN_CLOSE_WORKTREE_WORKSPACE'),
+		true,
+	);
+});
+
 void test('fit terminal action delegates to the action context', async () => {
 	let fitted = 0;
 

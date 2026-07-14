@@ -109,6 +109,8 @@ void test('bundled command menu exposes the approved Issue 91 tree', () => {
 				{ label: 'Open Workspace', type: 'preset' },
 				{ label: 'Close Workspace', type: 'preset' },
 				{ label: 'Rename Workspace', type: 'preset' },
+				{ label: 'New Worktree Workspace', type: 'action' },
+				{ label: 'Close Worktree Workspace', type: 'action' },
 				{ label: 'codex auth refresh', type: 'preset' },
 				{ label: 'restart codex', type: 'bridge' },
 			],
@@ -181,6 +183,31 @@ void test('mdev workspace presets run existing tmux workspace commands', () => {
 			{ type: 'enter' },
 		],
 	});
+});
+
+void test('mdev native worktree workspace actions follow the existing workspace presets', () => {
+	const commandMenus = getBundledShellConfig().commandMenus;
+	const mdev = findEntry(commandMenus, ['mdev']);
+	assert.equal(mdev.type, 'submenu');
+	if (mdev.type !== 'submenu') return;
+
+	const renameIndex = mdev.entries.findIndex(
+		(entry) => entry.label === 'Rename Workspace',
+	);
+	assert.notEqual(renameIndex, -1);
+	assert.deepEqual(mdev.entries.slice(renameIndex + 1, renameIndex + 3), [
+		{
+			type: 'action',
+			label: 'New Worktree Workspace',
+			actionId: 'OPEN_NEW_WORKTREE_WORKSPACE',
+		},
+		{
+			type: 'action',
+			label: 'Close Worktree Workspace',
+			actionId: 'OPEN_CLOSE_WORKTREE_WORKSPACE',
+		},
+	]);
+	assert.equal(mdev.entries[renameIndex + 3]?.label, 'codex auth refresh');
 });
 
 void test('mdev codex entries expose auth refresh preset and bridge-backed restart', () => {

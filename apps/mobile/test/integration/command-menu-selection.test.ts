@@ -60,6 +60,43 @@ void test('command menu selection dispatch closes before native actions', () => 
 	assert.deepEqual(calls, ['close', 'action:OPEN_REPO_FEATURE_REQUEST']);
 });
 
+void test('command menu selection closes before each native worktree workspace action', () => {
+	for (const actionId of [
+		'OPEN_NEW_WORKTREE_WORKSPACE',
+		'OPEN_CLOSE_WORKTREE_WORKSPACE',
+	] as const) {
+		const calls: string[] = [];
+		dispatchCommandMenuSelection(
+			{
+				type: 'action',
+				label:
+					actionId === 'OPEN_NEW_WORKTREE_WORKSPACE'
+						? 'New Worktree Workspace'
+						: 'Close Worktree Workspace',
+				actionId,
+			},
+			{
+				onSubmenu: () => {},
+				onPreset: () => {},
+				onClose: () => calls.push('close'),
+				onAction: (selectedActionId) => {
+					if (selectedActionId === 'OPEN_NEW_WORKTREE_WORKSPACE') {
+						calls.push('open-new');
+					} else if (selectedActionId === 'OPEN_CLOSE_WORKTREE_WORKSPACE') {
+						calls.push('open-close');
+					}
+				},
+				onBridge: () => {},
+			},
+		);
+
+		assert.deepEqual(calls, [
+			'close',
+			actionId === 'OPEN_NEW_WORKTREE_WORKSPACE' ? 'open-new' : 'open-close',
+		]);
+	}
+});
+
 void test('command menu selection dispatch closes before bridge entries', () => {
 	const calls: string[] = [];
 	const entry: CommandMenuEntry = {
