@@ -16,8 +16,8 @@ const execFileAsync = promisify(execFile);
 
 function createDiscoveryEnv(
 	homeDirectory: string,
-	overrides: NodeJS.ProcessEnv = {},
-): NodeJS.ProcessEnv {
+	overrides: typeof process.env = {},
+): typeof process.env {
 	return {
 		...process.env,
 		...overrides,
