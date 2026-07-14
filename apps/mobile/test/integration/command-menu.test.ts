@@ -207,7 +207,7 @@ void test('mdev codex entries expose auth refresh preset and bridge-backed resta
 		type: 'bridge',
 		label: 'restart codex',
 		operation: 'codex.restart',
-		timeoutMs: 10_000,
+		timeoutMs: 60_000,
 	});
 });
 
