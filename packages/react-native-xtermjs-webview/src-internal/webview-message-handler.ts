@@ -6,6 +6,7 @@ import {
 	type BridgeOutboundMessage,
 	type TouchScrollConfig,
 } from '../src/bridge';
+import { createWriteProgressReporter } from './write-progress';
 
 type SelectionHandles = {
 	applySelectionMode: (enabled: boolean, options: { force: true }) => void;
@@ -38,6 +39,7 @@ export function createXtermWebViewMessageHandler({
 	touchScrollController,
 	sendToRn,
 	applyFontFamily,
+	now = () => performance.now(),
 }: {
 	instanceId: string;
 	term: MessageHandlerTerminal;
@@ -46,10 +48,17 @@ export function createXtermWebViewMessageHandler({
 	touchScrollController: TouchScrollController;
 	sendToRn: (msg: BridgeInboundDraftMessage) => void;
 	applyFontFamily: (family?: string) => void;
+	now?: () => number;
 }) {
+	const writeProgressReporter = createWriteProgressReporter({
+		instanceId,
+		now,
+		sendToRn,
+	});
 	const termWrite = (bStr: string) => {
 		const bytes = bStrToBinary(bStr);
-		term.write(bytes);
+		writeProgressReporter.received(bytes.byteLength);
+		term.write(bytes, writeProgressReporter.completed);
 	};
 
 	return (e: MessageEvent<BridgeOutboundMessage>) => {

@@ -17,7 +17,7 @@ export declare function createScrollbackEnterRequestFailureHandler({ logger, sen
     logger?: XtermMessageLogger;
     sendToWebView: (message: BridgeOutboundMessage) => void;
 }): (event: ScrollbackEnterRequestEvent, error: unknown) => void;
-export declare function handleXtermBridgeInboundMessage(msg: BridgeInboundDraftMessage, { currentInstanceIdRef, pendingSelectionRef, logger, onInitialized, autoFitFn, setInitialized, onInput, onData, onResize, onSelection, onSelectionModeChange, onScrollbackModeChange, onScrollbackEnterRequested, onScrollbackEnterRequestFailure, onScrollbackBatch, invalidatedInstanceIdsRef, invalidatedBridgeLoadTokensRef, currentBridgeLoadTokenRef, expectedBridgeLoadIdRef, awaitingBridgeDocumentStartRef, }: {
+export declare function handleXtermBridgeInboundMessage(msg: BridgeInboundDraftMessage, { currentInstanceIdRef, pendingSelectionRef, logger, onInitialized, autoFitFn, setInitialized, onInput, onData, onResize, onSelection, onSelectionModeChange, onScrollbackModeChange, onScrollbackEnterRequested, onScrollbackEnterRequestFailure, onScrollbackBatch, onOutputProgress, invalidatedInstanceIdsRef, invalidatedBridgeLoadTokensRef, currentBridgeLoadTokenRef, expectedBridgeLoadIdRef, awaitingBridgeDocumentStartRef, }: {
     currentInstanceIdRef: {
         current: string | null;
     };
@@ -59,6 +59,9 @@ export declare function handleXtermBridgeInboundMessage(msg: BridgeInboundDraftM
     onScrollbackEnterRequested?: (event: ScrollbackEnterRequestEvent) => void | Promise<void>;
     onScrollbackEnterRequestFailure?: (event: ScrollbackEnterRequestEvent, error: unknown) => void;
     onScrollbackBatch?: (event: ScrollbackBatchEvent) => void;
+    onOutputProgress?: (event: Extract<BridgeInboundDraftMessage, {
+        type: 'outputProgress';
+    }>) => void;
 }): boolean;
 export {};
 //# sourceMappingURL=xterm-message-handler.d.ts.map

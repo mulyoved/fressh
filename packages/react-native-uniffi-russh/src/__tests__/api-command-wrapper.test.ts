@@ -149,6 +149,83 @@ async function connectWithGeneratedConnection(generatedConnection: unknown) {
 	});
 }
 
+async function startWrappedShell(input: {
+	bufferStats(): unknown;
+	currentSeq(): bigint;
+}) {
+	const generatedShell = {
+		getInfo: () => ({
+			channelId: 7,
+			createdAtMs: 8,
+			term: generated.TerminalType.Xterm256,
+			connectionId: 'conn-1',
+		}),
+		bufferStats: input.bufferStats,
+		currentSeq: input.currentSeq,
+	};
+	const connection = await connectWithGeneratedConnection(
+		createGeneratedConnection({
+			startShell: jest.fn(async () => generatedShell),
+		}),
+	);
+	const shell = await connection.startShell({
+		term: 'Xterm256',
+		useTmux: false,
+		tmuxSessionName: 'main',
+	});
+	return { generatedShell, shell };
+}
+
+test('startShell wrapper preserves the native receiver for buffer stats', async () => {
+	const stats = {
+		ringBytesCount: 1_000n,
+		usedBytes: 20n,
+		headSeq: 4n,
+		tailSeq: 8n,
+		droppedBytesTotal: 0n,
+		chunksCount: 5n,
+	};
+	let generatedShell!: object;
+	const started = await startWrappedShell({
+		bufferStats() {
+			expect(this).toBe(generatedShell);
+			return stats;
+		},
+		currentSeq() {
+			expect(this).toBe(generatedShell);
+			return 9n;
+		},
+	});
+	generatedShell = started.generatedShell;
+
+	expect(started.shell.bufferStats()).toEqual(stats);
+});
+
+test('startShell wrapper preserves the exact native current sequence', async () => {
+	const exactSequence = 9_007_199_254_740_993n;
+	let generatedShell!: object;
+	const started = await startWrappedShell({
+		bufferStats() {
+			expect(this).toBe(generatedShell);
+			return {
+				ringBytesCount: 0n,
+				usedBytes: 0n,
+				headSeq: 0n,
+				tailSeq: 0n,
+				droppedBytesTotal: 0n,
+				chunksCount: 0n,
+			};
+		},
+		currentSeq() {
+			expect(this).toBe(generatedShell);
+			return exactSequence;
+		},
+	});
+	generatedShell = started.generatedShell;
+
+	expect(started.shell.currentSeq()).toBe(exactSequence);
+});
+
 test('api trace logging is disabled by default', async () => {
 	const previousTraceFlag = process.env.FRESSH_RUSSH_TRACE;
 	delete process.env.FRESSH_RUSSH_TRACE;

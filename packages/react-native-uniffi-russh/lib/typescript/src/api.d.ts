@@ -158,7 +158,7 @@ export type SshShell = {
         signal?: AbortSignal;
     }) => Promise<void>;
     bufferStats: () => GeneratedRussh.BufferStats;
-    currentSeq: () => number;
+    currentSeq: () => bigint;
     readBuffer: (cursor: Cursor, maxBytes?: bigint) => BufferReadResult;
     addListener: (cb: (ev: ListenerEvent) => void, opts: ListenerOptions) => bigint;
     removeListener: (id: bigint) => void;

@@ -9,13 +9,20 @@ type BridgeGeneration = BridgeLoad & {
 type LegacyBridgeGeneration = {
     bridgeStartedAt?: number;
 };
+export type OutputProgressBridgeMessage = {
+    type: 'outputProgress';
+    instanceId: string;
+    receivedMessages: number;
+    receivedBytes: number;
+    completedWrites: number;
+} & BridgeGeneration;
 export type BridgeInboundMessage = ({
     type: 'documentStarted';
     bridgeLoadToken: string;
 } & BridgeLoad) | ({
     type: 'initialized';
     instanceId: string;
-} & BridgeGeneration) | {
+} & BridgeGeneration) | OutputProgressBridgeMessage | {
     type: 'input';
     str: string;
     instanceId: string;

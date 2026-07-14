@@ -4,6 +4,7 @@ import { binaryToBStr, bStrToBinary, BridgeInboundDraftMessage, ScrollbackBatchE
 import { XtermWebViewHandle } from './xterm-webview-handle';
 export { bStrToBinary, binaryToBStr };
 export type { ScrollbackBatchEvent, TmuxScrollBatchEvent, TouchScrollConfig, XtermWebViewHandle, };
+export type { XtermOutputDiagnostics } from './output-diagnostics';
 type StrictOmit<T, K extends keyof T> = Omit<T, K>;
 type ITerminalOptions = import('@xterm/xterm').ITerminalOptions;
 type WebViewOptions = React.ComponentProps<typeof WebView>;

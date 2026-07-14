@@ -9,6 +9,7 @@ import {
 	handleScrollbackBatchBridgeMessage,
 	mapScrollbackBatchMessage,
 } from '../src/bridge';
+import { createXtermOutputDiagnostics } from '../src/output-diagnostics';
 import {
 	createScrollbackEnterRequestFailureHandler,
 	handleXtermBridgeInboundMessage,
@@ -18,6 +19,7 @@ import {
 	createXtermWebViewHandle,
 } from '../src/xterm-webview-handle';
 import { createXtermWebViewMessageHandler } from './webview-message-handler';
+import { createWriteProgressReporter } from './write-progress';
 
 function withTrackedClearTimeouts(run: (cleared: unknown[]) => void): unknown[] {
 	const clearTimeoutOriginal = globalThis.clearTimeout;
@@ -237,6 +239,7 @@ void test('XtermJsWebView message handler routes current instance events and dro
 				events.push(['scrollback-enter', event]);
 			},
 			onScrollbackBatch: (event) => events.push(['scroll-batch', event]),
+			onOutputProgress: (event) => events.push(['output-progress', event]),
 		});
 
 	assert.equal(handle({ type: 'initialized', instanceId: 'instance-1' }), true);
@@ -325,6 +328,26 @@ void test('XtermJsWebView message handler routes current instance events and dro
 	);
 	assert.equal(
 		handle({
+			type: 'outputProgress',
+			instanceId: 'instance-1',
+			receivedMessages: 2,
+			receivedBytes: 17,
+			completedWrites: 1,
+		}),
+		true,
+	);
+	assert.equal(
+		handle({
+			type: 'outputProgress',
+			instanceId: 'stale-instance',
+			receivedMessages: 9,
+			receivedBytes: 99,
+			completedWrites: 8,
+		}),
+		true,
+	);
+	assert.equal(
+		handle({
 			type: 'scrollbackEnterRequested',
 			instanceId: 'stale-instance',
 			requestId: 8,
@@ -383,6 +406,165 @@ void test('XtermJsWebView message handler routes current instance events and dro
 				instanceId: 'instance-1',
 			},
 		],
+		[
+			'output-progress',
+			{
+				type: 'outputProgress',
+				instanceId: 'instance-1',
+				receivedMessages: 2,
+				receivedBytes: 17,
+				completedWrites: 1,
+			},
+		],
+	]);
+});
+
+void test('xterm output diagnostics separate queued, sent, and completed bytes', () => {
+	const diagnostics = createXtermOutputDiagnostics();
+	diagnostics.recordQueued(10);
+	diagnostics.recordFlush();
+	diagnostics.recordSent(10);
+	diagnostics.recordWebViewProgress({
+		instanceId: 'instance-1',
+		receivedMessages: 1,
+		receivedBytes: 10,
+		completedWrites: 1,
+	});
+	assert.deepEqual(diagnostics.getSnapshot(), {
+		webViewInstanceId: 'instance-1',
+		rnQueuedMessages: 1,
+		rnQueuedBytes: 10,
+		rnFlushes: 1,
+		rnSentMessages: 1,
+		rnSentBytes: 10,
+		webViewReceivedMessages: 1,
+		webViewReceivedBytes: 10,
+		webViewCompletedWrites: 1,
+	});
+});
+
+void test('buffered flush stays queued when the WebView send is unavailable', () => {
+	const diagnostics = createXtermOutputDiagnostics();
+	diagnostics.recordQueued(10);
+	assert.equal(typeof diagnostics.recordSendAttempt, 'function');
+
+	assert.equal(
+		diagnostics.recordSendAttempt({
+			byteCount: 10,
+			isFlush: true,
+			send: () => false,
+		}),
+		false,
+	);
+
+	assert.deepEqual(diagnostics.getSnapshot(), {
+		webViewInstanceId: null,
+		rnQueuedMessages: 1,
+		rnQueuedBytes: 10,
+		rnFlushes: 0,
+		rnSentMessages: 0,
+		rnSentBytes: 0,
+		webViewReceivedMessages: 0,
+		webViewReceivedBytes: 0,
+		webViewCompletedWrites: 0,
+	});
+});
+
+void test('writeMany stays queued when the WebView send is unavailable', () => {
+	const diagnostics = createXtermOutputDiagnostics();
+	diagnostics.recordQueued(10);
+	assert.equal(typeof diagnostics.recordSendAttempt, 'function');
+
+	assert.equal(
+		diagnostics.recordSendAttempt({
+			byteCount: 10,
+			isFlush: false,
+			send: () => false,
+		}),
+		false,
+	);
+
+	assert.deepEqual(diagnostics.getSnapshot(), {
+		webViewInstanceId: null,
+		rnQueuedMessages: 1,
+		rnQueuedBytes: 10,
+		rnFlushes: 0,
+		rnSentMessages: 0,
+		rnSentBytes: 0,
+		webViewReceivedMessages: 0,
+		webViewReceivedBytes: 0,
+		webViewCompletedWrites: 0,
+	});
+});
+
+void test('output progress forwards only the active bridge generation', () => {
+	const progress: unknown[] = [];
+	const options = {
+		currentInstanceIdRef: { current: 'instance-1' },
+		expectedBridgeLoadIdRef: { current: 2 },
+		currentBridgeLoadTokenRef: { current: 'current-token' },
+		pendingSelectionRef: { current: new Map() },
+		autoFitFn: () => {},
+		setInitialized: () => {},
+		onOutputProgress: (event: unknown) => progress.push(event),
+	};
+
+	assert.equal(
+		handleXtermBridgeInboundMessage(
+			{
+				type: 'outputProgress',
+				instanceId: 'instance-1',
+				bridgeLoadId: 2,
+				bridgeLoadToken: 'current-token',
+				receivedMessages: 1,
+				receivedBytes: 10,
+				completedWrites: 1,
+			},
+			options,
+		),
+		true,
+	);
+	assert.equal(
+		handleXtermBridgeInboundMessage(
+			{
+				type: 'outputProgress',
+				instanceId: 'instance-1',
+				bridgeLoadId: 1,
+				bridgeLoadToken: 'stale-token',
+				receivedMessages: 2,
+				receivedBytes: 20,
+				completedWrites: 2,
+			},
+			options,
+		),
+		true,
+	);
+	assert.equal(
+		handleXtermBridgeInboundMessage(
+			{
+				type: 'outputProgress',
+				instanceId: 'instance-1',
+				bridgeLoadId: 2,
+				bridgeLoadToken: 'stale-token',
+				receivedMessages: 3,
+				receivedBytes: 30,
+				completedWrites: 3,
+			},
+			options,
+		),
+		true,
+	);
+
+	assert.deepEqual(progress, [
+		{
+			type: 'outputProgress',
+			instanceId: 'instance-1',
+			bridgeLoadId: 2,
+			bridgeLoadToken: 'current-token',
+			receivedMessages: 1,
+			receivedBytes: 10,
+			completedWrites: 1,
+		},
 	]);
 });
 
@@ -1102,6 +1284,80 @@ void test('WebView outbound handler ignores stale scrollback instance messages',
 	assert.deepEqual(events, [['exit', { requestId: 3 }], ['ack', 4], ['ack', 5]]);
 });
 
+void test('write progress reports received bytes and completed xterm writes without content', () => {
+	let nowMs = 1_000;
+	const messages: BridgeInboundDraftMessage[] = [];
+	const reporter = createWriteProgressReporter({
+		instanceId: 'instance-1',
+		now: () => nowMs,
+		sendToRn: (message) => messages.push(message),
+		minIntervalMs: 250,
+	});
+
+	reporter.received(12);
+	reporter.completed();
+	nowMs += 300;
+	reporter.received(7);
+	reporter.completed();
+
+	assert.deepEqual(messages, [
+		{
+			type: 'outputProgress',
+			instanceId: 'instance-1',
+			receivedMessages: 1,
+			receivedBytes: 12,
+			completedWrites: 1,
+		},
+		{
+			type: 'outputProgress',
+			instanceId: 'instance-1',
+			receivedMessages: 2,
+			receivedBytes: 19,
+			completedWrites: 2,
+		},
+	]);
+});
+
+void test('webview write progress advances only after the xterm callback', () => {
+	let complete: (() => void) | undefined;
+	const messages: BridgeInboundDraftMessage[] = [];
+	const handler = createXtermWebViewMessageHandler({
+		instanceId: 'instance-1',
+		term: {
+			cols: 80,
+			rows: 24,
+			options: {},
+			write: (_bytes, callback) => {
+				complete = callback;
+			},
+			resize: () => {},
+			getSelection: () => '',
+			clear: () => {},
+			focus: () => {},
+		},
+		fitAddon: { fit: () => {} },
+		selectionHandles: { applySelectionMode: () => {} },
+		touchScrollController: {
+			setConfig: () => {},
+			exitScrollback: () => {},
+			handleEnterAck: () => {},
+		},
+		sendToRn: (message) => messages.push(message),
+		applyFontFamily: () => {},
+		now: () => 1_000,
+	});
+
+	handler(
+		new MessageEvent('message', { data: { type: 'write', bStr: 'abc' } }),
+	);
+	assert.equal(
+		messages.some((message) => message.type === 'outputProgress'),
+		false,
+	);
+	complete?.();
+	assert.equal(messages.at(-1)?.type, 'outputProgress');
+});
+
 void test('public tmux ack handle sends the legacy tmux ack type', () => {
 	const messages: unknown[] = [];
 	const sendToWebView = (message: BridgeOutboundMessage) => messages.push(message);
@@ -1109,6 +1365,7 @@ void test('public tmux ack handle sends the legacy tmux ack type', () => {
 		write: () => {},
 		writeMany: () => {},
 		flush: () => {},
+		getOutputDiagnostics: createXtermOutputDiagnostics().getSnapshot,
 		sendToWebView,
 		webRef: { current: null },
 		setSystemKeyboardEnabled: () => {},
@@ -1129,6 +1386,41 @@ void test('public tmux ack handle sends the legacy tmux ack type', () => {
 			instanceId: 'current-instance',
 		},
 	]);
+});
+
+void test('public handle returns a copied output diagnostics snapshot', () => {
+	const snapshot = {
+		webViewInstanceId: 'instance-1',
+		rnQueuedMessages: 1,
+		rnQueuedBytes: 10,
+		rnFlushes: 1,
+		rnSentMessages: 1,
+		rnSentBytes: 10,
+		webViewReceivedMessages: 1,
+		webViewReceivedBytes: 10,
+		webViewCompletedWrites: 1,
+	};
+	const sendToWebView = () => {};
+	const handle = createXtermWebViewHandle({
+		write: () => {},
+		writeMany: () => {},
+		flush: () => {},
+		getOutputDiagnostics: () => snapshot,
+		sendToWebView,
+		webRef: { current: null },
+		setSystemKeyboardEnabled: () => {},
+		setSelectionModeEnabled: () => {},
+		getSelection: () => Promise.resolve(''),
+		autoFitFn: () => {},
+		appliedSizeRef: { current: null },
+		fit: () => {},
+		...createXtermWebViewAckSenders(sendToWebView),
+	});
+
+	const first = handle.getOutputDiagnostics();
+	first.rnQueuedBytes = 999;
+
+	assert.equal(handle.getOutputDiagnostics().rnQueuedBytes, 10);
 });
 
 void test('XtermJsWebView message handler reports rejected scrollback enter callbacks', async () => {

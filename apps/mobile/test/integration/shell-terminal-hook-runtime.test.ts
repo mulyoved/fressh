@@ -91,6 +91,7 @@ function createFixture(
 		detach: () => {},
 		getRuntimeKey: () => null,
 		getRuntimeInstanceId: () => 'instance-1',
+		getOutputDiagnostics: () => null,
 		isCurrentInstance: (instanceId) => instanceId === 'instance-1',
 		isAttached: () => false,
 	};

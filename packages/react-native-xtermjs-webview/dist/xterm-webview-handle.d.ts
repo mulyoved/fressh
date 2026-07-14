@@ -1,4 +1,5 @@
 import { BridgeOutboundMessage } from './bridge';
+import { XtermOutputDiagnostics } from './output-diagnostics';
 type TerminalSize = {
     cols: number;
     rows: number;
@@ -15,6 +16,7 @@ export type XtermWebViewHandle = {
     write: (data: Uint8Array) => void;
     writeMany: (chunks: Uint8Array[]) => void;
     flush: () => void;
+    getOutputDiagnostics: () => XtermOutputDiagnostics;
     clear: () => void;
     focus: () => void;
     setSystemKeyboardEnabled: (enabled: boolean) => void;
@@ -34,6 +36,7 @@ export type XtermWebViewHandleDeps = {
     write: XtermWebViewHandle['write'];
     writeMany: XtermWebViewHandle['writeMany'];
     flush: XtermWebViewHandle['flush'];
+    getOutputDiagnostics: XtermWebViewHandle['getOutputDiagnostics'];
     sendToWebView: (message: BridgeOutboundMessage) => void;
     webRef: FocusableWebViewRef;
     setSystemKeyboardEnabled: XtermWebViewHandle['setSystemKeyboardEnabled'];
@@ -46,6 +49,6 @@ export type XtermWebViewHandleDeps = {
     sendTmuxEnterCopyModeAck: XtermWebViewHandle['sendTmuxEnterCopyModeAck'];
 };
 export declare function createXtermWebViewAckSenders(sendToWebView: (message: BridgeOutboundMessage) => void): Pick<XtermWebViewHandle, 'sendScrollbackEnterAck' | 'sendTmuxEnterCopyModeAck'>;
-export declare function createXtermWebViewHandle({ write, writeMany, flush, sendToWebView, webRef, setSystemKeyboardEnabled, setSelectionModeEnabled, getSelection, autoFitFn, appliedSizeRef, fit, sendScrollbackEnterAck, sendTmuxEnterCopyModeAck, }: XtermWebViewHandleDeps): XtermWebViewHandle;
+export declare function createXtermWebViewHandle({ write, writeMany, flush, getOutputDiagnostics, sendToWebView, webRef, setSystemKeyboardEnabled, setSelectionModeEnabled, getSelection, autoFitFn, appliedSizeRef, fit, sendScrollbackEnterAck, sendTmuxEnterCopyModeAck, }: XtermWebViewHandleDeps): XtermWebViewHandle;
 export {};
 //# sourceMappingURL=xterm-webview-handle.d.ts.map

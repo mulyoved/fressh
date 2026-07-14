@@ -45,6 +45,7 @@ export function createShellKeyboardRemoteCore({
 	closeCommandMenu,
 	showAlert,
 	invalidateShellTransport,
+	readTerminalOutputDiagnostics,
 	logger,
 	now = Date.now,
 	restartCodex = restartCodexWithBridge,
@@ -103,6 +104,15 @@ export function createShellKeyboardRemoteCore({
 				error,
 			);
 			return null;
+		}
+	};
+	const sampleTerminalOutput = (phase: 'before' | 'after'): void => {
+		try {
+			const snapshot = readTerminalOutputDiagnostics();
+			if (snapshot === null) return;
+			safeInfo('Terminal output diagnostics', { phase, snapshot });
+		} catch (error) {
+			safeWarn('Failed to read terminal output diagnostics', error);
 		}
 	};
 	const captureAuthority = (): KeyboardRemoteAuthority | null => {
@@ -171,11 +181,13 @@ export function createShellKeyboardRemoteCore({
 				return runShellWorkmuxKeyboardCommand({
 					argv: commandArgv,
 					runCommand: async (nextArgv, options) => {
+						sampleTerminalOutput('before');
 						try {
 							const result = await runnerTarget.workmuxControlChannel.command(
 								[...nextArgv],
 								options,
 							);
+							sampleTerminalOutput('after');
 							if (commandIsCurrent()) {
 								const finishedAtMs = readClock();
 								if (!commandIsCurrent()) return result;
@@ -195,6 +207,7 @@ export function createShellKeyboardRemoteCore({
 							}
 							return result;
 						} catch (error) {
+							sampleTerminalOutput('after');
 							if (commandIsCurrent()) {
 								const failedAtMs = readClock();
 								if (!commandIsCurrent()) throw error;

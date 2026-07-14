@@ -9,6 +9,7 @@ import { type WorkmuxNavScope } from '@/lib/workmux-app-commands';
 import { type WorkmuxControlChannel } from '@/lib/workmux-control-channel';
 
 import { type ControllerInvalidationReason } from './controller-core';
+import { type TerminalOutputDiagnosticSnapshot } from './terminal-output-diagnostics';
 
 export type ShellKeyboardRemoteOutcome =
 	| { status: 'handled' }
@@ -68,6 +69,7 @@ export type CreateShellKeyboardRemoteCoreOptions = {
 	closeCommandMenu(): void;
 	showAlert(title: string, message: string): void;
 	invalidateShellTransport(connectionId: string, channelId: number): void;
+	readTerminalOutputDiagnostics(): TerminalOutputDiagnosticSnapshot | null;
 	logger?: ShellKeyboardRemoteLogger;
 	now?: () => number;
 	restartCodex?: typeof restartCodexWithBridge;

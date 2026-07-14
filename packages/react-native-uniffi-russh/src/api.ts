@@ -176,7 +176,7 @@ export type SshShell = {
 	//   coalesceMs?: number;
 	// }) => Promise<void>;
 	bufferStats: () => GeneratedRussh.BufferStats;
-	currentSeq: () => number;
+	currentSeq: () => bigint;
 
 	// Replay + live
 	readBuffer: (cursor: Cursor, maxBytes?: bigint) => BufferReadResult;
@@ -433,8 +433,8 @@ function wrapShellSession(
 				o?.signal ? { signal: o.signal } : undefined,
 			),
 		// setBufferPolicy,
-		bufferStats: shell.bufferStats,
-		currentSeq: () => Number(shell.currentSeq()),
+		bufferStats: () => shell.bufferStats(),
+		currentSeq: () => shell.currentSeq(),
 		readBuffer,
 		addListener,
 		removeListener: (id) => shell.removeListener(id),

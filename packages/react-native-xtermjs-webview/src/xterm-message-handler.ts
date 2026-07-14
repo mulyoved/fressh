@@ -102,6 +102,7 @@ export function handleXtermBridgeInboundMessage(
 		onScrollbackEnterRequested,
 		onScrollbackEnterRequestFailure,
 		onScrollbackBatch,
+		onOutputProgress,
 		invalidatedInstanceIdsRef,
 		invalidatedBridgeLoadTokensRef,
 		currentBridgeLoadTokenRef,
@@ -142,6 +143,12 @@ export function handleXtermBridgeInboundMessage(
 			error: unknown,
 		) => void;
 		onScrollbackBatch?: (event: ScrollbackBatchEvent) => void;
+		onOutputProgress?: (
+			event: Extract<
+				BridgeInboundDraftMessage,
+				{ type: 'outputProgress' }
+			>,
+		) => void;
 	},
 ): boolean {
 	if (
@@ -276,6 +283,10 @@ export function handleXtermBridgeInboundMessage(
 		} else {
 			logger?.warn?.(`dropping non-typing webview input`, kind);
 		}
+		return true;
+	}
+	if (msg.type === 'outputProgress') {
+		onOutputProgress?.(msg);
 		return true;
 	}
 	if (msg.type === 'debug') {
