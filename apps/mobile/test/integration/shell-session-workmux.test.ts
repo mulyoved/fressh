@@ -3,10 +3,7 @@ import test from 'node:test';
 import { type ConnectionDiagnosticEvent } from '../../src/lib/connection-diagnostics';
 import { type MdevBridgeDisposeOptions } from '../../src/lib/mdev-bridge-client';
 import { createShellDiagnosticPort } from '../../src/lib/shell-controllers/session-diagnostics';
-import {
-	createShellSessionWorkmuxOwner,
-	type ShellSessionWorkmuxInput,
-} from '../../src/lib/shell-controllers/session-workmux';
+import { createShellSessionWorkmuxOwner } from '../../src/lib/shell-controllers/session-workmux';
 import { type ShellTargetKey } from '../../src/lib/shell-controllers/source-keys';
 import {
 	type WorkmuxControlChannel,
@@ -14,6 +11,10 @@ import {
 } from '../../src/lib/workmux-control-channel';
 
 type DiagnosticWarning = { message: string; error?: unknown };
+
+type ShellSessionWorkmuxInput = Parameters<
+	typeof createShellSessionWorkmuxOwner
+>[0];
 
 function targetKey(value: string): ShellTargetKey {
 	return value as ShellTargetKey;
@@ -168,6 +169,81 @@ void test('target replacement retires cleanup before disposing the old channel',
 		'cleanup:end',
 		'old:dispose',
 	]);
+});
+
+void test('failed commands preserve actionable output when error is empty', async () => {
+	const owner = createHarness('target-1', {
+		createChannel: (label, events) => ({
+			...createChannel({ label, events }),
+			command: async () => ({
+				success: false,
+				output: 'tmux server reported the actionable failure',
+				error: '',
+			}),
+		}),
+	});
+
+	assert.deepEqual(await owner.port.command(['tmux', 'failing-command']), {
+		status: 'failed',
+		failure: { message: 'tmux server reported the actionable failure' },
+		output: 'tmux server reported the actionable failure',
+	});
+});
+
+void test('channel factory failures leave an unavailable port that activation can retry', async () => {
+	const events: string[] = [];
+	const warnings: DiagnosticWarning[] = [];
+	let attempts = 0;
+	const input: ShellSessionWorkmuxInput = {
+		key: targetKey('target-1'),
+		connection: null,
+		diagnostics: {
+			event: () => {},
+			warn: (message, error) => warnings.push({ message, error }),
+		},
+		createChannel: () => {
+			attempts += 1;
+			if (attempts === 1) throw new Error('factory failed');
+			return createChannel({ label: 'recovered', events });
+		},
+		setTimeout,
+		clearTimeout,
+	};
+
+	const owner = createShellSessionWorkmuxOwner(input);
+	assert.deepEqual(await owner.getPort().command(['before-retry']), {
+		status: 'unavailable',
+	});
+	assert.match(warnings[0]?.message ?? '', /factory|create/i);
+
+	owner.activate();
+	assert.deepEqual(await owner.getPort().command(['after-retry']), {
+		status: 'completed',
+		output: 'recovered:command-output',
+	});
+});
+
+void test('successor factory failure settles retirement and remains retryable', async () => {
+	const owner = createHarness('target-1', {
+		createChannel: (label, events) => {
+			if (label === 'new') throw new Error('successor factory failed');
+			return createChannel({ label, events });
+		},
+	});
+
+	owner.runtime.replace(owner.createInput('target-2'));
+	await owner.runtime.drain();
+	assert.equal(owner.runtime.getPort().key, targetKey('target-2'));
+	assert.deepEqual(await owner.runtime.getPort().command(['unavailable']), {
+		status: 'unavailable',
+	});
+	assert.match(owner.diagnostics.at(-1)?.message ?? '', /factory/i);
+
+	owner.runtime.activate();
+	assert.deepEqual(await owner.runtime.getPort().command(['recovered']), {
+		status: 'completed',
+		output: 'newer:command-output',
+	});
 });
 
 void test('replacement exposes no successor until rejected cleanup and disposal settle', async () => {
@@ -364,6 +440,9 @@ void test('stale ports cannot command a replacement channel', async () => {
 		await oldPort.operation({ operation: 'tmux.nav', params: {} }),
 		{ status: 'superseded' },
 	);
+	assert.deepEqual(await oldPort.scroll.enter({ sessionName: 'main' }), {
+		status: 'superseded',
+	});
 	assert.equal(
 		owner.events.some((event) => event.startsWith('new:command:')),
 		false,
@@ -609,6 +688,53 @@ void test('diagnostic events use the active trace only for their captured genera
 	assert.deepEqual(traced, [event]);
 	assert.equal(traceReads, 1);
 	assert.deepEqual(warnings, []);
+});
+
+void test('current-generation diagnostic events retain the detailed persistent log', () => {
+	const details: unknown[] = [];
+	const port = createShellDiagnosticPort({
+		generation: 7,
+		getCurrentGeneration: () => 7,
+		getActiveTrace: () => null,
+		getEventDetails: (event) => ({
+			connectionId: 'connection-1',
+			channelId: 9,
+			kind: event.kind,
+			fields: ['stage=request-started'],
+			message: undefined,
+			hasConnection: true,
+			hasShell: true,
+			connectionCount: 2,
+			shellCount: 3,
+		}),
+		logger: {
+			info: (message, value) => details.push({ message, value }),
+			warn: () => {},
+		},
+	});
+
+	port.event({
+		kind: 'mdev-bridge.lifecycle',
+		source: 'mdev-bridge',
+		stage: 'request-started',
+	});
+
+	assert.deepEqual(details, [
+		{
+			message: 'Workmux diagnostic event',
+			value: {
+				connectionId: 'connection-1',
+				channelId: 9,
+				kind: 'mdev-bridge.lifecycle',
+				fields: ['stage=request-started'],
+				message: undefined,
+				hasConnection: true,
+				hasShell: true,
+				connectionCount: 2,
+				shellCount: 3,
+			},
+		},
+	]);
 });
 
 void test('diagnostic failures are contained and report only formatted typed event fields', () => {

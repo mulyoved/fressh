@@ -31,7 +31,7 @@ export function createShellDetailKeyboardControllerInput(
 			sessionName: input.remote.sessionName,
 			connectionId: input.remote.connectionId,
 			channelId: input.remote.channelId,
-			workmuxControlChannel: input.remote.workmuxControlChannel,
+			workmux: input.remote.workmux,
 			hostCommands: input.remote.hostCommands,
 		},
 		navScope: input.navScope,
@@ -152,7 +152,7 @@ export type ShellDetailKeyboardAuthorityIdentity = {
 	targetKey: unknown;
 	activityGeneration: number;
 	tmuxEnabled: boolean;
-	workmuxControlChannel: unknown;
+	workmux: unknown;
 };
 
 export type ShellDetailKeyboardAuthorityRuntime = {
@@ -209,7 +209,7 @@ export function createShellDetailKeyboardAuthorityRuntime(
 				identity.targetKey === nextIdentity.targetKey &&
 				identity.activityGeneration === nextIdentity.activityGeneration &&
 				identity.tmuxEnabled === nextIdentity.tmuxEnabled &&
-				identity.workmuxControlChannel === nextIdentity.workmuxControlChannel
+				identity.workmux === nextIdentity.workmux
 			) {
 				return;
 			}

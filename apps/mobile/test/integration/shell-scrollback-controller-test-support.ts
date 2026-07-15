@@ -144,9 +144,9 @@ export function createScrollbackHarness(
 		sendBatch: async () => {},
 	};
 	const scroll = {
-		enter: async () => ({ success: true, output: '' }),
-		move: async () => ({ success: true, output: '' }),
-		exit: async () => ({ success: true, output: '' }),
+		enter: async () => ({ status: 'completed' as const, output: '' }),
+		move: async () => ({ status: 'completed' as const, output: '' }),
+		exit: async () => ({ status: 'completed' as const, output: '' }),
 	};
 	const workmuxBeforeDispose = new Map<
 		string,

@@ -16,7 +16,9 @@ export type CreateShellDiagnosticPortInput = {
 	readonly generation: number;
 	getCurrentGeneration(): number;
 	getActiveTrace(): ShellDiagnosticTraceSink | null;
+	getEventDetails?(event: ConnectionDiagnosticEvent): unknown;
 	logger: {
+		info?(message: string, details?: unknown): void;
 		warn(message: string, error?: unknown): void;
 	};
 };
@@ -25,6 +27,7 @@ export function createShellDiagnosticPort({
 	generation,
 	getCurrentGeneration,
 	getActiveTrace,
+	getEventDetails,
 	logger,
 }: CreateShellDiagnosticPortInput): ShellDiagnosticPort {
 	const warn = (message: string, error?: unknown): void => {
@@ -40,6 +43,9 @@ export function createShellDiagnosticPort({
 			try {
 				if (getCurrentGeneration() !== generation) return;
 				getActiveTrace()?.event(event);
+				if (getEventDetails && logger.info) {
+					logger.info('Workmux diagnostic event', getEventDetails(event));
+				}
 			} catch (error) {
 				let fields = '';
 				try {

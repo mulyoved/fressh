@@ -7,6 +7,7 @@ import {
 	parseWorkmuxAppContextOutput,
 } from '../workmux-app-commands';
 import { type ControllerOutcome } from './controller-core';
+import { unwrapControllerOutput } from './controller-outcome';
 import { type ShellModalArbiter } from './modal-arbiter';
 import { type ShellScrollbackInputPort } from './scrollback-contracts';
 import {
@@ -73,17 +74,21 @@ export function createSkillSelectorControllerAdapter(input: {
 						buildWorkmuxAppContextArgv(sessionName),
 						{ timeoutMs: 10_000 },
 					);
-					if (result.status !== 'completed') {
-						const message =
-							result.status === 'failed'
-								? result.failure.message
-								: result.status === 'superseded'
-									? 'Workmux command superseded.'
-									: 'Workmux command unavailable.';
-						throw new Error(formatWorkmuxAppBoundaryFailureMessage(message));
+					let output: string;
+					try {
+						output = unwrapControllerOutput(result, {
+							superseded: 'Workmux command superseded.',
+							unavailable: 'Workmux command unavailable.',
+						});
+					} catch (error) {
+						throw new Error(
+							formatWorkmuxAppBoundaryFailureMessage(
+								current.getErrorMessage(error),
+							),
+						);
 					}
 					try {
-						const context = parseWorkmuxAppContextOutput(result.output ?? '');
+						const context = parseWorkmuxAppContextOutput(output);
 						return {
 							panePath: context.panePath,
 							projectRoot: context.projectRoot,
@@ -97,14 +102,10 @@ export function createSkillSelectorControllerAdapter(input: {
 				},
 				runCommand: async (command) => {
 					const result = await hostCommands.run(command, 10_000);
-					if (result.status === 'completed') return result.output ?? '';
-					throw new Error(
-						result.status === 'failed'
-							? result.failure.message
-							: result.status === 'superseded'
-								? 'Skill discovery command superseded.'
-								: HOST_BROWSER_NO_CONNECTION_MESSAGE,
-					);
+					return unwrapControllerOutput(result, {
+						superseded: 'Skill discovery command superseded.',
+						unavailable: HOST_BROWSER_NO_CONNECTION_MESSAGE,
+					});
 				},
 				forceRefresh,
 			});

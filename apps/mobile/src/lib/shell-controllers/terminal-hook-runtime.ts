@@ -5,6 +5,7 @@ import {
 	type ReplaySafeDisposer,
 } from './controller-core';
 import { type ShellTerminalSourcePort } from './session-contracts';
+import { type ShellTerminalViewPort } from './terminal-contracts';
 import {
 	createTerminalLifecycleController,
 	type CreateTerminalLifecycleControllerInput,
@@ -21,7 +22,6 @@ import {
 import {
 	createShellTerminalTransport,
 	type ShellTerminalTransportController,
-	type TerminalRuntimeKey,
 } from './terminal-transport';
 
 export type ShellTerminalRuntimeRef = {
@@ -37,18 +37,7 @@ export type ShellTerminalRuntimeDependencies = {
 	router: ShellTerminalRuntimeRouter;
 };
 
-export type ShellTerminalRuntimeView = {
-	getRuntimeKey(): TerminalRuntimeKey | null;
-	getRuntimeInstanceId(): string | null;
-	getSelectionModeEnabled(): boolean;
-	isCurrentInstance(instanceId: string): boolean;
-	fit(): void;
-	setSystemKeyboardEnabled(enabled: boolean): void;
-	setSelectionModeEnabled(enabled: boolean): void;
-	getSelection(): Promise<string>;
-	exitScrollback(message: { requestId: number; instanceId?: string }): void;
-	sendScrollbackEnterAck(requestId: number, instanceId: string): void;
-};
+export type ShellTerminalRuntimeView = ShellTerminalViewPort;
 
 export type TerminalHookRuntimeFactories = {
 	createTransport(
@@ -178,8 +167,7 @@ export function createShellTerminalHookRuntime(input: {
 		bytes: Uint8Array<ArrayBufferLike>,
 	): Promise<void> => {
 		if (!active || !source) return;
-		const copied = new Uint8Array(bytes);
-		await source.sendData(copied);
+		await source.sendData(bytes);
 	};
 	const view: ShellTerminalRuntimeView = {
 		getRuntimeKey: () => (active ? lifecycle.getRuntimeKey() : null),

@@ -1,6 +1,7 @@
 import { HOST_BROWSER_NO_CONNECTION_MESSAGE } from '../host-browser-actions';
 import { runHostCommandWithBoundary } from '../host-command-router';
 import { type BrowserActionErrorInput } from '../shell-browser-action-error-inputs';
+import { unwrapControllerOutput } from './controller-outcome';
 import { type ShellModalArbiter } from './modal-arbiter';
 import {
 	type ShellHostCommandPort,
@@ -79,15 +80,12 @@ export function createBrowserActionsControllerAdapter(input: {
 			if (!current.hostCommands) {
 				throw new Error(HOST_BROWSER_NO_CONNECTION_MESSAGE);
 			}
-			return current.workmux.command(argv, { timeoutMs }).then((result) => {
-				if (result.status === 'completed') return result.output ?? '';
-				if (result.status === 'failed') throw new Error(result.failure.message);
-				throw new Error(
-					result.status === 'superseded'
-						? 'Workmux command superseded.'
-						: 'Workmux command unavailable.',
-				);
-			});
+			return current.workmux.command(argv, { timeoutMs }).then((result) =>
+				unwrapControllerOutput(result, {
+					superseded: 'Workmux command superseded.',
+					unavailable: 'Workmux command unavailable.',
+				}),
+			);
 		},
 		openAndroidUrl: input.openAndroidUrl,
 		showError: (error) => {

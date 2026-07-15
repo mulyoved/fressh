@@ -1,3 +1,4 @@
+import { type ConnectionDiagnosticEvent } from '../connection-diagnostics';
 import { type MdevBridgeOperationRequest } from '../workmux-bridge-operations';
 import {
 	createWorkmuxControlChannel,
@@ -9,11 +10,23 @@ import {
 import { type ControllerOutcome } from './controller-core';
 import {
 	type RetiringWorkmuxCleanupPort,
-	type ShellSessionWorkmuxInput,
 	type ShellWorkmuxPort,
 } from './session-contracts';
+import { type ShellDiagnosticPort } from './session-diagnostics';
+import { type ShellTargetKey } from './source-keys';
 
-export type { ShellSessionWorkmuxInput } from './session-contracts';
+type ShellSessionWorkmuxInput = {
+	key: ShellTargetKey;
+	connection: Parameters<typeof createWorkmuxControlChannel>[0]['connection'];
+	diagnostics: ShellDiagnosticPort;
+	createChannel(input: {
+		connection: Parameters<typeof createWorkmuxControlChannel>[0]['connection'];
+		trace: { event(event: ConnectionDiagnosticEvent): void };
+	}): WorkmuxControlChannel;
+	cleanupTimeoutMs?: number;
+	setTimeout(task: () => void, delayMs: number): unknown;
+	clearTimeout(timer: unknown): void;
+};
 
 export function createShellSessionWorkmuxInput({
 	key,
@@ -76,7 +89,7 @@ function failedOutcome(result: WorkmuxControlCommandResult): ControllerOutcome<{
 	return {
 		status: 'failed',
 		failure: {
-			message: result.error ?? 'Workmux command failed.',
+			message: result.error || result.output || 'Workmux command failed.',
 			...(result.failureClass ? { failureClass: result.failureClass } : {}),
 		},
 		...(result.output ? { output: result.output } : {}),
@@ -95,14 +108,6 @@ function toCommandOutcome(
 				...(result.output ? { output: result.output } : {}),
 			}
 		: failedOutcome(result);
-}
-
-function supersededScrollResult(): WorkmuxControlCommandResult {
-	return {
-		success: false,
-		output: '',
-		error: 'Workmux session port superseded.',
-	};
 }
 
 function thrownCommandOutcome(
@@ -187,23 +192,19 @@ export function createShellSessionWorkmuxOwner(
 			invoke: (
 				channel: WorkmuxControlChannel,
 			) => Promise<WorkmuxControlCommandResult>,
-		): Promise<WorkmuxControlCommandResult> => {
+		): ReturnType<typeof runCommand> => {
 			const channel = owned.channel;
-			if (!owned.active) return supersededScrollResult();
-			if (channel === null) {
-				return { success: false, output: '', error: 'Workmux unavailable.' };
-			}
+			if (!owned.active) return Promise.resolve({ status: 'superseded' });
+			if (channel === null) return Promise.resolve({ status: 'unavailable' });
 			try {
 				const result = await invoke(channel);
-				return owned.active ? result : supersededScrollResult();
+				return owned.active
+					? toCommandOutcome(result)
+					: { status: 'superseded' };
 			} catch (error) {
 				return owned.active
-					? {
-							success: false,
-							output: '',
-							error: error instanceof Error ? error.message : String(error),
-						}
-					: supersededScrollResult();
+					? thrownCommandOutcome(error)
+					: { status: 'superseded' };
 			}
 		};
 
@@ -241,18 +242,23 @@ export function createShellSessionWorkmuxOwner(
 	function activateOwned(owned: OwnedWorkmux): void {
 		if (!owned.active || owned.channel !== null) return;
 		const { input } = owned;
-		owned.channel = input.createChannel({
-			connection: input.connection,
-			trace: {
-				event: (event) => {
-					try {
-						input.diagnostics.event(event);
-					} catch {
-						// Channel diagnostics cannot affect control operations.
-					}
+		try {
+			owned.channel = input.createChannel({
+				connection: input.connection,
+				trace: {
+					event: (event) => {
+						try {
+							input.diagnostics.event(event);
+						} catch {
+							// Channel diagnostics cannot affect control operations.
+						}
+					},
 				},
-			},
-		});
+			});
+		} catch (error) {
+			owned.channel = null;
+			warnSafely(owned, 'Workmux control channel factory failed', error);
+		}
 	}
 
 	function createRetiringPort(owned: OwnedWorkmux): RetiringWorkmuxCleanupPort {
@@ -362,20 +368,24 @@ export function createShellSessionWorkmuxOwner(
 			return;
 		}
 		processingRetirement = true;
+		const finishRetirement = () => {
+			try {
+				retirement.afterRetire?.();
+			} catch (error) {
+				warnSafely(
+					retirement.owned,
+					'Workmux successor construction failed',
+					error,
+				);
+			} finally {
+				processNextRetirement();
+			}
+		};
 		void retire(
 			retirement.owned,
 			retirement.reason,
 			retirement.registrations,
-		).then(
-			() => {
-				retirement.afterRetire?.();
-				processNextRetirement();
-			},
-			() => {
-				retirement.afterRetire?.();
-				processNextRetirement();
-			},
-		);
+		).then(finishRetirement, finishRetirement);
 	}
 
 	function enqueueRetirement(retirement: Retirement): void {

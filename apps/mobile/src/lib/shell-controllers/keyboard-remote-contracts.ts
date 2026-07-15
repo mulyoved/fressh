@@ -32,7 +32,7 @@ export type ShellKeyboardRemoteTargetContext = {
 	sessionName: string;
 	connectionId: string;
 	channelId: number;
-	workmuxControlChannel: Pick<ShellWorkmuxPort, 'command' | 'operation'>;
+	workmux: ShellWorkmuxPort;
 	hostCommands: ShellHostCommandPort | null;
 };
 

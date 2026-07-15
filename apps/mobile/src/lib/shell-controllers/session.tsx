@@ -8,6 +8,7 @@ import {
 } from 'react';
 import { type ShellRouteRequest } from '../../app/shell/shell-route';
 import { useAutoConnectStore } from '../auto-connect-store';
+import { formatConnectionDiagnosticEventFields } from '../connection-diagnostics';
 import { getStoredConnectionId } from '../connection-utils';
 import { secretsManager } from '../secrets-manager';
 import { executeSideChannelCommand } from '../ssh-side-channel';
@@ -251,9 +252,24 @@ export function useShellSessionController({
 				generation: workmuxGeneration,
 				getCurrentGeneration: () => workmuxGenerationRef.current,
 				getActiveTrace: () => activeDiagnosticTraceRef.current,
+				getEventDetails: (event) => {
+					const state = useSshStore.getState();
+					const storeKey = `${connectionId}-${channelId}` as const;
+					return {
+						connectionId,
+						channelId,
+						kind: event.kind,
+						fields: formatConnectionDiagnosticEventFields(event),
+						message: (event as { message?: unknown }).message,
+						hasConnection: Boolean(state.connections[connectionId]),
+						hasShell: Boolean(state.shells[storeKey]),
+						connectionCount: Object.keys(state.connections).length,
+						shellCount: Object.keys(state.shells).length,
+					};
+				},
 				logger,
 			}),
-		[logger, workmuxGeneration],
+		[channelId, connectionId, logger, workmuxGeneration],
 	);
 	const [workmuxOwner] = useState(() =>
 		createShellSessionWorkmuxOwner(
@@ -316,7 +332,8 @@ export function useShellSessionController({
 							return {
 								status: 'failed',
 								failure: {
-									message: result.error || 'Host command failed.',
+									message:
+										result.error || result.output || 'Host command failed.',
 								},
 								output: result.output,
 							};
@@ -354,6 +371,8 @@ export function useShellSessionController({
 		],
 	);
 
+	useLayoutEffect(() => lifecycle.setup(), [lifecycle]);
+
 	useLayoutEffect(() => {
 		routerRef.current = router;
 	}, [router]);
@@ -377,6 +396,21 @@ export function useShellSessionController({
 					generation: nextWorkmuxGeneration,
 					getCurrentGeneration: () => workmuxGenerationRef.current,
 					getActiveTrace: () => activeDiagnosticTraceRef.current,
+					getEventDetails: (event) => {
+						const state = useSshStore.getState();
+						const storeKey = `${connectionId}-${channelId}` as const;
+						return {
+							connectionId,
+							channelId,
+							kind: event.kind,
+							fields: formatConnectionDiagnosticEventFields(event),
+							message: (event as { message?: unknown }).message,
+							hasConnection: Boolean(state.connections[connectionId]),
+							hasShell: Boolean(state.shells[storeKey]),
+							connectionCount: Object.keys(state.connections).length,
+							shellCount: Object.keys(state.shells).length,
+						};
+					},
 					logger,
 				});
 				workmuxOwner.replace(
@@ -409,7 +443,9 @@ export function useShellSessionController({
 		});
 	}, [
 		activeDiagnosticTrace,
+		channelId,
 		connection,
+		connectionId,
 		core,
 		diagnostics,
 		isAutoConnecting,
@@ -422,7 +458,6 @@ export function useShellSessionController({
 		workmuxOwner,
 	]);
 
-	useEffect(() => lifecycle.setup(), [lifecycle]);
 	useEffect(() => {
 		const generation = tmuxQueryGenerationRef.current + 1;
 		tmuxQueryGenerationRef.current = generation;

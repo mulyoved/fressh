@@ -37,7 +37,7 @@ void describe('shell keyboard controller composition', () => {
 			'runtimeShellConfigReloadRequestIdRef',
 			'systemKeyboardVisibleRef',
 			'lastKeyboardVisibleRef',
-			'workmuxControlChannelRef',
+			'workmuxRef',
 		]) {
 			assert.doesNotMatch(source, new RegExp(legacy));
 		}
@@ -77,9 +77,9 @@ void describe('shell keyboard controller composition', () => {
 				sessionName: 'main',
 				connectionId: 'connection-1',
 				channelId: 1,
-				workmuxControlChannel: {
+				workmux: {
 					id: 1,
-				} as unknown as ShellDetailKeyboardCompositionInput['remote']['workmuxControlChannel'],
+				} as unknown as ShellDetailKeyboardCompositionInput['remote']['workmux'],
 			},
 		};
 		const second = {
@@ -105,9 +105,9 @@ void describe('shell keyboard controller composition', () => {
 				sessionName: 'main',
 				connectionId: 'connection-2',
 				channelId: 2,
-				workmuxControlChannel: {
+				workmux: {
 					id: 2,
-				} as unknown as ShellDetailKeyboardCompositionInput['remote']['workmuxControlChannel'],
+				} as unknown as ShellDetailKeyboardCompositionInput['remote']['workmux'],
 			},
 		};
 		const stable = {
@@ -148,10 +148,7 @@ void describe('shell keyboard controller composition', () => {
 		assert.equal(secondInput.remoteTarget.targetKey, second.targetKey);
 		assert.equal(secondInput.remoteTarget.hostCommands, 'connection-2');
 		assert.equal(secondInput.remoteTarget.channelId, 2);
-		assert.equal(
-			secondInput.remoteTarget.workmuxControlChannel,
-			second.remote.workmuxControlChannel,
-		);
+		assert.equal(secondInput.remoteTarget.workmux, second.remote.workmux);
 		for (const key of Object.keys(stable)) {
 			assert.equal(
 				(firstInput as unknown as Record<string, unknown>)[key],
@@ -286,7 +283,7 @@ void describe('shell keyboard controller composition', () => {
 			targetKey: 'target-1',
 			activityGeneration: 1,
 			tmuxEnabled: true,
-			workmuxControlChannel: { id: 1 },
+			workmux: { id: 1 },
 		});
 		runtime.replaceHandle({
 			invalidate: (reason: string) => events.push(`invalidate:${reason}`),
@@ -296,7 +293,7 @@ void describe('shell keyboard controller composition', () => {
 			targetKey: 'target-2',
 			activityGeneration: 1,
 			tmuxEnabled: true,
-			workmuxControlChannel: { id: 2 },
+			workmux: { id: 2 },
 			appActive: true,
 			focused: true,
 		});
@@ -311,7 +308,7 @@ void describe('shell keyboard controller composition', () => {
 			targetKey: 'target',
 			activityGeneration: 1,
 			tmuxEnabled: true,
-			workmuxControlChannel: {},
+			workmux: {},
 		});
 		const late = createShellDetailKeyboardLateBindings();
 		const publication = createShellDetailKeyboardCommitPublication({
@@ -334,7 +331,7 @@ void describe('shell keyboard controller composition', () => {
 			targetKey: 'target',
 			activityGeneration: 1,
 			tmuxEnabled: false,
-			workmuxControlChannel: publication,
+			workmux: publication,
 			appActive: true,
 			focused: true,
 		});
@@ -358,7 +355,7 @@ void describe('shell keyboard controller composition', () => {
 			targetKey: 'target',
 			activityGeneration: 1,
 			tmuxEnabled: true,
-			workmuxControlChannel: {},
+			workmux: {},
 		});
 		const late = createShellDetailKeyboardLateBindings();
 		const publication = createShellDetailKeyboardCommitPublication({
@@ -410,7 +407,7 @@ void describe('shell keyboard controller composition', () => {
 			targetKey: 'target',
 			activityGeneration: 1,
 			tmuxEnabled: false,
-			workmuxControlChannel: channel,
+			workmux: channel,
 		});
 		runtime.replaceHandle({
 			invalidate: () => events.push('invalidate'),
@@ -419,7 +416,7 @@ void describe('shell keyboard controller composition', () => {
 			targetKey: 'target',
 			activityGeneration: 1,
 			tmuxEnabled: true,
-			workmuxControlChannel: channel,
+			workmux: channel,
 			appActive: true,
 			focused: true,
 		});
@@ -448,7 +445,7 @@ void describe('shell keyboard controller composition', () => {
 			},
 			{
 				name: 'channel',
-				next: { workmuxControlChannel: {} },
+				next: { workmux: {} },
 				expected: ['source-change'],
 			},
 			{
@@ -473,7 +470,7 @@ void describe('shell keyboard controller composition', () => {
 				targetKey: 'target',
 				activityGeneration: 1,
 				tmuxEnabled: false,
-				workmuxControlChannel: channel,
+				workmux: channel,
 			});
 			runtime.replaceHandle({
 				invalidate: (reason) => events.push(reason),
@@ -482,7 +479,7 @@ void describe('shell keyboard controller composition', () => {
 				targetKey: 'target',
 				activityGeneration: 1,
 				tmuxEnabled: false,
-				workmuxControlChannel: channel,
+				workmux: channel,
 				appActive: true,
 				focused: true,
 				...row.next,
@@ -498,7 +495,7 @@ void describe('shell keyboard controller composition', () => {
 				targetKey: 'target',
 				activityGeneration: 1,
 				tmuxEnabled: true,
-				workmuxControlChannel: {},
+				workmux: {},
 			},
 			{ onInvalidationError: () => events.push('observed') },
 		);
@@ -511,7 +508,7 @@ void describe('shell keyboard controller composition', () => {
 			targetKey: 'next-target',
 			activityGeneration: 2,
 			tmuxEnabled: true,
-			workmuxControlChannel: {},
+			workmux: {},
 			appActive: true,
 			focused: true,
 		});
@@ -531,7 +528,7 @@ void describe('shell keyboard controller composition', () => {
 				targetKey: 'target',
 				activityGeneration: 1,
 				tmuxEnabled: true,
-				workmuxControlChannel: {},
+				workmux: {},
 			},
 			{ onClose: () => events.push('close'), late },
 		);
@@ -553,7 +550,7 @@ void describe('shell keyboard controller composition', () => {
 			targetKey: 'closed-target',
 			activityGeneration: 2,
 			tmuxEnabled: true,
-			workmuxControlChannel: {},
+			workmux: {},
 			appActive: true,
 			focused: true,
 		});

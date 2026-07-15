@@ -427,7 +427,7 @@ function ShellDetail({ request }: { request: ShellRouteRequest }) {
 				targetKey,
 				activityGeneration: activitySnapshot.generation,
 				tmuxEnabled,
-				workmuxControlChannel,
+				workmux: workmuxControlChannel,
 			},
 			{
 				late: keyboardLateBindings,
@@ -447,7 +447,7 @@ function ShellDetail({ request }: { request: ShellRouteRequest }) {
 			targetKey,
 			activityGeneration: activitySnapshot.generation,
 			tmuxEnabled,
-			workmuxControlChannel,
+			workmux: workmuxControlChannel,
 			appActive: activitySnapshot.appActive,
 			focused: activitySnapshot.focused,
 		});
@@ -1522,7 +1522,7 @@ function ShellDetail({ request }: { request: ShellRouteRequest }) {
 			sessionName: activeTmuxSessionName,
 			connectionId,
 			channelId,
-			workmuxControlChannel,
+			workmux: workmuxControlChannel,
 			hostCommands: connection,
 		},
 		navScope,

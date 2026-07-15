@@ -186,10 +186,9 @@ export function createShellKeyboardRemoteCore({
 				});
 				if (!commandIsCurrent()) throw new Error('Workmux command superseded.');
 				try {
-					const result = await runnerTarget.workmuxControlChannel.command(
-						commandArgv,
-						{ timeoutMs },
-					);
+					const result = await runnerTarget.workmux.command(commandArgv, {
+						timeoutMs,
+					});
 					if (commandIsCurrent()) {
 						const finishedAtMs = readClock();
 						if (!commandIsCurrent()) return result;
@@ -485,7 +484,7 @@ export function createShellKeyboardRemoteCore({
 										error: 'superseded',
 									});
 								}
-								return authority.target.workmuxControlChannel
+								return authority.target.workmux
 									.command([...argv], commandOptions)
 									.then(toBridgeWorkmuxResult);
 							},
@@ -497,7 +496,7 @@ export function createShellKeyboardRemoteCore({
 										error: 'superseded',
 									});
 								}
-								return authority.target.workmuxControlChannel
+								return authority.target.workmux
 									.operation(
 										{
 											operation: request.operation,

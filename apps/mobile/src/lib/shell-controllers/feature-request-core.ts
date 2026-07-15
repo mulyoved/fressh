@@ -3,6 +3,7 @@ import {
 	createControllerPublisher,
 	type ControllerCore,
 } from './controller-core';
+import { matchControllerOutcome } from './controller-outcome';
 import { type ShellHostCommandPort } from './session-contracts';
 
 export type FeatureRequestState = {
@@ -180,24 +181,37 @@ export function createFeatureRequestControllerCore(
 					sourceStale = false;
 					return;
 				}
-				if (result.status === 'superseded') {
+				const submission = matchControllerOutcome(result, {
+					completed: (completed) => ({
+						kind: 'completed' as const,
+						output: completed.output,
+						issueUrl: completed.issueUrl,
+					}),
+					failed: ({ failure }) => ({
+						kind: 'failed' as const,
+						message: failure.message,
+					}),
+					superseded: () => ({ kind: 'superseded' as const }),
+					unavailable: () => ({
+						kind: 'failed' as const,
+						message: 'No SSH connection available',
+					}),
+				});
+				if (submission.kind === 'superseded') {
 					reset();
 					sourceStale = false;
 					return;
 				}
-				if (result.status === 'completed') {
+				if (submission.kind === 'completed') {
 					deps.logger.info('Feature request submitted successfully', {
-						output: result.output,
-						issueUrl: result.issueUrl,
+						output: submission.output,
+						issueUrl: submission.issueUrl,
 					});
 					reset();
 					sourceStale = false;
-					deps.showSubmittedAlert(result.issueUrl ?? null);
+					deps.showSubmittedAlert(submission.issueUrl ?? null);
 				} else {
-					const errorMessage =
-						result.status === 'failed'
-							? result.failure.message
-							: 'No SSH connection available';
+					const errorMessage = submission.message;
 					deps.logger.error('Feature request failed', {
 						error: errorMessage,
 					});

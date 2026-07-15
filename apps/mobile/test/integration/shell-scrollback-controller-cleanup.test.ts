@@ -684,9 +684,9 @@ void test('real suppressed runtime reset failure logs exactly once', async () =>
 			scroll: {
 				...fixture.scroll,
 				exit: async () => ({
-					success: false,
+					status: 'failed' as const,
 					output: '',
-					error: 'suppressed exit failed',
+					failure: { message: 'suppressed exit failed' },
 				}),
 			},
 		},

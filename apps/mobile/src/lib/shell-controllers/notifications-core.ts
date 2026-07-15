@@ -7,6 +7,7 @@ import {
 	type ControllerCore,
 	type ControllerInvalidationReason,
 } from './controller-core';
+import { unwrapControllerOutput } from './controller-outcome';
 import { createShellNotificationRouteCoordinator } from './notifications-route-coordinator';
 import {
 	type ShellActivityPort,
@@ -207,13 +208,10 @@ export function createShellNotificationsControllerCore({
 		timeoutMs: number,
 	): Promise<string> => {
 		const result = await commandPort.command(argv, { timeoutMs });
-		if (result.status === 'completed') return result.output ?? '';
-		if (result.status === 'failed') throw new Error(result.failure.message);
-		throw new Error(
-			result.status === 'superseded'
-				? 'Agent notification command superseded.'
-				: 'Agent notification command unavailable.',
-		);
+		return unwrapControllerOutput(result, {
+			superseded: 'Agent notification command superseded.',
+			unavailable: 'Agent notification command unavailable.',
+		});
 	};
 
 	const runAttempt = async (attempt: AcknowledgementAttempt): Promise<void> => {

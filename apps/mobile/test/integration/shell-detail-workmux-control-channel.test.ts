@@ -34,6 +34,12 @@ void describe('shell detail typed Workmux ownership', () => {
 		);
 		assert.match(session, /createShellDiagnosticPort\(\{/);
 		assert.match(session, /workmuxOwner\.replace\(/);
+		assert.ok(
+			session.indexOf('useLayoutEffect(() => lifecycle.setup()') <
+				session.indexOf('workmuxOwner.activate()'),
+			'lifecycle disposal authority must register before Workmux activation',
+		);
+		assert.doesNotMatch(session, /useEffect\(\(\) => lifecycle\.setup\(\)/);
 	});
 
 	void test('routes scrollback through the typed Workmux port and retirement registration', () => {
@@ -63,7 +69,7 @@ void describe('shell detail typed Workmux ownership', () => {
 		);
 		assert.match(
 			detail,
-			/remote: \{[\s\S]*?workmuxControlChannel,[\s\S]*?hostCommands: connection,/,
+			/remote: \{[\s\S]*?workmux: workmuxControlChannel,[\s\S]*?hostCommands: connection,/,
 		);
 		assert.match(
 			detail,

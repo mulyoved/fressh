@@ -4,15 +4,9 @@ import type {
 	Cursor,
 	ListenerEvent,
 } from '@fressh/react-native-uniffi-russh';
-import { type ConnectionDiagnosticEvent } from '../connection-diagnostics';
+import { type MdevBridgeFailureClass } from '../mdev-bridge-client';
+import { type WorkmuxScrollDirection } from '../workmux-app-commands';
 import { type MdevBridgeOperationRequest } from '../workmux-bridge-operations';
-import {
-	type WorkmuxControlChannel,
-	type WorkmuxControlCommandResult,
-	type WorkmuxControlConnection,
-	type WorkmuxScrollMove,
-	type WorkmuxScrollTarget,
-} from '../workmux-control-channel';
 import { type ShellActivitySnapshot } from './activity-core';
 import { type ControllerOutcome } from './controller-core';
 import { type ShellDiagnosticPort } from './session-diagnostics';
@@ -53,7 +47,7 @@ export type RetiringWorkmuxCleanupPort = {
 
 export type ShellWorkmuxFailure = {
 	message: string;
-	failureClass?: WorkmuxControlCommandResult['failureClass'];
+	failureClass?: MdevBridgeFailureClass;
 };
 
 export type ShellWorkmuxOutcome = ControllerOutcome<ShellWorkmuxFailure> & {
@@ -61,9 +55,14 @@ export type ShellWorkmuxOutcome = ControllerOutcome<ShellWorkmuxFailure> & {
 };
 
 export type ShellWorkmuxScrollPort = {
-	enter(input: WorkmuxScrollTarget): Promise<WorkmuxControlCommandResult>;
-	move(input: WorkmuxScrollMove): Promise<WorkmuxControlCommandResult>;
-	exit(input: WorkmuxScrollTarget): Promise<WorkmuxControlCommandResult>;
+	enter(input: { sessionName: string }): Promise<ShellWorkmuxOutcome>;
+	move(input: {
+		sessionName: string;
+		direction: WorkmuxScrollDirection;
+		unit: 'line' | 'page';
+		count: number;
+	}): Promise<ShellWorkmuxOutcome>;
+	exit(input: { sessionName: string }): Promise<ShellWorkmuxOutcome>;
 };
 
 export type ShellWorkmuxPort = {
@@ -136,17 +135,4 @@ export type ShellSessionPorts = {
 	workmux: ShellWorkmuxPort;
 	diagnostics: ShellDiagnosticPort;
 	activity: ShellActivityPort;
-};
-
-export type ShellSessionWorkmuxInput = {
-	key: ShellTargetKey;
-	connection: WorkmuxControlConnection | null;
-	diagnostics: ShellDiagnosticPort;
-	createChannel(input: {
-		connection: WorkmuxControlConnection | null;
-		trace: { event(event: ConnectionDiagnosticEvent): void };
-	}): WorkmuxControlChannel;
-	cleanupTimeoutMs?: number;
-	setTimeout(task: () => void, delayMs: number): unknown;
-	clearTimeout(timer: unknown): void;
 };

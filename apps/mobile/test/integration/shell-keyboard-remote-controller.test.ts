@@ -56,7 +56,8 @@ function createKeyboardRemoteHarness() {
 			key: `host:${id}` as never,
 			run: async () => ({ status: 'unavailable' }),
 		},
-		workmuxControlChannel: {
+		workmux: {
+			key: `workmux:${id}` as never,
 			command: (argv, options) => {
 				commandCalls.push({ argv: [...argv], timeoutMs: options?.timeoutMs });
 				return command.promise;
@@ -66,6 +67,12 @@ function createKeyboardRemoteHarness() {
 				operationCalls.push({ timeoutMs: options?.timeoutMs });
 				return operation.promise;
 			},
+			scroll: {
+				enter: async () => ({ status: 'unavailable' }),
+				move: async () => ({ status: 'unavailable' }),
+				exit: async () => ({ status: 'unavailable' }),
+			},
+			registerBeforeDispose: () => () => {},
 		},
 	});
 	const initialTarget = target('main');
@@ -155,8 +162,8 @@ void test('keyboard remote core consumes a typed superseded Workmux outcome dire
 	const target = harness.target('typed');
 	harness.core.setTargetContext({
 		...target,
-		workmuxControlChannel: {
-			...target.workmuxControlChannel,
+		workmux: {
+			...target.workmux,
 			command: async () => ({ status: 'superseded' }),
 		},
 	});
@@ -191,8 +198,8 @@ void test('keyboard remote core instruments failed Workmux command results', asy
 	const command = deferred<WorkmuxCommandOutcome>();
 	const info: string[] = [];
 	const target = createKeyboardRemoteHarness().target('main');
-	target.workmuxControlChannel = {
-		...target.workmuxControlChannel,
+	target.workmux = {
+		...target.workmux,
 		command: () => command.promise,
 	};
 	const core = createShellKeyboardRemoteCore({
@@ -266,8 +273,8 @@ void test('keyboard remote core preserves transport failure when error clock thr
 	const alerts: { title: string; message: string }[] = [];
 	let clockReads = 0;
 	const target = createKeyboardRemoteHarness().target('main');
-	target.workmuxControlChannel = {
-		...target.workmuxControlChannel,
+	target.workmux = {
+		...target.workmux,
 		command: () => command.promise,
 	};
 	const core = createShellKeyboardRemoteCore({
@@ -375,8 +382,8 @@ void test('keyboard remote core revalidates after clock reentry before logging',
 	let infoCalls = 0;
 	let core!: ReturnType<typeof createShellKeyboardRemoteCore>;
 	const target = createKeyboardRemoteHarness().target('main');
-	target.workmuxControlChannel = {
-		...target.workmuxControlChannel,
+	target.workmux = {
+		...target.workmux,
 		command: async () => {
 			commandCalls += 1;
 			return { status: 'completed', output: '' };
@@ -417,8 +424,8 @@ void test('keyboard remote core routes current transport failure to invalidation
 	const invalidations: [string, number][] = [];
 	const alerts: unknown[] = [];
 	const target = createKeyboardRemoteHarness().target('main');
-	target.workmuxControlChannel = {
-		...target.workmuxControlChannel,
+	target.workmux = {
+		...target.workmux,
 		command: () => command.promise,
 	};
 	const core = createShellKeyboardRemoteCore({
@@ -455,8 +462,8 @@ void test('keyboard remote core contains throwing transport invalidation', async
 	const command = deferred<WorkmuxCommandOutcome>();
 	const warnings: string[] = [];
 	const target = createKeyboardRemoteHarness().target('main');
-	target.workmuxControlChannel = {
-		...target.workmuxControlChannel,
+	target.workmux = {
+		...target.workmux,
 		command: () => command.promise,
 	};
 	const core = createShellKeyboardRemoteCore({
@@ -512,8 +519,8 @@ void test('keyboard remote core suppresses reentrant throwing transport feedback
 	const alerts: unknown[] = [];
 	let core!: ReturnType<typeof createShellKeyboardRemoteCore>;
 	const target = createKeyboardRemoteHarness().target('main');
-	target.workmuxControlChannel = {
-		...target.workmuxControlChannel,
+	target.workmux = {
+		...target.workmux,
 		command: () => command.promise,
 	};
 	core = createShellKeyboardRemoteCore({
@@ -574,8 +581,8 @@ void test('keyboard remote core bounds queued Workmux commands to the latest rep
 	const latestCommand = deferred<WorkmuxCommandOutcome>();
 	let commandCalls = 0;
 	const target = createKeyboardRemoteHarness().target('main');
-	target.workmuxControlChannel = {
-		...target.workmuxControlChannel,
+	target.workmux = {
+		...target.workmux,
 		command: () =>
 			commandCalls++ === 0 ? firstCommand.promise : latestCommand.promise,
 	};
@@ -863,8 +870,8 @@ void test('keyboard remote core revalidates after logger reentry', async () => {
 	let commandCalls = 0;
 	let core!: ReturnType<typeof createShellKeyboardRemoteCore>;
 	const target = createKeyboardRemoteHarness().target('main');
-	target.workmuxControlChannel = {
-		...target.workmuxControlChannel,
+	target.workmux = {
+		...target.workmux,
 		command: async () => {
 			commandCalls += 1;
 			return { status: 'completed', output: '' };
@@ -934,8 +941,8 @@ void test('keyboard remote core suppresses transport after nav-scope reentry', a
 	const alerts: unknown[] = [];
 	let core!: ReturnType<typeof createShellKeyboardRemoteCore>;
 	const target = createKeyboardRemoteHarness().target('main');
-	target.workmuxControlChannel = {
-		...target.workmuxControlChannel,
+	target.workmux = {
+		...target.workmux,
 		command: async () => {
 			commandCalls += 1;
 			return { status: 'completed', output: '' };
@@ -973,8 +980,8 @@ void test('keyboard remote core suppresses transport after nav-scope reentry', a
 void test('keyboard remote core contains throwing and reentrant activity getters', async () => {
 	const target = createKeyboardRemoteHarness().target('main');
 	let commandCalls = 0;
-	target.workmuxControlChannel = {
-		...target.workmuxControlChannel,
+	target.workmux = {
+		...target.workmux,
 		command: async () => {
 			commandCalls += 1;
 			return { status: 'completed', output: '' };
@@ -1032,8 +1039,8 @@ void test('keyboard remote core invalidation is reusable', async () => {
 	const secondCommand = deferred<WorkmuxCommandOutcome>();
 	let commandCount = 0;
 	const target = createKeyboardRemoteHarness().target('main');
-	target.workmuxControlChannel = {
-		...target.workmuxControlChannel,
+	target.workmux = {
+		...target.workmux,
 		command: () =>
 			commandCount++ === 0 ? firstCommand.promise : secondCommand.promise,
 	};
@@ -1069,8 +1076,8 @@ void test('keyboard remote core immediately detaches an unresolved Workmux comma
 	const nextCommand = deferred<WorkmuxCommandOutcome>();
 	let calls = 0;
 	const target = createKeyboardRemoteHarness().target('main');
-	target.workmuxControlChannel = {
-		...target.workmuxControlChannel,
+	target.workmux = {
+		...target.workmux,
 		command: () => (calls++ === 0 ? oldCommand.promise : nextCommand.promise),
 	};
 	const core = createShellKeyboardRemoteCore({
@@ -1107,15 +1114,15 @@ void test('keyboard remote core target replacement detaches unresolved Workmux o
 	const harness = createKeyboardRemoteHarness();
 	const initial = {
 		...harness.initialTarget,
-		workmuxControlChannel: {
-			...harness.initialTarget.workmuxControlChannel,
+		workmux: {
+			...harness.initialTarget.workmux,
 			command: () => old.promise,
 		},
 	};
 	const replacement = {
 		...harness.target('other'),
-		workmuxControlChannel: {
-			...harness.target('other').workmuxControlChannel,
+		workmux: {
+			...harness.target('other').workmux,
 			command: () => next.promise,
 		},
 	};

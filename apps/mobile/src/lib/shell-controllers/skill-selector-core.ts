@@ -4,6 +4,7 @@ import {
 	type ControllerCore,
 	type ControllerOutcome,
 } from './controller-core';
+import { matchControllerOutcome } from './controller-outcome';
 
 export type SkillSelectorProject = {
 	projectName: string;
@@ -140,19 +141,26 @@ export function createSkillSelectorControllerCore(deps: {
 			};
 		}
 		if (!isCurrent(id, requestSourceKey)) return;
-		if (outcome.status === 'completed') {
+		const selectionResult = matchControllerOutcome(outcome, {
+			completed: () => ({ completed: true as const, error: null }),
+			failed: ({ failure }) => ({
+				completed: false as const,
+				error: failure.message,
+			}),
+			superseded: () => ({ completed: false as const, error: null }),
+			unavailable: () => ({
+				completed: false as const,
+				error: 'Terminal input is unavailable.',
+			}),
+		});
+		if (selectionResult.completed) {
 			close();
 			return;
 		}
 		publisher.publish({
 			...publisher.getSnapshot(),
 			isSelecting: false,
-			error:
-				outcome.status === 'failed'
-					? outcome.failure.message
-					: outcome.status === 'unavailable'
-						? 'Terminal input is unavailable.'
-						: null,
+			error: selectionResult.error,
 		});
 	};
 
