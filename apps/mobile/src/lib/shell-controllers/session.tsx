@@ -387,11 +387,10 @@ export function useShellSessionController({
 					}),
 				);
 				void workmuxOwner.drain().then(() => {
-					if (
-						sourceGenerationRef.current === nextGeneration &&
-						workmuxGenerationRef.current === nextWorkmuxGeneration
-					) {
+					if (sourceGenerationRef.current === nextGeneration) {
 						setSourceGeneration(nextGeneration);
+					}
+					if (workmuxGenerationRef.current === nextWorkmuxGeneration) {
 						setWorkmuxGeneration(nextWorkmuxGeneration);
 					}
 				});

@@ -176,6 +176,14 @@ function createShell(connectionId = 'connection-1', channelId = 7) {
 	};
 }
 
+function deferred<T = void>() {
+	let resolve!: (value: T | PromiseLike<T>) => void;
+	const promise = new Promise<T>((resolvePromise) => {
+		resolve = resolvePromise;
+	});
+	return { promise, resolve };
+}
+
 beforeEach(() => {
 	mockCreateWorkmuxControlChannel.mockClear();
 	mockFetchQuery.mockClear();
@@ -601,6 +609,75 @@ test('source replacement suppresses retiring diagnostics and delivers successor 
 	retiringInput?.trace.event({ kind: 'retiring-event' });
 	successorInput?.trace.event({ kind: 'successor-event' });
 
+	expect(traceEvent).toHaveBeenCalledTimes(1);
+	expect(traceEvent).toHaveBeenCalledWith({ kind: 'successor-event' });
+	screen.unmount();
+});
+
+test('shell rotation during retirement publishes the successor without replacing the newest terminal source', async () => {
+	const firstShell = createShell();
+	mockUseSshStore.setState({
+		connections: { 'connection-1': createConnection('host-a') },
+		shells: { 'connection-1-7': firstShell },
+	});
+	const traceEvent = jest.fn();
+	mockUseAutoConnectStore.setState({
+		activeDiagnosticTrace: { event: traceEvent },
+	});
+	const onHandle = jest.fn<(handle: ShellSessionControllerHandle) => void>();
+	const latest = () => onHandle.mock.calls.at(-1)?.[0];
+	const screen = render(
+		<SessionHarness
+			onHandle={onHandle}
+			useController={getUseShellSessionController()}
+		/>,
+	);
+	const predecessor = latest()?.ports.workmux;
+	const firstTerminalSource = latest()?.ports.terminalSource;
+	const cleanupStarted = deferred();
+	const releaseCleanup = deferred();
+	predecessor?.registerBeforeDispose('deferred-test', async () => {
+		cleanupStarted.resolve();
+		await releaseCleanup.promise;
+	});
+	const predecessorInput = mockCreateWorkmuxControlChannel.mock.calls[0]?.[0];
+
+	act(() => {
+		mockUseSshStore.setState({
+			connections: { 'connection-1': createConnection('host-b') },
+		});
+	});
+	await cleanupStarted.promise;
+	expect(mockCreateWorkmuxControlChannel).toHaveBeenCalledTimes(1);
+	await expect(predecessor?.command(['stale'])).resolves.toEqual({
+		status: 'superseded',
+	});
+
+	const newestShell = createShell();
+	act(() => {
+		mockUseSshStore.setState({
+			shells: { 'connection-1-7': newestShell },
+		});
+	});
+	const newestTerminalSource = latest()?.ports.terminalSource;
+	expect(newestTerminalSource).not.toBe(firstTerminalSource);
+
+	await act(async () => {
+		releaseCleanup.resolve();
+		await Promise.resolve();
+		await Promise.resolve();
+	});
+
+	const successor = latest()?.ports.workmux;
+	const successorInput = mockCreateWorkmuxControlChannel.mock.calls[1]?.[0];
+	expect(successorInput).toBeDefined();
+	expect(successor).not.toBe(predecessor);
+	expect(latest()?.ports.terminalSource).toBe(newestTerminalSource);
+	await expect(successor?.command(['current'])).resolves.toEqual({
+		status: 'completed',
+	});
+	predecessorInput?.trace.event({ kind: 'retiring-event' });
+	successorInput?.trace.event({ kind: 'successor-event' });
 	expect(traceEvent).toHaveBeenCalledTimes(1);
 	expect(traceEvent).toHaveBeenCalledWith({ kind: 'successor-event' });
 	screen.unmount();
