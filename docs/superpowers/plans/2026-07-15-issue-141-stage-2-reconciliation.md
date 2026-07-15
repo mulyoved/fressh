@@ -302,7 +302,14 @@ git commit -m "Rebuild shell route boundary"
 
 Write the new commit hash into the Task 1 evidence row.
 
-### Task 2: Screen Session, Workmux, and Diagnostic Ownership
+### Task 2: Screen Session, Workmux, Diagnostics, and Generation-Bound Ports
+
+> **Review-boundary correction:** Task 3 is implemented and reviewed as part
+> of this task. The final Task 2 session contracts intentionally remove raw
+> shell and Workmux access, while the current downstream controllers require
+> those raw values. A clean intermediate Task 2 snapshot would therefore need
+> a prohibited compatibility seam or fail typecheck. Keep both task bodies in
+> this single TDD, commit, stable-review, and CE1 checkpoint.
 
 **Files:**
 
@@ -454,7 +461,7 @@ git add docs/run/issue-141-stage-2-reconciliation-evidence.md apps/mobile/src/ap
 git commit -m "Rebuild shell session ownership"
 ```
 
-### Task 3: Generation-Bound Controller Ports
+#### Task 3 requirements (merged into Task 2; do not dispatch separately)
 
 **Files:**
 
