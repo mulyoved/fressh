@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { createWisprCloseCoordinator } from '../../src/lib/shell-controllers/wispr-close-coordinator';
+import { createWisprTapRunner } from '../../src/lib/shell-controllers/wispr-tap-runner';
 import {
 	canStartWisprTextEntryAutomation,
 	reduceWisprAutomationState,
@@ -128,6 +130,25 @@ void test('Wispr tap timeout reports late native failure', async () => {
 	await nextTick();
 
 	assert.equal(lateFailureCount, 1);
+});
+
+void test('Wispr tap timeout uses and clears the injected timer port', async () => {
+	let timeoutTask: (() => void) | undefined;
+	const cleared: unknown[] = [];
+	const pending = tapWisprControlWithTimeout({
+		tapWisprControl: () => new Promise<string>(() => {}),
+		timeoutMs: 750,
+		setTimeout: (task, delayMs) => {
+			assert.equal(delayMs, 750);
+			timeoutTask = task;
+			return 'tap-timeout';
+		},
+		clearTimeout: (timer) => cleared.push(timer),
+	});
+	assert.equal(typeof timeoutTask, 'function');
+	timeoutTask?.();
+	await assert.rejects(pending, WisprTapTimeoutError);
+	assert.deepEqual(cleared, ['tap-timeout']);
 });
 
 void test('withTimeout resolves before the deadline', async () => {
@@ -421,4 +442,230 @@ void test('Wispr auto-start waits for older pending auto-close requests to settl
 		}),
 		false,
 	);
+});
+
+void test('focused tap runner retries failures at 200 ms and then completes', async () => {
+	let now = 0;
+	let attempts = 0;
+	const sleeps: number[] = [];
+	const runner = createWisprTapRunner({
+		tapControl: async () => {
+			attempts += 1;
+			if (attempts === 1) throw new Error('not found');
+		},
+		now: () => now,
+		setTimeout: (task, delayMs) => setTimeout(task, delayMs),
+		clearTimeout: (timer) =>
+			clearTimeout(timer as ReturnType<typeof setTimeout>),
+		sleep: async (delayMs) => {
+			sleeps.push(delayMs);
+			now += delayMs;
+		},
+	});
+	assert.deepEqual(
+		await runner.run({
+			retry: true,
+			isCurrent: () => true,
+			acceptLateResult: () => true,
+		}),
+		{
+			status: 'completed',
+		},
+	);
+	assert.equal(attempts, 2);
+	assert.deepEqual(sleeps, [200]);
+});
+
+void test('close tap invocation does not require start-attempt observation', async () => {
+	let taps = 0;
+	const runner = createWisprTapRunner({
+		tapControl: async () => {
+			taps += 1;
+		},
+		now: () => 0,
+		setTimeout: (task, delayMs) => setTimeout(task, delayMs),
+		clearTimeout: (timer) =>
+			clearTimeout(timer as ReturnType<typeof setTimeout>),
+		sleep: async () => {},
+	});
+
+	assert.deepEqual(
+		await runner.run({
+			retry: false,
+			isCurrent: () => true,
+			acceptLateResult: () => true,
+		}),
+		{ status: 'completed' },
+	);
+	assert.equal(taps, 1);
+});
+
+void test('focused tap runner checks freshness after retry sleep', async () => {
+	let current = true;
+	let attempts = 0;
+	const runner = createWisprTapRunner({
+		tapControl: async () => {
+			attempts += 1;
+			throw new Error('not found');
+		},
+		now: () => 0,
+		setTimeout: (task, delayMs) => setTimeout(task, delayMs),
+		clearTimeout: (timer) =>
+			clearTimeout(timer as ReturnType<typeof setTimeout>),
+		sleep: async () => {
+			current = false;
+		},
+	});
+	assert.deepEqual(
+		await runner.run({
+			retry: true,
+			isCurrent: () => current,
+			acceptLateResult: () => current,
+		}),
+		{ status: 'superseded' },
+	);
+	assert.equal(attempts, 1);
+});
+
+void test('focused tap runner treats a throwing timer as a bounded failure', async () => {
+	let attemptStarts = 0;
+	const runner = createWisprTapRunner({
+		tapControl: () => new Promise(() => {}),
+		now: () => 0,
+		setTimeout: () => {
+			throw new Error('timer unavailable');
+		},
+		clearTimeout: () => {},
+		sleep: async () => {},
+	});
+	assert.deepEqual(
+		await runner.run({
+			retry: false,
+			isCurrent: () => true,
+			acceptLateResult: () => true,
+			attempt: {
+				start: () => {
+					attemptStarts += 1;
+				},
+				settle: () => {},
+			},
+		}),
+		{
+			status: 'failed',
+			reason: 'tap-failed',
+			message: 'Wispr tap failed: timer unavailable',
+			timedOut: false,
+			uncertain: false,
+		},
+	);
+	assert.equal(attemptStarts, 0);
+});
+
+void test('focused tap runner distinguishes an issued timeout as uncertain', async () => {
+	let timeoutTask: (() => void) | undefined;
+	let attemptStarts = 0;
+	const runner = createWisprTapRunner({
+		tapControl: () => new Promise(() => {}),
+		now: () => 0,
+		setTimeout: (task) => {
+			timeoutTask = task;
+			return 'timeout';
+		},
+		clearTimeout: () => {},
+		sleep: async () => {},
+	});
+	const running = runner.run({
+		retry: false,
+		isCurrent: () => true,
+		acceptLateResult: () => true,
+		attempt: {
+			start: () => {
+				attemptStarts += 1;
+			},
+			settle: () => {},
+		},
+	});
+	assert.equal(attemptStarts, 1);
+	timeoutTask?.();
+	assert.deepEqual(await running, {
+		status: 'failed',
+		reason: 'tap-failed',
+		message: 'Wispr tap failed: Wispr tap timed out',
+		timedOut: true,
+		uncertain: true,
+	});
+});
+
+void test('focused tap runner turns a synchronous native throw into failure', async () => {
+	const runner = createWisprTapRunner({
+		tapControl: () => {
+			throw new Error('native exploded');
+		},
+		now: () => 0,
+		setTimeout: () => 'unused',
+		clearTimeout: () => {},
+		sleep: async () => {},
+	});
+	assert.deepEqual(
+		await runner.run({
+			retry: false,
+			isCurrent: () => true,
+			acceptLateResult: () => true,
+		}),
+		{
+			status: 'failed',
+			reason: 'tap-failed',
+			message: 'Wispr tap failed: native exploded',
+			timedOut: false,
+			uncertain: false,
+		},
+	);
+});
+
+void test('close coordinator releases only the latest deferred start after close success', async () => {
+	let close!: (closed: boolean) => void;
+	let ready = 0;
+	const coordinator = createWisprCloseCoordinator({
+		close: () =>
+			new Promise<boolean>((resolve) => {
+				close = resolve;
+			}),
+		onDeferredReady: () => {
+			ready += 1;
+		},
+		onTransactionSettled: () => {},
+	});
+	coordinator.requestAfterStart({ requestId: 7, retryClose: true });
+	coordinator.deferAutoStart(8);
+	coordinator.deferAutoStart(9);
+	assert.equal(coordinator.consumeStartResult(7, true), true);
+	assert.equal(coordinator.blocksAutoStart(), true);
+	close(true);
+	await nextTick();
+	assert.equal(ready, 1);
+	assert.equal(coordinator.takeDeferredAutoStart(), 9);
+	assert.equal(coordinator.blocksAutoStart(), false);
+});
+
+void test('close coordinator invalidation silences retired deferred work but settles cleanup', async () => {
+	let close!: (closed: boolean) => void;
+	let ready = 0;
+	const coordinator = createWisprCloseCoordinator({
+		close: () =>
+			new Promise<boolean>((resolve) => {
+				close = resolve;
+			}),
+		onDeferredReady: () => {
+			ready += 1;
+		},
+		onTransactionSettled: () => {},
+	});
+	coordinator.requestAfterStart({ requestId: 4, retryClose: false });
+	coordinator.deferAutoStart(5);
+	coordinator.consumeStartResult(4, true);
+	coordinator.retireDeferredStart();
+	close(true);
+	await nextTick();
+	assert.equal(ready, 0);
+	assert.equal(coordinator.takeDeferredAutoStart(), null);
 });

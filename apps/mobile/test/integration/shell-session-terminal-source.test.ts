@@ -16,7 +16,7 @@ function createDeferredTerminalSourceHarness() {
 	const read = deferred<{
 		chunks: [];
 		nextSeq: bigint;
-		dropped: boolean;
+		dropped?: { fromSeq: bigint; toSeq: bigint };
 	}>();
 	const listener = deferred<bigint>();
 	const send = deferred<void>();
@@ -25,6 +25,15 @@ function createDeferredTerminalSourceHarness() {
 	const sentPayloads: number[][] = [];
 	const resizeCalls: [number, number][] = [];
 	const shell = {
+		bufferStats: () => ({
+			ringBytesCount: 0n,
+			usedBytes: 0n,
+			headSeq: 0n,
+			tailSeq: 0n,
+			droppedBytesTotal: 0n,
+			chunksCount: 0n,
+		}),
+		currentSeq: () => 0n,
 		readBuffer: () => read.promise,
 		addListener: () => listener.promise,
 		removeListener: (id: bigint) => removedListenerIds.push(id),
@@ -106,9 +115,9 @@ void test('terminal source preserves native bigint diagnostics and hides stale g
 
 void test('in-flight buffer reads reject instead of returning retired shell output', async () => {
 	const harness = createDeferredTerminalSourceHarness();
-	const pending = harness.port.readBuffer({ mode: 'head' });
+	const pending = Promise.resolve(harness.port.readBuffer({ mode: 'head' }));
 	harness.rotate();
-	harness.read.resolve({ chunks: [], nextSeq: 12n, dropped: false });
+	harness.read.resolve({ chunks: [], nextSeq: 12n });
 
 	await assert.rejects(pending, /Shell terminal source superseded/);
 });
