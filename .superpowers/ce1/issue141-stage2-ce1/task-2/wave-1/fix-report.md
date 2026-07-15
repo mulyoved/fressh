@@ -43,7 +43,10 @@ additional successor-factory, typed stale-scroll, and retry coverage.
   restored, including bigint string fidelity, snapshot freshness, and proof
   that output payload contents do not enter diagnostics.
 - `CE1-T2-009`: architecture tests scan production sources for raw Workmux
-  factory/diagnostic ownership and assert the final public contract vocabulary.
+  factory/diagnostic ownership and raw native `bufferStats()`/`currentSeq()`
+  invocations. The native-call scan distinguishes calls from definitions and
+  type declarations, with a committed offender fixture proving detection, and
+  asserts the final public contract vocabulary.
 - `CE1-T2-010`: the redundant terminal-hook payload clone was removed. The
   session/native boundary retains the ownership copy.
 - `CE1-T2-011`: the 1,084-line lifecycle suite was split into controller,
@@ -51,12 +54,33 @@ additional successor-factory, typed stale-scroll, and retry coverage.
   test files are now 373, 420, and 175 lines.
 - `CE1-T2-012`: outcome decoding is centralized in an exhaustive matcher and
   output unwrapper. Browser actions, notifications, skill discovery/selection,
-  and feature requests now use the shared decoder.
+  feature requests, host command routing, Worktree Workspace, terminal fit, and
+  scrollback now use the shared decoder. The output helper accepts a typed
+  failure-to-error mapper so Worktree preserves `failureClass` without a local
+  decoder or compatibility facade.
+
+## Stable Review Follow-up
+
+- Restored focused typed-port tests proving Worktree admission closes all
+  conflicting modals in order, stops at the first blocked close, and keeps hook
+  ownership free of terminal-input escape hatches.
+- Corrected the stale reconnect architecture assertion to require
+  `lastReconnectOutcome`/recovery ownership in `session.tsx` and its absence
+  from `detail.tsx`.
+- Preserved the scrollback 650-line ownership ceiling by moving verified-runtime
+  clear authority into `scrollback-clear-coordinator.ts` and context
+  normalization/identity/replacement policy into the React-free
+  `scrollback-context-identity.ts`; `scrollback-core.ts` is now 646 lines.
 
 ## Verification
 
 - `pnpm run test:integration`: exit 0 (full mobile integration suite).
+- Final full mobile integration result: 2259 passed, 0 failed.
 - Focused outcome/architecture matrix: 87 passed, 0 failed.
+- Stable follow-up ownership/outcome/Worktree matrix: 121 passed, 0 failed.
+- Complete Task 2 integration matrix: 253 passed, 0 failed.
+- Final affected architecture/Worktree/scrollback matrix: 110 passed, 0 failed.
+- Focused scrollback decomposition matrix: 65 passed, 0 failed.
 - Focused Workmux/keyboard/scrollback/runtime matrix: 141 passed, 0 failed.
 - Split terminal lifecycle suites: 39 passed, 0 failed.
 - Session/activity component boundary suites: 11 passed, 0 failed.
@@ -67,8 +91,9 @@ additional successor-factory, typed stale-scroll, and retry coverage.
 
 ## Commit
 
-The implementation and this report are committed together; the commit hash is
-reported in the Task 2 handoff.
+The stable-review follow-up implementation is commit `4d1bc1b8` (`Close Task 2
+ownership review gaps`). This report update is committed as separate evidence
+so it can name the exact implementation commit.
 
 ## Concerns
 
