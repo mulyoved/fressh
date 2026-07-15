@@ -1,10 +1,5 @@
 import assert from 'node:assert/strict';
-import {
-	mkdtempSync,
-	readFileSync,
-	rmSync,
-	writeFileSync,
-} from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -95,49 +90,49 @@ async function loadMountedModal() {
 	const compiledDirectory = mkdtempSync(
 		join(tmpdir(), 'fressh-worktree-workspace-modal-'),
 	);
-	const modalPropsPath = join(
-		process.cwd(),
-		'src/lib/shell-controllers/worktree-workspace-modal-props.ts',
-	);
-	const compiledModalPropsPath = join(
-		compiledDirectory,
-		'worktree-workspace-modal-props.mjs',
-	);
-	writeFileSync(
-		compiledModalPropsPath,
-		transpileModule(readFileSync(modalPropsPath, 'utf8'), modalPropsPath),
-	);
-	let compiled = transpileModule(componentSource, componentPath);
-	compiled = replaceModuleSpecifier(
-		compiled,
-		'react',
-		import.meta.resolve('react'),
-	);
-	compiled = replaceModuleSpecifier(
-		compiled,
-		'react-native',
-		new URL(
-			'../fixtures/worktree-workspace-react-native-shim.mjs',
-			import.meta.url,
-		).href,
-	);
-	compiled = replaceModuleSpecifier(
-		compiled,
-		'@/lib/shell-controllers/worktree-workspace-modal-props',
-		pathToFileURL(compiledModalPropsPath).href,
-	);
-	compiled = replaceModuleSpecifier(
-		compiled,
-		'@/lib/theme',
-		new URL('../fixtures/worktree-workspace-theme-shim.mjs', import.meta.url)
-			.href,
-	);
-	const compiledComponentPath = join(
-		compiledDirectory,
-		'WorktreeWorkspaceModal.mjs',
-	);
-	writeFileSync(compiledComponentPath, compiled);
 	try {
+		const modalPropsPath = join(
+			process.cwd(),
+			'src/lib/shell-controllers/worktree-workspace-modal-props.ts',
+		);
+		const compiledModalPropsPath = join(
+			compiledDirectory,
+			'worktree-workspace-modal-props.mjs',
+		);
+		writeFileSync(
+			compiledModalPropsPath,
+			transpileModule(readFileSync(modalPropsPath, 'utf8'), modalPropsPath),
+		);
+		let compiled = transpileModule(componentSource, componentPath);
+		compiled = replaceModuleSpecifier(
+			compiled,
+			'react',
+			import.meta.resolve('react'),
+		);
+		compiled = replaceModuleSpecifier(
+			compiled,
+			'react-native',
+			new URL(
+				'../fixtures/worktree-workspace-react-native-shim.mjs',
+				import.meta.url,
+			).href,
+		);
+		compiled = replaceModuleSpecifier(
+			compiled,
+			'@/lib/shell-controllers/worktree-workspace-modal-props',
+			pathToFileURL(compiledModalPropsPath).href,
+		);
+		compiled = replaceModuleSpecifier(
+			compiled,
+			'@/lib/theme',
+			new URL('../fixtures/worktree-workspace-theme-shim.mjs', import.meta.url)
+				.href,
+		);
+		const compiledComponentPath = join(
+			compiledDirectory,
+			'WorktreeWorkspaceModal.mjs',
+		);
+		writeFileSync(compiledComponentPath, compiled);
 		return (await import(pathToFileURL(compiledComponentPath).href)) as {
 			WorktreeWorkspaceModal: React.ComponentType<WorktreeWorkspaceModalProps>;
 		};
