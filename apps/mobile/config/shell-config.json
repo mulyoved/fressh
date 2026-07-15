@@ -1,6 +1,6 @@
 {
-	"version": "2026-07-14.2",
-	"updatedAt": "2026-07-14T15:00:00.000Z",
+	"version": "2026-07-15.1",
+	"updatedAt": "2026-07-15T08:02:09.000Z",
 	"defaultKeyboardId": "phone_base",
 	"activeKeyboardIds": [
 		"phone_base",
@@ -1071,57 +1071,8 @@
 			"entries": [
 				{
 					"type": "action",
-					"label": "Request a Feature",
-					"actionId": "OPEN_REPO_FEATURE_REQUEST"
-				},
-				{
-					"type": "action",
 					"label": "Fit terminal to device",
 					"actionId": "FIT_TERMINAL_TO_DEVICE"
-				},
-				{
-					"type": "action",
-					"label": "Debug connection in Codex",
-					"actionId": "DEBUG_CONNECTION_IN_CODEX"
-				},
-				{
-					"type": "preset",
-					"label": "Open Workspace",
-					"steps": [
-						{
-							"type": "text",
-							"data": "mdev tmux open-workspace"
-						},
-						{
-							"type": "enter"
-						}
-					]
-				},
-				{
-					"type": "preset",
-					"label": "Close Workspace",
-					"steps": [
-						{
-							"type": "text",
-							"data": "mdev tmux workspace close"
-						},
-						{
-							"type": "enter"
-						}
-					]
-				},
-				{
-					"type": "preset",
-					"label": "Rename Workspace",
-					"steps": [
-						{
-							"type": "text",
-							"data": "mdev tmux workspace prompt-rename"
-						},
-						{
-							"type": "enter"
-						}
-					]
 				},
 				{
 					"type": "action",
@@ -1134,23 +1085,78 @@
 					"actionId": "OPEN_CLOSE_WORKTREE_WORKSPACE"
 				},
 				{
-					"type": "preset",
-					"label": "codex auth refresh",
-					"steps": [
-						{
-							"type": "text",
-							"data": "mdev codex auth refresh"
-						},
-						{
-							"type": "enter"
-						}
-					]
-				},
-				{
 					"type": "bridge",
 					"label": "restart codex",
 					"operation": "codex.restart",
 					"timeoutMs": 60000
+				},
+				{
+					"type": "submenu",
+					"label": "Advanced",
+					"entries": [
+						{
+							"type": "preset",
+							"label": "codex auth refresh",
+							"steps": [
+								{
+									"type": "text",
+									"data": "mdev codex auth refresh"
+								},
+								{
+									"type": "enter"
+								}
+							]
+						},
+						{
+							"type": "action",
+							"label": "Debug connection in Codex",
+							"actionId": "DEBUG_CONNECTION_IN_CODEX"
+						},
+						{
+							"type": "preset",
+							"label": "Open Workspace",
+							"steps": [
+								{
+									"type": "text",
+									"data": "mdev tmux open-workspace"
+								},
+								{
+									"type": "enter"
+								}
+							]
+						},
+						{
+							"type": "preset",
+							"label": "Rename Workspace",
+							"steps": [
+								{
+									"type": "text",
+									"data": "mdev tmux workspace prompt-rename"
+								},
+								{
+									"type": "enter"
+								}
+							]
+						},
+						{
+							"type": "preset",
+							"label": "Close Workspace",
+							"steps": [
+								{
+									"type": "text",
+									"data": "mdev tmux workspace close"
+								},
+								{
+									"type": "enter"
+								}
+							]
+						},
+						{
+							"type": "action",
+							"label": "Request a Feature",
+							"actionId": "OPEN_REPO_FEATURE_REQUEST"
+						}
+					]
 				}
 			]
 		},
