@@ -475,10 +475,12 @@ test('stale tmux resolution is ignored and real connection or target changes rep
 	);
 	expect(pending.has('user-host-a-22')).toBe(true);
 
-	act(() => {
+	await act(async () => {
 		mockUseSshStore.setState({
 			connections: { 'connection-1': createConnection('host-b') },
 		});
+		await Promise.resolve();
+		await Promise.resolve();
 	});
 	expect(mockCreateWorkmuxControlChannel).toHaveBeenCalledTimes(2);
 	expect(pending.has('user-host-b-22')).toBe(true);
@@ -487,6 +489,7 @@ test('stale tmux resolution is ignored and real connection or target changes rep
 		pending.get('user-host-b-22')?.resolve({
 			value: { useTmux: true, tmuxSessionName: 'beta' },
 		});
+		await Promise.resolve();
 		await Promise.resolve();
 	});
 	expect(latest()?.tmux).toEqual({ enabled: true, target: 'beta' });
@@ -557,5 +560,40 @@ test('diagnostics follow the committed trace and explicit invalidation uses the 
 		mockUseSshStore.getState().invalidateShellTransport,
 	).toHaveBeenCalledWith('connection-1', 7);
 	expect(latest()?.snapshot.status).toBe('leaving');
+	screen.unmount();
+});
+
+test('source replacement suppresses retiring diagnostics and delivers successor diagnostics', async () => {
+	mockUseSshStore.setState({
+		connections: { 'connection-1': createConnection('host-a') },
+		shells: { 'connection-1-7': createShell() },
+	});
+	const traceEvent = jest.fn();
+	mockUseAutoConnectStore.setState({
+		activeDiagnosticTrace: { event: traceEvent },
+	});
+	const screen = render(
+		<SessionHarness
+			onHandle={() => {}}
+			useController={getUseShellSessionController()}
+		/>,
+	);
+	const retiringInput = mockCreateWorkmuxControlChannel.mock.calls[0]?.[0];
+
+	await act(async () => {
+		mockUseSshStore.setState({
+			connections: { 'connection-1': createConnection('host-b') },
+		});
+		await Promise.resolve();
+		await Promise.resolve();
+	});
+
+	const successorInput = mockCreateWorkmuxControlChannel.mock.calls[1]?.[0];
+	expect(successorInput).toBeDefined();
+	retiringInput?.trace.event({ kind: 'retiring-event' });
+	successorInput?.trace.event({ kind: 'successor-event' });
+
+	expect(traceEvent).toHaveBeenCalledTimes(1);
+	expect(traceEvent).toHaveBeenCalledWith({ kind: 'successor-event' });
 	screen.unmount();
 });

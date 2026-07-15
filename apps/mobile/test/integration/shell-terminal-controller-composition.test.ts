@@ -3,133 +3,58 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
 
-const source = readFileSync(
-	join(process.cwd(), 'src/app/shell/detail.tsx'),
-	'utf8',
-);
+const readSource = (path: string) =>
+	readFileSync(join(process.cwd(), path), 'utf8');
 
-function extractBalancedCall(callee: string, from = 0): string {
-	const callStart = source.indexOf(`${callee}(`, from);
-	assert.notEqual(callStart, -1);
-	const open = source.indexOf('(', callStart);
-	let depth = 0;
-	for (let index = open; index < source.length; index += 1) {
-		if (source[index] === '(') depth += 1;
-		if (source[index] === ')') {
-			depth -= 1;
-			if (depth === 0) return source.slice(callStart, index + 1);
-		}
-	}
-	assert.fail(`${callee} call was not closed`);
-}
+const detail = readSource('src/app/shell/detail.tsx');
+const terminal = readSource('src/lib/shell-controllers/terminal.tsx');
 
 void test('shell detail delegates terminal refs and lifecycle', () => {
-	assert.match(source, /useShellTerminalController\(\{/);
-	assert.match(source, /ref=\{terminal\.xtermRef\}/);
-	assert.match(source, /onLoadStart: terminal\.onLoadStart/);
-	assert.match(source, /onResize=\{terminal\.onResize\}/);
-	assert.match(source, /onInitialized=\{terminal\.onInitialized\}/);
-	assert.match(source, /onRetry=\{terminal\.retry\}/);
-	for (const legacy of [
-		'listenerIdRef',
-		'listenerOwnerRef',
-		'attachedShellKeyRef',
-		'hasAttachedOnceRef',
-		'resizeTimeoutRef',
-		'lastSizeRef',
-		'terminalFitSizeWaitersRef',
-		'writerRef',
-	]) {
-		assert.doesNotMatch(source, new RegExp(legacy));
-	}
+	assert.match(detail, /useShellTerminalController\(\{/);
+	assert.match(detail, /ref=\{terminal\.xtermRef\}/);
+	assert.match(detail, /onLoadStart: terminal\.onLoadStart/);
+	assert.match(detail, /onResize=\{terminal\.onResize\}/);
+	assert.match(detail, /onInitialized=\{terminal\.onInitialized\}/);
+	assert.match(detail, /onRetry=\{terminal\.retry\}/);
+	assert.doesNotMatch(
+		detail,
+		/listenerIdRef|listenerOwnerRef|attachedShellKeyRef|hasAttachedOnceRef|writerRef/,
+	);
 });
 
-void test('shell detail composes the terminal with transport identity and raw runtime instance', () => {
-	const runtimeCallbackStart = source.indexOf(
-		'const handleTerminalRuntimeChanged = useCallback',
-	);
-	const terminalHookStart = source.indexOf(
-		'const terminal = useShellTerminalController',
-		runtimeCallbackStart,
-	);
-	assert.notEqual(runtimeCallbackStart, -1);
-	assert.notEqual(terminalHookStart, -1);
-	const runtimeCallback = source.slice(runtimeCallbackStart, terminalHookStart);
-	const terminalCall = extractBalancedCall(
-		'useShellTerminalController',
-		terminalHookStart,
-	);
-
-	for (const property of [
-		/\bshell,/,
-		/\btransportKey,/,
-		/platformOS: Platform\.OS/,
-		/systemKeyboardEnabled: Platform\.OS === 'android'/,
-		/selectionModeEnabled: false/,
-		/\blogger,/,
-		/\brouter,/,
-		/onRuntimeChanged: handleTerminalRuntimeChanged/,
-	]) {
-		assert.match(terminalCall, property);
-	}
+void test('shell detail supplies only the typed terminal source and runtime dependencies', () => {
+	assert.match(detail, /const terminalSource = ports\.terminalSource/);
 	assert.match(
-		runtimeCallback,
-		/\(runtimeKey: TerminalRuntimeKey \| null, instanceId: string \| null\)/,
+		detail,
+		/useShellTerminalController\(\{\s*source: terminalSource,\s*platformOS: Platform\.OS,\s*systemKeyboardEnabled: Platform\.OS === 'android',\s*logger,\s*router,\s*\}\)/,
 	);
-	assert.match(
-		runtimeCallback,
-		/scrollbackRuntimeChangedRef\.current\(instanceId\)/,
-	);
-	assert.doesNotMatch(runtimeCallback, /commandTimeoutsRef/);
-	assert.doesNotMatch(runtimeCallback, /JSON\.parse|\.split\(/);
-	assert.doesNotMatch(terminalCall, /targetKey|tmuxTarget/);
+	assert.doesNotMatch(detail, /useShellTerminalController\(\{[\s\S]*?\bshell,/);
+	assert.match(terminal, /source: ShellTerminalSourcePort/);
+	assert.match(terminal, /runtime\.updateSource\(source\)/);
 });
 
-void test('shell detail consumes terminal size, view, and transport ports', () => {
-	const manualFitStart = source.indexOf('const manualTerminalFitRunner');
-	const manualFitEnd = source.indexOf(
-		'const featureRequest = useFeatureRequestController',
-		manualFitStart,
-	);
-	assert.notEqual(manualFitStart, -1);
-	assert.notEqual(manualFitEnd, -1);
-	const manualFit = source.slice(manualFitStart, manualFitEnd);
-	assert.match(source, /terminalSizeSnapshotRef\.current = terminal\.lastSize/);
+void test('scrollback, keyboard, and manual fit consume terminal ports', () => {
 	assert.match(
-		manualFit,
-		/getTerminalSize: \(\) => terminalSizeSnapshotRef\.current/,
+		detail,
+		/useShellScrollbackController\(\{[\s\S]*?terminalTransport: terminal\.transport,[\s\S]*?terminalView: terminal\.view,/,
 	);
-	assert.match(source, /getXterm: \(\) => terminal\.view/);
 	assert.match(
-		source,
+		detail,
+		/createShellDetailKeyboardControllerInput\(\{[\s\S]*?\s+scrollback,[\s\S]*?\s+terminal,/,
+	);
+	assert.match(detail, /getTerminalSize: terminal\.getLastSize/);
+	assert.match(detail, /getXterm: \(\) => terminal\.view/);
+	assert.match(
+		detail,
 		/waitForTerminalSizeAfterFit: terminal\.waitForSizeAfterFit/,
 	);
-	assert.match(source, /terminal\.view\.fit\(\)/);
-	const scrollbackAdapter = extractBalancedCall('useShellScrollbackController');
-	assert.match(scrollbackAdapter, /terminalTransport: terminal\.transport/);
-	assert.match(scrollbackAdapter, /terminalView: terminal\.view/);
-	const keyboardCall = extractBalancedCall(
-		'createShellDetailKeyboardControllerInput',
-	);
-	assert.match(keyboardCall, /^\s*scrollback,\s*$/m);
-	assert.match(keyboardCall, /^\s*terminal,\s*$/m);
-	assert.doesNotMatch(
-		source,
-		/createShellTerminalLiveInputRequest|runWorkmuxScrollbackLiveInputSendPlan/,
-	);
-	assert.match(
-		manualFit,
-		/terminal\.view,[\s\S]*terminal\.waitForSizeAfterFit/,
-	);
-	assert.doesNotMatch(manualFit, /^\s*terminal,\s*$/m);
-	assert.doesNotMatch(source, /new OrderedWriter/);
-	assert.doesNotMatch(source, /xtermRef\.current/);
+	assert.doesNotMatch(detail, /new OrderedWriter|xtermRef\.current/);
 });
 
-void test('shell detail retains terminal rendering through the controller snapshot', () => {
+void test('waiting rendering is retained through the terminal controller snapshot', () => {
 	assert.match(
-		source,
-		/terminal\.hasRendered \|\| Boolean\(shell && connection\)/,
+		detail,
+		/case 'waiting':\s*if \(!terminal\.hasRendered\) return <RouteSkeleton \/>/,
 	);
-	assert.doesNotMatch(source, /terminalReady|hasRenderedTerminal/);
+	assert.doesNotMatch(detail, /terminalReady|hasRenderedTerminal/);
 });

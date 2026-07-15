@@ -64,6 +64,7 @@ type Retirement = {
 	owned: OwnedWorkmux;
 	reason: 'reconnect' | 'unmount';
 	registrations: [string, CleanupRegistration][];
+	afterRetire?(): void;
 };
 
 const DEFAULT_CLEANUP_TIMEOUT_MS = 5_000;
@@ -126,6 +127,7 @@ export function createShellSessionWorkmuxOwner(
 	let processingRetirement = false;
 	let resolveRetirementDrain: (() => void) | null = null;
 	let retirementDrain = Promise.resolve();
+	let pendingReplacement: ShellSessionWorkmuxInput | null = null;
 	let current = createOwnedWorkmux(
 		initialInput,
 		options.deferActivation !== true,
@@ -364,7 +366,16 @@ export function createShellSessionWorkmuxOwner(
 			retirement.owned,
 			retirement.reason,
 			retirement.registrations,
-		).then(processNextRetirement, processNextRetirement);
+		).then(
+			() => {
+				retirement.afterRetire?.();
+				processNextRetirement();
+			},
+			() => {
+				retirement.afterRetire?.();
+				processNextRetirement();
+			},
+		);
 	}
 
 	function enqueueRetirement(retirement: Retirement): void {
@@ -380,6 +391,7 @@ export function createShellSessionWorkmuxOwner(
 	function scheduleRetirement(
 		owned: OwnedWorkmux,
 		reason: 'reconnect' | 'unmount',
+		afterRetire?: () => void,
 	): void {
 		if (owned.retirementScheduled) return;
 		owned.retirementScheduled = true;
@@ -398,19 +410,34 @@ export function createShellSessionWorkmuxOwner(
 		const registrations = [...owned.cleanups.entries()];
 		owned.cleanups.clear();
 		if (owned.channel !== null) {
-			enqueueRetirement({ owned, reason, registrations });
+			enqueueRetirement({
+				owned,
+				reason,
+				registrations,
+				...(afterRetire ? { afterRetire } : {}),
+			});
+		} else {
+			afterRetire?.();
 		}
+	}
+
+	function exposePendingReplacement(): void {
+		if (disposed || pendingReplacement === null) return;
+		const input = pendingReplacement;
+		pendingReplacement = null;
+		current = createOwnedWorkmux(input);
 	}
 
 	function applyMutation(mutation: OwnerMutation): void {
 		if (mutation.kind === 'replace') {
 			if (disposed) return;
-			scheduleRetirement(current, 'reconnect');
-			current = createOwnedWorkmux(mutation.input);
+			pendingReplacement = mutation.input;
+			scheduleRetirement(current, 'reconnect', exposePendingReplacement);
 			return;
 		}
 		if (disposed) return;
 		disposed = true;
+		pendingReplacement = null;
 		scheduleRetirement(current, mutation.reason);
 	}
 

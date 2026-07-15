@@ -227,7 +227,8 @@ export function useShellSessionController({
 			? getStoredConnectionId(connection.connectionDetails)
 			: undefined);
 	const activeDiagnosticTraceRef = useRef(activeDiagnosticTrace);
-	const diagnosticGenerationRef = useRef(0);
+	const [sourceGeneration, setSourceGeneration] = useState(0);
+	const sourceGenerationRef = useRef(0);
 	const routerRef = useRef(router);
 	const [core] = useState(() =>
 		createShellSessionCore({
@@ -242,13 +243,15 @@ export function useShellSessionController({
 			},
 		}),
 	);
-	const [diagnostics] = useState(() =>
-		createShellDiagnosticPort({
-			generation: 0,
-			getCurrentGeneration: () => diagnosticGenerationRef.current,
-			getActiveTrace: () => activeDiagnosticTraceRef.current,
-			logger,
-		}),
+	const diagnostics = useMemo(
+		() =>
+			createShellDiagnosticPort({
+				generation: sourceGeneration,
+				getCurrentGeneration: () => sourceGenerationRef.current,
+				getActiveTrace: () => activeDiagnosticTraceRef.current,
+				logger,
+			}),
+		[logger, sourceGeneration],
 	);
 	const [workmuxOwner] = useState(() =>
 		createShellSessionWorkmuxOwner(
@@ -261,12 +264,9 @@ export function useShellSessionController({
 		),
 	);
 	const reconnectingRef = useRef(false);
-	const [sourceGeneration, setSourceGeneration] = useState(0);
-	const sourceGenerationRef = useRef(0);
 	const [lifecycle] = useState(() =>
 		createReplaySafeDisposer(() => {
 			sourceGenerationRef.current += 1;
-			diagnosticGenerationRef.current += 1;
 			core.invalidate('unmount');
 			core.dispose();
 			workmuxOwner.dispose(reconnectingRef.current ? 'reconnect' : 'unmount');
@@ -365,19 +365,31 @@ export function useShellSessionController({
 		const sourceChanged =
 			connectionChanged || previousIdentity.shell !== shell || targetChanged;
 		if (sourceChanged) {
+			const nextGeneration = sourceGenerationRef.current + 1;
+			sourceGenerationRef.current = nextGeneration;
 			if (connectionChanged || targetChanged) {
+				const nextDiagnostics = createShellDiagnosticPort({
+					generation: nextGeneration,
+					getCurrentGeneration: () => sourceGenerationRef.current,
+					getActiveTrace: () => activeDiagnosticTraceRef.current,
+					logger,
+				});
 				workmuxOwner.replace(
 					createWorkmuxInput({
 						key: targetKey,
 						connection: (connection ?? null) as WorkmuxControlConnection | null,
-						diagnostics,
+						diagnostics: nextDiagnostics,
 					}),
 				);
+				void workmuxOwner.drain().then(() => {
+					if (sourceGenerationRef.current === nextGeneration) {
+						setSourceGeneration(nextGeneration);
+					}
+				});
+			} else {
+				setSourceGeneration(nextGeneration);
 			}
 			sourceIdentityRef.current = { connection, shell, targetKey };
-			const nextGeneration = sourceGenerationRef.current + 1;
-			sourceGenerationRef.current = nextGeneration;
-			setSourceGeneration(nextGeneration);
 		}
 		core.reconcile({
 			connectionPresent: connection !== undefined,
@@ -395,6 +407,7 @@ export function useShellSessionController({
 		isAutoConnecting,
 		isReconnecting,
 		lastReconnectOutcome,
+		logger,
 		shell,
 		storedConnectionId,
 		targetKey,

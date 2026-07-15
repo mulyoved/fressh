@@ -170,6 +170,56 @@ void test('target replacement retires cleanup before disposing the old channel',
 	]);
 });
 
+void test('replacement exposes no successor until rejected cleanup and disposal settle', async () => {
+	const releaseCleanup = deferred<void>();
+	const owner = createHarness('target-1', {
+		createChannel: (label, events) => {
+			events.push(`${label}:create`);
+			return createChannel({ label, events });
+		},
+	});
+	owner.port.registerBeforeDispose('scrollback', async () => {
+		owner.events.push('cleanup:start');
+		await releaseCleanup.promise;
+		owner.events.push('cleanup:reject');
+		throw new Error('cleanup rejected');
+	});
+
+	owner.runtime.replace(owner.createInput('target-2'));
+
+	assert.equal(owner.runtime.getPort().key, targetKey('target-1'));
+	assert.equal(owner.getChannelCount(), 1);
+	assert.deepEqual(
+		await owner.runtime
+			.getPort()
+			.command(['must', 'not', 'reach', 'successor']),
+		{ status: 'superseded' },
+	);
+	assert.deepEqual(owner.events, [
+		'old:create',
+		'old:prepare',
+		'cleanup:start',
+	]);
+
+	releaseCleanup.resolve();
+	await owner.runtime.drain();
+
+	assert.equal(owner.runtime.getPort().key, targetKey('target-2'));
+	assert.equal(owner.getChannelCount(), 2);
+	assert.deepEqual(owner.events, [
+		'old:create',
+		'old:prepare',
+		'cleanup:start',
+		'cleanup:reject',
+		'old:dispose',
+		'new:create',
+	]);
+	assert.deepEqual(
+		await owner.runtime.getPort().command(['successor', 'command']),
+		{ status: 'completed', output: 'new:command-output' },
+	);
+});
+
 void test('retiring port exposes only exitScroll', async () => {
 	const owner = createHarness('target-1');
 	let retiringPort: object | null = null;
@@ -408,7 +458,7 @@ void test('stale unregister cannot remove a newer cleanup for the same owner', a
 	assert.equal(owner.events.includes('cleanup:new'), true);
 });
 
-void test('drain includes a replacement synchronously requested by cleanup', async () => {
+void test('cleanup replacement supersedes the pending successor before exposure', async () => {
 	const owner = createHarness('target-1');
 	owner.port.registerBeforeDispose('reentrant', async () => {
 		owner.events.push('cleanup:replace');
@@ -421,14 +471,13 @@ void test('drain includes a replacement synchronously requested by cleanup', asy
 	assert.deepEqual(owner.events, [
 		'old:prepare',
 		'cleanup:replace',
-		'new:prepare',
 		'old:dispose',
-		'new:dispose',
 	]);
 	assert.equal(owner.runtime.getPort().key, targetKey('target-3'));
+	assert.equal(owner.getChannelCount(), 2);
 });
 
-void test('replace then dispose retires each captured channel once without reaching a replacement', async () => {
+void test('dispose during retirement prevents pending successor construction', async () => {
 	const firstCleanup = deferred<void>();
 	const owner = createHarness('target-1');
 	owner.port.registerBeforeDispose('first', async (retiring) => {
@@ -457,11 +506,11 @@ void test('replace then dispose retires each captured channel once without reach
 	);
 	assert.equal(
 		owner.events.filter((event) => event === 'new:dispose').length,
-		1,
+		0,
 	);
 	assert.equal(owner.events.includes('old:exit:one'), true);
-	assert.equal(owner.events.includes('new:exit:two'), true);
-	assert.equal(owner.getChannelCount(), 2);
+	assert.equal(owner.events.includes('new:exit:two'), false);
+	assert.equal(owner.getChannelCount(), 1);
 });
 
 void test('rejected disposal and throwing diagnostics are contained without a second dispose', async () => {
