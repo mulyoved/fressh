@@ -1,6 +1,17 @@
 {
   "versionGroups": [
     {
+      "label": "Expo 54 requires the Jest 29 test stack in the mobile app",
+      "packages": [
+        "@fressh/mobile"
+      ],
+      "dependencies": [
+        "@types/jest",
+        "jest"
+      ],
+      "isIgnored": true
+    },
+    {
       "label": "Use workspace protocol when developing local packages",
       "dependencies": [
         "$LOCAL"

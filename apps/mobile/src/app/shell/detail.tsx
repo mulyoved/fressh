@@ -71,6 +71,7 @@ import {
 } from '@/lib/shell-controllers/source-keys';
 import { useShellTerminalController } from '@/lib/shell-controllers/terminal';
 import { type TerminalRuntimeKey } from '@/lib/shell-controllers/terminal-transport';
+import { useWorktreeWorkspaceController } from '@/lib/shell-controllers/worktree-workspace';
 import { executeSideChannelCommand } from '@/lib/ssh-side-channel';
 import { useSshStore } from '@/lib/ssh-store';
 import { createManualTerminalFitRunner } from '@/lib/terminal-fit-runner';
@@ -115,6 +116,7 @@ import {
 	TextEntryModal,
 	type TextInputScreenBounds,
 } from './components/TextEntryModal';
+import { WorktreeWorkspaceModal } from './components/WorktreeWorkspaceModal';
 import {
 	createShellDetailKeyboardAuthorityRuntime,
 	createShellDetailKeyboardCommitPublication,
@@ -1365,6 +1367,14 @@ function ShellDetail() {
 	);
 
 	const activeTmuxSessionName = tmuxTarget.trim() || 'main';
+	const worktreeWorkspace = useWorktreeWorkspaceController({
+		connection: connection ?? null,
+		tmuxEnabled,
+		sessionName: activeTmuxSessionName,
+		sourceKey: targetKey,
+		workmuxControlChannel,
+		arbiter: modalArbiter,
+	});
 
 	const runBrowserActionsWorkmuxCommand = useCallback(
 		async (_connection: unknown, argv: string[], timeoutMs: number) => {
@@ -1642,6 +1652,8 @@ function ShellDetail() {
 				openCommandMenu: commandMenuModal.onOpen,
 				closeCommandMenu: commandMenuModal.onClose,
 				openCommander: commanderModal.onOpen,
+				openNewWorktreeWorkspace: worktreeWorkspace.openNew,
+				openCloseWorktreeWorkspace: worktreeWorkspace.openClose,
 				openBrowserActions: browserActions.open,
 				openFeatureRequest: featureRequest.open,
 				openConfigurator: openConfigDialog,
@@ -1654,6 +1666,8 @@ function ShellDetail() {
 			handleCloseTextEntry,
 			keyboardLateBindings,
 			openConfigDialog,
+			worktreeWorkspace.openClose,
+			worktreeWorkspace.openNew,
 		],
 	);
 	const browserCommands = useMemo<ShellKeyboardBrowserCommands>(
@@ -1893,6 +1907,10 @@ function ShellDetail() {
 				<SkillSelectorModal
 					bottomOffset={Platform.OS === 'android' ? insets.bottom + 24 : 24}
 					{...skillSelector.modalProps}
+				/>
+				<WorktreeWorkspaceModal
+					bottomOffset={Platform.OS === 'android' ? insets.bottom + 24 : 24}
+					{...worktreeWorkspace.modalProps}
 				/>
 				<TextEntryModal
 					open={textEntryModal.open}

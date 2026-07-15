@@ -190,16 +190,18 @@ export function createDirectTmuxControlTransport({
 	const closeCachedShell = async (opts?: { timeout?: boolean }) => {
 		const cachedShellPromise = shellPromise;
 		shellPromise = null;
-		const shell = await (opts?.timeout && cachedShellPromise
-			? withDisposeTimeout(cachedShellPromise, new AbortController())
-			: cachedShellPromise
+		const shell = await (
+			opts?.timeout && cachedShellPromise
+				? withDisposeTimeout(cachedShellPromise, new AbortController())
+				: cachedShellPromise
 		)?.catch(() => null);
 		if (!shell) return;
 		const abortController = new AbortController();
 		const closePromise = shell.close({ signal: abortController.signal });
-		await (opts?.timeout
-			? withDisposeTimeout(closePromise, abortController)
-			: closePromise
+		await (
+			opts?.timeout
+				? withDisposeTimeout(closePromise, abortController)
+				: closePromise
 		).catch(() => {});
 	};
 

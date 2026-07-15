@@ -52,52 +52,47 @@ export const savedEntryEvents = {
 	selected: (input: {
 		source: ConnectionDiagnosticSource;
 		connection: ConnectionDiagnosticConnectionIdentity;
-	}): SavedEntrySelectedEvent =>
-		({
-			kind: 'saved-entry.selected',
-			source: input.source,
-			connection: copyConnectionIdentity(input.connection),
-		}),
+	}): SavedEntrySelectedEvent => ({
+		kind: 'saved-entry.selected',
+		source: input.source,
+		connection: copyConnectionIdentity(input.connection),
+	}),
 	missing: (input: {
 		source: ConnectionDiagnosticSource;
 		message?: string;
-	}): SavedEntryMissingEvent =>
-		({
-			kind: 'saved-entry.missing',
-			source: input.source,
-			message: input.message,
-		}),
+	}): SavedEntryMissingEvent => ({
+		kind: 'saved-entry.missing',
+		source: input.source,
+		message: input.message,
+	}),
 	invalidTmuxSettings: (input: {
 		source: ConnectionDiagnosticSource;
 		connection: ConnectionDiagnosticConnectionIdentity;
 		useTmuxType: string;
 		tmuxSessionNameType: string;
-	}): SavedEntryInvalidTmuxSettingsEvent =>
-		({
-			kind: 'saved-entry.invalid-tmux-settings',
-			source: input.source,
-			connection: copyConnectionIdentity(input.connection),
-			useTmuxType: input.useTmuxType,
-			tmuxSessionNameType: input.tmuxSessionNameType,
-		}),
+	}): SavedEntryInvalidTmuxSettingsEvent => ({
+		kind: 'saved-entry.invalid-tmux-settings',
+		source: input.source,
+		connection: copyConnectionIdentity(input.connection),
+		useTmuxType: input.useTmuxType,
+		tmuxSessionNameType: input.tmuxSessionNameType,
+	}),
 	keyResolved: (input: {
 		source: ConnectionDiagnosticSource;
 		connection: ConnectionDiagnosticConnectionIdentity;
-	}): KeyResolvedEvent =>
-		({
-			kind: 'key.resolved',
-			source: input.source,
-			connection: copyConnectionIdentity(input.connection),
-		}),
+	}): KeyResolvedEvent => ({
+		kind: 'key.resolved',
+		source: input.source,
+		connection: copyConnectionIdentity(input.connection),
+	}),
 	keyMissing: (input: {
 		source: ConnectionDiagnosticSource;
 		connection: ConnectionDiagnosticConnectionIdentity;
-	}): KeyMissingEvent =>
-		({
-			kind: 'key.missing',
-			source: input.source,
-			connection: copyConnectionIdentity(input.connection),
-		}),
+	}): KeyMissingEvent => ({
+		kind: 'key.missing',
+		source: input.source,
+		connection: copyConnectionIdentity(input.connection),
+	}),
 } as const;
 
 export function formatSavedEntryEventFields(event: SavedEntryEvent): string[] {

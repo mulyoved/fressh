@@ -14,6 +14,17 @@ import {
 
 const execFileAsync = promisify(execFile);
 
+function createDiscoveryEnv(
+	homeDirectory: string,
+	overrides: Partial<typeof process.env> = {},
+): typeof process.env {
+	return {
+		...process.env,
+		...overrides,
+		HOME: homeDirectory,
+	};
+}
+
 const discoveryRecords = [
 	{
 		path: '/repo/.codex/skills/brainstorming/SKILL.md',
@@ -230,12 +241,13 @@ void test('filterDiscoveredSkills ranks skill name matches before description ma
 	);
 });
 
-void test('buildSkillDiscoveryCommand scopes discovery to repo-local skills', () => {
+void test('buildSkillDiscoveryCommand scopes discovery to repo and user-global skills', () => {
 	const command = buildSkillDiscoveryCommand("/tmp/repo with ' quote");
 
 	assert.match(command, /python3 -c/);
 	assert.match(command, /\.codex/);
 	assert.match(command, /\.agents/);
+	assert.match(command, /pathlib\.Path\.home/);
 	assert.match(command, /skills/);
 	assert.match(command, /SKILL\.md/);
 	assert.match(command, /errors='\\''replace'\\''/);
@@ -243,6 +255,119 @@ void test('buildSkillDiscoveryCommand scopes discovery to repo-local skills', ()
 	assert.doesNotMatch(command, /<<'PY'/);
 	assert.doesNotMatch(command, /\r?\n/);
 	assert.match(command, /'\/tmp\/repo with '\\'' quote'/);
+});
+
+void test('buildSkillDiscoveryCommand discovers repo and user-global skills with repo precedence', async () => {
+	const tempRoot = await mkdtemp(join(tmpdir(), 'skill-discovery-combined-'));
+	try {
+		const repoRoot = join(tempRoot, "repo with ' quote");
+		const homeDirectory = join(tempRoot, 'home');
+		const repoDuplicateSkill = join(
+			repoRoot,
+			'.agents',
+			'skills',
+			'shared',
+			'SKILL.md',
+		);
+		const repoOnlySkill = join(
+			repoRoot,
+			'.codex',
+			'skills',
+			'repo-only',
+			'SKILL.md',
+		);
+		const globalDuplicateSkill = join(
+			homeDirectory,
+			'.codex',
+			'skills',
+			'shared',
+			'SKILL.md',
+		);
+		const globalOnlySkill = join(
+			homeDirectory,
+			'.codex',
+			'skills',
+			'global-only',
+			'SKILL.md',
+		);
+		const bundledSystemSkill = join(
+			homeDirectory,
+			'.codex',
+			'skills',
+			'.system',
+			'bundled',
+			'SKILL.md',
+		);
+
+		await Promise.all([
+			mkdir(join(repoRoot, '.agents', 'skills', 'shared'), {
+				recursive: true,
+			}),
+			mkdir(join(repoRoot, '.codex', 'skills', 'repo-only'), {
+				recursive: true,
+			}),
+			mkdir(join(homeDirectory, '.codex', 'skills', 'shared'), {
+				recursive: true,
+			}),
+			mkdir(join(homeDirectory, '.codex', 'skills', 'global-only'), {
+				recursive: true,
+			}),
+			mkdir(join(homeDirectory, '.codex', 'skills', '.system', 'bundled'), {
+				recursive: true,
+			}),
+		]);
+		await Promise.all([
+			writeFile(
+				repoDuplicateSkill,
+				'---\nname: Shared-Skill\ndescription: repository wins\n---\n',
+			),
+			writeFile(
+				repoOnlySkill,
+				'---\nname: repo-only\ndescription: repository only\n---\n',
+			),
+			writeFile(
+				globalDuplicateSkill,
+				'---\nname: shared-skill\ndescription: global duplicate\n---\n',
+			),
+			writeFile(
+				globalOnlySkill,
+				'---\nname: global-only\ndescription: global only\n---\n',
+			),
+			writeFile(
+				bundledSystemSkill,
+				'---\nname: bundled\ndescription: excluded system skill\n---\n',
+			),
+		]);
+
+		const { stdout } = await execFileAsync(
+			'/bin/bash',
+			['-lc', buildSkillDiscoveryCommand(repoRoot)],
+			{
+				cwd: repoRoot,
+				env: createDiscoveryEnv(homeDirectory),
+			},
+		);
+
+		assert.deepEqual(parseSkills(stdout), [
+			{
+				name: 'global-only',
+				path: globalOnlySkill,
+				description: 'global only',
+			},
+			{
+				name: 'repo-only',
+				path: repoOnlySkill,
+				description: 'repository only',
+			},
+			{
+				name: 'Shared-Skill',
+				path: repoDuplicateSkill,
+				description: 'repository wins',
+			},
+		]);
+	} finally {
+		await rm(tempRoot, { recursive: true, force: true });
+	}
 });
 
 void test('buildSkillDiscoveryCommand executes and discovers repo-local skills', async () => {
@@ -294,7 +419,10 @@ void test('buildSkillDiscoveryCommand executes and discovers repo-local skills',
 		const { stdout } = await execFileAsync(
 			'bash',
 			['-lc', buildSkillDiscoveryCommand(tempRepo)],
-			{ cwd: tempRepo },
+			{
+				cwd: tempRepo,
+				env: createDiscoveryEnv(join(tempRepo, 'isolated-home')),
+			},
 		);
 
 		const skills = parseSkills(stdout);
@@ -332,7 +460,10 @@ void test('buildSkillDiscoveryCommand resolves skills from the workspace root', 
 		const { stdout } = await execFileAsync(
 			'bash',
 			['-lc', buildSkillDiscoveryCommand(tempRepo)],
-			{ cwd: nestedCwd },
+			{
+				cwd: nestedCwd,
+				env: createDiscoveryEnv(join(tempRepo, 'isolated-home')),
+			},
 		);
 
 		assert.deepEqual(parseSkills(stdout), [
@@ -408,7 +539,10 @@ void test('buildSkillDiscoveryCommand only discovers skills under the workspace 
 		const { stdout } = await execFileAsync(
 			'bash',
 			['-lc', buildSkillDiscoveryCommand(tempRepo)],
-			{ cwd: panePath },
+			{
+				cwd: panePath,
+				env: createDiscoveryEnv(join(tempRepo, 'isolated-home')),
+			},
 		);
 
 		assert.deepEqual(parseSkills(stdout), [
@@ -450,13 +584,20 @@ void test('buildSkillDiscoveryCommand does not require git', async () => {
 		);
 
 		await execFileAsync('/bin/bash', ['-c', '! command -v git'], {
-			env: { ...process.env, PATH: tempBin },
+			env: createDiscoveryEnv(join(tempRepo, 'isolated-home'), {
+				PATH: tempBin,
+			}),
 		});
 
 		const { stdout } = await execFileAsync(
 			'/bin/bash',
 			['-c', buildSkillDiscoveryCommand(tempRepo)],
-			{ cwd: tempRepo, env: { ...process.env, PATH: tempBin } },
+			{
+				cwd: tempRepo,
+				env: createDiscoveryEnv(join(tempRepo, 'isolated-home'), {
+					PATH: tempBin,
+				}),
+			},
 		);
 
 		assert.deepEqual(parseSkills(stdout), [
@@ -490,6 +631,7 @@ void test('buildSkillDiscoveryCommand works with side-channel completion suffix'
 		const command = `${buildSkillDiscoveryCommand(tempRepo)}; __EC__=$?; echo "${marker}"; echo "EXIT_CODE:$__EC__"`;
 		const { stdout } = await execFileAsync('bash', ['-lc', command], {
 			cwd: tempRepo,
+			env: createDiscoveryEnv(join(tempRepo, 'isolated-home')),
 		});
 		const sideChannelOutput = `${command}\n${stdout}`;
 		const sideChannelLines = sideChannelOutput.trim().split(/\r?\n/);

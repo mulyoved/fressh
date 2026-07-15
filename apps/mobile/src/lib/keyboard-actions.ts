@@ -82,6 +82,8 @@ export const KNOWN_ACTION_IDS = [
 	'DEBUG_CONNECTION_IN_CODEX',
 	'REFLOW_TERMINAL',
 	'OPEN_COMMANDER',
+	'OPEN_NEW_WORKTREE_WORKSPACE',
+	'OPEN_CLOSE_WORKTREE_WORKSPACE',
 	'OPEN_SKILL_SELECTOR',
 	'OPEN_BROWSER_ACTIONS',
 	'OPEN_REPO_FEATURE_REQUEST',
@@ -292,6 +294,8 @@ export type ActionContext = {
 	restartCodex?: () => Promise<void> | void;
 	debugConnectionInCodex?: () => Promise<void> | void;
 	openCommander?: () => void;
+	openNewWorktreeWorkspace?: () => void;
+	openCloseWorktreeWorkspace?: () => void;
 	openSkillSelector?: () => void;
 	openBrowserActions?: () => void;
 	openRepoFeatureRequest?: () => void;
@@ -462,6 +466,14 @@ export async function runAction(
 		}
 		case 'OPEN_COMMANDER': {
 			context.openCommander?.();
+			return;
+		}
+		case 'OPEN_NEW_WORKTREE_WORKSPACE': {
+			context.openNewWorktreeWorkspace?.();
+			return;
+		}
+		case 'OPEN_CLOSE_WORKTREE_WORKSPACE': {
+			context.openCloseWorktreeWorkspace?.();
 			return;
 		}
 		case 'OPEN_SKILL_SELECTOR': {

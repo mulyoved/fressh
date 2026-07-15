@@ -1,6 +1,6 @@
 import { type DiscoveredSkill } from '@/lib/skill-discovery';
 
-export const SKILL_DISCOVERY_CACHE_VERSION = 1;
+export const SKILL_DISCOVERY_CACHE_VERSION = 2;
 
 export type SkillDiscoveryCacheStorage = {
 	getString: (key: string) => string | undefined;
@@ -39,7 +39,7 @@ export function buildSkillDiscoveryCacheKey(
 ): string {
 	return [
 		'skillDiscoveryCache',
-		'v1',
+		`v${SKILL_DISCOVERY_CACHE_VERSION}`,
 		encodeSkillDiscoveryCacheKeyPart(parts.stableConnectionId),
 		encodeSkillDiscoveryCacheKeyPart(parts.tmuxTarget),
 		encodeSkillDiscoveryCacheKeyPart(parts.projectRoot),

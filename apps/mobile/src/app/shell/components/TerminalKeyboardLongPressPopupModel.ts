@@ -43,9 +43,7 @@ export function getTerminalKeyboardLongPressPopupItems({
 			icon: option.icon,
 			width: popup.layout.optionWidth,
 			highlighted: popup.highlightedIndex === index,
-			badgeLabel: scopeBadge
-				? WORKMUX_NAV_SCOPE_BADGE_LABEL[scopeBadge]
-				: null,
+			badgeLabel: scopeBadge ? WORKMUX_NAV_SCOPE_BADGE_LABEL[scopeBadge] : null,
 			isCurrentScope: optionScope !== null && optionScope === navScope,
 		};
 	});

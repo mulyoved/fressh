@@ -305,10 +305,7 @@ export class AgentNotificationDedupe {
 			return { type: 'ignored' };
 		}
 		if (!posted) {
-			if (
-				pending.posted ||
-				pending.inFlightPostCount > 0
-			) {
+			if (pending.posted || pending.inFlightPostCount > 0) {
 				pending.needsPostRetry = true;
 				return { type: 'ignored' };
 			}

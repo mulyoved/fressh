@@ -39,7 +39,17 @@ function generatePrivateKeyFixture() {
 	try {
 		const result = spawnSync(
 			'ssh-keygen',
-			['-q', '-t', 'ed25519', '-N', '', '-C', 'muly@dev-remote-machine', '-f', keyPath],
+			[
+				'-q',
+				'-t',
+				'ed25519',
+				'-N',
+				'',
+				'-C',
+				'muly@dev-remote-machine',
+				'-f',
+				keyPath,
+			],
 			{
 				encoding: 'utf8',
 			},
@@ -71,14 +81,9 @@ function validatePrivateKeyWithSshKeygen(privateKey: string) {
 			throw new Error(`ssh-keygen unavailable: ${result.error.message}`);
 		}
 		if (result.status === 0) return;
-		throw new Error(
-			'Invalid private key',
-			{
-				cause:
-					result.stderr.trim() ||
-					'ssh-keygen rejected the private key.',
-			},
-		);
+		throw new Error('Invalid private key', {
+			cause: result.stderr.trim() || 'ssh-keygen rejected the private key.',
+		});
 	} finally {
 		rmSync(tempDir, { recursive: true, force: true });
 	}
@@ -498,11 +503,13 @@ void test('replaceAllFromBackup replaces stale keys and connections in memory st
 	});
 
 	assert.deepEqual(
-		(await keyStorage.listEntriesWithValues()).map(({ id, metadata, value }) => ({
-			id,
-			metadata,
-			value,
-		})),
+		(await keyStorage.listEntriesWithValues()).map(
+			({ id, metadata, value }) => ({
+				id,
+				metadata,
+				value,
+			}),
+		),
 		[keyEntry],
 	);
 	assert.deepEqual(await connectionStorage.listEntriesWithValues(), [
@@ -510,48 +517,45 @@ void test('replaceAllFromBackup replaces stale keys and connections in memory st
 	]);
 });
 
-void test(
-	'replaceAllPrivateKeyEntries handler invalidates after replacing entries',
-	async () => {
-		const keyStorage = makeBetterSecureStore({
-			storagePrefix: 'privateKey',
-			extraManifestFieldsSchema: keyMetadataSchema,
-			parseValue: (value) => value,
-			storage: createMemoryAsyncStorage().storage,
-			randomUUID: () => 'generated',
-			logger: noopLogger,
-		});
-		await keyStorage.upsertEntry(staleKeyEntry);
+void test('replaceAllPrivateKeyEntries handler invalidates after replacing entries', async () => {
+	const keyStorage = makeBetterSecureStore({
+		storagePrefix: 'privateKey',
+		extraManifestFieldsSchema: keyMetadataSchema,
+		parseValue: (value) => value,
+		storage: createMemoryAsyncStorage().storage,
+		randomUUID: () => 'generated',
+		logger: noopLogger,
+	});
+	await keyStorage.upsertEntry(staleKeyEntry);
 
-		let invalidateCalls = 0;
-		const replaceAllEntries = createReplaceAllPrivateKeyEntriesHandler({
-			replaceAllKeys: async (entries) => {
-				await replaceAllPrivateKeys({
-					entries,
-					storage: {
-						replaceAllEntries: async (replacement) => {
-							await keyStorage.clearAllEntries();
-							for (const entry of replacement) {
-								await keyStorage.upsertEntry(entry);
-							}
-						},
+	let invalidateCalls = 0;
+	const replaceAllEntries = createReplaceAllPrivateKeyEntriesHandler({
+		replaceAllKeys: async (entries) => {
+			await replaceAllPrivateKeys({
+				entries,
+				storage: {
+					replaceAllEntries: async (replacement) => {
+						await keyStorage.clearAllEntries();
+						for (const entry of replacement) {
+							await keyStorage.upsertEntry(entry);
+						}
 					},
-					validatePrivateKey: validatePrivateKeyWithSshKeygen,
-				});
-			},
-			invalidateKeysQuery: async () => {
-				invalidateCalls += 1;
-			},
-		});
+				},
+				validatePrivateKey: validatePrivateKeyWithSshKeygen,
+			});
+		},
+		invalidateKeysQuery: async () => {
+			invalidateCalls += 1;
+		},
+	});
 
-		await replaceAllEntries([keyEntry]);
+	await replaceAllEntries([keyEntry]);
 
-		assert.equal(invalidateCalls, 1);
-		assert.deepEqual(
-			(await keyStorage.listEntriesWithValues()).map(
-				({ id, metadata, value }) => ({ id, metadata, value }),
-			),
-			[keyEntry],
-		);
-	},
-);
+	assert.equal(invalidateCalls, 1);
+	assert.deepEqual(
+		(await keyStorage.listEntriesWithValues()).map(
+			({ id, metadata, value }) => ({ id, metadata, value }),
+		),
+		[keyEntry],
+	);
+});

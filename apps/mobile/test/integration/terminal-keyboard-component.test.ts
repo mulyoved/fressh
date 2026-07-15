@@ -54,17 +54,18 @@ void test('Work long-press popup items render dynamic visible-scope labels and b
 void test('Work long-press popup builder uses latest nav scope callback value', () => {
 	let currentNavScope: WorkmuxNavScope = 'active';
 	const getNavScope = () => currentNavScope;
-	const openAfterLongPressDelay = () => buildTerminalKeyboardLongPressPopup({
-		slot: workSlot,
-		getNavScope,
-		keyboardWidth: 525,
-		keyboardBounds: { left: 0, top: 0, width: 525, height: 180 },
-		anchorX: 200,
-		anchorY: 120,
-		anchorWidth: 80,
-		pointerLocalX: 240,
-		pointerLocalY: 130,
-	});
+	const openAfterLongPressDelay = () =>
+		buildTerminalKeyboardLongPressPopup({
+			slot: workSlot,
+			getNavScope,
+			keyboardWidth: 525,
+			keyboardBounds: { left: 0, top: 0, width: 525, height: 180 },
+			anchorX: 200,
+			anchorY: 120,
+			anchorWidth: 80,
+			pointerLocalX: 240,
+			pointerLocalY: 130,
+		});
 
 	currentNavScope = 'visible';
 	const popup = openAfterLongPressDelay();

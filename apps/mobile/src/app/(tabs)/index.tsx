@@ -198,19 +198,19 @@ function Host() {
 						>
 							fressh
 						</Text>
-					<Text
-						style={{ marginTop: 4, fontSize: 13, color: theme.colors.muted }}
-					>
-						A fast, friendly SSH client
-					</Text>
-				</View>
-				<TailscaleRecoveryPanel
-					state={tailscaleRecoveryUiState}
-					actions={tailscaleRecoveryActions}
-				/>
-				<View
-					style={{
-						backgroundColor: theme.colors.surface,
+						<Text
+							style={{ marginTop: 4, fontSize: 13, color: theme.colors.muted }}
+						>
+							A fast, friendly SSH client
+						</Text>
+					</View>
+					<TailscaleRecoveryPanel
+						state={tailscaleRecoveryUiState}
+						actions={tailscaleRecoveryActions}
+					/>
+					<View
+						style={{
+							backgroundColor: theme.colors.surface,
 							borderRadius: 20,
 							padding: 24,
 							marginHorizontal: 4,
@@ -296,9 +296,11 @@ function Host() {
 										if (isSubmitting) return;
 										sshConnMutation.reset();
 										setLastConnectionProgressEvent(null);
-										void connectionForm.handleSubmit().catch((error: unknown) => {
-											logger.warn('Host connect submit failed', error);
-										});
+										void connectionForm
+											.handleSubmit()
+											.catch((error: unknown) => {
+												logger.warn('Host connect submit failed', error);
+											});
 									}}
 								/>
 							</View>

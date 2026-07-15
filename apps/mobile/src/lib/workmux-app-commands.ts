@@ -174,12 +174,11 @@ function isMissingWorkmuxAppCommandFailure(message: string): boolean {
 	].some((pattern) => pattern.test(message));
 }
 
-function formatNoScopedWorkmuxNavTargetFailure(
-	message: string,
-): string | null {
-	const match = /^No window to navigate to for scope "([^"]+)" in session (.+)$/.exec(
-		message,
-	);
+function formatNoScopedWorkmuxNavTargetFailure(message: string): string | null {
+	const match =
+		/^No window to navigate to for scope "([^"]+)" in session (.+)$/.exec(
+			message,
+		);
 	if (!match) return null;
 	const [, scope, session] = match;
 	return `No Workmux window matched scope "${scope}" in session "${session}". Workmux navigation only moves between Workmux workspace windows; normal tmux windows are not included.`;
@@ -190,8 +189,7 @@ export function formatWorkmuxAppCommandFailureMessage(message: string): string {
 	if (!trimmed || isMissingWorkmuxAppCommandFailure(trimmed)) {
 		return WORKMUX_APP_COMMAND_UPDATE_MESSAGE;
 	}
-	const scopedNavTargetFailure =
-		formatNoScopedWorkmuxNavTargetFailure(trimmed);
+	const scopedNavTargetFailure = formatNoScopedWorkmuxNavTargetFailure(trimmed);
 	if (scopedNavTargetFailure) return scopedNavTargetFailure;
 	return trimmed;
 }
@@ -229,9 +227,7 @@ function isMdevCommandToken(index: number, tokens: string[]): boolean {
 		case 'focus':
 			return index === 5;
 		case 'nav':
-			return tokens[4] === 'select'
-				? index === 6
-				: index === 5 || index === 7;
+			return tokens[4] === 'select' ? index === 6 : index === 5 || index === 7;
 		default:
 			return false;
 	}

@@ -33,7 +33,7 @@ void test('buildSkillDiscoveryCacheKey separates connection, tmux target, and pr
 		buildSkillDiscoveryCacheKey(keyParts),
 		[
 			'skillDiscoveryCache',
-			'v1',
+			'v2',
 			'connection%2E1',
 			'session%3A1%2E2',
 			'%2Fhome%2Fmuly%2Ffressh%20app',
@@ -97,6 +97,29 @@ void test('write and read preserve cache records', () => {
 		updatedAt: '2026-05-26T12:00:00.000Z',
 	});
 	assert.deepEqual(cache.read(keyParts), written);
+});
+
+void test('version 1 cache records are rejected after global discovery migration', () => {
+	const key = [
+		'skillDiscoveryCache',
+		'v2',
+		'connection%2E1',
+		'session%3A1%2E2',
+		'%2Fhome%2Fmuly%2Ffressh%20app',
+	].join('.');
+	const { entries, storage } = createMemoryStorage({
+		[key]: JSON.stringify({
+			version: 1,
+			...keyParts,
+			projectName: 'fressh app',
+			skills: [],
+			updatedAt: '2026-05-26T12:00:00.000Z',
+		}),
+	});
+	const cache = createSkillDiscoveryCache({ storage });
+
+	assert.equal(cache.read(keyParts), null);
+	assert.equal(entries.has(key), false);
 });
 
 void test('malformed records return null and are deleted from storage', () => {

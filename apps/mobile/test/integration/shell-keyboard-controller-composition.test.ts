@@ -175,6 +175,8 @@ void describe('shell keyboard controller composition', () => {
 			openBrowserActions() {},
 			openFeatureRequest() {},
 			openConfigurator() {},
+			openNewWorktreeWorkspace() {},
+			openCloseWorktreeWorkspace() {},
 		});
 
 		late.replaceSkillSelector({
@@ -224,6 +226,8 @@ void describe('shell keyboard controller composition', () => {
 			openBrowserActions: () => events.push('open-browser'),
 			openFeatureRequest: () => events.push('open-feature'),
 			openConfigurator: () => events.push('open-config'),
+			openNewWorktreeWorkspace: () => events.push('open-worktree-new'),
+			openCloseWorktreeWorkspace: () => events.push('open-worktree-close'),
 		});
 
 		commands.toggleCommandMenu();
@@ -259,6 +263,8 @@ void describe('shell keyboard controller composition', () => {
 		commands.openFeatureRequest();
 		commands.openWisprTextEditor();
 		commands.openConfigurator();
+		commands.openNewWorktreeWorkspace();
+		commands.openCloseWorktreeWorkspace();
 		commands.closeCommandMenu();
 		assert.deepEqual(events, [
 			'open-skill',
@@ -266,6 +272,8 @@ void describe('shell keyboard controller composition', () => {
 			'open-feature',
 			'open-wispr',
 			'open-config',
+			'open-worktree-new',
+			'open-worktree-close',
 			'close-menu',
 		]);
 	});

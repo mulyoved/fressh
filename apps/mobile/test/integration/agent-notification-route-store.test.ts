@@ -825,10 +825,7 @@ void test('agent notification tap token creation prunes orphan route keys', () =
 
 void test('agent notification tap token creation prunes empty route keys', () => {
 	const storage = createMemoryStorage();
-	storage.set(
-		'route:["saved-host","main","@12","main:@12:2000:waiting"]',
-		'',
-	);
+	storage.set('route:["saved-host","main","@12","main:@12:2000:waiting"]', '');
 	const store = createAgentNotificationRouteTokenStore({
 		storage,
 		createToken: () => 'token-1',

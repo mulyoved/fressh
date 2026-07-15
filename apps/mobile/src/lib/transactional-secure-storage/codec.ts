@@ -20,7 +20,11 @@ export function assertPayloadFits(payload: string): void {
 export function encodeValueChunks(value: string): string[] {
 	const bytes = textEncoder.encode(value);
 	const chunks: string[] = [];
-	for (let offset = 0; offset < bytes.length; offset += MAX_RAW_VALUE_CHUNK_BYTES) {
+	for (
+		let offset = 0;
+		offset < bytes.length;
+		offset += MAX_RAW_VALUE_CHUNK_BYTES
+	) {
 		chunks.push(
 			fromByteArray(bytes.subarray(offset, offset + MAX_RAW_VALUE_CHUNK_BYTES)),
 		);
@@ -51,9 +55,7 @@ function sortObjectKeys(value: unknown): unknown {
 		return Object.fromEntries(
 			Object.entries(value)
 				.filter(([, fieldValue]) => fieldValue !== undefined)
-				.sort(([left], [right]) =>
-					left < right ? -1 : left > right ? 1 : 0,
-				)
+				.sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
 				.map(([key, fieldValue]) => [key, sortObjectKeys(fieldValue)]),
 		);
 	}

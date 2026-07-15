@@ -469,7 +469,10 @@ void test('manager reconnect wiring passes dropped identity and launch auto-conn
 		droppedChannelId: 7,
 		droppedStoredConnectionId: 'muly-100_64_0_10-22',
 	});
-	assert.equal((await receivedArgs.loadLatestSavedConnection())?.value.host, '100.64.0.11');
+	assert.equal(
+		(await receivedArgs.loadLatestSavedConnection())?.value.host,
+		'100.64.0.11',
+	);
 });
 
 void test('app-resume-no-shell without a dropped shell keeps normal auto-connect filtering', async () => {
@@ -573,7 +576,10 @@ void test('app-resume-no-shell without a dropped shell keeps normal auto-connect
 	}
 	const receivedArgs: AutoConnectAttemptSourceArgs = capturedArgs;
 	assert.equal(receivedArgs.reconnectContext, undefined);
-	assert.equal((await receivedArgs.loadLatestSavedConnection())?.value.host, '100.64.0.11');
+	assert.equal(
+		(await receivedArgs.loadLatestSavedConnection())?.value.host,
+		'100.64.0.11',
+	);
 });
 
 void test('failed network reconnect marks Tailscale attention and records host-page destination', async () => {
@@ -617,9 +623,11 @@ void test('successful reconnect clears stale host-page reconnect outcome', async
 	} = {};
 	const context = createAutoConnectHarness({
 		attemptAutoConnect: async () =>
-			await new Promise<{ status: 'connected'; message?: string }>((resolve) => {
-				pendingAttempt.resolve = resolve;
-			}),
+			await new Promise<{ status: 'connected'; message?: string }>(
+				(resolve) => {
+					pendingAttempt.resolve = resolve;
+				},
+			),
 		traceEvent: () => {},
 	});
 	useAutoConnectStore.getState().setLastReconnectOutcome({
@@ -730,13 +738,12 @@ void test('app-resume-no-shell reconnect installs dropped context so stale activ
 				};
 			},
 			loadSavedConnections: async () => savedEntries,
-				loadSavedConnectionByStoredId: async (storedConnectionId) => {
-					loadedIds.push(storedConnectionId);
-					return (
-						savedEntries.find((entry) => entry.id === storedConnectionId) ??
-						null
-					);
-				},
+			loadSavedConnectionByStoredId: async (storedConnectionId) => {
+				loadedIds.push(storedConnectionId);
+				return (
+					savedEntries.find((entry) => entry.id === storedConnectionId) ?? null
+				);
+			},
 			resolveKeySecurity: async () => ({
 				type: 'key',
 				privateKey: 'private-key',
@@ -841,10 +848,10 @@ void test('reconnect retry loop preserves dropped reconnect context for every pr
 		callback: () => void;
 		cleared: boolean;
 	}[] = [];
-		const capturedAttempts: {
-			reconnectContext: AutoConnectAttemptSourceArgs['reconnectContext'];
-			autoConnectHost: string | undefined;
-		}[] = [];
+	const capturedAttempts: {
+		reconnectContext: AutoConnectAttemptSourceArgs['reconnectContext'];
+		autoConnectHost: string | undefined;
+	}[] = [];
 	const controller = createAutoConnectReconnectController({
 		delaysMs: [10],
 		windowMs: 100,
@@ -915,9 +922,8 @@ void test('reconnect retry loop preserves dropped reconnect context for every pr
 					attemptAutoConnectSourceImpl: async (args) => {
 						capturedAttempts.push({
 							reconnectContext: args.reconnectContext,
-							autoConnectHost: (
-								await args.loadLatestSavedConnection()
-							)?.value.host,
+							autoConnectHost: (await args.loadLatestSavedConnection())?.value
+								.host,
 						});
 						return capturedAttempts.length === 1
 							? { status: 'retry', message: 'retry-once' }
@@ -936,26 +942,26 @@ void test('reconnect retry loop preserves dropped reconnect context for every pr
 		},
 	});
 
-		assert.equal(controller.start('shell-drop'), true);
-		await flushPromises();
-		assert.equal(
-			installResumeReconnectContext({
+	assert.equal(controller.start('shell-drop'), true);
+	await flushPromises();
+	assert.equal(
+		installResumeReconnectContext({
 			reconnectContextState,
 			reconnectRunning: controller.isRunning(),
 			pathname: '/shell/detail',
 			shells: [],
 			connections: {},
-			}),
-			false,
-		);
-		assert.equal(capturedAttempts.length, 1);
-		assert.equal(
-			timers.filter((timer) => timer.delayMs === 10 && timer.cleared === false)
-				.length,
-			1,
-		);
+		}),
+		false,
+	);
+	assert.equal(capturedAttempts.length, 1);
+	assert.equal(
+		timers.filter((timer) => timer.delayMs === 10 && timer.cleared === false)
+			.length,
+		1,
+	);
 
-		const retryTimer = timers.find(
+	const retryTimer = timers.find(
 		(timer) => timer.delayMs === 10 && timer.cleared === false,
 	);
 	assert.ok(retryTimer);
@@ -972,7 +978,7 @@ void test('reconnect retry loop preserves dropped reconnect context for every pr
 				droppedChannelId: 7,
 				droppedStoredConnectionId: 'muly-100_64_0_10-22',
 			},
-				autoConnectHost: '100.64.0.11',
+			autoConnectHost: '100.64.0.11',
 		},
 		{
 			reconnectContext: {
@@ -982,7 +988,7 @@ void test('reconnect retry loop preserves dropped reconnect context for every pr
 				droppedChannelId: 7,
 				droppedStoredConnectionId: 'muly-100_64_0_10-22',
 			},
-				autoConnectHost: '100.64.0.11',
+			autoConnectHost: '100.64.0.11',
 		},
 	]);
 	assert.equal(controller.isRunning(), false);

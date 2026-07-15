@@ -327,6 +327,28 @@ void describe('shell detail Workmux control channel wiring', () => {
 		assert.doesNotMatch(source, /handleCommandBridgeEntry/);
 	});
 
+	void test('composes one native worktree workspace controller and modal', () => {
+		const source = readFileSync(detailSourcePath, 'utf8');
+		assert.equal(source.match(/useWorktreeWorkspaceController\(/g)?.length, 1);
+		assert.match(
+			source,
+			/const worktreeWorkspace = useWorktreeWorkspaceController\(\{\s*connection: connection \?\? null,\s*tmuxEnabled,\s*sessionName: activeTmuxSessionName,\s*sourceKey: targetKey,\s*workmuxControlChannel,\s*arbiter: modalArbiter,\s*\}\);/,
+		);
+		assert.match(
+			source,
+			/openNewWorktreeWorkspace: worktreeWorkspace\.openNew/,
+		);
+		assert.match(
+			source,
+			/openCloseWorktreeWorkspace: worktreeWorkspace\.openClose/,
+		);
+		assert.equal(source.match(/<WorktreeWorkspaceModal\b/g)?.length, 1);
+		assert.match(
+			source,
+			/<WorktreeWorkspaceModal\s+bottomOffset=\{Platform\.OS === 'android' \? insets\.bottom \+ 24 : 24\}\s+\{\.\.\.worktreeWorkspace\.modalProps\}\s*\/>/,
+		);
+	});
+
 	void test('routes action slot presses through action run options helper', () => {
 		const source = readFileSync(detailSourcePath, 'utf8');
 		const inputCore = readFileSync(

@@ -143,7 +143,9 @@ function hasRequiredScopeOptions(slot: KeyboardSlot): boolean {
 
 function getMetadataValue(
 	option: KeyboardLongPressOption,
-	key: typeof WORKMUX_NAV_SCOPE_OVERRIDE_KEY | typeof WORKMUX_LONG_PRESS_SCOPE_BADGE_KEY,
+	key:
+		| typeof WORKMUX_NAV_SCOPE_OVERRIDE_KEY
+		| typeof WORKMUX_LONG_PRESS_SCOPE_BADGE_KEY,
 ): unknown {
 	return (option as Record<string, unknown>)[key];
 }

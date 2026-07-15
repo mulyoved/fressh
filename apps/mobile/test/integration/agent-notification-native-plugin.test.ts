@@ -59,7 +59,10 @@ async function foregroundPluginSource() {
 
 async function mobilePackageJson() {
 	return JSON.parse(
-		await readFile(new URL('../../package.json', import.meta.url).pathname, 'utf8'),
+		await readFile(
+			new URL('../../package.json', import.meta.url).pathname,
+			'utf8',
+		),
 	) as { scripts?: Record<string, string> };
 }
 
@@ -422,8 +425,14 @@ void test('foreground service template defines and creates agent alert channel',
 	assert.match(source, /NotificationManager\.IMPORTANCE_DEFAULT/);
 	assert.match(source, /ensureNotificationChannels\(context\)/);
 	assert.match(source, /notify\(notificationId, buildAgentAlertNotification/);
-	assert.match(source, /lockscreenVisibility = Notification\.VISIBILITY_PRIVATE/);
-	assert.match(source, /\.setVisibility\(NotificationCompat\.VISIBILITY_PRIVATE\)/);
+	assert.match(
+		source,
+		/lockscreenVisibility = Notification\.VISIBILITY_PRIVATE/,
+	);
+	assert.match(
+		source,
+		/\.setVisibility\(NotificationCompat\.VISIBILITY_PRIVATE\)/,
+	);
 	assert.match(
 		source,
 		/\.setPublicVersion\(buildAgentAlertPublicNotification\(context, vibrate\)\)/,

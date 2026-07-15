@@ -100,121 +100,111 @@ export const sshEvents = {
 	connectStarted: (input: {
 		source: ConnectionDiagnosticSource;
 		connection: ConnectionDiagnosticConnectionIdentity;
-	}): SshConnectStartedEvent =>
-		({
-			kind: 'ssh.connect.started',
-			source: input.source,
-			connection: copyConnectionIdentity(input.connection),
-		}),
+	}): SshConnectStartedEvent => ({
+		kind: 'ssh.connect.started',
+		source: input.source,
+		connection: copyConnectionIdentity(input.connection),
+	}),
 	connectProgress: (input: {
 		source: ConnectionDiagnosticSource;
 		connection: ConnectionDiagnosticConnectionIdentity;
 		phase?: string;
 		message?: string;
-	}): SshConnectProgressEvent =>
-		({
-			kind: 'ssh.connect.progress',
-			source: input.source,
-			...(input.message === undefined ? {} : { message: input.message }),
-			connection: copyConnectionIdentity(input.connection),
-			phase: input.phase,
-		}),
+	}): SshConnectProgressEvent => ({
+		kind: 'ssh.connect.progress',
+		source: input.source,
+		...(input.message === undefined ? {} : { message: input.message }),
+		connection: copyConnectionIdentity(input.connection),
+		phase: input.phase,
+	}),
 	connectConnected: (input: {
 		source: ConnectionDiagnosticSource;
 		connection: ConnectionDiagnosticConnectionIdentity;
 		storedConnectionId: string;
-	}): SshConnectConnectedEvent =>
-		({
-			kind: 'ssh.connect.connected',
-			source: input.source,
-			connection: copyConnectionIdentity(input.connection),
-			storedConnectionId: input.storedConnectionId,
-		}),
+	}): SshConnectConnectedEvent => ({
+		kind: 'ssh.connect.connected',
+		source: input.source,
+		connection: copyConnectionIdentity(input.connection),
+		storedConnectionId: input.storedConnectionId,
+	}),
 	connectFailed: (input: {
 		source: ConnectionDiagnosticSource;
 		connection: ConnectionDiagnosticConnectionIdentity;
 		error: unknown;
-	}): SshConnectFailedEvent =>
-		({
-			kind: 'ssh.connect.failed',
-			source: input.source,
-			connection: copyConnectionIdentity(input.connection),
-			error: serializeConnectionDiagnosticError(input.error),
-		}),
+	}): SshConnectFailedEvent => ({
+		kind: 'ssh.connect.failed',
+		source: input.source,
+		connection: copyConnectionIdentity(input.connection),
+		error: serializeConnectionDiagnosticError(input.error),
+	}),
 	shellStarted: (input: {
 		source: ConnectionDiagnosticSource;
 		connection: ConnectionDiagnosticConnectionIdentity;
-	}): SshShellStartedEvent =>
-		({
-			kind: 'ssh.shell.started',
-			source: input.source,
-			connection: copyConnectionIdentity(input.connection),
-		}),
+	}): SshShellStartedEvent => ({
+		kind: 'ssh.shell.started',
+		source: input.source,
+		connection: copyConnectionIdentity(input.connection),
+	}),
 	shellConnected: (input: {
 		source: ConnectionDiagnosticSource;
 		connection: ConnectionDiagnosticConnectionIdentity;
 		channelId: number;
 		storedConnectionId: string;
-	}): SshShellConnectedEvent =>
-		({
-			kind: 'ssh.shell.connected',
-			source: input.source,
-			connection: copyConnectionIdentity(input.connection),
-			channelId: input.channelId,
-			storedConnectionId: input.storedConnectionId,
-		}),
+	}): SshShellConnectedEvent => ({
+		kind: 'ssh.shell.connected',
+		source: input.source,
+		connection: copyConnectionIdentity(input.connection),
+		channelId: input.channelId,
+		storedConnectionId: input.storedConnectionId,
+	}),
 	shellFailed: (input: {
 		source: ConnectionDiagnosticSource;
 		connection: ConnectionDiagnosticConnectionIdentity;
 		error: unknown;
 		storedConnectionId: string;
-	}): SshShellFailedEvent =>
-		({
-			kind: 'ssh.shell.failed',
-			source: input.source,
-			connection: copyConnectionIdentity(input.connection),
-			error: serializeConnectionDiagnosticError(input.error),
-			storedConnectionId: input.storedConnectionId,
-		}),
+	}): SshShellFailedEvent => ({
+		kind: 'ssh.shell.failed',
+		source: input.source,
+		connection: copyConnectionIdentity(input.connection),
+		error: serializeConnectionDiagnosticError(input.error),
+		storedConnectionId: input.storedConnectionId,
+	}),
 	shellTmuxAttachFailed: (input: {
 		source: ConnectionDiagnosticSource;
 		connection: ConnectionDiagnosticConnectionIdentity;
 		error: unknown;
 		tmuxAttachFailureReason: string | null;
 		storedConnectionId: string;
-	}): SshShellTmuxAttachFailedEvent =>
-		({
-			kind: 'ssh.shell.tmux-attach-failed',
-			source: input.source,
-			connection: copyConnectionIdentity(input.connection),
-			error: serializeConnectionDiagnosticError(input.error),
-			tmuxAttachFailureReason: input.tmuxAttachFailureReason,
-			storedConnectionId: input.storedConnectionId,
-		}),
+	}): SshShellTmuxAttachFailedEvent => ({
+		kind: 'ssh.shell.tmux-attach-failed',
+		source: input.source,
+		connection: copyConnectionIdentity(input.connection),
+		error: serializeConnectionDiagnosticError(input.error),
+		tmuxAttachFailureReason: input.tmuxAttachFailureReason,
+		storedConnectionId: input.storedConnectionId,
+	}),
 	diagnosticDisconnected: (input: {
 		source: ConnectionDiagnosticSource;
 		connection: ConnectionDiagnosticConnectionIdentity;
 		message?: string;
-	}): DiagnosticDisconnectedEvent =>
-		({
-			kind: 'ssh.diagnostic.disconnected',
-			source: input.source,
-			message: input.message,
-			connection: copyConnectionIdentity(input.connection),
-		}),
+	}): DiagnosticDisconnectedEvent => ({
+		kind: 'ssh.diagnostic.disconnected',
+		source: input.source,
+		message: input.message,
+		connection: copyConnectionIdentity(input.connection),
+	}),
 	diagnosticDisconnectFailed: (input: {
 		source: ConnectionDiagnosticSource;
 		connection: ConnectionDiagnosticConnectionIdentity;
 		error: unknown;
 		message?: string;
-	}): DiagnosticDisconnectFailedEvent =>
-		({
-			kind: 'ssh.diagnostic.disconnect-failed',
-			source: input.source,
-			message: input.message,
-			connection: copyConnectionIdentity(input.connection),
-			error: serializeConnectionDiagnosticError(input.error),
-		}),
+	}): DiagnosticDisconnectFailedEvent => ({
+		kind: 'ssh.diagnostic.disconnect-failed',
+		source: input.source,
+		message: input.message,
+		connection: copyConnectionIdentity(input.connection),
+		error: serializeConnectionDiagnosticError(input.error),
+	}),
 } as const;
 
 export function formatSshEventFields(event: SshDiagnosticEvent): string[] {

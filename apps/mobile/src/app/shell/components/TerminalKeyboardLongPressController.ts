@@ -127,7 +127,10 @@ export function createTerminalKeyboardLongPressMeasureCallback({
 	setLongPressPopup: (popup: TerminalKeyboardLongPressPopupState) => void;
 }) {
 	return (x: number, y: number, width: number) => {
-		if (!isMountedRef.current || longPressGenerationRef.current !== generation) {
+		if (
+			!isMountedRef.current ||
+			longPressGenerationRef.current !== generation
+		) {
 			return;
 		}
 		const gesture = longPressGestureRef.current;

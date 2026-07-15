@@ -267,7 +267,10 @@ void test('postAgentNotificationWithRouteToken ignores stale posts before creati
 		windowId: event.windowId,
 	});
 	const notificationId = createStableNotificationId(key);
-	assert.equal(dedupe.markPendingEvent(key, notificationId, currentEvent), true);
+	assert.equal(
+		dedupe.markPendingEvent(key, notificationId, currentEvent),
+		true,
+	);
 	let createRouteTokenCalls = 0;
 	let nativePostCalls = 0;
 

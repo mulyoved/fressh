@@ -505,12 +505,7 @@ void test('dedupe ignores stale post completions without clearing newer status',
 	const waitingAttemptId = dedupe.beginPost(key, waitingEvent.id);
 	assert.equal(waitingAttemptId, 1);
 	assert.equal(
-		dedupe.markPendingEvent(
-			key,
-			notificationId,
-			doneEvent,
-			'saved-host:main',
-		),
+		dedupe.markPendingEvent(key, notificationId, doneEvent, 'saved-host:main'),
 		true,
 	);
 	assert.deepEqual(dedupe.completePost(key, waitingEvent.id, 1, false), {
@@ -519,12 +514,12 @@ void test('dedupe ignores stale post completions without clearing newer status',
 	assert.deepEqual(dedupe.completePost(key, waitingEvent.id, 1, true), {
 		type: 'superseded',
 		posted: true,
-			current: {
-				key,
-				notificationId,
-				event: doneEvent,
-				resumeKey: 'saved-host:main',
-			},
+		current: {
+			key,
+			notificationId,
+			event: doneEvent,
+			resumeKey: 'saved-host:main',
+		},
 	});
 	const doneAttemptId = dedupe.beginPost(key, doneEvent.id);
 	assert.equal(doneAttemptId, 1);
@@ -572,12 +567,7 @@ void test('dedupe ignores duplicate current failure while another current post i
 	const waitingAttemptId = dedupe.beginPost(key, waitingEvent.id);
 	assert.equal(waitingAttemptId, 1);
 	assert.equal(
-		dedupe.markPendingEvent(
-			key,
-			notificationId,
-			doneEvent,
-			'saved-host:main',
-		),
+		dedupe.markPendingEvent(key, notificationId, doneEvent, 'saved-host:main'),
 		true,
 	);
 	const doneAttemptId = dedupe.beginPost(key, doneEvent.id);
@@ -643,12 +633,7 @@ void test('dedupe retries unposted current event after stale notification update
 		},
 	);
 	assert.equal(
-		dedupe.markPendingEvent(
-			key,
-			notificationId,
-			doneEvent,
-			'saved-host:main',
-		),
+		dedupe.markPendingEvent(key, notificationId, doneEvent, 'saved-host:main'),
 		true,
 	);
 	const doneAttemptId = dedupe.beginPost(key, doneEvent.id);
@@ -666,12 +651,7 @@ void test('dedupe retries unposted current event after stale notification update
 		resumeKey: 'saved-host:main',
 	});
 	assert.equal(
-		dedupe.markPendingEvent(
-			key,
-			notificationId,
-			doneEvent,
-			'saved-host:main',
-		),
+		dedupe.markPendingEvent(key, notificationId, doneEvent, 'saved-host:main'),
 		true,
 	);
 });
@@ -711,12 +691,7 @@ void test('dedupe retries current event failure even when stale post is in fligh
 	const waitingAttemptId = dedupe.beginPost(key, waitingEvent.id);
 	assert.equal(waitingAttemptId, 1);
 	assert.equal(
-		dedupe.markPendingEvent(
-			key,
-			notificationId,
-			doneEvent,
-			'saved-host:main',
-		),
+		dedupe.markPendingEvent(key, notificationId, doneEvent, 'saved-host:main'),
 		true,
 	);
 	const doneAttemptId = dedupe.beginPost(key, doneEvent.id);
@@ -735,12 +710,7 @@ void test('dedupe retries current event failure even when stale post is in fligh
 		},
 	);
 	assert.equal(
-		dedupe.markPendingEvent(
-			key,
-			notificationId,
-			doneEvent,
-			'saved-host:main',
-		),
+		dedupe.markPendingEvent(key, notificationId, doneEvent, 'saved-host:main'),
 		true,
 	);
 });
@@ -780,12 +750,7 @@ void test('dedupe ignores duplicate current failure while a stale post is in fli
 	const waitingAttemptId = dedupe.beginPost(key, waitingEvent.id);
 	assert.equal(waitingAttemptId, 1);
 	assert.equal(
-		dedupe.markPendingEvent(
-			key,
-			notificationId,
-			doneEvent,
-			'saved-host:main',
-		),
+		dedupe.markPendingEvent(key, notificationId, doneEvent, 'saved-host:main'),
 		true,
 	);
 	const firstDoneAttemptId = dedupe.beginPost(key, doneEvent.id);
@@ -882,12 +847,7 @@ void test('dedupe restores current event when stale post completes after current
 	const waitingAttemptId = dedupe.beginPost(key, waitingEvent.id);
 	assert.equal(waitingAttemptId, 1);
 	assert.equal(
-		dedupe.markPendingEvent(
-			key,
-			notificationId,
-			doneEvent,
-			'saved-host:main',
-		),
+		dedupe.markPendingEvent(key, notificationId, doneEvent, 'saved-host:main'),
 		true,
 	);
 	const doneAttemptId = dedupe.beginPost(key, doneEvent.id);

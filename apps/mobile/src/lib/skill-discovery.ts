@@ -131,7 +131,8 @@ export function buildSkillDiscoveryCommand(projectRoot: string): string {
 		'import json,pathlib,sys',
 		'base=pathlib.Path(sys.argv[1])',
 		'base=base.resolve()',
-		"roots=[base/'.agents'/'skills',base/'.codex'/'skills']",
+		'home=pathlib.Path.home()',
+		"roots=[base/'.agents'/'skills',base/'.codex'/'skills',home/'.codex'/'skills']",
 		'records=[]',
 		'for root in roots:',
 		"    for skill_file in sorted(root.glob('*/SKILL.md')):",
@@ -172,7 +173,10 @@ function extractSkillDiscoveryJsonPayload(output: string): string | null {
 }
 
 function stripAnsi(value: string): string {
-	return value.replace(new RegExp(String.raw`\u001B\[[0-?]*[ -/]*[@-~]`, 'g'), '');
+	return value.replace(
+		new RegExp(String.raw`\u001B\[[0-?]*[ -/]*[@-~]`, 'g'),
+		'',
+	);
 }
 
 function isSkillDiscoveryRecord(value: unknown): value is SkillDiscoveryRecord {

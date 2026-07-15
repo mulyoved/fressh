@@ -230,11 +230,8 @@ export function createTerminalLifecycleController({
 		attemptRuntimeRevision: number,
 		attemptXterm: LifecycleXterm,
 	): boolean =>
-		isRuntimeCurrent(
-			attemptGeneration,
-			attemptShell,
-			attemptRuntimeRevision,
-		) && isCurrentXterm(attemptXterm);
+		isRuntimeCurrent(attemptGeneration, attemptShell, attemptRuntimeRevision) &&
+		isCurrentXterm(attemptXterm);
 
 	const attach = (): Promise<void> => {
 		if (disposed || !publisher.getSnapshot().ready) return Promise.resolve();

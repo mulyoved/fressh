@@ -1,6 +1,6 @@
 {
-	"version": "2026-06-14.2",
-	"updatedAt": "2026-06-14T12:00:00.000Z",
+	"version": "2026-07-14.2",
+	"updatedAt": "2026-07-14T15:00:00.000Z",
 	"defaultKeyboardId": "phone_base",
 	"activeKeyboardIds": [
 		"phone_base",
@@ -1124,6 +1124,16 @@
 					]
 				},
 				{
+					"type": "action",
+					"label": "New Worktree Workspace",
+					"actionId": "OPEN_NEW_WORKTREE_WORKSPACE"
+				},
+				{
+					"type": "action",
+					"label": "Close Worktree Workspace",
+					"actionId": "OPEN_CLOSE_WORKTREE_WORKSPACE"
+				},
+				{
 					"type": "preset",
 					"label": "codex auth refresh",
 					"steps": [
@@ -1140,7 +1150,7 @@
 					"type": "bridge",
 					"label": "restart codex",
 					"operation": "codex.restart",
-					"timeoutMs": 10000
+					"timeoutMs": 60000
 				}
 			]
 		},

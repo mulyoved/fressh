@@ -7,7 +7,10 @@ import {
 	SecureStorageUnavailableError,
 	type Sha256,
 } from '../../src/lib/transactional-secure-storage/contracts';
-import { buildV2Keys, hashCanonicalRecord } from '../../src/lib/transactional-secure-storage/records';
+import {
+	buildV2Keys,
+	hashCanonicalRecord,
+} from '../../src/lib/transactional-secure-storage/records';
 import { selectSnapshot } from '../../src/lib/transactional-secure-storage/snapshot-reader';
 import { FaultInjectingStringStorage } from './helpers/fault-injecting-string-storage';
 import { writeTransactionalStorageFixture } from './helpers/transactional-storage-fixtures';
@@ -36,11 +39,23 @@ void test('snapshot recovery rejects incomplete generic cleanup descriptors', as
 		{ cleanup: { headKey: 'cleanup', sha256: 'cleanup-hash' } },
 	]) {
 		const storage = new FaultInjectingStringStorage();
-		await writeTransactionalStorageFixture({ ...readerOptions(storage), serializeValue, slot: 'a', commitGeneration: 1, entries: [] });
+		await writeTransactionalStorageFixture({
+			...readerOptions(storage),
+			serializeValue,
+			slot: 'a',
+			commitGeneration: 1,
+			entries: [],
+		});
 		const rootKey = buildV2Keys(namespace).root.a;
-		const root = JSON.parse((await storage.getItem(rootKey))!) as Record<string, unknown>;
+		const root = JSON.parse((await storage.getItem(rootKey))!) as Record<
+			string,
+			unknown
+		>;
 		await storage.setItem(rootKey, JSON.stringify({ ...root, ...fields }));
-		assert.equal((await selectSnapshot(readerOptions(storage))).status, 'no-valid-state');
+		assert.equal(
+			(await selectSnapshot(readerOptions(storage))).status,
+			'no-valid-state',
+		);
 	}
 });
 
@@ -93,10 +108,9 @@ async function refreshFixtureHashes(
 		};
 		const revisionKey = fixture.revisionKeys[pageIndex];
 		if (revisionKey !== undefined && page.entries[0] !== undefined) {
-			const revision = JSON.parse((await storage.getItem(revisionKey))!) as Record<
-				string,
-				unknown
-			>;
+			const revision = JSON.parse(
+				(await storage.getItem(revisionKey))!,
+			) as Record<string, unknown>;
 			page.entries[0].revisionSha256 = await sha256(
 				new TextEncoder().encode(canonicalJson(revision)),
 			);
@@ -245,28 +259,40 @@ void test('falls back when a changed value-record ID has no derived chunk', asyn
 for (const [name, corrupt] of [
 	[
 		'duplicate entry IDs',
-		async (storage: FaultInjectingStringStorage, higher: Awaited<ReturnType<typeof writeTransactionalStorageFixture>>) =>
+		async (
+			storage: FaultInjectingStringStorage,
+			higher: Awaited<ReturnType<typeof writeTransactionalStorageFixture>>,
+		) =>
 			mutateRecord(storage, higher.manifestKeys[1]!, (page) => {
 				(page.entries as { entryId: string }[])[0]!.entryId = 'new';
 			}),
 	],
 	[
 		'manifest loops',
-		async (storage: FaultInjectingStringStorage, higher: Awaited<ReturnType<typeof writeTransactionalStorageFixture>>) =>
+		async (
+			storage: FaultInjectingStringStorage,
+			higher: Awaited<ReturnType<typeof writeTransactionalStorageFixture>>,
+		) =>
 			mutateRecord(storage, higher.manifestKeys[1]!, (page) => {
 				page.nextPageKey = higher.manifestKeys[0];
 			}),
 	],
 	[
 		'wrong hashes',
-		async (storage: FaultInjectingStringStorage, higher: Awaited<ReturnType<typeof writeTransactionalStorageFixture>>) =>
+		async (
+			storage: FaultInjectingStringStorage,
+			higher: Awaited<ReturnType<typeof writeTransactionalStorageFixture>>,
+		) =>
 			mutateRecord(storage, higher.revisionKeys[0]!, (revision) => {
 				revision.valueSha256 = 'wrong';
 			}),
 	],
 	[
 		'byte mismatches',
-		async (storage: FaultInjectingStringStorage, higher: Awaited<ReturnType<typeof writeTransactionalStorageFixture>>) =>
+		async (
+			storage: FaultInjectingStringStorage,
+			higher: Awaited<ReturnType<typeof writeTransactionalStorageFixture>>,
+		) =>
 			mutateRecord(storage, higher.revisionKeys[0]!, (revision) => {
 				revision.valueByteLength = (revision.valueByteLength as number) + 1;
 			}),

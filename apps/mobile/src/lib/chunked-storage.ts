@@ -1,9 +1,6 @@
 import * as z from 'zod';
 
-type LoggerLike = Pick<
-	Console,
-	'debug' | 'info' | 'warn' | 'error'
->;
+type LoggerLike = Pick<Console, 'debug' | 'info' | 'warn' | 'error'>;
 
 export type AsyncStringStorage = {
 	getItem: (key: string) => Promise<string | null>;
@@ -122,8 +119,9 @@ export function makeBetterSecureStore<
 
 		for (const manifestChunkId of rootManifest.manifestChunksIds) {
 			const manifestChunkKeyString = keys.manifestChunkKey(manifestChunkId);
-			const rawManifestChunkString =
-				await storage.getItem(manifestChunkKeyString);
+			const rawManifestChunkString = await storage.getItem(
+				manifestChunkKeyString,
+			);
 			if (!rawManifestChunkString) {
 				logger.warn('Pruning missing manifest chunk reference', {
 					rootManifestKey: keys.rootManifestKey,
@@ -136,7 +134,9 @@ export function makeBetterSecureStore<
 				`Manifest chunk for ${manifestChunkKeyString} is ${rawManifestChunkString.length} bytes`,
 			);
 			try {
-				const unsafedManifestChunk: unknown = JSON.parse(rawManifestChunkString);
+				const unsafedManifestChunk: unknown = JSON.parse(
+					rawManifestChunkString,
+				);
 				manifestChunks.push({
 					manifestChunk: manifestChunkSchema.parse(unsafedManifestChunk),
 					manifestChunkId,
@@ -207,7 +207,9 @@ export function makeBetterSecureStore<
 		);
 	}
 
-	async function listEntriesWithValues(): Promise<(Entry & { value: Value })[]> {
+	async function listEntriesWithValues(): Promise<
+		(Entry & { value: Value })[]
+	> {
 		const manifestEntries = await listEntries();
 		return await Promise.all(
 			manifestEntries.map(async (entry) => {
@@ -269,7 +271,9 @@ export function makeBetterSecureStore<
 			);
 		await Promise.all([
 			...emptyManifestChunks.map(async (manifestChunk) => {
-				await storage.deleteItem(keys.manifestChunkKey(manifestChunk.manifestChunkId));
+				await storage.deleteItem(
+					keys.manifestChunkKey(manifestChunk.manifestChunkId),
+				);
 			}),
 			persistRootManifest(manifest.rootManifest),
 		]);
@@ -285,9 +289,11 @@ export function makeBetterSecureStore<
 		}));
 		await Promise.allSettled([
 			storage.deleteItem(keys.rootManifestKey),
-			...manifest.rootManifest.manifestChunksIds.map(async (manifestChunkId) => {
-				await storage.deleteItem(keys.manifestChunkKey(manifestChunkId));
-			}),
+			...manifest.rootManifest.manifestChunksIds.map(
+				async (manifestChunkId) => {
+					await storage.deleteItem(keys.manifestChunkKey(manifestChunkId));
+				},
+			),
 			...manifest.manifestChunks.flatMap((manifestChunk) =>
 				manifestChunk.manifestChunk.entries.flatMap((entry) =>
 					Array.from({ length: entry.chunkCount }, async (_, chunkIdx) => {
@@ -354,14 +360,16 @@ export function makeBetterSecureStore<
 			manifestChunkWithRoom.manifestChunkId,
 		);
 		await Promise.all([
-			storage.setItem(
-				manifestChunkKeyString,
-				JSON.stringify(manifestChunkWithRoom.manifestChunk),
-			).then(() => {
-				logger.info(
-					`Set manifest chunk for ${manifestChunkKeyString} to ${JSON.stringify(manifestChunkWithRoom.manifestChunk).length} bytes`,
-				);
-			}),
+			storage
+				.setItem(
+					manifestChunkKeyString,
+					JSON.stringify(manifestChunkWithRoom.manifestChunk),
+				)
+				.then(() => {
+					logger.info(
+						`Set manifest chunk for ${manifestChunkKeyString} to ${JSON.stringify(manifestChunkWithRoom.manifestChunk).length} bytes`,
+					);
+				}),
 			...valueChunks.map(async (valueChunk, chunkIdx) => {
 				const entryKeyString = keys.entryKey(newManifestEntry.id, chunkIdx);
 				logger.debug('setting entry chunk', entryKeyString);

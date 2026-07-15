@@ -139,13 +139,13 @@ void test('reconnect saved-entry loader exception returns a classified result', 
 		loadLatestSavedConnection: async () => {
 			throw new Error('latest reconnect fallback should not run');
 		},
-			resolveKeySecurity: async () => {
-				throw new Error('security should not resolve');
-			},
-			trace: { event: (event) => events.push(event) },
-			navigateToShell: () => {
-				throw new Error('navigation should not run');
-			},
+		resolveKeySecurity: async () => {
+			throw new Error('security should not resolve');
+		},
+		trace: { event: (event) => events.push(event) },
+		navigateToShell: () => {
+			throw new Error('navigation should not run');
+		},
 		recovery: readyRecovery,
 		markTailscaleAttention: () => {},
 		clearTailscaleAttention: () => {},
@@ -239,13 +239,13 @@ void test('reconnect key resolver exception returns a classified result', async 
 		loadLatestSavedConnection: async () => {
 			throw new Error('latest reconnect fallback should not run');
 		},
-			resolveKeySecurity: async () => {
-				throw new Error('key resolver failed');
-			},
-			trace: { event: (event) => events.push(event) },
-			navigateToShell: () => {
-				throw new Error('navigation should not run');
-			},
+		resolveKeySecurity: async () => {
+			throw new Error('key resolver failed');
+		},
+		trace: { event: (event) => events.push(event) },
+		navigateToShell: () => {
+			throw new Error('navigation should not run');
+		},
 		recovery: readyRecovery,
 		markTailscaleAttention: () => {},
 		clearTailscaleAttention: () => {},
@@ -669,8 +669,7 @@ void test('tmux reconnect prefers the dropped stored connection when the dropped
 	assert.deepEqual(
 		events.find(
 			(event) =>
-				(event as { kind?: string }).kind ===
-				'reconnect.transport.invalidated',
+				(event as { kind?: string }).kind === 'reconnect.transport.invalidated',
 		),
 		{
 			kind: 'reconnect.transport.invalidated',
@@ -748,16 +747,15 @@ void test('reconnect uses the dropped saved entry when launch selection is filte
 	]);
 	assert.deepEqual(
 		events.find(
-			(event) =>
-				(event as { kind?: string }).kind === 'saved-entry.selected',
+			(event) => (event as { kind?: string }).kind === 'saved-entry.selected',
 		),
 		{
-					kind: 'saved-entry.selected',
-					source: 'saved-entry',
-					connection: {
-					savedConnectionId: reconnectEntry.id,
-					username: 'muly',
-					host: '100.64.0.10',
+			kind: 'saved-entry.selected',
+			source: 'saved-entry',
+			connection: {
+				savedConnectionId: reconnectEntry.id,
+				username: 'muly',
+				host: '100.64.0.10',
 				port: 22,
 				keyId: 'key-1',
 				useTmux: true,
@@ -838,16 +836,16 @@ void test('android tmux reconnect traces Tailscale readiness before saved-entry 
 		pathname: '/shell/detail',
 		latestShell: null,
 		connections: {},
-			reconnectContext: {
-				trigger: 'reconnect',
-				droppedConnectionId: 'active-conn-1',
-				droppedStoredConnectionId: 'saved-1',
-				pathname: '/shell/detail',
-			},
-			loadSavedConnectionByStoredId: async () =>
-				createSavedEntry({
-					...baseDetails,
-					autoConnect: false,
+		reconnectContext: {
+			trigger: 'reconnect',
+			droppedConnectionId: 'active-conn-1',
+			droppedStoredConnectionId: 'saved-1',
+			pathname: '/shell/detail',
+		},
+		loadSavedConnectionByStoredId: async () =>
+			createSavedEntry({
+				...baseDetails,
+				autoConnect: false,
 				useTmux: true,
 				tmuxSessionName: 'main',
 			}),
@@ -1033,7 +1031,9 @@ void test('reconnect maps saved-entry lifecycle outcomes into reconnect result s
 	};
 	type ReconnectOutcomeCase = {
 		name: string;
-		result: Parameters<typeof mapReconnectSavedEntryAttemptOutcome>[0]['result'];
+		result: Parameters<
+			typeof mapReconnectSavedEntryAttemptOutcome
+		>[0]['result'];
 		expected:
 			| { status: 'failedTmuxAttach' }
 			| { status: 'needsAttention'; message: string }
@@ -1306,12 +1306,12 @@ void test('reconnect maps timeout and caller abort into retry', async () => {
 		const runContext =
 			testCase.name === 'timeout'
 				? createConnectionRunContext({
-					timeouts: {
-						operationTimeoutMs: 5,
-						recoveryTimeoutMs: 60_000,
-						cleanupTimeoutMs: 5_000,
-					},
-				})
+						timeouts: {
+							operationTimeoutMs: 5,
+							recoveryTimeoutMs: 60_000,
+							cleanupTimeoutMs: 5_000,
+						},
+					})
 				: undefined;
 
 		try {

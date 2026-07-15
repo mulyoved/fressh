@@ -72,7 +72,9 @@ export function TailscaleRecoveryPanel(props: {
 						retryAction.disabled && styles.disabledButton,
 					]}
 				>
-					<Text style={[styles.buttonText, { color: theme.colors.textPrimary }]}>
+					<Text
+						style={[styles.buttonText, { color: theme.colors.textPrimary }]}
+					>
 						{retryAction.label}
 					</Text>
 				</Pressable>
@@ -90,7 +92,9 @@ export function TailscaleRecoveryPanel(props: {
 						resetAction.disabled && styles.disabledButton,
 					]}
 				>
-					<Text style={[styles.buttonText, { color: theme.colors.textPrimary }]}>
+					<Text
+						style={[styles.buttonText, { color: theme.colors.textPrimary }]}
+					>
 						{resetAction.label}
 					</Text>
 				</Pressable>

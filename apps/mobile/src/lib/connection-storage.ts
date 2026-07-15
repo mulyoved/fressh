@@ -138,7 +138,9 @@ export function createConnectionStorage(params: {
 		}
 	}
 
-	function writeEntriesById(entriesById: Record<string, StoredConnectionEntry>) {
+	function writeEntriesById(
+		entriesById: Record<string, StoredConnectionEntry>,
+	) {
 		if (Object.keys(entriesById).length === 0) {
 			params.storage.delete(connectionsStateKey);
 			return;
@@ -157,9 +159,12 @@ export function createConnectionStorage(params: {
 		} catch (error) {
 			// A manifest read failure is not safe to treat as an empty legacy store.
 			// Keep SecureStore untouched and retry migration on a later launch.
-			params.logger.warn('Deferring legacy connection migration after read failure', {
-				error: String(error),
-			});
+			params.logger.warn(
+				'Deferring legacy connection migration after read failure',
+				{
+					error: String(error),
+				},
+			);
 			return;
 		}
 

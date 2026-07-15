@@ -28,7 +28,11 @@ function createHarness(
 		resizePty: async (cols, rows) => {
 			calls.push(`resizePty:${cols}x${rows}`);
 		},
-		executeSideChannelCommand: async (requestConnection, command, timeoutMs) => {
+		executeSideChannelCommand: async (
+			requestConnection,
+			command,
+			timeoutMs,
+		) => {
 			assert.equal(requestConnection, connection);
 			calls.push(`tmux:${command}:${String(timeoutMs)}`);
 			return {

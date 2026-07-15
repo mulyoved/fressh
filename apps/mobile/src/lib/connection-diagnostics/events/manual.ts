@@ -73,75 +73,68 @@ export const manualDiagnosticEvents = {
 	savedEntryMissing: (input: {
 		source: ConnectionDiagnosticSource;
 		message?: string;
-	}): ManualDiagnosticSavedEntryMissingEvent =>
-		({
-			kind: 'manual-diagnostic.saved-entry.missing',
-			source: input.source,
-			message: input.message,
-		}),
+	}): ManualDiagnosticSavedEntryMissingEvent => ({
+		kind: 'manual-diagnostic.saved-entry.missing',
+		source: input.source,
+		message: input.message,
+	}),
 	tailscaleAttention: (input: {
 		source: ConnectionDiagnosticSource;
 		message: string;
-	}): ManualDiagnosticTailscaleAttentionEvent =>
-		({
-			kind: 'manual-diagnostic.tailscale.attention',
-			source: input.source,
-			message: input.message,
-		}),
+	}): ManualDiagnosticTailscaleAttentionEvent => ({
+		kind: 'manual-diagnostic.tailscale.attention',
+		source: input.source,
+		message: input.message,
+	}),
 	tailscaleAttentionCleared: (input: {
 		source: ConnectionDiagnosticSource;
 		message?: string;
-	}): ManualDiagnosticTailscaleAttentionClearedEvent =>
-		({
-			kind: 'manual-diagnostic.tailscale.attention-cleared',
-			source: input.source,
-			message: input.message,
-		}),
+	}): ManualDiagnosticTailscaleAttentionClearedEvent => ({
+		kind: 'manual-diagnostic.tailscale.attention-cleared',
+		source: input.source,
+		message: input.message,
+	}),
 	tmuxAttachFailed: (input: {
 		source: ConnectionDiagnosticSource;
 		connection: ConnectionDiagnosticConnectionIdentity;
 		tmuxAttachFailureReason: string | null;
 		message?: string;
-	}): ManualDiagnosticTmuxAttachFailedEvent =>
-		({
-			kind: 'manual-diagnostic.tmux-attach-failed',
-			source: input.source,
-			message: input.message,
-			connection: copyConnectionIdentity(input.connection),
-			tmuxAttachFailureReason: input.tmuxAttachFailureReason,
-		}),
+	}): ManualDiagnosticTmuxAttachFailedEvent => ({
+		kind: 'manual-diagnostic.tmux-attach-failed',
+		source: input.source,
+		message: input.message,
+		connection: copyConnectionIdentity(input.connection),
+		tmuxAttachFailureReason: input.tmuxAttachFailureReason,
+	}),
 	warning: (input: {
 		source: ConnectionDiagnosticSource;
 		message: string;
 		error: unknown;
-	}): ManualDiagnosticWarningEvent =>
-		({
-			kind: 'manual-diagnostic.warning',
-			source: input.source,
-			message: input.message,
-			error: serializeConnectionDiagnosticError(input.error),
-		}),
+	}): ManualDiagnosticWarningEvent => ({
+		kind: 'manual-diagnostic.warning',
+		source: input.source,
+		message: input.message,
+		error: serializeConnectionDiagnosticError(input.error),
+	}),
 	timeout: (input: {
 		timeoutMs: number;
 		message: string;
-	}): ManualDiagnosticTimeoutEvent =>
-		({
-			kind: 'manual-diagnostic.timeout',
-			source: 'manual-diagnostic',
-			timeoutMs: input.timeoutMs,
-			message: input.message,
-		}),
+	}): ManualDiagnosticTimeoutEvent => ({
+		kind: 'manual-diagnostic.timeout',
+		source: 'manual-diagnostic',
+		timeoutMs: input.timeoutMs,
+		message: input.message,
+	}),
 	failed: (input: {
 		source: ConnectionDiagnosticSource;
 		error: unknown;
 		message?: string;
-	}): ManualDiagnosticFailedEvent =>
-		({
-			kind: 'manual-diagnostic.failed',
-			source: input.source,
-			message: input.message,
-			error: serializeConnectionDiagnosticError(input.error),
-		}),
+	}): ManualDiagnosticFailedEvent => ({
+		kind: 'manual-diagnostic.failed',
+		source: input.source,
+		message: input.message,
+		error: serializeConnectionDiagnosticError(input.error),
+	}),
 } as const;
 
 export function formatManualDiagnosticEventFields(

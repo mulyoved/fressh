@@ -239,7 +239,8 @@ export async function attemptAutoConnectSource({
 	);
 	const activeConnection = pickLatestActiveConnection(connections);
 	if (activeConnection) {
-		const reconnectingExistingSession = reconnectContext?.trigger === 'reconnect';
+		const reconnectingExistingSession =
+			reconnectContext?.trigger === 'reconnect';
 		if (reconnectingExistingSession) {
 			traceEvent(
 				reconnectEvents.transportInvalidated({
@@ -458,7 +459,10 @@ export async function attemptAutoConnectSource({
 	if (isAborted()) return false;
 	if (!resolvedSecurity) return false;
 	const logTmuxAttachFailure = (
-		result: Extract<SavedEntryConnectionAttemptOutcome, { status: 'tmuxAttachFailed' }>,
+		result: Extract<
+			SavedEntryConnectionAttemptOutcome,
+			{ status: 'tmuxAttachFailed' }
+		>,
 	) => {
 		logger.info('Auto-connect tmux attach failed, will retry', {
 			connectionId: result.connectionId,
@@ -531,12 +535,12 @@ export async function attemptAutoConnectSource({
 					storedConnectionId: result.storedConnectionId,
 				}),
 			);
-				logTmuxAttachFailure({
-					status: 'tmuxAttachFailed',
-					connectionId: result.connectionId,
-					tmuxAttachFailureReason: result.tmuxAttachFailureReason,
-					tmuxSessionName: result.tmuxSessionName,
-					storedConnectionId: result.storedConnectionId,
+			logTmuxAttachFailure({
+				status: 'tmuxAttachFailed',
+				connectionId: result.connectionId,
+				tmuxAttachFailureReason: result.tmuxAttachFailureReason,
+				tmuxSessionName: result.tmuxSessionName,
+				storedConnectionId: result.storedConnectionId,
 			});
 			traceEvent(
 				autoConnectEvents.savedEntryConnectFailed({

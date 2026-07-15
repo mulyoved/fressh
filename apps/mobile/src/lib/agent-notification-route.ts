@@ -92,7 +92,9 @@ function parseTokenFields(
 	};
 }
 
-function parseRecord(raw: string | undefined): AgentNotificationRouteRecord | null {
+function parseRecord(
+	raw: string | undefined,
+): AgentNotificationRouteRecord | null {
 	const parsed = parseJsonRecord(raw);
 	const token = parseTokenFields(parsed);
 	if (
@@ -435,4 +437,3 @@ export function acknowledgeRoutedAgentNotificationWithDependencies(
 		);
 	}
 }
-

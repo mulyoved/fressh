@@ -111,8 +111,7 @@ export async function attemptAutoConnectFromManager({
 	...args
 }: Omit<
 	AutoConnectAttemptSourceArgs,
-	| 'loadLatestSavedConnection'
-	| 'loadSavedConnectionByStoredId'
+	'loadLatestSavedConnection' | 'loadSavedConnectionByStoredId'
 > & {
 	loadSavedConnections: () => Promise<SavedConnectionEntry[] | null>;
 	loadSavedConnectionByStoredId: NonNullable<
