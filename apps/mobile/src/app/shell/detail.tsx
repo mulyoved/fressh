@@ -109,6 +109,7 @@ import { ConfigureModal } from './components/ConfigureModal';
 import { DetectedOpenPickerModal } from './components/DetectedOpenPickerModal';
 import { FeatureRequestModal } from './components/FeatureRequestModal';
 import { HostUrlModal } from './components/HostUrlModal';
+import { ShellRouteErrorScreen } from './components/ShellRouteErrorScreen';
 import { SkillSelectorModal } from './components/SkillSelectorModal';
 import { TerminalCommanderModal } from './components/TerminalCommanderModal';
 import { TerminalKeyboard } from './components/TerminalKeyboard';
@@ -124,6 +125,11 @@ import {
 	createShellDetailKeyboardLateBindings,
 	createShellDetailKeyboardModalCommands,
 } from './shell-keyboard-composition';
+import {
+	parseShellRoute,
+	type ShellRouteParams,
+	type ShellRouteRequest,
+} from './shell-route';
 import { resolveShellTouchScrollPolicy } from './shell-touch-scroll';
 
 const logger = rootLogger.extend('TabsShellDetail');
@@ -186,6 +192,8 @@ const SHELL_CONFIG_DOC_URL =
 export default function TabsShellDetail() {
 	const [ready, setReady] = useState(false);
 	const hasShownRef = useRef(false);
+	const searchParams = useLocalSearchParams<ShellRouteParams>();
+	const router = useRouter();
 
 	useFocusEffect(
 		React.useCallback(() => {
@@ -211,7 +219,24 @@ export default function TabsShellDetail() {
 	);
 
 	if (!ready) return <RouteSkeleton />;
-	return <ShellDetail />;
+	return (
+		<ShellDetailRoute params={searchParams} onBack={() => router.back()} />
+	);
+}
+
+function ShellDetailRoute({
+	params,
+	onBack,
+}: {
+	params: ShellRouteParams;
+	onBack(): void;
+}) {
+	const result = parseShellRoute(params);
+	return result.status === 'invalid' ? (
+		<ShellRouteErrorScreen error={result.error} onBack={onBack} />
+	) : (
+		<ShellDetail request={result.request} />
+	);
 }
 
 function RouteSkeleton() {
@@ -368,37 +393,23 @@ function TerminalErrorFallback({ onRetry }: { onRetry: () => void }) {
 	);
 }
 
-function ShellDetail() {
+function ShellDetail({ request }: { request: ShellRouteRequest }) {
 	const [shellConfigState] = useState(() => loadRuntimeShellConfigState());
 
-	const searchParams = useLocalSearchParams<{
-		connectionId?: string;
-		channelId?: string;
-		agentConnectionId?: string;
-		agentSession?: string;
-		agentWindowId?: string;
-		agentEventId?: string;
-		agentTapToken?: string;
-		tmuxError?: string;
-		tmuxAttachFailureReason?: string;
-		tmuxSessionName?: string;
-		storedConnectionId?: string;
-	}>();
-
-	const connectionId = searchParams.connectionId;
-	const channelId = parseInt(searchParams.channelId ?? '');
-
-	if (!connectionId || isNaN(channelId))
-		throw new Error('Missing or invalid connectionId/channelId');
-	const hasTmuxAttachError = searchParams.tmuxError === 'attach-failed';
-	const agentConnectionId = searchParams.agentConnectionId?.trim() || null;
-	const agentSession = searchParams.agentSession?.trim() || null;
-	const agentWindowId = searchParams.agentWindowId?.trim() || null;
-	const agentEventId = searchParams.agentEventId?.trim() || null;
-	const agentTapToken = searchParams.agentTapToken?.trim() || null;
-	const tmuxSessionName = searchParams.tmuxSessionName;
+	const { connectionId, channelId } = request;
+	const {
+		connectionId: agentConnectionId,
+		session: agentSession,
+		windowId: agentWindowId,
+		eventId: agentEventId,
+		tapToken: agentTapToken,
+	} = request.agentRoute;
+	const hasTmuxAttachError = request.tmuxAttach.status === 'failed';
+	const tmuxSessionName = request.tmuxAttach.sessionName;
 	const tmuxAttachFailureReason =
-		searchParams.tmuxAttachFailureReason?.trim() || undefined;
+		request.tmuxAttach.status === 'failed'
+			? request.tmuxAttach.failureReason
+			: undefined;
 	const activity = useShellActivityController();
 	const getActivitySnapshot = activity.getSnapshot;
 
@@ -414,7 +425,7 @@ function ShellDetail() {
 		? getStoredConnectionId(connection.connectionDetails)
 		: undefined;
 	const storedConnectionId =
-		searchParams.storedConnectionId ?? connectionStoredConnectionId;
+		request.storedConnectionId ?? connectionStoredConnectionId;
 	const isAutoConnecting = useAutoConnectStore((s) => s.isAutoConnecting);
 	const isReconnecting = useAutoConnectStore((s) => s.isReconnecting);
 	const lastReconnectOutcome = useAutoConnectStore(
