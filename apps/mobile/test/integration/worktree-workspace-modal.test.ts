@@ -1,8 +1,14 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { registerHooks } from 'node:module';
+import {
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
+import { tmpdir } from 'node:os';
+import { pathToFileURL } from 'node:url';
 import React from 'react';
 import {
 	act,
@@ -60,42 +66,84 @@ async function loadModalPropsModule() {
 	);
 }
 
-const reactNativeShim = `
-	export const ActivityIndicator = 'ActivityIndicator';
-	export const KeyboardAvoidingView = 'KeyboardAvoidingView';
-	export const Modal = 'Modal';
-	export const Platform = { OS: 'ios' };
-	export const Pressable = 'Pressable';
-	export const ScrollView = 'ScrollView';
-	export const Text = 'Text';
-	export const TextInput = 'TextInput';
-	export const View = 'View';
-`;
-const themeShim = `
-	const colors = new Proxy({}, { get: () => '#000000' });
-	export function useTheme() { return { colors }; }
-`;
+function transpileModule(source: string, fileName: string): string {
+	return ts.transpileModule(source, {
+		fileName,
+		compilerOptions: {
+			jsx: ts.JsxEmit.React,
+			module: ts.ModuleKind.ESNext,
+			target: ts.ScriptTarget.ES2022,
+		},
+	}).outputText;
+}
 
-registerHooks({
-	resolve(specifier, context, nextResolve) {
-		if (specifier === 'react-native') {
-			return {
-				url: `data:text/javascript,${encodeURIComponent(reactNativeShim)}`,
-				shortCircuit: true,
-			};
+function replaceModuleSpecifier(
+	source: string,
+	specifier: string,
+	replacement: string,
+): string {
+	for (const quote of ["'", '"']) {
+		const token = `${quote}${specifier}${quote}`;
+		if (source.includes(token)) {
+			return source.replaceAll(token, JSON.stringify(replacement));
 		}
-		if (specifier === '@/lib/theme') {
-			return {
-				url: `data:text/javascript,${encodeURIComponent(themeShim)}`,
-				shortCircuit: true,
-			};
-		}
-		return nextResolve(specifier, context);
-	},
-});
+	}
+	throw new Error(`Transpiled modal did not import ${specifier}`);
+}
 
 async function loadMountedModal() {
-	return import('../../src/app/shell/components/WorktreeWorkspaceModal');
+	const compiledDirectory = mkdtempSync(
+		join(tmpdir(), 'fressh-worktree-workspace-modal-'),
+	);
+	const modalPropsPath = join(
+		process.cwd(),
+		'src/lib/shell-controllers/worktree-workspace-modal-props.ts',
+	);
+	const compiledModalPropsPath = join(
+		compiledDirectory,
+		'worktree-workspace-modal-props.mjs',
+	);
+	writeFileSync(
+		compiledModalPropsPath,
+		transpileModule(readFileSync(modalPropsPath, 'utf8'), modalPropsPath),
+	);
+	let compiled = transpileModule(componentSource, componentPath);
+	compiled = replaceModuleSpecifier(
+		compiled,
+		'react',
+		import.meta.resolve('react'),
+	);
+	compiled = replaceModuleSpecifier(
+		compiled,
+		'react-native',
+		new URL(
+			'../fixtures/worktree-workspace-react-native-shim.mjs',
+			import.meta.url,
+		).href,
+	);
+	compiled = replaceModuleSpecifier(
+		compiled,
+		'@/lib/shell-controllers/worktree-workspace-modal-props',
+		pathToFileURL(compiledModalPropsPath).href,
+	);
+	compiled = replaceModuleSpecifier(
+		compiled,
+		'@/lib/theme',
+		new URL('../fixtures/worktree-workspace-theme-shim.mjs', import.meta.url)
+			.href,
+	);
+	const compiledComponentPath = join(
+		compiledDirectory,
+		'WorktreeWorkspaceModal.mjs',
+	);
+	writeFileSync(compiledComponentPath, compiled);
+	try {
+		return (await import(pathToFileURL(compiledComponentPath).href)) as {
+			WorktreeWorkspaceModal: React.ComponentType<WorktreeWorkspaceModalProps>;
+		};
+	} finally {
+		rmSync(compiledDirectory, { force: true, recursive: true });
+	}
 }
 
 function renderedText(instance: ReactTestInstance): string {
@@ -124,9 +172,9 @@ function hostWithText(
 }
 
 async function mountModal(
+	WorktreeWorkspaceModal: React.ComponentType<WorktreeWorkspaceModalProps>,
 	props: WorktreeWorkspaceModalProps,
 ): Promise<ReactTestRenderer> {
-	const { WorktreeWorkspaceModal } = await loadMountedModal();
 	let renderer: ReactTestRenderer | undefined;
 	const originalConsoleError = console.error;
 	console.error = (...args: unknown[]) => {
@@ -426,7 +474,7 @@ void test('mounted new modal preserves and resets its draft by preparation ident
 		onCreate: (branch: string) => created.push(branch),
 		bottomOffset: 0,
 	} as const;
-	const renderer = await mountModal(props);
+	const renderer = await mountModal(WorktreeWorkspaceModal, props);
 
 	await act(async () => {
 		host(renderer.root, 'TextInput').props.onChangeText('custom-branch');
@@ -489,7 +537,7 @@ void test('mounted close modal blocks busy actions and enables idle actions', as
 		...callbacks,
 		bottomOffset: 0,
 	} as const;
-	const renderer = await mountModal(busyProps);
+	const renderer = await mountModal(WorktreeWorkspaceModal, busyProps);
 	const busyModal = host(renderer.root, 'Modal');
 	const busyBackdrop = renderer.root.findByProps({
 		testID: 'worktree-workspace-backdrop',

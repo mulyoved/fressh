@@ -1,0 +1,9 @@
+export const ActivityIndicator = 'ActivityIndicator';
+export const KeyboardAvoidingView = 'KeyboardAvoidingView';
+export const Modal = 'Modal';
+export const Platform = { OS: 'ios' };
+export const Pressable = 'Pressable';
+export const ScrollView = 'ScrollView';
+export const Text = 'Text';
+export const TextInput = 'TextInput';
+export const View = 'View';
