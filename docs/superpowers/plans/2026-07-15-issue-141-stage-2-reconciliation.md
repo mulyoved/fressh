@@ -596,12 +596,14 @@ git commit -m "Rebuild typed shell ports"
 Before committing, inspect `git diff --cached --name-only`; it must contain only
 Task 3 files, not secure storage, shell config, Jest config, or generated files.
 
-### Task 4: Session-Scoped Wispr Controller
+### Task 4: Session-Scoped Wispr Controller and Native-Control Authority
 
 **Files:**
 
 - Create: `apps/mobile/src/lib/shell-controllers/wispr-close-coordinator.ts`
 - Create: `apps/mobile/src/lib/shell-controllers/wispr-core.ts`
+- Create:
+  `apps/mobile/src/lib/shell-controllers/wispr-native-control-authority.ts`
 - Create: `apps/mobile/src/lib/shell-controllers/wispr-start-protocol.ts`
 - Create: `apps/mobile/src/lib/shell-controllers/wispr-tap-runner.ts`
 - Create: `apps/mobile/src/lib/shell-controllers/wispr-timer-owner.ts`
@@ -611,6 +613,8 @@ Task 3 files, not secure storage, shell config, Jest config, or generated files.
 - Create:
   `apps/mobile/test/integration/shell-wispr-controller-lifecycle.test.ts`
 - Create: `apps/mobile/test/integration/shell-wispr-timer-owner.test.ts`
+- Create:
+  `apps/mobile/test/integration/shell-wispr-native-control-authority.test.ts`
 - Create: `apps/mobile/test/components/shell-wispr-controller.test.tsx`
 - Modify: `apps/mobile/src/lib/wispr-automation.ts`
 - Modify: `apps/mobile/src/lib/shell-controllers/simple-modals.tsx`
@@ -621,7 +625,8 @@ Task 3 files, not secure storage, shell config, Jest config, or generated files.
 - Consumes: session generation, `ShellActivityPort`, text-entry modal commands,
   current native Wispr adapter, logger, and injectable clock/timers.
 - Produces: `useShellWisprController()` with `snapshot`, `openTextEditor`,
-  `textEntryProps`, and complete session cleanup.
+  `textEntryProps`, complete session cleanup, and a process-wide serialized
+  `WisprNativeControlAuthority`.
 
 - [ ] **Step 1: Add pure state-machine and fake-time tests**
 
@@ -636,6 +641,7 @@ export type WisprTimerOwner = WisprTimerPort & {
 
 export type CreateShellWisprControllerCoreInput = {
 	native: ShellWisprNativePort;
+	controlAuthority: WisprNativeControlAuthority;
 	modal: ShellWisprModalPort;
 	now(): number;
 	setTimeout(task: () => void, delayMs: number): unknown;
@@ -651,25 +657,31 @@ export type CreateShellWisprControllerCoreInput = {
 
 Cover unsupported platform, setup-required status, automatic start, manual
 start, timeout, close during pending start, unmount, repeated close, stale
-request IDs, and rejected native calls.
+request IDs, and rejected native calls. Add authority tests for one active
+lease, latest-waiter replacement, cancellation, release, poison, stale lease
+release/poison, successor waiting, and failed or uncertain cleanup.
 
 - [ ] **Step 2: Run Wispr tests and record RED**
 
 ```bash
 cd apps/mobile
-pnpm exec tsx --test test/integration/wispr-automation.test.ts test/integration/shell-wispr-controller.test.ts test/integration/shell-wispr-controller-lifecycle.test.ts test/integration/shell-wispr-timer-owner.test.ts
+pnpm exec tsx --test test/integration/wispr-automation.test.ts test/integration/shell-wispr-controller.test.ts test/integration/shell-wispr-controller-lifecycle.test.ts test/integration/shell-wispr-timer-owner.test.ts test/integration/shell-wispr-native-control-authority.test.ts
 pnpm exec jest --config jest.config.cjs --runInBand test/components/shell-wispr-controller.test.tsx
 ```
 
-Expected: FAIL because the Wispr controller modules are absent.
+Expected: FAIL because the Wispr controller and native-control authority modules
+are absent.
 
 - [ ] **Step 3: Implement pure Wispr owners**
 
-Implement separate core, timer, tap, start, and close units. The public snapshot
-is a discriminated union; no unit may own both native tap retry and modal view
-state. Every async completion checks request identity before publishing. Timer
-cleanup is idempotent, and a pending native start remains paired with its close
-decision after React unmount.
+Implement separate core, timer, tap, start, close, and native-control authority
+units. The public snapshot is a discriminated union; no unit may own both native
+tap retry and modal view state. Every async completion checks request identity
+before publishing. Timer cleanup is idempotent, and a pending native start
+remains paired with its close decision after React unmount. Start acquires the
+process-wide authority before a native toggle; successful close releases the
+exact lease; failed or uncertain cleanup poisons it. A newer waiter supersedes
+only the older waiter and cannot disturb the active owner.
 
 - [ ] **Step 4: Implement the React/native adapter**
 
@@ -682,23 +694,23 @@ and disposes through a replay-safe lifecycle. Remove `openRef` and render-time
 
 ```bash
 cd apps/mobile
-pnpm exec tsx --test test/integration/wispr-automation.test.ts test/integration/shell-wispr-controller.test.ts test/integration/shell-wispr-controller-lifecycle.test.ts test/integration/shell-wispr-timer-owner.test.ts
+pnpm exec tsx --test test/integration/wispr-automation.test.ts test/integration/shell-wispr-controller.test.ts test/integration/shell-wispr-controller-lifecycle.test.ts test/integration/shell-wispr-timer-owner.test.ts test/integration/shell-wispr-native-control-authority.test.ts
 pnpm exec jest --config jest.config.cjs --runInBand test/components/shell-wispr-controller.test.tsx
 pnpm run fmt:check
 pnpm run typecheck
 ```
 
 Expected: all commands exit 0. Record source commits `ad219e88` through
-`5dc97c87`.
+`0d54b653`.
 
 - [ ] **Step 6: Commit the Wispr controller slice**
 
 ```bash
-git add docs/run/issue-141-stage-2-reconciliation-evidence.md apps/mobile/src/lib/shell-controllers/wispr-close-coordinator.ts apps/mobile/src/lib/shell-controllers/wispr-core.ts apps/mobile/src/lib/shell-controllers/wispr-start-protocol.ts apps/mobile/src/lib/shell-controllers/wispr-tap-runner.ts apps/mobile/src/lib/shell-controllers/wispr-timer-owner.ts apps/mobile/src/lib/shell-controllers/wispr.tsx apps/mobile/src/lib/shell-controllers/simple-modals.tsx apps/mobile/src/lib/wispr-automation.ts apps/mobile/src/app/shell/detail.tsx apps/mobile/test/integration/shell-wispr-controller-test-support.ts apps/mobile/test/integration/shell-wispr-controller.test.ts apps/mobile/test/integration/shell-wispr-controller-lifecycle.test.ts apps/mobile/test/integration/shell-wispr-timer-owner.test.ts apps/mobile/test/integration/wispr-automation.test.ts apps/mobile/test/components/shell-wispr-controller.test.tsx
-git commit -m "Rebuild shell Wispr ownership"
+git add docs/run/issue-141-stage-2-reconciliation-evidence.md apps/mobile/src/lib/shell-controllers/wispr-close-coordinator.ts apps/mobile/src/lib/shell-controllers/wispr-core.ts apps/mobile/src/lib/shell-controllers/wispr-native-control-authority.ts apps/mobile/src/lib/shell-controllers/wispr-start-protocol.ts apps/mobile/src/lib/shell-controllers/wispr-tap-runner.ts apps/mobile/src/lib/shell-controllers/wispr-timer-owner.ts apps/mobile/src/lib/shell-controllers/wispr.tsx apps/mobile/src/lib/shell-controllers/simple-modals.tsx apps/mobile/src/lib/wispr-automation.ts apps/mobile/src/app/shell/detail.tsx apps/mobile/test/integration/shell-wispr-controller-test-support.ts apps/mobile/test/integration/shell-wispr-controller.test.ts apps/mobile/test/integration/shell-wispr-controller-lifecycle.test.ts apps/mobile/test/integration/shell-wispr-timer-owner.test.ts apps/mobile/test/integration/shell-wispr-native-control-authority.test.ts apps/mobile/test/integration/wispr-automation.test.ts apps/mobile/test/components/shell-wispr-controller.test.tsx
+git commit -m "Rebuild serialized shell Wispr ownership"
 ```
 
-### Task 5: Real ShellScreenView and Composition Boundary
+### Task 5: ShellScreenView, Composition, and Worktree Port Boundary
 
 **Files:**
 
@@ -718,6 +730,11 @@ git commit -m "Rebuild shell Wispr ownership"
 - Create: `apps/mobile/test/components/shell-detail-modal-commands.test.tsx`
 - Create: `apps/mobile/test/components/shell-session-target-lifetimes.test.tsx`
 - Create: `apps/mobile/test/components/use-connection-debug-command.test.tsx`
+- Modify: `apps/mobile/src/lib/shell-controllers/worktree-workspace-adapter.ts`
+- Modify: `apps/mobile/src/lib/shell-controllers/worktree-workspace.tsx`
+- Modify:
+  `apps/mobile/test/integration/shell-worktree-workspace-controller.test.ts`
+- Modify: `apps/mobile/test/components/worktree-workspace-modal.test.tsx`
 - Modify: `apps/mobile/src/app/shell/detail.tsx`
 - Delete: `apps/mobile/src/app/shell/shell-keyboard-composition.ts`
 - Delete:
@@ -728,7 +745,8 @@ git commit -m "Rebuild shell Wispr ownership"
 - Consumes: Task 2 session owner, Task 3 controller ports, Task 4 Wispr
   controller, and existing modal/controller view props.
 - Produces: real `ShellScreenView`, composition-only `ShellDetail`, focused
-  session lifetime owners, and enforced architecture limits.
+  session lifetime owners, enforced architecture limits, port-based Worktree
+  Workspace dependencies, and view-owned Worktree modal rendering.
 
 - [ ] **Step 1: Add final boundary tests before moving JSX**
 
@@ -744,18 +762,23 @@ assert.deepEqual(findViewWorkflowViolations(viewFile), []);
 ```
 
 Move the original Stage 2 render cases into the three named component-test
-files. Preserve the current `jest-expo` setup and use `@/` imports.
+files. Preserve the current `jest-expo` setup and use `@/` imports. Add
+assertions that Worktree Workspace imports no `WorkmuxControlChannel` or generic
+raw connection, `ShellScreenView.tsx` renders `WorktreeWorkspaceModal`, and
+`detail.tsx` does not render that modal directly.
 
 - [ ] **Step 2: Run boundary and component tests and record RED**
 
 ```bash
 cd apps/mobile
 pnpm exec tsx --test test/integration/shell-detail-boundary.test.ts
-pnpm exec jest --config jest.config.cjs --runInBand test/components/shell-detail-modal-commands.test.tsx test/components/shell-session-target-lifetimes.test.tsx test/components/use-connection-debug-command.test.tsx
+pnpm exec tsx --test test/integration/shell-worktree-workspace-controller.test.ts test/integration/worktree-workspace-bridge.test.ts test/integration/worktree-workspace-modal.test.ts
+pnpm exec jest --config jest.config.cjs --runInBand test/components/shell-detail-modal-commands.test.tsx test/components/shell-session-target-lifetimes.test.tsx test/components/use-connection-debug-command.test.tsx test/components/worktree-workspace-modal.test.tsx
 ```
 
-Expected: FAIL because `ShellScreenView.tsx` and focused owners are absent and
-`detail.tsx` exceeds both limits.
+Expected: FAIL because `ShellScreenView.tsx` and focused owners are absent,
+`detail.tsx` exceeds both limits, and Worktree still consumes and renders
+through the old raw boundary.
 
 - [ ] **Step 3: Move rendering into ShellScreenView**
 
@@ -777,6 +800,9 @@ export function ShellScreenView(
 Move the real `XtermJsWebView`, keyboard, overlays, reconnect state, and modal
 JSX into the view. The view may import controller types but no controller hooks,
 stores, native adapters, timers, Workmux factories, or diagnostic constructors.
+Add `worktreeWorkspace: WorktreeWorkspaceModalControllerProps` to
+`ShellScreenModalView` and render `WorktreeWorkspaceModal` with the shared
+bottom offset.
 
 - [ ] **Step 4: Reduce ShellDetail and delete obsolete shims**
 
@@ -784,31 +810,45 @@ Extract route-ready, manual-fit, terminal-view-policy, session-source,
 target-lifetime, tmux-resolution, transport, and remote-copy-mode owners. Delete
 the keyboard composition shim and its test. `ShellDetail` constructs owners,
 wires ports, derives `ShellScreenSessionView`, and passes view props only.
+Replace Worktree's raw connection and `WorkmuxControlChannel` dependency with
+`connectionAvailable`, `tmuxEnabled`, `sessionName`, `ShellTargetKey`, and
+`Pick<ShellWorkmuxPort, 'command' | 'operation'>`. Map `completed`, `failed`,
+`superseded`, and `unavailable` outcomes explicitly while preserving existing
+timeouts, failure classification, stale-target handling, invalid-response
+handling, modal arbitration, and no-retry behavior. Pass only its `modalProps`
+to `ShellScreenView`.
 
 - [ ] **Step 5: Run shell composition regressions and record GREEN**
 
 ```bash
 cd apps/mobile
 pnpm exec tsx --test test/integration/shell-detail-boundary.test.ts test/integration/shell-route.test.ts test/integration/shell-session-controller.test.ts test/integration/shell-session-workmux.test.ts test/integration/shell-terminal-runtime-publication.test.ts test/integration/shell-keyboard-hook-composition.test.ts test/integration/shell-scrollback-controller.test.ts test/integration/shell-modal-controller-composition.test.ts
-pnpm exec jest --config jest.config.cjs --runInBand test/components/shell-detail-modal-commands.test.tsx test/components/shell-session-target-lifetimes.test.tsx test/components/use-connection-debug-command.test.tsx
+pnpm exec tsx --test test/integration/shell-worktree-workspace-controller.test.ts test/integration/worktree-workspace-bridge.test.ts test/integration/worktree-workspace-modal.test.ts test/integration/command-menu.test.ts test/integration/keyboard-config.test.ts test/integration/shell-config-schema.test.ts
+pnpm exec jest --config jest.config.cjs --runInBand test/components/shell-detail-modal-commands.test.tsx test/components/shell-session-target-lifetimes.test.tsx test/components/use-connection-debug-command.test.tsx test/components/worktree-workspace-modal.test.tsx
 pnpm run fmt:check
 pnpm run typecheck
 ```
 
 Expected: all commands exit 0 and the boundary reports fewer than 650 nonblank
 file lines and fewer than 300 `ShellDetail` lines. Record source commits
-`8751a1d0` through `73c7a20a`.
+`8751a1d0` through `73c7a20a` plus the new #139 adaptation, and confirm the
+direct Worktree actions and final Advanced submenu remain unchanged.
 
 - [ ] **Step 6: Commit the rendering slice**
 
 ```bash
 git add docs/run/issue-141-stage-2-reconciliation-evidence.md apps/mobile/src/app/shell apps/mobile/src/lib/shell-controllers apps/mobile/src/lib/connection-debug-command.ts apps/mobile/src/lib/connection-diagnostic-delivery.ts apps/mobile/src/lib/tmux-scrollback.ts apps/mobile/src/lib/use-connection-debug-command.ts apps/mobile/test/integration apps/mobile/test/components
-git commit -m "Rebuild shell rendering boundary"
+git commit -m "Rebuild shell and Worktree boundaries"
 ```
 
 Inspect the staged diff first and unstage any file not named in Task 5.
 
-### Task 6: Serialized Wispr Native-Control Authority
+### Task 6 (Retired Reference): Serialized Wispr Native-Control Authority
+
+**Do not dispatch this as a separate task.** Its complete requirements, tests,
+implementation, verification, and commit scope are merged into Task 4 so the
+first Wispr snapshot already satisfies serialized native-control ownership. The
+text below remains only as provenance for the plan correction.
 
 **Files:**
 
@@ -911,7 +951,13 @@ git add docs/run/issue-141-stage-2-reconciliation-evidence.md apps/mobile/src/li
 git commit -m "Serialize Wispr native control"
 ```
 
-### Task 7: Worktree Workspace Session-Port Adaptation
+### Task 7 (Retired Reference): Worktree Workspace Session-Port Adaptation
+
+**Do not dispatch this as a separate task.** Its complete requirements, tests,
+implementation, verification, and commit scope are merged into Task 5 so the
+first `ShellScreenView` snapshot already owns Worktree rendering and consumes
+session ports. The text below remains only as provenance for the plan
+correction.
 
 **Files:**
 
@@ -1070,7 +1116,7 @@ git commit -m "Adapt Worktree Workspace to shell ports"
 
 - Modify: `docs/run/issue-141-stage-2-reconciliation-evidence.md`
 - Modify only when a failing gate identifies a Stage 2 defect: files already
-  listed in Tasks 1–7 and their focused tests.
+  listed in Tasks 1–5 and their focused tests.
 
 **Interfaces:**
 
@@ -1124,7 +1170,7 @@ Expected: every command exits 0. Do not run `test:e2e:clear-state`.
 - [ ] **Step 5: Run repository checks with Nix**
 
 ```bash
-cd /home/muly/code/fressh
+cd "$(git rev-parse --show-toplevel)"
 nix develop .#default -c pnpm exec turbo lint:check
 nix develop .#default -c pnpm --filter @fressh/react-native-uniffi-russh test
 nix develop .#default -c pnpm --filter @fressh/react-native-xtermjs-webview test
@@ -1138,13 +1184,13 @@ Stage 2 duplication. Record exact output summaries.
 
 Invoke `thermo-nuclear-code-quality-review` over the complete diff from the
 recorded replacement base through `HEAD`. Resolve every blocking finding in the
-owning Task 1–7 file, rerun its focused tests, and append the review artifact or
+owning Task 1–5 file, rerun its focused tests, and append the review artifact or
 path plus final zero-blocker result to the evidence file.
 
 - [ ] **Step 7: Build the local Android preview**
 
 ```bash
-cd /home/muly/code/fressh/apps/mobile
+cd "$(git rev-parse --show-toplevel)/apps/mobile"
 ANDROID_HOME=/home/muly/Android/Sdk ANDROID_SDK_ROOT=/home/muly/Android/Sdk EAS_SKIP_AUTO_FINGERPRINT=1 pnpm exec eas build --local --profile preview --platform android
 ```
 
