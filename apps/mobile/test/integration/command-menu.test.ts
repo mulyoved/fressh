@@ -103,16 +103,22 @@ void test('bundled command menu exposes the approved Issue 91 tree', () => {
 			label: 'mdev',
 			type: 'submenu',
 			children: [
-				{ label: 'Request a Feature', type: 'action' },
 				{ label: 'Fit terminal to device', type: 'action' },
-				{ label: 'Debug connection in Codex', type: 'action' },
-				{ label: 'Open Workspace', type: 'preset' },
-				{ label: 'Close Workspace', type: 'preset' },
-				{ label: 'Rename Workspace', type: 'preset' },
 				{ label: 'New Worktree Workspace', type: 'action' },
 				{ label: 'Close Worktree Workspace', type: 'action' },
-				{ label: 'codex auth refresh', type: 'preset' },
 				{ label: 'restart codex', type: 'bridge' },
+				{
+					label: 'Advanced',
+					type: 'submenu',
+					children: [
+						{ label: 'codex auth refresh', type: 'preset' },
+						{ label: 'Debug connection in Codex', type: 'action' },
+						{ label: 'Open Workspace', type: 'preset' },
+						{ label: 'Rename Workspace', type: 'preset' },
+						{ label: 'Close Workspace', type: 'preset' },
+						{ label: 'Request a Feature', type: 'action' },
+					],
+				},
 			],
 		},
 		{
@@ -129,25 +135,24 @@ void test('bundled command menu exposes the approved Issue 91 tree', () => {
 	]);
 });
 
-void test('mdev submenu routes feature request through a native app action', () => {
-	const mdev = getBundledShellConfig().commandMenus.find(
-		(entry) => entry.type === 'submenu' && entry.label === 'mdev',
-	);
-	assert.ok(mdev);
-	assert.equal(mdev.type, 'submenu');
+void test('mdev Advanced submenu routes feature request through a native app action', () => {
+	const commandMenus = getBundledShellConfig().commandMenus;
 
-	assert.deepEqual(mdev.entries[0], {
-		type: 'action',
-		label: 'Request a Feature',
-		actionId: 'OPEN_REPO_FEATURE_REQUEST',
-	});
+	assert.deepEqual(
+		findEntry(commandMenus, ['mdev', 'Advanced', 'Request a Feature']),
+		{
+			type: 'action',
+			label: 'Request a Feature',
+			actionId: 'OPEN_REPO_FEATURE_REQUEST',
+		},
+	);
 });
 
 void test('mdev submenu exposes connection diagnostic action', () => {
 	const commandMenus = getBundledShellConfig().commandMenus;
 
 	assert.deepEqual(
-		findEntry(commandMenus, ['mdev', 'Debug connection in Codex']),
+		findEntry(commandMenus, ['mdev', 'Advanced', 'Debug connection in Codex']),
 		{
 			type: 'action',
 			label: 'Debug connection in Codex',
@@ -159,43 +164,53 @@ void test('mdev submenu exposes connection diagnostic action', () => {
 void test('mdev workspace presets run existing tmux workspace commands', () => {
 	const commandMenus = getBundledShellConfig().commandMenus;
 
-	assert.deepEqual(findPreset(commandMenus, ['mdev', 'Open Workspace']), {
-		type: 'preset',
-		label: 'Open Workspace',
-		steps: [
-			{ type: 'text', data: 'mdev tmux open-workspace' },
-			{ type: 'enter' },
-		],
-	});
-	assert.deepEqual(findPreset(commandMenus, ['mdev', 'Close Workspace']), {
-		type: 'preset',
-		label: 'Close Workspace',
-		steps: [
-			{ type: 'text', data: 'mdev tmux workspace close' },
-			{ type: 'enter' },
-		],
-	});
-	assert.deepEqual(findPreset(commandMenus, ['mdev', 'Rename Workspace']), {
-		type: 'preset',
-		label: 'Rename Workspace',
-		steps: [
-			{ type: 'text', data: 'mdev tmux workspace prompt-rename' },
-			{ type: 'enter' },
-		],
-	});
+	assert.deepEqual(
+		findPreset(commandMenus, ['mdev', 'Advanced', 'Open Workspace']),
+		{
+			type: 'preset',
+			label: 'Open Workspace',
+			steps: [
+				{ type: 'text', data: 'mdev tmux open-workspace' },
+				{ type: 'enter' },
+			],
+		},
+	);
+	assert.deepEqual(
+		findPreset(commandMenus, ['mdev', 'Advanced', 'Close Workspace']),
+		{
+			type: 'preset',
+			label: 'Close Workspace',
+			steps: [
+				{ type: 'text', data: 'mdev tmux workspace close' },
+				{ type: 'enter' },
+			],
+		},
+	);
+	assert.deepEqual(
+		findPreset(commandMenus, ['mdev', 'Advanced', 'Rename Workspace']),
+		{
+			type: 'preset',
+			label: 'Rename Workspace',
+			steps: [
+				{ type: 'text', data: 'mdev tmux workspace prompt-rename' },
+				{ type: 'enter' },
+			],
+		},
+	);
 });
 
-void test('mdev native worktree workspace actions follow the existing workspace presets', () => {
+void test('mdev keeps terminal fit and native worktree workspace actions first', () => {
 	const commandMenus = getBundledShellConfig().commandMenus;
 	const mdev = findEntry(commandMenus, ['mdev']);
 	assert.equal(mdev.type, 'submenu');
 	if (mdev.type !== 'submenu') return;
 
-	const renameIndex = mdev.entries.findIndex(
-		(entry) => entry.label === 'Rename Workspace',
-	);
-	assert.notEqual(renameIndex, -1);
-	assert.deepEqual(mdev.entries.slice(renameIndex + 1, renameIndex + 3), [
+	assert.deepEqual(mdev.entries.slice(0, 3), [
+		{
+			type: 'action',
+			label: 'Fit terminal to device',
+			actionId: 'FIT_TERMINAL_TO_DEVICE',
+		},
 		{
 			type: 'action',
 			label: 'New Worktree Workspace',
@@ -207,7 +222,6 @@ void test('mdev native worktree workspace actions follow the existing workspace 
 			actionId: 'OPEN_CLOSE_WORKTREE_WORKSPACE',
 		},
 	]);
-	assert.equal(mdev.entries[renameIndex + 3]?.label, 'codex auth refresh');
 });
 
 void test('mdev codex entries expose auth refresh preset and bridge-backed restart', () => {
@@ -222,14 +236,21 @@ void test('mdev codex entries expose auth refresh preset and bridge-backed resta
 		false,
 	);
 
-	assert.deepEqual(findPreset(commandMenus, ['mdev', 'codex auth refresh']), {
-		type: 'preset',
-		label: 'codex auth refresh',
-		steps: [
-			{ type: 'text', data: 'mdev codex auth refresh' },
-			{ type: 'enter' },
-		],
-	});
+	assert.equal(
+		mdev.entries.some((entry) => entry.label === 'codex auth refresh'),
+		false,
+	);
+	assert.deepEqual(
+		findPreset(commandMenus, ['mdev', 'Advanced', 'codex auth refresh']),
+		{
+			type: 'preset',
+			label: 'codex auth refresh',
+			steps: [
+				{ type: 'text', data: 'mdev codex auth refresh' },
+				{ type: 'enter' },
+			],
+		},
+	);
 	assert.deepEqual(findEntry(commandMenus, ['mdev', 'restart codex']), {
 		type: 'bridge',
 		label: 'restart codex',

@@ -578,7 +578,7 @@ void test('shell config accepts legacy detected-open action ids', () => {
 	assert.doesNotThrow(() => parseShellConfigData(macroConfig));
 });
 
-void test('mdev command menu exposes terminal fit action', () => {
+void test('mdev command menu keeps terminal fit action first', () => {
 	const config = getBundledShellConfig();
 	const mdevMenu = config.commandMenus.find(
 		(entry) => entry.type === 'submenu' && entry.label === 'mdev',
@@ -586,40 +586,24 @@ void test('mdev command menu exposes terminal fit action', () => {
 	assert.ok(mdevMenu);
 	assert.equal(mdevMenu.type, 'submenu');
 
-	assert.deepEqual(mdevMenu.entries.slice(0, 3), [
-		{
-			type: 'action',
-			label: 'Request a Feature',
-			actionId: 'OPEN_REPO_FEATURE_REQUEST',
-		},
-		{
-			type: 'action',
-			label: 'Fit terminal to device',
-			actionId: 'FIT_TERMINAL_TO_DEVICE',
-		},
-		{
-			type: 'action',
-			label: 'Debug connection in Codex',
-			actionId: 'DEBUG_CONNECTION_IN_CODEX',
-		},
-	]);
+	assert.deepEqual(mdevMenu.entries[0], {
+		type: 'action',
+		label: 'Fit terminal to device',
+		actionId: 'FIT_TERMINAL_TO_DEVICE',
+	});
 });
 
-void test('bundled config exposes native worktree workspace actions with committed metadata', () => {
+void test('bundled config exposes direct worktree actions with committed metadata', () => {
 	const config = getBundledShellConfig();
 	const mdevMenu = config.commandMenus.find(
 		(entry) => entry.type === 'submenu' && entry.label === 'mdev',
 	);
 	assert.ok(mdevMenu);
 	assert.equal(mdevMenu.type, 'submenu');
-	assert.equal(config.version, '2026-07-14.2');
-	assert.equal(config.updatedAt, '2026-07-14T15:00:00.000Z');
+	assert.equal(config.version, '2026-07-15.1');
+	assert.equal(config.updatedAt, '2026-07-15T08:02:09.000Z');
 
-	const renameIndex = mdevMenu.entries.findIndex(
-		(entry) => entry.label === 'Rename Workspace',
-	);
-	assert.notEqual(renameIndex, -1);
-	assert.deepEqual(mdevMenu.entries.slice(renameIndex + 1, renameIndex + 3), [
+	assert.deepEqual(mdevMenu.entries.slice(1, 3), [
 		{
 			type: 'action',
 			label: 'New Worktree Workspace',
@@ -631,7 +615,8 @@ void test('bundled config exposes native worktree workspace actions with committ
 			actionId: 'OPEN_CLOSE_WORKTREE_WORKSPACE',
 		},
 	]);
-	assert.equal(mdevMenu.entries[renameIndex + 3]?.label, 'codex auth refresh');
+	assert.equal(mdevMenu.entries.at(-1)?.type, 'submenu');
+	assert.equal(mdevMenu.entries.at(-1)?.label, 'Advanced');
 });
 
 void test('advanced keyboard omits consolidated host URL setter actions', () => {
