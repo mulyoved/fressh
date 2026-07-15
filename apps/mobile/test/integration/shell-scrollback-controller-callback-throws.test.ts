@@ -83,6 +83,8 @@ for (const boundary of [
 ] as const) {
 	void test(`scrollback throwing ${boundary} fails closed and later work remains usable`, async () => {
 		const fixture = prepareActiveHarness();
+		const getSelectionModeEnabled =
+			fixture.harness.context.terminalView.getSelectionModeEnabled;
 		const remoteBefore = fixture.harness.remoteCopyModeActive.current;
 		const generationBefore = fixture.harness.remoteCopyModeGeneration.current;
 		if (boundary === 'terminal-currentness') {
@@ -92,17 +94,17 @@ for (const boundary of [
 		} else if (boundary === 'activity') {
 			fixture.harness.core.setContext({
 				...fixture.harness.context,
-				getActivitySnapshot: () => {
-					throw new Error('activity failed');
+				activity: {
+					...fixture.harness.context.activity,
+					getSnapshot: () => {
+						throw new Error('activity failed');
+					},
 				},
 			});
 		} else {
-			fixture.harness.core.setContext({
-				...fixture.harness.context,
-				getSelectionModeEnabled: () => {
-					throw new Error('selection failed');
-				},
-			});
+			fixture.harness.context.terminalView.getSelectionModeEnabled = () => {
+				throw new Error('selection failed');
+			};
 		}
 
 		await assert.doesNotReject(() =>
@@ -125,6 +127,8 @@ for (const boundary of [
 		assert.ok(fixture.getWarningCalls() > 0);
 
 		fixture.harness.context.terminalView.isCurrentInstance = () => true;
+		fixture.harness.context.terminalView.getSelectionModeEnabled =
+			getSelectionModeEnabled;
 		fixture.harness.core.setContext(fixture.harness.context);
 		await fixture.harness.core.onScrollbackEnterRequested({
 			...enterEvent,

@@ -19,7 +19,10 @@ void test('scrollback suppresses alert after logger reenters a newer target', ()
 					...harness.context,
 					targetKey: createShellTargetKey('transport' as never, 'other'),
 					targetName: 'other',
-					workmuxScroll: replacementScroll,
+					workmux: {
+						...harness.context.workmux,
+						scroll: replacementScroll,
+					},
 				});
 			},
 		},
@@ -44,7 +47,10 @@ void test('scrollback feedback reentry cannot reset the newer target executor', 
 					...harness.context,
 					targetKey: createShellTargetKey('transport' as never, 'other'),
 					targetName: 'other',
-					workmuxScroll: replacementScroll,
+					workmux: {
+						...harness.context.workmux,
+						scroll: replacementScroll,
+					},
 				});
 			},
 			copyMessage: () => {},
@@ -63,14 +69,20 @@ void test('scrollback failure activity reentry suppresses stale feedback', () =>
 	const replacementScroll = { ...harness.scroll };
 	harness.core.setContext({
 		...harness.context,
-		getActivitySnapshot: () => {
-			harness.core.setContext({
-				...harness.context,
-				targetKey: createShellTargetKey('transport' as never, 'other'),
-				targetName: 'other',
-				workmuxScroll: replacementScroll,
-			});
-			return harness.context.getActivitySnapshot();
+		activity: {
+			...harness.context.activity,
+			getSnapshot: () => {
+				harness.core.setContext({
+					...harness.context,
+					targetKey: createShellTargetKey('transport' as never, 'other'),
+					targetName: 'other',
+					workmux: {
+						...harness.context.workmux,
+						scroll: replacementScroll,
+					},
+				});
+				return harness.context.activity.getSnapshot();
+			},
 		},
 	});
 	const callback = harness.executorInputs[0]?.onFailure;
@@ -91,7 +103,10 @@ void test('scrollback not-in-mode trace reentry cannot mutate newer target state
 				...harness.context,
 				targetKey: createShellTargetKey('transport' as never, 'other'),
 				targetName: 'other',
-				workmuxScroll: replacementScroll,
+				workmux: {
+					...harness.context.workmux,
+					scroll: replacementScroll,
+				},
 			});
 		},
 	});
@@ -217,9 +232,12 @@ for (const boundary of ['selection', 'accepted-trace'] as const) {
 		if (boundary === 'selection') {
 			harness.core.setContext({
 				...harness.context,
-				getSelectionModeEnabled: () => {
-					harness.core.onTerminalRuntimeChanged('instance-2');
-					return false;
+				terminalView: {
+					...harness.context.terminalView,
+					getSelectionModeEnabled: () => {
+						harness.core.onTerminalRuntimeChanged('instance-2');
+						return false;
+					},
 				},
 			});
 		} else {

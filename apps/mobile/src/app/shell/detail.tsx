@@ -16,6 +16,7 @@ import React, {
 	useMemo,
 	useRef,
 	useState,
+	useSyncExternalStore,
 } from 'react';
 import {
 	ActivityIndicator,
@@ -30,12 +31,6 @@ import {
 	View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useAutoConnectStore } from '@/lib/auto-connect';
-import {
-	formatConnectionDiagnosticEventFields,
-	type ConnectionDiagnosticEvent,
-} from '@/lib/connection-diagnostics';
-import { getStoredConnectionId } from '@/lib/connection-utils';
 import { runDetectedOpenCallback } from '@/lib/detected-open-actions';
 import { HANDLE_DEV_SERVER_URL } from '@/lib/keyboard-actions';
 import { rootLogger } from '@/lib/logger';
@@ -47,7 +42,6 @@ import {
 	isScrollTraceEnabled,
 	type ScrollTraceSink,
 } from '@/lib/scroll-trace';
-import { secretsManager } from '@/lib/secrets-manager';
 import {
 	loadRuntimeShellConfigState,
 	reloadRuntimeShellConfigFromRemote,
@@ -62,22 +56,17 @@ import {
 import { createShellModalArbiter } from '@/lib/shell-controllers/modal-arbiter';
 import { useShellNotificationsController } from '@/lib/shell-controllers/notifications';
 import { useShellScrollbackController } from '@/lib/shell-controllers/scrollback';
-import { reportShellScrollbackChannelCleanupError } from '@/lib/shell-controllers/scrollback-channel-teardown';
+import {
+	createShellSessionMountKey,
+	useShellSessionController,
+} from '@/lib/shell-controllers/session';
 import { useShellSimpleModals } from '@/lib/shell-controllers/simple-modals';
 import { useSkillSelectorController } from '@/lib/shell-controllers/skill-selector';
-import {
-	createShellTargetKey,
-	createShellTransportKey,
-} from '@/lib/shell-controllers/source-keys';
 import { useShellTerminalController } from '@/lib/shell-controllers/terminal';
-import { type TerminalRuntimeKey } from '@/lib/shell-controllers/terminal-transport';
 import { useWorktreeWorkspaceController } from '@/lib/shell-controllers/worktree-workspace';
-import { executeSideChannelCommand } from '@/lib/ssh-side-channel';
-import { useSshStore } from '@/lib/ssh-store';
 import { createManualTerminalFitRunner } from '@/lib/terminal-fit-runner';
 import { useTheme } from '@/lib/theme';
 import { useConnectionDebugCommand } from '@/lib/use-connection-debug-command';
-import { queryClient } from '@/lib/utils';
 import {
 	canStartWisprTextEntryAutomation,
 	isWisprAutomationBusy,
@@ -97,11 +86,6 @@ import {
 } from '@/lib/wispr-automation';
 import { wisprAutomationNative } from '@/lib/wispr-automation-native';
 import { type WorkmuxNavScope } from '@/lib/workmux-app-commands';
-import {
-	createWorkmuxControlChannel,
-	disposeWorkmuxControlChannelAfterCleanup,
-	type WorkmuxControlChannel,
-} from '@/lib/workmux-control-channel';
 import { getWorkmuxAttachErrorCopy } from '@/lib/workmux-copy';
 import { BrowserActionsModal } from './components/BrowserActionsModal';
 import { CommandMenuModal } from './components/CommandMenuModal';
@@ -235,7 +219,10 @@ function ShellDetailRoute({
 	return result.status === 'invalid' ? (
 		<ShellRouteErrorScreen error={result.error} onBack={onBack} />
 	) : (
-		<ShellDetail request={result.request} />
+		<ShellDetail
+			key={createShellSessionMountKey(result.request)}
+			request={result.request}
+		/>
 	);
 }
 
@@ -404,93 +391,41 @@ function ShellDetail({ request }: { request: ShellRouteRequest }) {
 		eventId: agentEventId,
 		tapToken: agentTapToken,
 	} = request.agentRoute;
-	const hasTmuxAttachError = request.tmuxAttach.status === 'failed';
-	const tmuxSessionName = request.tmuxAttach.sessionName;
-	const tmuxAttachFailureReason =
-		request.tmuxAttach.status === 'failed'
-			? request.tmuxAttach.failureReason
-			: undefined;
 	const activity = useShellActivityController();
-	const getActivitySnapshot = activity.getSnapshot;
 
 	const router = useRouter();
 	const theme = useTheme();
 	const insets = useSafeAreaInsets();
-
-	const shell = useSshStore(
-		(s) => s.shells[`${connectionId}-${channelId}` as const],
+	const session = useShellSessionController({
+		request,
+		activity,
+		router,
+		logger,
+	});
+	const { snapshot, ports, identity, tmux, storedConnectionId } = session;
+	const activityPort = ports.activity;
+	const activitySnapshot = useSyncExternalStore(
+		activityPort.subscribe,
+		activityPort.getSnapshot,
+		activityPort.getSnapshot,
 	);
-	const connection = useSshStore((s) => s.connections[connectionId]);
-	const connectionStoredConnectionId = connection
-		? getStoredConnectionId(connection.connectionDetails)
-		: undefined;
-	const storedConnectionId =
-		request.storedConnectionId ?? connectionStoredConnectionId;
-	const isAutoConnecting = useAutoConnectStore((s) => s.isAutoConnecting);
-	const isReconnecting = useAutoConnectStore((s) => s.isReconnecting);
-	const lastReconnectOutcome = useAutoConnectStore(
-		(s) => s.lastReconnectOutcome,
-	);
-	const activeDiagnosticTrace = useAutoConnectStore(
-		(s) => s.activeDiagnosticTrace,
-	);
-	const activeDiagnosticTraceRef = useRef(activeDiagnosticTrace);
-	useLayoutEffect(() => {
-		activeDiagnosticTraceRef.current = activeDiagnosticTrace;
-	}, [activeDiagnosticTrace]);
-	const workmuxDiagnosticTrace = useMemo(
-		() => ({
-			event: (event: ConnectionDiagnosticEvent) => {
-				activeDiagnosticTraceRef.current?.event(event);
-				const state = useSshStore.getState();
-				const storeKey = `${connectionId}-${channelId}` as const;
-				logger.info('Workmux diagnostic event', {
-					connectionId,
-					channelId,
-					kind: event.kind,
-					fields: formatConnectionDiagnosticEventFields(event),
-					message: (event as { message?: unknown }).message,
-					hasConnection: Boolean(state.connections[connectionId]),
-					hasShell: Boolean(state.shells[storeKey]),
-					connectionCount: Object.keys(state.connections).length,
-					shellCount: Object.keys(state.shells).length,
-				});
-			},
-		}),
-		[channelId, connectionId],
-	);
-	const [tmuxTarget, setTmuxTarget] = useState(
-		tmuxSessionName?.trim().length ? tmuxSessionName.trim() : 'main',
-	);
-	const [tmuxEnabled, setTmuxEnabled] = useState(false);
-	const normalizedTmuxTarget = tmuxTarget.trim().length
-		? tmuxTarget.trim()
-		: 'main';
-	const transportKey = useMemo(
-		() => createShellTransportKey(connectionId, channelId),
-		[channelId, connectionId],
-	);
-	const targetKey = useMemo(
-		() => createShellTargetKey(transportKey, tmuxTarget),
-		[tmuxTarget, transportKey],
-	);
+	const { transportKey, targetKey } = identity;
+	const { enabled: tmuxEnabled, target: tmuxTarget } = tmux;
+	const normalizedTmuxTarget = tmuxTarget.trim() || 'main';
+	const terminalSource = ports.terminalSource;
+	const shellAvailable = terminalSource.isAvailable();
+	const connection = snapshot.status === 'ready' ? ports.hostCommands : null;
+	const connectionStoredConnectionId = storedConnectionId;
 	const modalArbiter = useMemo(() => createShellModalArbiter(), []);
-	const workmuxControlChannel = useMemo<WorkmuxControlChannel>(() => {
-		void normalizedTmuxTarget;
-		return createWorkmuxControlChannel({
-			connection: connection ?? null,
-			trace: workmuxDiagnosticTrace,
-		});
-	}, [connection, normalizedTmuxTarget, workmuxDiagnosticTrace]);
+	const workmuxControlChannel = ports.workmux;
 	const [keyboardLateBindings] = useState(
 		createShellDetailKeyboardLateBindings,
 	);
-	const keyboardSelectionModeRef = useRef(false);
 	const [keyboardAuthority] = useState(() =>
 		createShellDetailKeyboardAuthorityRuntime(
 			{
 				targetKey,
-				activityGeneration: activity.snapshot.generation,
+				activityGeneration: activitySnapshot.generation,
 				tmuxEnabled,
 				workmuxControlChannel,
 			},
@@ -505,99 +440,27 @@ function ShellDetail({ request }: { request: ShellRouteRequest }) {
 		createShellDetailKeyboardCommitPublication({
 			authority: keyboardAuthority,
 			late: keyboardLateBindings,
-			publishSelectionMode: (enabled) => {
-				keyboardSelectionModeRef.current = enabled;
-			},
 		}),
 	);
 	useLayoutEffect(() => {
 		keyboardAuthority.reconcile({
 			targetKey,
-			activityGeneration: activity.snapshot.generation,
+			activityGeneration: activitySnapshot.generation,
 			tmuxEnabled,
 			workmuxControlChannel,
-			appActive: activity.snapshot.appActive,
-			focused: activity.snapshot.focused,
+			appActive: activitySnapshot.appActive,
+			focused: activitySnapshot.focused,
 		});
 	}, [
-		activity.snapshot.appActive,
-		activity.snapshot.focused,
-		activity.snapshot.generation,
+		activitySnapshot.appActive,
+		activitySnapshot.focused,
+		activitySnapshot.generation,
 		keyboardAuthority,
 		targetKey,
 		tmuxEnabled,
 		workmuxControlChannel,
 	]);
 	useEffect(() => keyboardAuthority.setup(), [keyboardAuthority]);
-
-	useEffect(() => {
-		if (hasTmuxAttachError) return;
-		if (shell && connection) return;
-		if (isAutoConnecting || isReconnecting) return;
-		if (connection && !shell) {
-			if (
-				isReconnecting === false &&
-				lastReconnectOutcome &&
-				lastReconnectOutcome.destination === 'hostPage'
-			) {
-				logger.info('reconnect failed, replacing route with host page', {
-					outcome: lastReconnectOutcome.status,
-				});
-				router.replace({
-					pathname: '/',
-					params: { editConnectionId: storedConnectionId ?? connectionId },
-				});
-				return;
-			}
-			logger.info(
-				'shell missing on active connection, waiting for reconnect cycle',
-			);
-			return;
-		}
-		logger.info('connection not found, replacing route with /shell');
-		router.back();
-	}, [
-		connection,
-		hasTmuxAttachError,
-		isAutoConnecting,
-		isReconnecting,
-		lastReconnectOutcome,
-		storedConnectionId,
-		connectionId,
-		router,
-		shell,
-	]);
-
-	useEffect(() => {
-		if (tmuxSessionName?.trim().length) {
-			// eslint-disable-next-line @eslint-react/hooks-extra/no-direct-set-state-in-use-effect -- Sync state from prop
-			setTmuxTarget(tmuxSessionName.trim());
-		}
-	}, [tmuxSessionName]);
-
-	useEffect(() => {
-		if (!storedConnectionId) return;
-		let cancelled = false;
-		void queryClient
-			.fetchQuery(secretsManager.connections.query.get(storedConnectionId))
-			.then((entry) => {
-				if (cancelled) return;
-				const details = entry?.value;
-				if (!details) return;
-				const useTmux = details.useTmux ?? true;
-				setTmuxEnabled(useTmux);
-				if (useTmux) {
-					const sessionName = details.tmuxSessionName?.trim() || 'main';
-					setTmuxTarget(sessionName);
-				}
-			})
-			.catch((error) => {
-				logger.warn('Failed to load tmux session info', error);
-			});
-		return () => {
-			cancelled = true;
-		};
-	}, [storedConnectionId]);
 
 	const [navScope] = preferences.workmuxNavScope.useWorkmuxNavScopePref();
 	const {
@@ -666,40 +529,25 @@ function ShellDetail({ request }: { request: ShellRouteRequest }) {
 		},
 		[normalizedTmuxTarget],
 	);
-	const scrollbackRuntimeChangedRef = useRef<
-		(instanceId: string | null) => void
-	>(() => {});
-	const handleTerminalRuntimeChanged = useCallback(
-		(runtimeKey: TerminalRuntimeKey | null, instanceId: string | null) => {
-			keyboardAuthority.onRuntimeChanged(runtimeKey, instanceId, () => {
-				scrollbackRuntimeChangedRef.current(instanceId);
-			});
-		},
-		[keyboardAuthority],
-	);
 	const terminal = useShellTerminalController({
-		shell,
-		transportKey,
+		source: terminalSource,
 		platformOS: Platform.OS,
 		systemKeyboardEnabled: Platform.OS === 'android',
-		selectionModeEnabled: false,
 		logger,
 		router,
-		onRuntimeChanged: handleTerminalRuntimeChanged,
 	});
 	const scrollback = useShellScrollbackController({
-		activity,
+		runtimeInstanceId: terminal.runtimeInstanceId,
 		context: {
+			activity: activityPort,
 			targetKey,
 			targetName: normalizedTmuxTarget,
 			connectionAvailable: Boolean(connection),
-			shellAvailable: Boolean(shell),
+			shellAvailable,
 			tmuxEnabled,
-			getActivitySnapshot,
-			getSelectionModeEnabled: () => keyboardSelectionModeRef.current,
 			terminalTransport: terminal.transport,
 			terminalView: terminal.view,
-			workmuxScroll: workmuxControlChannel.scroll,
+			workmux: workmuxControlChannel,
 			trace: traceScroll,
 			feedback: {
 				alert: (title, message, buttons) =>
@@ -713,33 +561,7 @@ function ShellDetail({ request }: { request: ShellRouteRequest }) {
 			getErrorMessage,
 			logger,
 		},
-		onTeardownCleanup: (cleanup) => {
-			const disposeReason = useAutoConnectStore.getState().isReconnecting
-				? 'reconnect'
-				: 'unmount';
-			disposeWorkmuxControlChannelAfterCleanup({
-				cleanup,
-				prepareDispose: () =>
-					workmuxControlChannel.prepareDispose({ reason: disposeReason }),
-				dispose: () => workmuxControlChannel.dispose({ reason: disposeReason }),
-				onCleanupError: (error) =>
-					reportShellScrollbackChannelCleanupError({
-						error,
-						logger,
-					}),
-				onDisposeError: (error) => {
-					try {
-						logger.warn('Workmux control channel dispose failed', error);
-					} catch {
-						// Channel teardown must not depend on diagnostics.
-					}
-				},
-			});
-		},
 	});
-	scrollbackRuntimeChangedRef.current = scrollback.onTerminalRuntimeChanged;
-	const terminalSizeSnapshotRef = useRef(terminal.lastSize);
-	terminalSizeSnapshotRef.current = terminal.lastSize;
 
 	const clearWisprOpeningTimeout = useCallback(() => {
 		if (!wisprOpeningTimeoutRef.current) return;
@@ -1379,35 +1201,16 @@ function ShellDetail({ request }: { request: ShellRouteRequest }) {
 
 	const activeTmuxSessionName = tmuxTarget.trim() || 'main';
 	const worktreeWorkspace = useWorktreeWorkspaceController({
-		connection: connection ?? null,
+		connectionAvailable: connection !== null,
 		tmuxEnabled,
 		sessionName: activeTmuxSessionName,
 		sourceKey: targetKey,
-		workmuxControlChannel,
+		workmux: workmuxControlChannel,
 		arbiter: modalArbiter,
 	});
 
-	const runBrowserActionsWorkmuxCommand = useCallback(
-		async (_connection: unknown, argv: string[], timeoutMs: number) => {
-			const result = await workmuxControlChannel.command(argv, {
-				timeoutMs,
-			});
-			if (!result.success) {
-				throw new Error(
-					result.error || result.output || 'Workmux command failed.',
-				);
-			}
-			return result.output;
-		},
-		[workmuxControlChannel],
-	);
-	const runNotificationWorkmuxCommand = useCallback(
-		(argv: string[], timeoutMs: number) =>
-			runBrowserActionsWorkmuxCommand(null, argv, timeoutMs),
-		[runBrowserActionsWorkmuxCommand],
-	);
 	useShellNotificationsController({
-		activity,
+		activity: activityPort,
 		commandPortKey: workmuxControlChannel,
 		context: {
 			transportKey,
@@ -1424,36 +1227,33 @@ function ShellDetail({ request }: { request: ShellRouteRequest }) {
 			agentEventId,
 			agentTapToken,
 		},
-		runWorkmuxCommand: runNotificationWorkmuxCommand,
+		workmux: workmuxControlChannel,
 		logger,
 	});
-
 	const browserActions = useBrowserActionsController({
-		connection: connection ?? null,
+		hostCommands: connection,
+		workmux: workmuxControlChannel,
 		tmuxEnabled,
 		tmuxTarget,
 		sourceKey: targetKey,
-		executeSideChannelCommand,
-		runWorkmuxCommand: runBrowserActionsWorkmuxCommand,
 		getErrorMessage,
 		arbiter: modalArbiter,
 	});
 	const manualTerminalFitRunner = useMemo(
 		() =>
 			createManualTerminalFitRunner({
-				getConnection: () => connection ?? null,
+				getHostCommands: () => connection,
 				isTmuxEnabled: () => tmuxEnabled,
-				getTerminalSize: () => terminalSizeSnapshotRef.current,
+				getTerminalSize: terminal.getLastSize,
 				getXterm: () => terminal.view,
 				getTargetName: () => tmuxTarget.trim() || 'main',
 				waitForTerminalSizeAfterFit: terminal.waitForSizeAfterFit,
 				resizePty: async (cols, rows) => {
-					if (!shell) {
+					if (!terminalSource.isAvailable()) {
 						throw new Error('No shell is available.');
 					}
-					await shell.resizePty(cols, rows);
+					await terminalSource.resizePty(cols, rows);
 				},
-				executeSideChannelCommand,
 				showFailure: (title, message) => {
 					Alert.alert(title, message);
 				},
@@ -1461,18 +1261,22 @@ function ShellDetail({ request }: { request: ShellRouteRequest }) {
 			}),
 		[
 			connection,
-			shell,
+			terminalSource,
+			terminal.getLastSize,
 			terminal.view,
 			terminal.waitForSizeAfterFit,
 			tmuxEnabled,
 			tmuxTarget,
 		],
 	);
+	useLayoutEffect(
+		() => () => manualTerminalFitRunner.cancelCurrent(),
+		[manualTerminalFitRunner],
+	);
 	const featureRequest = useFeatureRequestController({
-		connection: connection ?? null,
+		hostCommands: connection,
 		resolveCurrentGitHubRepository:
 			browserActions.resolveCurrentGitHubRepository,
-		executeSideChannelCommand,
 		getErrorMessage,
 		logger,
 		arbiter: modalArbiter,
@@ -1645,7 +1449,7 @@ function ShellDetail({ request }: { request: ShellRouteRequest }) {
 
 	const ignoreDiagnosticTerminalPaste = useCallback((_value: string) => {}, []);
 	const debugConnectionInCodex = useConnectionDebugCommand({
-		appActive: activity.snapshot.appActive,
+		appActive: activitySnapshot.appActive,
 		closeMenu: commandMenuModal.onClose,
 		allowTerminalPaste: false,
 		pasteIntoTerminal: ignoreDiagnosticTerminalPaste,
@@ -1709,7 +1513,7 @@ function ShellDetail({ request }: { request: ShellRouteRequest }) {
 	);
 	const keyboardControllerInput = createShellDetailKeyboardControllerInput({
 		initialShellConfigState: shellConfigState,
-		activity,
+		activity: activityPort,
 		targetKey,
 		scrollback,
 		terminal,
@@ -1719,7 +1523,7 @@ function ShellDetail({ request }: { request: ShellRouteRequest }) {
 			connectionId,
 			channelId,
 			workmuxControlChannel,
-			source: connection,
+			hostCommands: connection,
 		},
 		navScope,
 		setNavScope: (scope: WorkmuxNavScope) =>
@@ -1730,13 +1534,7 @@ function ShellDetail({ request }: { request: ShellRouteRequest }) {
 		debugConnectionInCodex,
 		reloadRuntimeShellConfig: reloadRuntimeShellConfigFromRemote,
 		showAlert: (title: string, message: string) => Alert.alert(title, message),
-		invalidateShellTransport: (
-			nextConnectionId: string,
-			nextChannelId: number,
-		) =>
-			useSshStore
-				.getState()
-				.invalidateShellTransport(nextConnectionId, nextChannelId),
+		invalidateShellTransport: session.invalidateShellTransport,
 		configureCommands,
 		logger,
 		platformOS: Platform.OS,
@@ -1744,7 +1542,6 @@ function ShellDetail({ request }: { request: ShellRouteRequest }) {
 	const keyboard = useShellKeyboardController(keyboardControllerInput);
 	const pendingKeyboardPublication = keyboardPublication.prepareKeyboard({
 		handle: keyboard,
-		selectionModeEnabled: keyboard.selectionModeEnabled,
 	});
 	useLayoutEffect(
 		() => pendingKeyboardPublication.commit(),
@@ -1752,11 +1549,10 @@ function ShellDetail({ request }: { request: ShellRouteRequest }) {
 	);
 
 	const skillSelector = useSkillSelectorController({
-		connection,
+		hostCommands: connection,
+		workmux: workmuxControlChannel,
+		input: scrollback.input,
 		tmuxEnabled,
-		runHostBrowserCommand: browserActions.runHostBrowserCommand,
-		resolveHostBrowserWorkspace: browserActions.resolveHostBrowserWorkspace,
-		sendTextRaw: keyboard.commanderProps.onPasteText,
 		sourceKey: targetKey,
 		stableConnectionId: connectionStoredConnectionId ?? connectionId,
 		tmuxTarget: activeTmuxSessionName,
@@ -1783,29 +1579,32 @@ function ShellDetail({ request }: { request: ShellRouteRequest }) {
 		[autoWisprEnabled, wisprAutomationState, wisprTextEditorAvailability],
 	);
 
-	if (hasTmuxAttachError) {
-		return (
-			<TmuxAttachErrorScreen
-				failureReason={tmuxAttachFailureReason}
-				sessionName={tmuxSessionName ?? 'main'}
-				onEdit={() => {
-					router.replace({
-						pathname: '/',
-						params: { editConnectionId: storedConnectionId ?? connectionId },
-					});
-				}}
-			/>
-		);
+	let showReconnectOverlay = false;
+	switch (snapshot.status) {
+		case 'attach-error':
+			return (
+				<TmuxAttachErrorScreen
+					failureReason={snapshot.failureReason}
+					sessionName={snapshot.sessionName}
+					onEdit={() => {
+						router.replace({
+							pathname: '/',
+							params: { editConnectionId: storedConnectionId ?? connectionId },
+						});
+					}}
+				/>
+			);
+		case 'leaving':
+			return null;
+		case 'waiting':
+			if (!terminal.hasRendered) return <RouteSkeleton />;
+			showReconnectOverlay = true;
+			break;
+		case 'ready':
+			break;
 	}
 
-	const shouldRenderTerminal =
-		terminal.hasRendered || Boolean(shell && connection);
-	const showReconnectOverlay =
-		(isAutoConnecting || isReconnecting) && (!shell || !connection);
 	const ScrollbackIcon = resolveLucideIcon('ArrowDownToLine');
-	if (!shouldRenderTerminal) {
-		return isAutoConnecting || isReconnecting ? <RouteSkeleton /> : null;
-	}
 
 	return (
 		<>

@@ -36,11 +36,10 @@ export type FeatureRequestControllerHandle = {
 	markSourceStale: () => void;
 };
 
-export type FeatureRequestControllerDeps<TConnection> =
-	FeatureRequestControllerDependencies<TConnection>;
+export type FeatureRequestControllerDeps = FeatureRequestControllerDependencies;
 
-export function useFeatureRequestController<TConnection>(
-	deps: FeatureRequestControllerDeps<TConnection>,
+export function useFeatureRequestController(
+	deps: FeatureRequestControllerDeps,
 ): FeatureRequestControllerHandle {
 	const committedDepsRef = useRef(deps);
 	const [adapter] = useState(() =>

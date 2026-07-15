@@ -8,10 +8,6 @@ import {
 	parseWorkmuxAppContextOutput,
 } from '../workmux-app-commands';
 import {
-	type WorkmuxControlChannel,
-	type WorkmuxControlCommandResult,
-} from '../workmux-control-channel';
-import {
 	buildCloseWorktreeWorkspaceRequest,
 	buildCreateWorktreeWorkspaceRequest,
 	buildPrepareCloseWorktreeWorkspaceRequest,
@@ -27,15 +23,20 @@ import {
 	WORKTREE_WORKSPACE_PREPARE_NEW_OPERATION_ID,
 } from '../worktree-workspace-bridge';
 import { type ShellModalArbiter } from './modal-arbiter';
+import {
+	type ShellWorkmuxOutcome,
+	type ShellWorkmuxPort,
+} from './session-contracts';
+import { type ShellTargetKey } from './source-keys';
 import { type WorktreeWorkspaceFailure } from './worktree-workspace-contracts';
 import { type WorktreeWorkspaceCoreDependencies } from './worktree-workspace-core';
 
-export type WorktreeWorkspaceControllerDependencies<TConnection> = Readonly<{
-	connection: TConnection | null;
+export type WorktreeWorkspaceControllerDependencies = Readonly<{
+	connectionAvailable: boolean;
 	tmuxEnabled: boolean;
 	sessionName: string;
-	sourceKey: unknown;
-	workmuxControlChannel: Pick<WorkmuxControlChannel, 'command' | 'operation'>;
+	sourceKey: ShellTargetKey;
+	workmux: Pick<ShellWorkmuxPort, 'command' | 'operation'>;
 	arbiter: ShellModalArbiter;
 }>;
 
@@ -158,39 +159,46 @@ function requestError(
 	);
 }
 
-async function runBridgeRequest(
-	request: () => Promise<WorkmuxControlCommandResult>,
-): Promise<string> {
-	let result: WorkmuxControlCommandResult;
-	try {
-		result = await request();
-	} catch (error) {
-		throw requestError(readMessage(error), readFailureClass(error));
+function unwrapWorkmuxOutcome(outcome: ShellWorkmuxOutcome): string {
+	switch (outcome.status) {
+		case 'completed':
+			return outcome.output ?? '';
+		case 'failed':
+			throw requestError(outcome.failure.message, outcome.failure.failureClass);
+		case 'superseded':
+			throw requestError('Worktree workspace request was superseded.');
+		case 'unavailable':
+			throw requestError('Worktree workspace request is unavailable.');
 	}
-	if (!result.success) {
-		throw requestError(result.error, result.failureClass);
-	}
-	return result.output;
 }
 
-export function createWorktreeWorkspaceControllerAdapter<TConnection>(input: {
-	getCommittedDependencies(): WorktreeWorkspaceControllerDependencies<TConnection>;
+async function runBridgeRequest(
+	request: () => Promise<ShellWorkmuxOutcome>,
+): Promise<string> {
+	try {
+		return unwrapWorkmuxOutcome(await request());
+	} catch (error) {
+		if (error instanceof WorktreeWorkspaceRequestError) throw error;
+		throw requestError(readMessage(error), readFailureClass(error));
+	}
+}
+
+export function createWorktreeWorkspaceControllerAdapter(input: {
+	getCommittedDependencies(): WorktreeWorkspaceControllerDependencies;
 	reportPrecondition(failure: WorktreeWorkspaceFailure): void;
 	logger: WorktreeWorkspaceCoreDependencies['logger'];
 }): WorktreeWorkspaceControllerAdapter {
 	const runOperation = (
-		request: Parameters<WorkmuxControlChannel['operation']>[0],
+		request: Parameters<ShellWorkmuxPort['operation']>[0],
 	) =>
 		runBridgeRequest(() =>
-			input
-				.getCommittedDependencies()
-				.workmuxControlChannel.operation(request, {
-					timeoutMs: WORKTREE_WORKSPACE_OPERATION_TIMEOUT_MS,
-				}),
+			input.getCommittedDependencies().workmux.operation(request, {
+				timeoutMs: WORKTREE_WORKSPACE_OPERATION_TIMEOUT_MS,
+			}),
 		);
 
 	return {
-		hasConnection: () => input.getCommittedDependencies().connection !== null,
+		hasConnection: () => input.getCommittedDependencies().connectionAvailable,
 		isWorkmuxEnabled: () => input.getCommittedDependencies().tmuxEnabled,
 		requestOpen: (onOpen) =>
 			input.getCommittedDependencies().arbiter.requestOpen({
@@ -201,7 +209,7 @@ export function createWorktreeWorkspaceControllerAdapter<TConnection>(input: {
 		resolveTarget: async () => {
 			const current = input.getCommittedDependencies();
 			const output = await runBridgeRequest(() =>
-				current.workmuxControlChannel.command(
+				current.workmux.command(
 					buildWorkmuxAppContextArgv(current.sessionName),
 					{ timeoutMs: WORKTREE_WORKSPACE_OPERATION_TIMEOUT_MS },
 				),

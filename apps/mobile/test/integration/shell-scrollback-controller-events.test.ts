@@ -39,6 +39,33 @@ void test('scrollback acknowledges only a current successful enter', async () =>
 	);
 });
 
+void test('scrollback registers retiring cleanup only while it owns remote copy mode', async () => {
+	const harness = createScrollbackHarness();
+	const executor = harness.executors[0];
+	assert.ok(executor);
+	executor.runEnterCommand = async () => true;
+	harness.core.onTerminalRuntimeChanged('instance-1');
+	assert.equal(harness.workmuxBeforeDispose.size, 0);
+
+	await harness.core.onScrollbackEnterRequested(enterEvent);
+
+	assert.equal(harness.workmuxBeforeDispose.size, 1);
+	const cleanup = [...harness.workmuxBeforeDispose.values()][0];
+	assert.ok(cleanup);
+	const exits: string[] = [];
+	await cleanup({
+		exitScroll: async ({ sessionName }) => {
+			exits.push(sessionName);
+			return { status: 'completed' };
+		},
+	});
+	assert.deepEqual(exits, ['main']);
+
+	harness.core.dispose();
+	assert.equal(harness.workmuxBeforeDispose.size, 0);
+	assert.equal(harness.workmuxUnregisterCount(), 1);
+});
+
 void test('scrollback focus invalidation rolls back an in-flight enter without ack', async () => {
 	const harness = createScrollbackHarness();
 	const entered = createDeferred<boolean>();
@@ -74,7 +101,7 @@ void test('scrollback stale enter cannot overwrite a reentrant newer target', as
 		...harness.context,
 		targetKey: createShellTargetKey('transport' as never, 'other'),
 		targetName: 'other',
-		workmuxScroll: replacementScroll,
+		workmux: { ...harness.context.workmux, scroll: replacementScroll },
 	});
 	entered.resolve(true);
 	await pending;
@@ -454,17 +481,23 @@ for (const boundary of [
 		} else if (boundary === 'activity') {
 			harness.core.setContext({
 				...harness.context,
-				getActivitySnapshot: () => {
-					reenter();
-					return harness.context.getActivitySnapshot();
+				activity: {
+					...harness.context.activity,
+					getSnapshot: () => {
+						reenter();
+						return harness.context.activity.getSnapshot();
+					},
 				},
 			});
 		} else if (boundary === 'selection') {
 			harness.core.setContext({
 				...harness.context,
-				getSelectionModeEnabled: () => {
-					reenter();
-					return false;
+				terminalView: {
+					...harness.context.terminalView,
+					getSelectionModeEnabled: () => {
+						reenter();
+						return false;
+					},
 				},
 			});
 		} else {

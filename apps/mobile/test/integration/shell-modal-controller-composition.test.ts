@@ -2,28 +2,6 @@ import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
-import { createShellModalArbiter } from '../../src/lib/shell-controllers/modal-arbiter';
-import { createWorktreeWorkspaceControllerAdapter } from '../../src/lib/shell-controllers/worktree-workspace-adapter';
-
-function createWorktreeAdapter(
-	arbiter: ReturnType<typeof createShellModalArbiter>,
-) {
-	return createWorktreeWorkspaceControllerAdapter({
-		getCommittedDependencies: () => ({
-			connection: {},
-			tmuxEnabled: true,
-			sessionName: 'main',
-			sourceKey: 'source-a',
-			workmuxControlChannel: {
-				command: async () => ({ success: true, output: '' }),
-				operation: async () => ({ success: true, output: '' }),
-			},
-			arbiter,
-		}),
-		reportPrecondition: () => {},
-		logger: { error: () => {} },
-	});
-}
 
 function extractBlock(source: string, start: string, end: string): string {
 	const startIndex = source.indexOf(start);
@@ -58,18 +36,23 @@ void test('shell detail composes focused modal controllers without shell-modals'
 	assert.match(source, /shell-controllers\/skill-selector/);
 	assert.match(source, /shell-controllers\/simple-modals/);
 	assert.match(source, /createShellModalArbiter/);
-	assert.match(source, /createShellTransportKey\(connectionId, channelId\)/);
-	assert.match(source, /createShellTargetKey\(transportKey, tmuxTarget\)/);
+	assert.match(source, /const \{ transportKey, targetKey \} = identity/);
 	assert.match(source, /useShellSimpleModals\(modalArbiter\)/);
 	assert.match(browserBlock, /sourceKey: targetKey/);
+	assert.match(browserBlock, /hostCommands: connection/);
+	assert.match(browserBlock, /workmux: workmuxControlChannel/);
 	assert.match(browserBlock, /arbiter: modalArbiter/);
+	assert.match(featureBlock, /hostCommands: connection/);
 	assert.match(featureBlock, /arbiter: modalArbiter/);
+	assert.match(skillBlock, /hostCommands: connection/);
+	assert.match(skillBlock, /workmux: workmuxControlChannel/);
+	assert.match(skillBlock, /input: scrollback\.input/);
 	assert.match(skillBlock, /tmuxEnabled/);
 	assert.match(skillBlock, /sourceKey: targetKey/);
 	assert.match(skillBlock, /arbiter: modalArbiter/);
-	assert.match(
+	assert.doesNotMatch(
 		skillBlock,
-		/sendTextRaw: keyboard\.commanderProps\.onPasteText/,
+		/sendTextRaw|runHostBrowserCommand|resolveHostBrowserWorkspace/,
 	);
 	assert.match(
 		source,
@@ -118,8 +101,8 @@ void test('shell detail tracks tmux-only lifecycle changes separately from targe
 	);
 	assert.match(source, /^\s*targetKey,\s*$/m);
 	assert.match(source, /^\s*tmuxEnabled,\s*$/m);
-	assert.match(source, /^\s*source: connection,\s*$/m);
-	assert.match(source, /remote:\s*\{[\s\S]*?source: connection,/);
+	assert.match(source, /^\s*hostCommands: connection,\s*$/m);
+	assert.match(source, /remote:\s*\{[\s\S]*?hostCommands: connection,/);
 	assert.doesNotMatch(
 		source,
 		/syncShellCommandLifecycle|workmuxKeyboardCommandRunner/,
@@ -141,86 +124,5 @@ void test('shell detail tracks tmux-only lifecycle changes separately from targe
 			),
 		),
 		false,
-	);
-});
-
-void test('worktree workspace arbiter admission closes every conflicting shell modal first', () => {
-	const events: string[] = [];
-	const arbiter = createShellModalArbiter();
-	const conflicts = [
-		'command-menu',
-		'commander',
-		'text-entry',
-		'configure',
-		'browser-actions',
-		'feature-request',
-		'skill-selector',
-	] as const;
-	for (const conflict of conflicts) {
-		arbiter.register(conflict, ({ opening }) => {
-			assert.equal(opening, 'worktree-workspace');
-			events.push(`close:${conflict}`);
-		});
-	}
-
-	const adapter = createWorktreeAdapter(arbiter);
-	assert.equal(
-		adapter.requestOpen(() => events.push('open:worktree-workspace')),
-		true,
-	);
-	assert.deepEqual(events, [
-		...conflicts.map((conflict) => `close:${conflict}`),
-		'open:worktree-workspace',
-	]);
-});
-
-void test('worktree workspace arbiter admission stops when a conflicting modal blocks close', () => {
-	const events: string[] = [];
-	const arbiter = createShellModalArbiter();
-	arbiter.register('command-menu', () => {
-		events.push('close:command-menu');
-	});
-	arbiter.register('commander', () => {
-		events.push('block:commander');
-		return false;
-	});
-	arbiter.register('text-entry', () => {
-		events.push('close:text-entry');
-	});
-
-	const adapter = createWorktreeAdapter(arbiter);
-	assert.equal(
-		adapter.requestOpen(() => events.push('opened')),
-		false,
-	);
-	assert.deepEqual(events, ['close:command-menu', 'block:commander']);
-});
-
-void test('worktree workspace hook owns committed source lifecycle without terminal input', () => {
-	const source = readFileSync(
-		join(process.cwd(), 'src/lib/shell-controllers/worktree-workspace.tsx'),
-		'utf8',
-	);
-	const adapterSource = readFileSync(
-		join(
-			process.cwd(),
-			'src/lib/shell-controllers/worktree-workspace-adapter.ts',
-		),
-		'utf8',
-	);
-	assert.match(
-		source,
-		/getCommittedDependencies: \(\) => committedDepsRef\.current/,
-	);
-	assert.match(
-		source,
-		/syncControllerSource\(\{[\s\S]*?dependencies: deps,[\s\S]*?core,[\s\S]*?\}\)/,
-	);
-	assert.match(source, /createReplaySafeControllerLifecycle\(core\)/);
-	assert.match(source, /adapter\.registerClose\(core\.close\)/);
-	assert.match(source, /Alert\.alert\('Worktree Workspace', failure\.message/);
-	assert.doesNotMatch(
-		`${source}\n${adapterSource}`,
-		/sendTextRaw|sendBytes|runCommandSteps|terminal-transport/,
 	);
 });

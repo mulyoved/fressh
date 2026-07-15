@@ -1,19 +1,15 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-// eslint-disable-next-line import/consistent-type-specifier-style -- Avoid evaluating React Native in Node integration tests.
-import type { SshShell } from '@fressh/react-native-uniffi-russh';
 // eslint-disable-next-line import/consistent-type-specifier-style -- Avoid evaluating the React Native WebView package in Node tests.
 import type { XtermWebViewHandle } from '@fressh/react-native-xtermjs-webview';
 import { createReplaySafeDisposer } from '../../src/lib/shell-controllers/controller-core';
+import { type ShellTerminalSourcePort } from '../../src/lib/shell-controllers/session-contracts';
 import { createShellTransportKey } from '../../src/lib/shell-controllers/source-keys';
 import {
 	createShellTerminalHookRuntime,
 	type TerminalHookRuntimeFactories,
 } from '../../src/lib/shell-controllers/terminal-hook-runtime';
-import {
-	type CreateTerminalLifecycleControllerInput,
-	type TerminalLifecycleController,
-} from '../../src/lib/shell-controllers/terminal-lifecycle-core';
+import { type TerminalLifecycleController } from '../../src/lib/shell-controllers/terminal-lifecycle-core';
 import {
 	type CreateTerminalSizeControllerInput,
 	type TerminalSizeController,
@@ -44,12 +40,15 @@ function createFixture(
 	let transportInput:
 		| Parameters<TerminalHookRuntimeFactories['createTransport']>[0]
 		| undefined;
-	let lifecycleInput: CreateTerminalLifecycleControllerInput | undefined;
 	let sizeInput: CreateTerminalSizeControllerInput | undefined;
 	let lifecycleSnapshot = {
 		ready: false,
 		hasRendered: false,
 		runtimeKey: null,
+		runtimeInstanceId: null,
+	};
+	let sizeSnapshot: { lastSize: { cols: number; rows: number } | null } = {
+		lastSize: null,
 	};
 	const transport: ShellTerminalTransportController = {
 		captureLease: () => null,
@@ -63,11 +62,13 @@ function createFixture(
 		dispose: () => calls.push('transport.dispose'),
 	};
 	const size: TerminalSizeController = {
-		getSnapshot: () => ({ lastSize: null }),
+		getSnapshot: () => sizeSnapshot,
 		subscribe: () => () => {},
 		invalidate: () => {},
 		dispose: () => calls.push('size.dispose'),
-		handleResize: () => {},
+		handleResize: (cols, rows) => {
+			sizeSnapshot = { lastSize: { cols, rows } };
+		},
 		waitForSizeAfterFit: async () => null,
 	};
 	const lifecycle: TerminalLifecycleController = {
@@ -109,7 +110,7 @@ function createFixture(
 		},
 		createLifecycle: (input) => {
 			counts.lifecycle += 1;
-			lifecycleInput = input;
+			void input;
 			return lifecycle;
 		},
 		createDisposer: (dispose, defer) => {
@@ -128,8 +129,6 @@ function createFixture(
 				warn: (message) => oldEvents.push(`warn:${message}`),
 			},
 			router: { back: () => oldEvents.push('back') },
-			onRuntimeChanged: (_key, instanceId) =>
-				oldEvents.push(`runtime:${instanceId}`),
 		},
 		factories,
 		deferDisposal: (task) => deferredTasks.push(task),
@@ -145,10 +144,6 @@ function createFixture(
 			assert.ok(transportInput);
 			return transportInput;
 		},
-		getLifecycleInput: () => {
-			assert.ok(lifecycleInput);
-			return lifecycleInput;
-		},
 		getSizeInput: () => {
 			assert.ok(sizeInput);
 			return sizeInput;
@@ -159,13 +154,19 @@ function createFixture(
 	};
 }
 
-function createShell(calls: string[]): SshShell {
+function createShell(calls: string[]): ShellTerminalSourcePort {
+	const key = createShellTransportKey('connection-a', 7);
 	return {
-		sendData: async (buffer: ArrayBuffer) =>
-			calls.push(`send:${new Uint8Array(buffer).join(',')}`),
+		key,
+		generation: 0,
+		connectionId: 'connection-a',
+		channelId: 7,
+		isAvailable: () => true,
+		sendData: async (buffer: Uint8Array) =>
+			calls.push(`send:${buffer.join(',')}`),
 		resizePty: async (cols: number, rows: number) =>
 			calls.push(`resize:${cols}x${rows}`),
-	} as unknown as SshShell;
+	} as unknown as ShellTerminalSourcePort;
 }
 
 function createXterm(calls: string[]): XtermWebViewHandle {
@@ -194,7 +195,7 @@ void test('hook runtime creates cores once and behaviorally delegates layout, at
 
 	const shell = createShell(fixture.calls);
 	const key = createShellTransportKey('connection-a', 7);
-	fixture.runtime.updateShell(key, shell);
+	fixture.runtime.updateSource(shell);
 	fixture.runtime.updateViewModes({
 		systemKeyboardEnabled: false,
 		selectionModeEnabled: true,
@@ -217,18 +218,10 @@ void test('hook runtime creates cores once and behaviorally delegates layout, at
 			warn: (message) => currentEvents.push(`warn:${message}`),
 		},
 		router: { back: () => currentEvents.push('back') },
-		onRuntimeChanged: (_runtimeKey, instanceId) =>
-			currentEvents.push(`runtime:${instanceId}`),
 	});
 	fixture.getTransportInput().onSendFailure(new Error('send failed'));
-	fixture.getLifecycleInput().onRuntimeChanged(null, 'instance-2');
 	fixture.runtime.retry();
-	assert.deepEqual(currentEvents, [
-		'warn:sendData failed',
-		'back',
-		'runtime:instance-2',
-		'back',
-	]);
+	assert.deepEqual(currentEvents, ['warn:sendData failed', 'back', 'back']);
 	assert.deepEqual(fixture.oldEvents, []);
 
 	const callsBeforeGuardedView = fixture.calls.length;
@@ -238,7 +231,10 @@ void test('hook runtime creates cores once and behaviorally delegates layout, at
 	fixture.runtime.view.setSelectionModeEnabled(true);
 	fixture.runtime.view.exitScrollback({ requestId: 1 });
 	fixture.runtime.view.sendScrollbackEnterAck(2, 'instance-1');
-	assert.equal(fixture.calls.length, callsBeforeGuardedView);
+	assert.deepEqual(fixture.calls.slice(callsBeforeGuardedView), [
+		'modes:true:true',
+		'modes:true:true',
+	]);
 	assert.equal(fixture.runtime.view.getRuntimeKey(), null);
 	assert.equal(fixture.runtime.view.getRuntimeInstanceId(), 'instance-1');
 	assert.equal(fixture.runtime.view.isCurrentInstance('instance-1'), true);
@@ -249,9 +245,11 @@ void test('hook runtime creates cores once and behaviorally delegates layout, at
 	assert.equal(await fixture.runtime.view.getSelection(), 'selected');
 	fixture.runtime.view.exitScrollback({ requestId: 4 });
 	fixture.runtime.view.sendScrollbackEnterAck(5, 'instance-2');
-	assert.deepEqual(fixture.calls.slice(-5), [
+	assert.deepEqual(fixture.calls.slice(-7), [
 		'fit',
+		'modes:true:true',
 		'keyboard:true',
+		'modes:true:true',
 		'selection:true',
 		'exit:4',
 		'ack:5:instance-2',
@@ -261,34 +259,77 @@ void test('hook runtime creates cores once and behaviorally delegates layout, at
 	assert.ok(fixture.calls.includes('resize:80x24'));
 });
 
+void test('terminal runtime owns current size and applied selection state', () => {
+	const fixture = createFixture();
+	fixture.runtime.size.handleResize(91, 27);
+	fixture.runtime.view.setSelectionModeEnabled(true);
+
+	assert.deepEqual(fixture.runtime.getLastSize(), { cols: 91, rows: 27 });
+	assert.equal(fixture.runtime.view.getSelectionModeEnabled(), true);
+});
+
+void test('retired terminal view ports are inert', async () => {
+	const fixture = createFixture();
+	fixture.xtermRef.current = createXterm(fixture.calls);
+	const view = fixture.runtime.view as typeof fixture.runtime.view & {
+		getSelectionModeEnabled?(): boolean;
+	};
+	fixture.runtime.view.setSelectionModeEnabled(true);
+	const cleanup = fixture.runtime.setupDisposal();
+	cleanup();
+	fixture.deferredTasks.shift()?.();
+	const callsAfterDispose = [...fixture.calls];
+
+	fixture.runtime.view.fit();
+	fixture.runtime.view.setSystemKeyboardEnabled(true);
+	fixture.runtime.view.setSelectionModeEnabled(true);
+	fixture.runtime.view.exitScrollback({ requestId: 9 });
+	fixture.runtime.view.sendScrollbackEnterAck(10, 'retired-instance');
+
+	assert.deepEqual(fixture.calls, callsAfterDispose);
+	assert.equal(fixture.runtime.view.getRuntimeKey(), null);
+	assert.equal(fixture.runtime.view.getRuntimeInstanceId(), null);
+	assert.equal(view.getSelectionModeEnabled?.(), false);
+	assert.equal(await fixture.runtime.view.getSelection(), '');
+});
+
 void test('same-key shell replacement stales delayed transport work before redirecting sends', async () => {
 	const shellAFirstSend = deferred<void>();
 	const shellACalls: number[][] = [];
 	const shellBCalls: number[][] = [];
+	const key = createShellTransportKey('connection-a', 7);
 	const shellA = {
-		sendData: async (buffer: ArrayBuffer) => {
-			shellACalls.push(Array.from(new Uint8Array(buffer)));
+		key,
+		generation: 0,
+		connectionId: 'connection-a',
+		channelId: 7,
+		isAvailable: () => true,
+		sendData: async (buffer: Uint8Array) => {
+			shellACalls.push(Array.from(buffer));
 			if (shellACalls.length === 1) await shellAFirstSend.promise;
 		},
 		resizePty: async () => {},
-	} as unknown as SshShell;
+	} as unknown as ShellTerminalSourcePort;
 	const shellB = {
-		sendData: async (buffer: ArrayBuffer) => {
-			shellBCalls.push(Array.from(new Uint8Array(buffer)));
+		key,
+		generation: 1,
+		connectionId: 'connection-a',
+		channelId: 7,
+		isAvailable: () => true,
+		sendData: async (buffer: Uint8Array) => {
+			shellBCalls.push(Array.from(buffer));
 		},
 		resizePty: async () => {},
-	} as unknown as SshShell;
+	} as unknown as ShellTerminalSourcePort;
 	const runtime = createShellTerminalHookRuntime({
 		xtermRef: { current: null },
 		platformOS: 'android',
 		dependencies: {
 			logger: { info: () => {}, warn: () => {} },
 			router: { back: () => {} },
-			onRuntimeChanged: () => {},
 		},
 	});
-	const key = createShellTransportKey('connection-a', 7);
-	runtime.updateShell(key, shellA);
+	runtime.updateSource(shellA);
 	runtime.transport.setRuntimeInstance('runtime-1');
 	const staleLease = runtime.transport.captureLease();
 	assert.ok(staleLease);
@@ -300,7 +341,7 @@ void test('same-key shell replacement stales delayed transport work before redir
 	await Promise.resolve();
 	assert.deepEqual(shellACalls, [[1]]);
 
-	runtime.updateShell(key, shellB);
+	runtime.updateSource(shellB);
 	assert.equal(runtime.transport.isLeaseCurrent(staleLease), false);
 	shellAFirstSend.resolve();
 	await staleBatch;
@@ -314,7 +355,7 @@ void test('same-key shell replacement stales delayed transport work before redir
 
 	const sameObjectLease = runtime.transport.captureLease();
 	assert.ok(sameObjectLease);
-	runtime.updateShell(key, shellB);
+	runtime.updateSource(shellB);
 	assert.equal(runtime.transport.isLeaseCurrent(sameObjectLease), true);
 	runtime.lifecycle.dispose();
 	runtime.size.dispose();
@@ -331,7 +372,6 @@ void test('hook runtime ordinary and Strict Mode cleanup attempts every disposer
 			warn: (message) => cleanupEvents.push(message),
 		},
 		router: { back: () => {} },
-		onRuntimeChanged: () => {},
 	});
 	const cleanup = ordinary.runtime.setupDisposal();
 	cleanup();
@@ -353,7 +393,6 @@ void test('hook runtime ordinary and Strict Mode cleanup attempts every disposer
 			},
 		},
 		router: { back: () => {} },
-		onRuntimeChanged: () => {},
 	});
 	const throwingCleanup = throwingLogger.runtime.setupDisposal();
 	throwingCleanup();
@@ -390,7 +429,6 @@ void test('replayed pending attach reports failure once through the latest logge
 			warn: (message) => currentEvents.push(message),
 		},
 		router: { back: () => {} },
-		onRuntimeChanged: () => {},
 	});
 	const replayed = fixture.runtime.requestAttach(true, true);
 	const error = new Error('attach failed');
@@ -409,7 +447,6 @@ void test('replayed pending attach reports failure once through the latest logge
 			},
 		},
 		router: { back: () => {} },
-		onRuntimeChanged: () => {},
 	});
 	const observed = throwingFixture.runtime.requestAttach(true, true);
 	throwing.reject(error);

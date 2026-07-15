@@ -32,7 +32,7 @@ export function createShellDetailKeyboardControllerInput(
 			connectionId: input.remote.connectionId,
 			channelId: input.remote.channelId,
 			workmuxControlChannel: input.remote.workmuxControlChannel,
-			source: input.remote.source,
+			hostCommands: input.remote.hostCommands,
 		},
 		navScope: input.navScope,
 		setNavScope: input.setNavScope,
@@ -155,11 +155,6 @@ export type ShellDetailKeyboardAuthorityIdentity = {
 	workmuxControlChannel: unknown;
 };
 
-type ShellDetailKeyboardRuntimeIdentity = {
-	runtimeKey: unknown;
-	instanceId: string | null;
-};
-
 export type ShellDetailKeyboardAuthorityRuntime = {
 	replaceHandle(handle: {
 		invalidate(reason: ControllerInvalidationReason): void;
@@ -170,12 +165,6 @@ export type ShellDetailKeyboardAuthorityRuntime = {
 			focused: boolean;
 		},
 	): void;
-	onRuntimeChanged(
-		runtimeKey: unknown,
-		instanceId: string | null,
-		notify: () => void,
-	): void;
-	getRuntimeIdentity(): ShellDetailKeyboardRuntimeIdentity;
 	setup(): () => void;
 };
 
@@ -191,10 +180,6 @@ export function createShellDetailKeyboardAuthorityRuntime(
 	let handle: {
 		invalidate(reason: ControllerInvalidationReason): void;
 	} | null = null;
-	let runtimeIdentity: ShellDetailKeyboardRuntimeIdentity = {
-		runtimeKey: null,
-		instanceId: null,
-	};
 	let closed = false;
 	const invalidate = (reason: ControllerInvalidationReason) => {
 		try {
@@ -236,13 +221,6 @@ export function createShellDetailKeyboardAuthorityRuntime(
 			invalidate(reason);
 			identity = nextIdentity;
 		},
-		onRuntimeChanged: (runtimeKey, instanceId, notify) => {
-			if (closed) return;
-			invalidate('runtime-reset');
-			runtimeIdentity = { runtimeKey, instanceId };
-			notify();
-		},
-		getRuntimeIdentity: () => ({ ...runtimeIdentity }),
 		setup: disposer.setup,
 	};
 }
@@ -252,47 +230,39 @@ type ShellDetailKeyboardPublishedHandle = {
 };
 
 export type ShellDetailKeyboardCommitPublication = {
-	prepareKeyboard(input: {
-		handle: ShellDetailKeyboardPublishedHandle;
-		selectionModeEnabled: boolean;
-	}): { commit(): () => void };
+	prepareKeyboard(input: { handle: ShellDetailKeyboardPublishedHandle }): {
+		commit(): () => void;
+	};
 	prepareLateBindings(input: {
 		skillSelector: { open(): void; close(): void };
 		openWispr(): void;
 	}): { commit(): () => void };
 	getSnapshot(): {
 		keyboardHandle: ShellDetailKeyboardPublishedHandle | null;
-		selectionModeEnabled: boolean;
 	};
 };
 
 export function createShellDetailKeyboardCommitPublication(input: {
 	authority: Pick<ShellDetailKeyboardAuthorityRuntime, 'replaceHandle'>;
 	late: ShellDetailKeyboardLateBindings;
-	publishSelectionMode(enabled: boolean): void;
 	defer?: (task: () => void) => void;
 }): ShellDetailKeyboardCommitPublication {
 	const defer = input.defer ?? queueMicrotask;
 	let currentKeyboardOwner: symbol | null = null;
 	let currentLateOwner: symbol | null = null;
 	let keyboardHandle: ShellDetailKeyboardPublishedHandle | null = null;
-	let selectionModeEnabled = false;
 	return {
 		prepareKeyboard: (next) => ({
 			commit: () => {
 				const owner = Symbol('shell-detail-keyboard-publication');
 				currentKeyboardOwner = owner;
 				keyboardHandle = next.handle;
-				selectionModeEnabled = next.selectionModeEnabled;
 				input.authority.replaceHandle(next.handle);
-				input.publishSelectionMode(next.selectionModeEnabled);
 				return () => {
 					defer(() => {
 						if (currentKeyboardOwner !== owner) return;
 						currentKeyboardOwner = null;
 						keyboardHandle = null;
-						selectionModeEnabled = false;
-						input.publishSelectionMode(false);
 					});
 				};
 			},
@@ -312,6 +282,6 @@ export function createShellDetailKeyboardCommitPublication(input: {
 				};
 			},
 		}),
-		getSnapshot: () => ({ keyboardHandle, selectionModeEnabled }),
+		getSnapshot: () => ({ keyboardHandle }),
 	};
 }

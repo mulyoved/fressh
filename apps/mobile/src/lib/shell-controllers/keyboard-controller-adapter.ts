@@ -12,7 +12,6 @@ import {
 	type KeyboardExecutableItem,
 } from '@/lib/shell-config';
 import { type WorkmuxNavScope } from '../workmux-app-commands';
-import { type ShellActivitySnapshot } from './activity-core';
 import { type ControllerInvalidationReason } from './controller-core';
 import {
 	applyKeyboardSelectionMode,
@@ -25,13 +24,12 @@ import {
 import { type ShellKeyboardInputCore } from './keyboard-input-contracts';
 import { type ShellKeyboardRemoteCore } from './keyboard-remote-contracts';
 import { type ShellKeyboardStateCore } from './keyboard-state-core';
+import { type ShellActivityPort } from './session-contracts';
 import { type ShellTerminalRuntimeView } from './terminal-hook-runtime';
 
 export type ShellKeyboardModalCommands = {
 	toggleCommandMenu(): void;
 	openCommander(): void;
-	openNewWorktreeWorkspace(): void;
-	openCloseWorktreeWorkspace(): void;
 	openSkillSelector(): void;
 	openBrowserActions(): void;
 	openFeatureRequest(): void;
@@ -48,9 +46,7 @@ export type ShellKeyboardBrowserCommands = {
 };
 
 export type ShellKeyboardControllerAdapterPorts = {
-	activity: {
-		getSnapshot(): ShellActivitySnapshot;
-	};
+	activity: ShellActivityPort;
 	sourceKey: unknown;
 	terminalView: Pick<
 		ShellTerminalRuntimeView,
@@ -199,10 +195,6 @@ export function createShellKeyboardControllerAdapter(input: {
 			toggleCommandMenu: () =>
 				input.getPorts().modalCommands.toggleCommandMenu(),
 			openCommander: () => input.getPorts().modalCommands.openCommander(),
-			openNewWorktreeWorkspace: () =>
-				input.getPorts().modalCommands.openNewWorktreeWorkspace(),
-			openCloseWorktreeWorkspace: () =>
-				input.getPorts().modalCommands.openCloseWorktreeWorkspace(),
 			openSkillSelector: () =>
 				input.getPorts().modalCommands.openSkillSelector(),
 			openBrowserActions: () =>
@@ -248,6 +240,8 @@ export function createShellKeyboardControllerAdapter(input: {
 				isCurrent: () => input.admission.isCurrent(generation),
 				setSelectionMode: (value) =>
 					input.stateCore.setSelectionModeEnabled(value),
+				setTerminalSelectionMode: (value) =>
+					input.getPorts().terminalView.setSelectionModeEnabled(value),
 				setTerminalSystemKeyboard: (value) =>
 					input.getPorts().terminalView.setSystemKeyboardEnabled(value),
 				dismissKeyboard: () => input.getPorts().dismissKeyboard(),

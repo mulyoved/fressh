@@ -83,7 +83,7 @@ export function handleScrollbackBatch({
 		return;
 	}
 	try {
-		const selectionModeEnabled = context.getSelectionModeEnabled();
+		const selectionModeEnabled = context.terminalView.getSelectionModeEnabled();
 		if (!isCurrent()) return;
 		handleTmuxScrollbackBatchEvent({
 			event,

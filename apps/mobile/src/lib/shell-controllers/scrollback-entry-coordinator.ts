@@ -93,7 +93,7 @@ export function createScrollbackEntryCoordinator({
 		if (!isInternallyCurrent(token)) return false;
 		let activity: ShellActivitySnapshot;
 		try {
-			activity = token.context.getActivitySnapshot();
+			activity = token.context.activity.getSnapshot();
 		} catch (error) {
 			warn(token.context.logger, 'Scrollback activity check failed', error);
 			return false;
@@ -199,7 +199,7 @@ export function createScrollbackEntryCoordinator({
 			return;
 		let activity: ShellActivitySnapshot;
 		try {
-			activity = context.getActivitySnapshot();
+			activity = context.activity.getSnapshot();
 		} catch (error) {
 			warn(context.logger, 'Scrollback activity check failed', error);
 			return;
@@ -221,7 +221,7 @@ export function createScrollbackEntryCoordinator({
 		if (!validate(token)) return;
 		let selectionModeEnabled: boolean;
 		try {
-			selectionModeEnabled = context.getSelectionModeEnabled();
+			selectionModeEnabled = context.terminalView.getSelectionModeEnabled();
 		} catch (error) {
 			warn(context.logger, 'Scrollback selection check failed', error);
 			return;

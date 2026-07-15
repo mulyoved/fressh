@@ -3,6 +3,10 @@ import {
 	createShellScrollbackControllerCore,
 	type ShellScrollbackContext,
 } from '../../src/lib/shell-controllers/scrollback-core';
+import {
+	type RetiringWorkmuxCleanupPort,
+	type ShellWorkmuxPort,
+} from '../../src/lib/shell-controllers/session-contracts';
 import { createShellTargetKey } from '../../src/lib/shell-controllers/source-keys';
 import { createTmuxScrollbackLineAccumulator } from '../../src/lib/workmux-scrollback-batch';
 import {
@@ -70,6 +74,14 @@ export function createScrollbackHarness(
 		interactive: true,
 		generation: 0,
 	} as const;
+	const activityListeners = new Set<() => void>();
+	const activity = {
+		getSnapshot: () => activitySnapshot,
+		subscribe: (listener: () => void) => {
+			activityListeners.add(listener);
+			return () => activityListeners.delete(listener);
+		},
+	};
 	let selectionModeEnabled = false;
 	const executorInputs: Parameters<
 		typeof createWorkmuxScrollbackCommandExecutor
@@ -113,7 +125,7 @@ export function createScrollbackHarness(
 	const terminalView = {
 		getRuntimeKey: () => null,
 		getRuntimeInstanceId: () => null,
-		getOutputDiagnostics: () => null,
+		getSelectionModeEnabled: () => selectionModeEnabled,
 		isCurrentInstance: () => true,
 		fit: () => {},
 		setSystemKeyboardEnabled: () => {},
@@ -136,17 +148,36 @@ export function createScrollbackHarness(
 		move: async () => ({ success: true, output: '' }),
 		exit: async () => ({ success: true, output: '' }),
 	};
-	const context: ShellScrollbackContext = {
+	const workmuxBeforeDispose = new Map<
+		string,
+		(port: RetiringWorkmuxCleanupPort) => Promise<void>
+	>();
+	let workmuxUnregisterCount = 0;
+	const workmux = {
+		key: targetKey,
+		scroll,
+		registerBeforeDispose: (owner, cleanup) => {
+			workmuxBeforeDispose.set(owner, cleanup);
+			return () => {
+				if (workmuxBeforeDispose.get(owner) !== cleanup) return;
+				workmuxBeforeDispose.delete(owner);
+				workmuxUnregisterCount += 1;
+			};
+		},
+	} satisfies Pick<
+		ShellWorkmuxPort,
+		'key' | 'scroll' | 'registerBeforeDispose'
+	>;
+	const context = {
 		targetKey,
 		targetName: 'main',
 		connectionAvailable: true,
 		shellAvailable: true,
 		tmuxEnabled: true,
-		getActivitySnapshot: () => activitySnapshot,
-		getSelectionModeEnabled: () => selectionModeEnabled,
+		activity,
 		terminalTransport,
 		terminalView,
-		workmuxScroll: scroll,
+		workmux,
 		trace: (event) => traces.push(event),
 		feedback: {
 			alert: (title, message) => alerts.push({ title, message }),
@@ -159,7 +190,7 @@ export function createScrollbackHarness(
 			} satisfies ShellScrollbackContext['logger']),
 		getErrorMessage: (error) =>
 			error instanceof Error ? error.message : String(error),
-	};
+	} as ShellScrollbackContext & { workmux: typeof workmux };
 	const core = createShellScrollbackControllerCore({
 		createExecutor,
 		lineAccumulator,
@@ -196,11 +227,15 @@ export function createScrollbackHarness(
 				...activitySnapshot,
 				...next,
 			} as typeof activitySnapshot;
+			for (const listener of [...activityListeners]) listener();
 		},
 		setSelectionModeEnabled: (enabled: boolean) => {
 			selectionModeEnabled = enabled;
 		},
 		traces,
 		warnings,
+		workmux,
+		workmuxBeforeDispose,
+		workmuxUnregisterCount: () => workmuxUnregisterCount,
 	};
 }

@@ -3,6 +3,7 @@ import {
 	createControllerPublisher,
 	type ControllerCore,
 } from './controller-core';
+import { type ShellHostCommandPort } from './session-contracts';
 
 export type FeatureRequestState = {
 	open: boolean;
@@ -12,12 +13,9 @@ export type FeatureRequestState = {
 	error: string | undefined;
 };
 
-export type FeatureRequestSubmissionResult = {
-	success: boolean;
-	output: string;
-	error?: string;
-	issueUrl?: string | null;
-};
+export type FeatureRequestSubmissionResult = Awaited<
+	ReturnType<ShellHostCommandPort['run']>
+>;
 
 export type FeatureRequestControllerCore =
 	ControllerCore<FeatureRequestState> & {
@@ -50,9 +48,6 @@ const CLOSED_STATE: FeatureRequestState = {
 	isResolvingTarget: false,
 	error: undefined,
 };
-
-const SUBMISSION_FAILURE_MESSAGE =
-	'Failed to create issue. Make sure gh and claude CLIs are installed and authenticated on the remote host.';
 
 export function createFeatureRequestControllerCore(
 	deps: FeatureRequestControllerCoreDependencies,
@@ -185,7 +180,12 @@ export function createFeatureRequestControllerCore(
 					sourceStale = false;
 					return;
 				}
-				if (result.success) {
+				if (result.status === 'superseded') {
+					reset();
+					sourceStale = false;
+					return;
+				}
+				if (result.status === 'completed') {
 					deps.logger.info('Feature request submitted successfully', {
 						output: result.output,
 						issueUrl: result.issueUrl,
@@ -194,7 +194,10 @@ export function createFeatureRequestControllerCore(
 					sourceStale = false;
 					deps.showSubmittedAlert(result.issueUrl ?? null);
 				} else {
-					const errorMessage = result.error || SUBMISSION_FAILURE_MESSAGE;
+					const errorMessage =
+						result.status === 'failed'
+							? result.failure.message
+							: 'No SSH connection available';
 					deps.logger.error('Feature request failed', {
 						error: errorMessage,
 					});

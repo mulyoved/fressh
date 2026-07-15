@@ -56,7 +56,7 @@ void test('scrollback replaces executor only for semantic target or command-port
 	assert.equal(harness.executors.length, 1);
 	harness.core.setContext({
 		...harness.context,
-		getActivitySnapshot: harness.context.getActivitySnapshot,
+		activity: { ...harness.context.activity },
 		logger: { warn: () => {} },
 	});
 	assert.equal(harness.executors.length, 1);
@@ -64,7 +64,7 @@ void test('scrollback replaces executor only for semantic target or command-port
 	const replacementScroll = { ...harness.scroll };
 	harness.core.setContext({
 		...harness.context,
-		workmuxScroll: replacementScroll,
+		workmux: { ...harness.context.workmux, scroll: replacementScroll },
 	});
 	assert.deepEqual(harness.events.slice(-1), ['dispose:1']);
 	assert.equal(harness.executors.length, 2);
@@ -74,7 +74,7 @@ void test('scrollback replaces executor only for semantic target or command-port
 		...harness.context,
 		targetKey: otherTarget,
 		targetName: 'other',
-		workmuxScroll: replacementScroll,
+		workmux: { ...harness.context.workmux, scroll: replacementScroll },
 	});
 	assert.deepEqual(harness.events.slice(-1), ['dispose:2']);
 	assert.equal(harness.executors.length, 3);
@@ -91,7 +91,10 @@ void test('same-target command-port replacement retains active scrollback state'
 	harness.remoteCopyModeActive.current = true;
 	harness.core.setContext({
 		...harness.context,
-		workmuxScroll: { ...harness.scroll },
+		workmux: {
+			...harness.context.workmux,
+			scroll: { ...harness.scroll },
+		},
 	});
 	assert.deepEqual(harness.core.getSnapshot(), {
 		active: true,
@@ -215,7 +218,10 @@ void test('scrollback suppresses callbacks from a replaced executor', () => {
 	assert.ok(staleExecutorInput);
 	harness.core.setContext({
 		...harness.context,
-		workmuxScroll: { ...harness.scroll },
+		workmux: {
+			...harness.context.workmux,
+			scroll: { ...harness.scroll },
+		},
 	});
 	staleExecutorInput.onFailure('stale failure', { commandKind: 'enter' });
 	staleExecutorInput.onDisposeExitFailure?.('stale dispose failure');

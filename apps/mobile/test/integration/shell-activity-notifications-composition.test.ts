@@ -73,7 +73,7 @@ void test('shell detail delegates activity and notification lifecycle', () => {
 		notificationComposition,
 		'route: {',
 	);
-	assert.match(notificationComposition, /^\s*activity,\s*$/m);
+	assert.match(notificationComposition, /^\s*activity:\s*activityPort,\s*$/m);
 	assert.match(notificationContext, /^\s*transportKey,\s*$/m);
 	assert.match(notificationContext, /^\s*targetKey,\s*$/m);
 	assert.match(
@@ -90,7 +90,7 @@ void test('shell detail delegates activity and notification lifecycle', () => {
 	assert.match(notificationRoute, /^\s*agentTapToken,\s*$/m);
 	assert.match(
 		notificationComposition,
-		/^\s*runWorkmuxCommand:\s*runNotificationWorkmuxCommand,\s*$/m,
+		/^\s*workmux:\s*workmuxControlChannel,\s*$/m,
 	);
 	assert.match(notificationComposition, /^\s*logger,\s*$/m);
 	assert.doesNotMatch(
@@ -98,15 +98,25 @@ void test('shell detail delegates activity and notification lifecycle', () => {
 		/storedConnectionId:\s*(?:searchParams\.)?storedConnectionId\b/,
 	);
 
-	assert.match(source, /const getActivitySnapshot = activity\.getSnapshot/);
+	assert.match(source, /const activityPort = ports\.activity/);
+	assert.match(source, /useSyncExternalStore\(/);
+	assert.doesNotMatch(
+		source,
+		/const getActivitySnapshot = activity\.getSnapshot/,
+	);
 	const keyboardComposition = extractObjectBlock(
 		source.slice(source.indexOf('createShellDetailKeyboardControllerInput({')),
 		'createShellDetailKeyboardControllerInput({',
 	);
-	assert.match(keyboardComposition, /^\s*activity,\s*$/m);
+	assert.match(keyboardComposition, /^\s*activity:\s*activityPort,\s*$/m);
 	assert.match(keyboardComposition, /^\s*targetKey,\s*$/m);
 	assert.match(source, /useShellScrollbackController\(\{/);
+	assert.match(source, /^\s*activity:\s*activityPort,\s*$/m);
 	assert.doesNotMatch(source, /createShellActivityRetainedDomainBridge/);
 	assert.doesNotMatch(source, /createShellActivityKeyboardActions/);
 	assert.doesNotMatch(source, /invalidateKeyboardRunner/);
+	assert.doesNotMatch(
+		source,
+		/executeSessionHostCommand|runBrowserActionsWorkmuxCommand|runNotificationWorkmuxCommand/,
+	);
 });

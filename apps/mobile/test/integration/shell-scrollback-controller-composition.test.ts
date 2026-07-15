@@ -53,18 +53,17 @@ void test('shell detail composes scrollback from semantic controller ports', () 
 	const call = variableInitializer('scrollback');
 	for (const mapping of [
 		/useShellScrollbackController\(\{/,
-		/^\s*activity,\s*$/m,
 		/context:\s*\{/,
+		/^\s*activity:\s*activityPort,\s*$/m,
 		/^\s*targetKey,\s*$/m,
 		/targetName:\s*normalizedTmuxTarget/,
 		/connectionAvailable:\s*Boolean\(connection\)/,
-		/shellAvailable:\s*Boolean\(shell\)/,
+		/^\s*shellAvailable,\s*$/m,
 		/^\s*tmuxEnabled,\s*$/m,
-		/getActivitySnapshot/,
-		/getSelectionModeEnabled:\s*\(\)\s*=>\s*keyboardSelectionModeRef\.current/,
 		/terminalTransport:\s*terminal\.transport/,
+		/runtimeInstanceId:\s*terminal\.runtimeInstanceId/,
 		/terminalView:\s*terminal\.view/,
-		/workmuxScroll:\s*workmuxControlChannel\.scroll/,
+		/workmux:\s*workmuxControlChannel/,
 		/^\s*trace:\s*traceScroll,\s*$/m,
 		/^\s*getErrorMessage,\s*$/m,
 		/^\s*logger,\s*$/m,
@@ -73,12 +72,9 @@ void test('shell detail composes scrollback from semantic controller ports', () 
 	}
 });
 
-void test('terminal runtime and WebView delegate raw scrollback events', () => {
-	const runtime = variableInitializer('handleTerminalRuntimeChanged');
-	assert.match(runtime, /instanceId:\s*string \| null/);
-	assert.match(runtime, /scrollbackRuntimeChangedRef\.current\(instanceId\)/);
-	assert.doesNotMatch(runtime, /runtimeKey.*split|JSON\.parse/);
-
+void test('terminal publication and WebView delegate raw scrollback events', () => {
+	assert.doesNotMatch(source, /scrollbackRuntimeChangedRef|onRuntimeChanged/);
+	assert.doesNotMatch(source, /keyboardSelectionModeRef/);
 	const xterm = xtermElement();
 	assert.match(xterm, /\{\.\.\.scrollback\.xtermProps\}/);
 	assert.doesNotMatch(
@@ -160,7 +156,7 @@ void test('terminal identity stays transport-only while scrollback receives targ
 	const terminalCall = variableInitializer('terminal');
 	const scrollbackCall = variableInitializer('scrollback');
 	assert.match(terminalCall, /useShellTerminalController\(\{/);
-	assert.match(terminalCall, /^\s*transportKey,\s*$/m);
+	assert.match(terminalCall, /source:\s*terminalSource/);
 	assert.doesNotMatch(terminalCall, /targetKey|tmuxTarget/);
 	assert.match(scrollbackCall, /^\s*targetKey,\s*$/m);
 	assert.match(scrollbackCall, /targetName:\s*normalizedTmuxTarget/);

@@ -1,0 +1,152 @@
+// eslint-disable-next-line import/consistent-type-specifier-style -- Avoid loading the React Native package in Node core tests.
+import type {
+	BufferReadResult,
+	Cursor,
+	ListenerEvent,
+} from '@fressh/react-native-uniffi-russh';
+import { type ConnectionDiagnosticEvent } from '../connection-diagnostics';
+import { type MdevBridgeOperationRequest } from '../workmux-bridge-operations';
+import {
+	type WorkmuxControlChannel,
+	type WorkmuxControlCommandResult,
+	type WorkmuxControlConnection,
+	type WorkmuxScrollMove,
+	type WorkmuxScrollTarget,
+} from '../workmux-control-channel';
+import { type ShellActivitySnapshot } from './activity-core';
+import { type ControllerOutcome } from './controller-core';
+import { type ShellDiagnosticPort } from './session-diagnostics';
+import { type ShellTargetKey, type ShellTransportKey } from './source-keys';
+
+export type ShellSessionSnapshot =
+	| {
+			status: 'waiting';
+			reason: 'auto-connect' | 'reconnect';
+			generation: number;
+	  }
+	| {
+			status: 'attach-error';
+			failureReason?: string;
+			sessionName: string;
+			generation: number;
+	  }
+	| { status: 'ready'; storedConnectionId?: string; generation: number }
+	| { status: 'leaving'; generation: number };
+
+export type ShellSessionNavigation = {
+	back(): void;
+	editHost(storedConnectionId: string): void;
+};
+
+export type ShellSessionSource = {
+	connectionPresent: boolean;
+	shellPresent: boolean;
+	isAutoConnecting: boolean;
+	isReconnecting: boolean;
+	lastReconnectOutcome: { status: string; destination: string } | null;
+	storedConnectionId?: string;
+};
+
+export type RetiringWorkmuxCleanupPort = {
+	exitScroll(input: { sessionName: string }): Promise<ControllerOutcome>;
+};
+
+export type ShellWorkmuxFailure = {
+	message: string;
+	failureClass?: WorkmuxControlCommandResult['failureClass'];
+};
+
+export type ShellWorkmuxOutcome = ControllerOutcome<ShellWorkmuxFailure> & {
+	output?: string;
+};
+
+export type ShellWorkmuxScrollPort = {
+	enter(input: WorkmuxScrollTarget): Promise<WorkmuxControlCommandResult>;
+	move(input: WorkmuxScrollMove): Promise<WorkmuxControlCommandResult>;
+	exit(input: WorkmuxScrollTarget): Promise<WorkmuxControlCommandResult>;
+};
+
+export type ShellWorkmuxPort = {
+	readonly key: ShellTargetKey;
+	command(
+		argv: string[],
+		options?: { timeoutMs?: number },
+	): Promise<ShellWorkmuxOutcome>;
+	operation(
+		request: MdevBridgeOperationRequest,
+		options?: { timeoutMs?: number },
+	): Promise<ShellWorkmuxOutcome>;
+	scroll: ShellWorkmuxScrollPort;
+	registerBeforeDispose(
+		owner: string,
+		cleanup: (port: RetiringWorkmuxCleanupPort) => Promise<void>,
+	): () => void;
+};
+
+export type ShellTerminalListenerRegistration = Readonly<{ id: bigint }>;
+
+export type ShellTerminalNativeOutputDiagnostics = {
+	currentSeq: string;
+	ringBytesCount: string;
+	usedBytes: string;
+	headSeq: string;
+	tailSeq: string;
+	droppedBytesTotal: string;
+	chunksCount: string;
+};
+
+export type ShellTerminalSourcePort = {
+	readonly key: ShellTransportKey;
+	readonly generation: number;
+	readonly connectionId: string;
+	readonly channelId: number;
+	isAvailable(): boolean;
+	getNativeOutputDiagnostics(): ShellTerminalNativeOutputDiagnostics | null;
+	readBuffer(cursor: Cursor): BufferReadResult | Promise<BufferReadResult>;
+	addListener(
+		listener: (event: ListenerEvent) => void,
+		options: { cursor: Cursor },
+	): Promise<ShellTerminalListenerRegistration>;
+	removeListener(registration: ShellTerminalListenerRegistration): void;
+	sendData(bytes: Uint8Array<ArrayBufferLike>): Promise<void>;
+	resizePty(cols: number, rows: number): Promise<void>;
+};
+
+export type ShellHostCommandPort = {
+	readonly key: ShellTargetKey;
+	run(
+		command: string,
+		timeoutMs: number,
+	): Promise<
+		ControllerOutcome<{ message: string }> & {
+			output?: string;
+			issueUrl?: string | null;
+		}
+	>;
+};
+
+export type ShellActivityPort = {
+	getSnapshot(): ShellActivitySnapshot;
+	subscribe(listener: () => void): () => void;
+};
+
+export type ShellSessionPorts = {
+	terminalSource: ShellTerminalSourcePort;
+	hostCommands: ShellHostCommandPort;
+	workmux: ShellWorkmuxPort;
+	diagnostics: ShellDiagnosticPort;
+	activity: ShellActivityPort;
+};
+
+export type ShellSessionWorkmuxInput = {
+	key: ShellTargetKey;
+	connection: WorkmuxControlConnection | null;
+	diagnostics: ShellDiagnosticPort;
+	createChannel(input: {
+		connection: WorkmuxControlConnection | null;
+		trace: { event(event: ConnectionDiagnosticEvent): void };
+	}): WorkmuxControlChannel;
+	cleanupTimeoutMs?: number;
+	setTimeout(task: () => void, delayMs: number): unknown;
+	clearTimeout(timer: unknown): void;
+};

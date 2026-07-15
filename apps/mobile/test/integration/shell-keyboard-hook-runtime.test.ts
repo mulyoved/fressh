@@ -428,6 +428,8 @@ void test('selection entry and exit preserve exact legacy system keyboard order'
 			platformOS: 'android',
 			isCurrent: () => true,
 			setSelectionMode: (value) => calls.push(`selection:${value}`),
+			setTerminalSelectionMode: (value) =>
+				calls.push(`terminal-selection:${value}`),
 			setTerminalSystemKeyboard: (value) => calls.push(`terminal:${value}`),
 			dismissKeyboard: () => calls.push('dismiss'),
 			clearKeyboardVisibility: () => calls.push('visible:false'),
@@ -438,11 +440,13 @@ void test('selection entry and exit preserve exact legacy system keyboard order'
 	run(false);
 	assert.deepEqual(calls, [
 		'selection:true',
+		'terminal-selection:true',
 		'terminal:false',
 		'dismiss',
 		'visible:false',
 		'system:false',
 		'selection:false',
+		'terminal-selection:false',
 		'terminal:true',
 		'system:true',
 	]);
@@ -456,6 +460,7 @@ void test('selection transition stops after reentrant authority loss', () => {
 		platformOS: 'android',
 		isCurrent: () => current,
 		setSelectionMode: () => calls.push('selection'),
+		setTerminalSelectionMode: () => calls.push('terminal-selection'),
 		setTerminalSystemKeyboard: () => {
 			calls.push('terminal');
 			current = false;
@@ -465,7 +470,7 @@ void test('selection transition stops after reentrant authority loss', () => {
 		setSystemKeyboard: () => calls.push('system'),
 		warn: () => calls.push('warn'),
 	});
-	assert.deepEqual(calls, ['selection', 'terminal']);
+	assert.deepEqual(calls, ['selection', 'terminal-selection', 'terminal']);
 });
 
 void test('controller admission closes synchronously and matching setup reopens it', () => {

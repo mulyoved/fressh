@@ -2,13 +2,16 @@ import {
 	acknowledgeVisibleAgentNotification,
 	type VisibleAgentNotificationSnapshot,
 } from '../agent-notification-visibility';
-import { type ShellActivitySnapshot } from './activity-core';
 import {
 	createControllerPublisher,
 	type ControllerCore,
 	type ControllerInvalidationReason,
 } from './controller-core';
 import { createShellNotificationRouteCoordinator } from './notifications-route-coordinator';
+import {
+	type ShellActivityPort,
+	type ShellWorkmuxPort,
+} from './session-contracts';
 import { type ShellTargetKey, type ShellTransportKey } from './source-keys';
 
 export type ShellNotificationContext = {
@@ -44,7 +47,7 @@ export type ShellNotificationsControllerCore =
 	ControllerCore<ShellNotificationsState> & {
 		setCommandPort(
 			key: ShellNotificationCommandPortKey,
-			runWorkmuxCommand: CreateShellNotificationsControllerCoreInput['runWorkmuxCommand'],
+			workmux: CreateShellNotificationsControllerCoreInput['workmux'],
 		): void;
 		setContext(context: ShellNotificationContext): void;
 		acknowledgeVisible(): Promise<void>;
@@ -53,11 +56,11 @@ export type ShellNotificationsControllerCore =
 	};
 
 export type CreateShellNotificationsControllerCoreInput = {
-	activity: { getSnapshot(): ShellActivitySnapshot };
+	activity: ShellActivityPort;
 	context: ShellNotificationContext;
 	platformOS: string;
 	commandPortKey: ShellNotificationCommandPortKey;
-	runWorkmuxCommand(argv: string[], timeoutMs: number): Promise<string>;
+	workmux: Pick<ShellWorkmuxPort, 'command'>;
 	consumeAuthorizedRouteToken(
 		connectionId: string,
 		session: string,
@@ -115,7 +118,7 @@ export function createShellNotificationsControllerCore({
 	context: initialContext,
 	platformOS,
 	commandPortKey: initialCommandPortKey,
-	runWorkmuxCommand: initialCommandPort,
+	workmux: initialCommandPort,
 	consumeAuthorizedRouteToken,
 	restoreAuthorizedRouteToken,
 	acknowledge,
@@ -199,6 +202,19 @@ export function createShellNotificationsControllerCore({
 		attempt.generation === generation &&
 		attempt.commandPortRevision === commandPortRevision &&
 		activity.getSnapshot().generation === attempt.activityGeneration;
+	const runWorkmuxCommand = async (
+		argv: string[],
+		timeoutMs: number,
+	): Promise<string> => {
+		const result = await commandPort.command(argv, { timeoutMs });
+		if (result.status === 'completed') return result.output ?? '';
+		if (result.status === 'failed') throw new Error(result.failure.message);
+		throw new Error(
+			result.status === 'superseded'
+				? 'Agent notification command superseded.'
+				: 'Agent notification command unavailable.',
+		);
+	};
 
 	const runAttempt = async (attempt: AcknowledgementAttempt): Promise<void> => {
 		const { context } = attempt;
@@ -212,7 +228,7 @@ export function createShellNotificationsControllerCore({
 			nextRequestId: () => attempt.generation,
 			isCurrentRequest: (requestId) =>
 				requestId === attempt.generation && isAttemptCurrent(attempt),
-			runWorkmuxCommand: commandPort,
+			runWorkmuxCommand,
 			acknowledge,
 			warn,
 		});
@@ -277,7 +293,7 @@ export function createShellNotificationsControllerCore({
 			epochInvalidated = false;
 		},
 		getCommandPortRevision: () => commandPortRevision,
-		runWorkmuxCommand: (argv, timeoutMs) => commandPort(argv, timeoutMs),
+		runWorkmuxCommand,
 		consumeAuthorizedRouteToken,
 		restoreAuthorizedRouteToken,
 		acknowledge,

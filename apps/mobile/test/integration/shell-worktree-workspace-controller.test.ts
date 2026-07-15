@@ -4,6 +4,14 @@ import { HOST_BROWSER_NO_CONNECTION_MESSAGE } from '../../src/lib/host-browser-a
 import { WORKMUX_KEYBOARD_COMMAND_DISABLED_MESSAGE } from '../../src/lib/keyboard-actions';
 import { MDEV_BRIDGE_UPDATE_MESSAGE } from '../../src/lib/mdev-bridge-client';
 import {
+	type ShellWorkmuxOutcome,
+	type ShellWorkmuxPort,
+} from '../../src/lib/shell-controllers/session-contracts';
+import {
+	createShellTargetKey,
+	createShellTransportKey,
+} from '../../src/lib/shell-controllers/source-keys';
+import {
 	createWorktreeWorkspaceControllerAdapter,
 	classifyWorktreeWorkspaceFailure,
 } from '../../src/lib/shell-controllers/worktree-workspace-adapter';
@@ -16,10 +24,6 @@ import {
 	buildWorkmuxAppContextArgv,
 	type WorkmuxAppContext,
 } from '../../src/lib/workmux-app-commands';
-import {
-	type WorkmuxControlCommandResult,
-	type WorkmuxControlChannel,
-} from '../../src/lib/workmux-control-channel';
 import {
 	WORKTREE_WORKSPACE_CLOSE_OPERATION_ID,
 	WORKTREE_WORKSPACE_CREATE_OPERATION_ID,
@@ -52,6 +56,10 @@ const NEW_PREPARATION: NewWorktreeWorkspacePreparation = {
 	projectRoot: '/home/muly/code/fressh',
 	suggestedBranch: 'issue-131-native-worktree-workspace',
 };
+const SOURCE_KEY = createShellTargetKey(
+	createShellTransportKey('connection-1', 7),
+	'main',
+);
 
 const CLOSE_PREPARATION: CloseWorktreeWorkspacePreparation = {
 	session: 'main',
@@ -571,29 +579,32 @@ void test('worktree workspace adapter sends exact typed bridge calls and parses 
 		request: unknown;
 		options: unknown;
 	}[] = [];
-	const operationResults: WorkmuxControlCommandResult[] = [
-		{ success: true, output: JSON.stringify(NEW_PREPARATION) },
-		{ success: true, output: JSON.stringify({ status: 'created' }) },
-		{ success: true, output: JSON.stringify(CLOSE_PREPARATION) },
-		{ success: true, output: JSON.stringify({ status: 'closed' }) },
+	const operationResults: ShellWorkmuxOutcome[] = [
+		{ status: 'completed', output: JSON.stringify(NEW_PREPARATION) },
+		{ status: 'completed', output: JSON.stringify({ status: 'created' }) },
+		{ status: 'completed', output: JSON.stringify(CLOSE_PREPARATION) },
+		{ status: 'completed', output: JSON.stringify({ status: 'closed' }) },
 	];
-	const channel: Pick<WorkmuxControlChannel, 'command' | 'operation'> = {
+	const workmux: Pick<ShellWorkmuxPort, 'command' | 'operation'> = {
 		command: async (argv, options) => {
 			calls.push({ kind: 'command', request: argv, options });
-			return { success: true, output: JSON.stringify(APP_CONTEXT) };
+			return {
+				status: 'completed' as const,
+				output: JSON.stringify(APP_CONTEXT),
+			};
 		},
 		operation: async (request, options) => {
 			calls.push({ kind: 'operation', request, options });
-			return operationResults.shift() ?? { success: false, output: '' };
+			return operationResults.shift() ?? { status: 'unavailable' as const };
 		},
 	};
 	const adapter = createWorktreeWorkspaceControllerAdapter({
 		getCommittedDependencies: () => ({
-			connection: {},
+			connectionAvailable: true,
 			tmuxEnabled: true,
 			sessionName: 'main',
-			sourceKey: 'source-a',
-			workmuxControlChannel: channel,
+			sourceKey: SOURCE_KEY,
+			workmux,
 			arbiter: {
 				register: () => () => {},
 				requestOpen: ({ onOpen }) => {
@@ -688,34 +699,39 @@ void test('worktree workspace adapter sends exact typed bridge calls and parses 
 });
 
 void test('worktree workspace adapter turns failed results and malformed output into classified failures', async () => {
-	const results: WorkmuxControlCommandResult[] = [
+	const results: ShellWorkmuxOutcome[] = [
 		{
-			success: false,
-			output: '',
-			error: `Unsupported operation ${WORKTREE_WORKSPACE_PREPARE_NEW_OPERATION_ID}`,
+			status: 'failed',
+			failure: {
+				message: `Unsupported operation ${WORKTREE_WORKSPACE_PREPARE_NEW_OPERATION_ID}`,
+			},
 		},
-		{ success: true, output: '{}' },
+		{ status: 'completed', output: '{}' },
 		{
-			success: false,
-			output: '',
-			error: 'Timed out after 60000ms',
-			failureClass: 'timeout',
+			status: 'failed',
+			failure: {
+				message: 'Timed out after 60000ms',
+				failureClass: 'timeout',
+			},
 		},
+		{ status: 'superseded' },
+		{ status: 'unavailable' },
 	];
-	const channel: Pick<WorkmuxControlChannel, 'command' | 'operation'> = {
+	const workmux: Pick<ShellWorkmuxPort, 'command' | 'operation'> = {
 		command: async () => ({
-			success: true,
+			status: 'completed' as const,
 			output: JSON.stringify(APP_CONTEXT),
 		}),
-		operation: async () => results.shift() ?? { success: false, output: '' },
+		operation: async () =>
+			results.shift() ?? { status: 'unavailable' as const },
 	};
 	const adapter = createWorktreeWorkspaceControllerAdapter({
 		getCommittedDependencies: () => ({
-			connection: {},
+			connectionAvailable: true,
 			tmuxEnabled: true,
 			sessionName: 'main',
-			sourceKey: 'source-a',
-			workmuxControlChannel: channel,
+			sourceKey: SOURCE_KEY,
+			workmux,
 			arbiter: {
 				register: () => () => {},
 				requestOpen: () => false,
@@ -759,5 +775,23 @@ void test('worktree workspace adapter turns failed results and malformed output 
 			});
 			return true;
 		},
+	);
+	await assert.rejects(
+		adapter.closeWorktreeWorkspace({
+			session: CLOSE_PREPARATION.session,
+			workspaceId: CLOSE_PREPARATION.workspaceId,
+			expectedWorktreePath: CLOSE_PREPARATION.worktreePath,
+			expectedCloseFingerprint: CLOSE_PREPARATION.closeFingerprint,
+		}),
+		/Worktree workspace request was superseded\./,
+	);
+	await assert.rejects(
+		adapter.closeWorktreeWorkspace({
+			session: CLOSE_PREPARATION.session,
+			workspaceId: CLOSE_PREPARATION.workspaceId,
+			expectedWorktreePath: CLOSE_PREPARATION.worktreePath,
+			expectedCloseFingerprint: CLOSE_PREPARATION.closeFingerprint,
+		}),
+		/Worktree workspace request is unavailable\./,
 	);
 });

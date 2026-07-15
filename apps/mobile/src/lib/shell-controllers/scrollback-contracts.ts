@@ -1,10 +1,12 @@
 import { type ScrollTraceSink } from '../scroll-trace';
-import { type WorkmuxControlChannel } from '../workmux-control-channel';
-import { type ShellActivitySnapshot } from './activity-core';
 import { type ControllerOutcome } from './controller-core';
+import {
+	type ShellActivityPort,
+	type ShellWorkmuxPort,
+} from './session-contracts';
 import { type ShellTargetKey } from './source-keys';
 // eslint-disable-next-line import/consistent-type-specifier-style -- A pure type import keeps React Native out of Node controller tests.
-import type { ShellTerminalViewPort } from './terminal';
+import type { ShellTerminalViewPort } from './terminal-contracts';
 import { type ShellTerminalTransportPort } from './terminal-transport';
 
 export type ShellScrollbackState = {
@@ -59,11 +61,10 @@ export type ShellScrollbackContext = {
 	connectionAvailable: boolean;
 	shellAvailable: boolean;
 	tmuxEnabled: boolean;
-	getActivitySnapshot(): ShellActivitySnapshot;
-	getSelectionModeEnabled(): boolean;
+	activity: ShellActivityPort;
 	terminalTransport: ShellTerminalTransportPort;
 	terminalView: ShellTerminalViewPort;
-	workmuxScroll: WorkmuxControlChannel['scroll'];
+	workmux: Pick<ShellWorkmuxPort, 'key' | 'scroll' | 'registerBeforeDispose'>;
 	trace: ScrollTraceSink;
 	feedback: ShellScrollbackFeedback;
 	logger: ShellScrollbackLogger;

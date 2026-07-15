@@ -47,7 +47,7 @@ void test('scrollback context replacement restores remote ownership when current
 	harness.remoteCopyModeActive.current = true;
 	harness.core.setContext({
 		...harness.context,
-		workmuxScroll: { ...harness.scroll },
+		workmux: { ...harness.context.workmux, scroll: { ...harness.scroll } },
 	});
 	cleanup.resolve(false);
 	await flushPromises();
@@ -63,7 +63,7 @@ void test('scrollback context replacement restores remote ownership when current
 	harness.remoteCopyModeActive.current = true;
 	harness.core.setContext({
 		...harness.context,
-		workmuxScroll: { ...harness.scroll },
+		workmux: { ...harness.context.workmux, scroll: { ...harness.scroll } },
 	});
 	cleanup.reject(new Error('replacement cleanup failed'));
 	await flushPromises();
@@ -103,13 +103,13 @@ void test('scrollback stale rejected context cleanup cannot restore remote owner
 	const replacementScroll = { ...harness.scroll };
 	harness.core.setContext({
 		...harness.context,
-		workmuxScroll: replacementScroll,
+		workmux: { ...harness.context.workmux, scroll: replacementScroll },
 	});
 	harness.core.setContext({
 		...harness.context,
 		targetKey: createShellTargetKey('transport' as never, 'newer'),
 		targetName: 'newer',
-		workmuxScroll: replacementScroll,
+		workmux: { ...harness.context.workmux, scroll: replacementScroll },
 	});
 	staleCleanup.reject(new Error('stale replacement cleanup failed'));
 	await flushPromises();
@@ -150,7 +150,7 @@ void test('scrollback reentrant same-target replacement without another exit rem
 	const reentrantScroll = { ...harness.scroll };
 	const reentrantContext = {
 		...harness.context,
-		workmuxScroll: reentrantScroll,
+		workmux: { ...harness.context.workmux, scroll: reentrantScroll },
 	};
 	firstExecutor.dispose = () => {
 		harness.core.setContext(reentrantContext);
@@ -159,7 +159,7 @@ void test('scrollback reentrant same-target replacement without another exit rem
 	harness.remoteCopyModeActive.current = true;
 	harness.core.setContext({
 		...harness.context,
-		workmuxScroll: { ...harness.scroll },
+		workmux: { ...harness.context.workmux, scroll: { ...harness.scroll } },
 	});
 	staleCleanup.resolve(false);
 	await flushPromises();
@@ -234,7 +234,10 @@ void test('scrollback synchronous same-target replacement failure remains blocki
 	assert.doesNotThrow(() =>
 		harness.core.setContext({
 			...harness.context,
-			workmuxScroll: { ...harness.scroll },
+			workmux: {
+				...harness.context.workmux,
+				scroll: { ...harness.scroll },
+			},
 		}),
 	);
 	assert.equal(harness.remoteCopyModeActive.current, true);
@@ -285,7 +288,10 @@ for (const operation of [
 			case 'context':
 				harness.core.setContext({
 					...harness.context,
-					workmuxScroll: { ...harness.scroll },
+					workmux: {
+						...harness.context.workmux,
+						scroll: { ...harness.scroll },
+					},
 				});
 				break;
 			case 'dispose':
@@ -514,7 +520,7 @@ void test('scrollback composes pending cleanup from independent executors', asyn
 	harness.core.invalidate('focus-lost');
 	harness.core.setContext({
 		...harness.context,
-		workmuxScroll: { ...harness.scroll },
+		workmux: { ...harness.context.workmux, scroll: { ...harness.scroll } },
 	});
 	const secondExecutor = harness.executors[1];
 	assert.ok(secondExecutor);
@@ -552,7 +558,7 @@ void test('scrollback tracks dispose separately from a pending reset', async () 
 	harness.core.invalidate('focus-lost');
 	harness.core.setContext({
 		...harness.context,
-		workmuxScroll: { ...harness.scroll },
+		workmux: { ...harness.context.workmux, scroll: { ...harness.scroll } },
 	});
 	assert.equal(disposeCount, 1);
 	assert.deepEqual(recording.trackedInputs, [
@@ -591,7 +597,7 @@ void test('scrollback retains same-target remote ownership through replacement a
 	harness.remoteCopyModeActive.current = true;
 	harness.core.setContext({
 		...harness.context,
-		workmuxScroll: { ...harness.scroll },
+		workmux: { ...harness.context.workmux, scroll: { ...harness.scroll } },
 	});
 	assert.equal(harness.remoteCopyModeActive.current, true);
 	cleanup.resolve(true);
@@ -635,7 +641,7 @@ void test('older same-target cleanup success cannot clear a newer remote acquisi
 	harness.remoteCopyModeActive.current = true;
 	harness.core.setContext({
 		...harness.context,
-		workmuxScroll: { ...harness.scroll },
+		workmux: { ...harness.context.workmux, scroll: { ...harness.scroll } },
 	});
 	harness.remoteCopyModeGeneration.current += 1;
 	harness.remoteCopyModeActive.current = true;
@@ -653,7 +659,7 @@ void test('older same-target cleanup failure remains blocking after newer acquis
 	harness.remoteCopyModeActive.current = true;
 	harness.core.setContext({
 		...harness.context,
-		workmuxScroll: { ...harness.scroll },
+		workmux: { ...harness.context.workmux, scroll: { ...harness.scroll } },
 	});
 	harness.remoteCopyModeGeneration.current += 1;
 	harness.remoteCopyModeActive.current = true;
@@ -673,13 +679,16 @@ void test('real suppressed runtime reset failure logs exactly once', async () =>
 	});
 	core.setContext({
 		...fixture.context,
-		workmuxScroll: {
-			...fixture.scroll,
-			exit: async () => ({
-				success: false,
-				output: '',
-				error: 'suppressed exit failed',
-			}),
+		workmux: {
+			...fixture.context.workmux,
+			scroll: {
+				...fixture.scroll,
+				exit: async () => ({
+					success: false,
+					output: '',
+					error: 'suppressed exit failed',
+				}),
+			},
 		},
 		logger: { warn: (message) => warnings.push(message) },
 	});

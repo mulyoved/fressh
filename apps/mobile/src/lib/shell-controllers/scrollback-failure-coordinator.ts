@@ -60,7 +60,7 @@ export function createScrollbackFailureCoordinator({
 		}
 		let interactive = false;
 		try {
-			interactive = context.getActivitySnapshot().interactive;
+			interactive = context.activity.getSnapshot().interactive;
 		} catch (error) {
 			warn(context.logger, 'Scrollback activity check failed', error);
 		}

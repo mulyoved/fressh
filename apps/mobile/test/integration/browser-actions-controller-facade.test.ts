@@ -9,11 +9,6 @@ void test('browser controller facade binds every modal callback and handle comma
 		paneTty: '/dev/pts/1',
 		panePath: '/repo',
 	};
-	const workspace = {
-		panePath: '/repo',
-		projectRoot: '/repo',
-		projectName: 'repo',
-	};
 	const core = {
 		open: () => {
 			events.push(['open']);
@@ -49,17 +44,9 @@ void test('browser controller facade binds every modal callback and handle comma
 			events.push(['resolve-path']);
 			return '/repo';
 		},
-		resolveWorkspace: async () => {
-			events.push(['resolve-workspace']);
-			return workspace;
-		},
 		resolveCurrentGitHubRepository: async () => {
 			events.push(['resolve-repository']);
 			return 'mulyoved/fressh';
-		},
-		runHostBrowserCommand: async (command: string, timeoutMs?: number) => {
-			events.push(['command', command, timeoutMs]);
-			return `output:${command}`;
 		},
 		invalidateHostUrlReads: () => events.push(['invalidate-url-reads']),
 		invalidate: (reason: string) => events.push(['invalidate', reason]),
@@ -128,16 +115,12 @@ void test('browser controller facade binds every modal callback and handle comma
 	handle.close();
 	assert.equal(await handle.resolveHostBrowserPaneContext(), context);
 	assert.equal(await handle.resolveHostBrowserPanePath(), '/repo');
-	assert.equal(await handle.resolveHostBrowserWorkspace(), workspace);
+	assert.equal('resolveHostBrowserWorkspace' in handle, false);
 	assert.equal(
 		await handle.resolveCurrentGitHubRepository(),
 		'mulyoved/fressh',
 	);
-	assert.equal(await handle.runHostBrowserCommand('default'), 'output:default');
-	assert.equal(
-		await handle.runHostBrowserCommand('explicit', 1234),
-		'output:explicit',
-	);
+	assert.equal('runHostBrowserCommand' in handle, false);
 	handle.invalidateHostUrlReads();
 	handle.invalidateAll();
 
@@ -158,10 +141,7 @@ void test('browser controller facade binds every modal callback and handle comma
 		['close'],
 		['resolve-context'],
 		['resolve-path'],
-		['resolve-workspace'],
 		['resolve-repository'],
-		['command', 'default', undefined],
-		['command', 'explicit', 1234],
 		['invalidate-url-reads'],
 		['invalidate', 'runtime-reset'],
 	]);

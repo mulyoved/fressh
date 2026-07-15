@@ -56,8 +56,8 @@ void describe('shell keyboard controller composition', () => {
 			{} as ShellDetailKeyboardCompositionInput['initialShellConfigState'];
 		const first = {
 			activity: {
-				snapshot: firstActivity,
 				getSnapshot: () => firstActivity,
+				subscribe: () => () => {},
 			},
 			targetKey: 'target-1',
 			scrollback: {
@@ -71,7 +71,8 @@ void describe('shell keyboard controller composition', () => {
 				} as unknown as ShellDetailKeyboardCompositionInput['terminal']['view'],
 			},
 			remote: {
-				source: 'connection-1',
+				hostCommands:
+					'connection-1' as unknown as ShellDetailKeyboardCompositionInput['remote']['hostCommands'],
 				tmuxEnabled: true,
 				sessionName: 'main',
 				connectionId: 'connection-1',
@@ -83,8 +84,8 @@ void describe('shell keyboard controller composition', () => {
 		};
 		const second = {
 			activity: {
-				snapshot: secondActivity,
 				getSnapshot: () => secondActivity,
+				subscribe: () => () => {},
 			},
 			targetKey: 'target-2',
 			scrollback: {
@@ -98,7 +99,8 @@ void describe('shell keyboard controller composition', () => {
 				} as unknown as ShellDetailKeyboardCompositionInput['terminal']['view'],
 			},
 			remote: {
-				source: 'connection-2',
+				hostCommands:
+					'connection-2' as unknown as ShellDetailKeyboardCompositionInput['remote']['hostCommands'],
 				tmuxEnabled: true,
 				sessionName: 'main',
 				connectionId: 'connection-2',
@@ -144,7 +146,7 @@ void describe('shell keyboard controller composition', () => {
 		assert.equal(secondInput.scrollbackInput, second.scrollback.input);
 		assert.equal(secondInput.terminalView, second.terminal.view);
 		assert.equal(secondInput.remoteTarget.targetKey, second.targetKey);
-		assert.equal(secondInput.remoteTarget.source, 'connection-2');
+		assert.equal(secondInput.remoteTarget.hostCommands, 'connection-2');
 		assert.equal(secondInput.remoteTarget.channelId, 2);
 		assert.equal(
 			secondInput.remoteTarget.workmuxControlChannel,
@@ -278,7 +280,7 @@ void describe('shell keyboard controller composition', () => {
 		]);
 	});
 
-	void test('authority runtime invalidates transitions and runtime before mutation', () => {
+	void test('authority invalidates source transitions before sibling mutation', () => {
 		const events: string[] = [];
 		const runtime = createShellDetailKeyboardAuthorityRuntime({
 			targetKey: 'target-1',
@@ -298,21 +300,9 @@ void describe('shell keyboard controller composition', () => {
 			appActive: true,
 			focused: true,
 		});
-		events.push('terminal-mutation');
-		runtime.onRuntimeChanged('runtime-2', 'instance-2', () => {
-			events.push('scrollback-mutation');
-		});
+		events.push('sibling-mutation');
 
-		assert.deepEqual(events, [
-			'invalidate:source-change',
-			'terminal-mutation',
-			'invalidate:runtime-reset',
-			'scrollback-mutation',
-		]);
-		assert.deepEqual(runtime.getRuntimeIdentity(), {
-			runtimeKey: 'runtime-2',
-			instanceId: 'instance-2',
-		});
+		assert.deepEqual(events, ['invalidate:source-change', 'sibling-mutation']);
 	});
 
 	void test('commit publication keeps abandoned render staged and old cleanup cannot clear new', async () => {
@@ -327,23 +317,18 @@ void describe('shell keyboard controller composition', () => {
 		const publication = createShellDetailKeyboardCommitPublication({
 			authority,
 			late,
-			publishSelectionMode: (enabled) =>
-				events.push(`selection:${String(enabled)}`),
 		});
 		const oldHandle = { invalidate: () => events.push('invalidate:old') };
 		const newHandle = { invalidate: () => events.push('invalidate:new') };
 		const oldKeyboard = publication.prepareKeyboard({
 			handle: oldHandle,
-			selectionModeEnabled: false,
 		});
 		const cleanupOld = oldKeyboard.commit();
 		const abandoned = publication.prepareKeyboard({
 			handle: newHandle,
-			selectionModeEnabled: true,
 		});
 
 		assert.equal(publication.getSnapshot().keyboardHandle, oldHandle);
-		assert.equal(publication.getSnapshot().selectionModeEnabled, false);
 		void abandoned;
 		authority.reconcile({
 			targetKey: 'target',
@@ -355,18 +340,12 @@ void describe('shell keyboard controller composition', () => {
 		});
 		const committedNew = publication.prepareKeyboard({
 			handle: newHandle,
-			selectionModeEnabled: true,
 		});
 		const cleanupNew = committedNew.commit();
 		cleanupOld();
 		await Promise.resolve();
 		assert.equal(publication.getSnapshot().keyboardHandle, newHandle);
-		assert.equal(publication.getSnapshot().selectionModeEnabled, true);
-		assert.deepEqual(events, [
-			'selection:false',
-			'invalidate:old',
-			'selection:true',
-		]);
+		assert.deepEqual(events, ['invalidate:old']);
 
 		cleanupNew();
 		await Promise.resolve();
@@ -385,7 +364,6 @@ void describe('shell keyboard controller composition', () => {
 		const publication = createShellDetailKeyboardCommitPublication({
 			authority,
 			late,
-			publishSelectionMode() {},
 		});
 		const old = publication.prepareLateBindings({
 			skillSelector: {
@@ -513,7 +491,7 @@ void describe('shell keyboard controller composition', () => {
 		}
 	});
 
-	void test('authority invalidation failure still reports and notifies runtime mutation', () => {
+	void test('authority invalidation failure remains contained and reported', () => {
 		const events: string[] = [];
 		const runtime = createShellDetailKeyboardAuthorityRuntime(
 			{
@@ -529,11 +507,16 @@ void describe('shell keyboard controller composition', () => {
 				throw new Error('boom');
 			},
 		});
-		runtime.onRuntimeChanged('runtime', 'instance', () => {
-			events.push('notified');
+		runtime.reconcile({
+			targetKey: 'next-target',
+			activityGeneration: 2,
+			tmuxEnabled: true,
+			workmuxControlChannel: {},
+			appActive: true,
+			focused: true,
 		});
 
-		assert.deepEqual(events, ['observed', 'notified']);
+		assert.deepEqual(events, ['observed']);
 	});
 
 	void test('authority lifecycle survives Strict replay and closes real unmount once', async () => {

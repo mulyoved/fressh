@@ -44,17 +44,16 @@ export type {
 } from './browser-actions-modal-props';
 export type { BrowserActionsControllerHandle } from './browser-actions-facade';
 
-export type BrowserActionsControllerDeps<TConnection> =
-	BrowserActionsControllerDependencies<TConnection>;
+export type BrowserActionsControllerDeps = BrowserActionsControllerDependencies;
 
-export function useBrowserActionsController<TConnection>(
-	deps: BrowserActionsControllerDeps<TConnection>,
+export function useBrowserActionsController(
+	deps: BrowserActionsControllerDeps,
 ): BrowserActionsControllerHandle {
 	const committedDepsRef = useRef(deps);
 	const trackedSourceRef = useRef({
 		sourceKey: deps.sourceKey,
 		tmuxEnabled: deps.tmuxEnabled,
-		connection: deps.connection,
+		authority: deps.hostCommands,
 	});
 	const [adapter] = useState(() =>
 		createBrowserActionsControllerAdapter({
@@ -111,6 +110,7 @@ export function useBrowserActionsController<TConnection>(
 			committedDependencies: committedDepsRef,
 			trackedSource: trackedSourceRef,
 			dependencies: deps,
+			getAuthority: (dependencies) => dependencies.hostCommands,
 			core,
 		});
 	}, [core, deps]);

@@ -1,17 +1,16 @@
-// eslint-disable-next-line import/consistent-type-specifier-style -- Keep the Node-testable hook runtime free of React Native evaluation.
-import type { SshShell } from '@fressh/react-native-uniffi-russh';
 // eslint-disable-next-line import/consistent-type-specifier-style -- Keep the Node-testable hook runtime free of React Native WebView evaluation.
 import type { XtermWebViewHandle } from '@fressh/react-native-xtermjs-webview';
 import {
 	createReplaySafeDisposer,
 	type ReplaySafeDisposer,
 } from './controller-core';
-import { type ShellTransportKey } from './source-keys';
+import { type ShellTerminalSourcePort } from './session-contracts';
 import {
 	createTerminalLifecycleController,
 	type CreateTerminalLifecycleControllerInput,
 	type TerminalLifecycleController,
 	type TerminalLifecycleLogger,
+	type TerminalLifecycleShell,
 } from './terminal-lifecycle-core';
 import { type TerminalOutputDiagnosticSnapshot } from './terminal-output-diagnostics';
 import {
@@ -36,16 +35,12 @@ export type ShellTerminalRuntimeRouter = {
 export type ShellTerminalRuntimeDependencies = {
 	logger: TerminalLifecycleLogger;
 	router: ShellTerminalRuntimeRouter;
-	onRuntimeChanged(
-		runtimeKey: TerminalRuntimeKey | null,
-		instanceId: string | null,
-	): void;
 };
 
 export type ShellTerminalRuntimeView = {
 	getRuntimeKey(): TerminalRuntimeKey | null;
 	getRuntimeInstanceId(): string | null;
-	getOutputDiagnostics(): TerminalOutputDiagnosticSnapshot | null;
+	getSelectionModeEnabled(): boolean;
 	isCurrentInstance(instanceId: string): boolean;
 	fit(): void;
 	setSystemKeyboardEnabled(enabled: boolean): void;
@@ -105,11 +100,10 @@ export type ShellTerminalHookRuntime = {
 	size: TerminalSizeController;
 	lifecycle: TerminalLifecycleController;
 	view: ShellTerminalRuntimeView;
+	getOutputDiagnostics(): TerminalOutputDiagnosticSnapshot | null;
+	getLastSize(): ReturnType<TerminalSizeController['getSnapshot']>['lastSize'];
 	updateDependencies(dependencies: ShellTerminalRuntimeDependencies): void;
-	updateShell(
-		transportKey: ShellTransportKey | null,
-		shell: SshShell | null | undefined,
-	): void;
+	updateSource(source: ShellTerminalSourcePort): void;
 	updateViewModes(modes: {
 		systemKeyboardEnabled: boolean;
 		selectionModeEnabled: boolean;
@@ -128,8 +122,12 @@ export function createShellTerminalHookRuntime(input: {
 }): ShellTerminalHookRuntime {
 	const factories = input.factories ?? defaultFactories;
 	let dependencies = input.dependencies;
-	let shell: SshShell | null = null;
-	let currentTransportKey: ShellTransportKey | null = null;
+	let source: ShellTerminalSourcePort | null = null;
+	let active = true;
+	let viewModes = {
+		systemKeyboardEnabled: input.platformOS === 'android',
+		selectionModeEnabled: false,
+	};
 	const observedAttachPromises = new WeakSet<Promise<void>>();
 	const currentLogger: TerminalLifecycleLogger = {
 		info: (message, details) => dependencies.logger.info(message, details),
@@ -149,7 +147,7 @@ export function createShellTerminalHookRuntime(input: {
 		clearTimeout: (timer) =>
 			clearTimeout(timer as ReturnType<typeof setTimeout>),
 		resizePty: async (cols, rows) => {
-			await shell?.resizePty(cols, rows);
+			await source?.resizePty(cols, rows);
 		},
 		warn: currentLogger.warn,
 	});
@@ -159,10 +157,10 @@ export function createShellTerminalHookRuntime(input: {
 		size,
 		platformOS: input.platformOS,
 		logger: currentLogger,
-		onRuntimeChanged: (runtimeKey, instanceId) =>
-			dependencies.onRuntimeChanged(runtimeKey, instanceId),
 	});
 	const disposer = factories.createDisposer(() => {
+		active = false;
+		source = null;
 		try {
 			disposeTerminalControllerCores({ lifecycle, size, transport });
 		} catch (error) {
@@ -176,29 +174,46 @@ export function createShellTerminalHookRuntime(input: {
 			}
 		}
 	}, input.deferDisposal ?? queueMicrotask);
-	const sendCurrentShell = async (
+	const sendCurrentSource = async (
 		bytes: Uint8Array<ArrayBufferLike>,
 	): Promise<void> => {
-		if (!shell) return;
+		if (!active || !source) return;
 		const copied = new Uint8Array(bytes);
-		await shell.sendData(copied.buffer as ArrayBuffer);
+		await source.sendData(copied);
 	};
 	const view: ShellTerminalRuntimeView = {
-		getRuntimeKey: lifecycle.getRuntimeKey,
-		getRuntimeInstanceId: lifecycle.getRuntimeInstanceId,
-		getOutputDiagnostics: lifecycle.getOutputDiagnostics,
-		isCurrentInstance: lifecycle.isCurrentInstance,
-		fit: () => input.xtermRef.current?.fit(),
-		setSystemKeyboardEnabled: (enabled) =>
-			input.xtermRef.current?.setSystemKeyboardEnabled(enabled),
-		setSelectionModeEnabled: (enabled) =>
-			input.xtermRef.current?.setSelectionModeEnabled(enabled),
+		getRuntimeKey: () => (active ? lifecycle.getRuntimeKey() : null),
+		getRuntimeInstanceId: () =>
+			active ? lifecycle.getRuntimeInstanceId() : null,
+		getSelectionModeEnabled: () => active && viewModes.selectionModeEnabled,
+		isCurrentInstance: (instanceId) =>
+			active && lifecycle.isCurrentInstance(instanceId),
+		fit: () => {
+			if (active) input.xtermRef.current?.fit();
+		},
+		setSystemKeyboardEnabled: (enabled) => {
+			if (!active) return;
+			viewModes = { ...viewModes, systemKeyboardEnabled: enabled };
+			lifecycle.setViewModes(viewModes);
+			input.xtermRef.current?.setSystemKeyboardEnabled(enabled);
+		},
+		setSelectionModeEnabled: (enabled) => {
+			if (!active) return;
+			viewModes = { ...viewModes, selectionModeEnabled: enabled };
+			lifecycle.setViewModes(viewModes);
+			input.xtermRef.current?.setSelectionModeEnabled(enabled);
+		},
 		getSelection: () =>
-			input.xtermRef.current?.getSelection() ?? Promise.resolve(''),
-		exitScrollback: (message) =>
-			input.xtermRef.current?.exitScrollback(message),
-		sendScrollbackEnterAck: (requestId, instanceId) =>
-			input.xtermRef.current?.sendScrollbackEnterAck(requestId, instanceId),
+			active
+				? (input.xtermRef.current?.getSelection() ?? Promise.resolve(''))
+				: Promise.resolve(''),
+		exitScrollback: (message) => {
+			if (active) input.xtermRef.current?.exitScrollback(message);
+		},
+		sendScrollbackEnterAck: (requestId, instanceId) => {
+			if (active)
+				input.xtermRef.current?.sendScrollbackEnterAck(requestId, instanceId);
+		},
 	};
 	const observeAttachFailure = (promise: Promise<void>): Promise<void> => {
 		if (observedAttachPromises.has(promise)) return promise;
@@ -212,34 +227,68 @@ export function createShellTerminalHookRuntime(input: {
 		});
 		return promise;
 	};
+	const createLifecycleSource = (
+		owner: ShellTerminalSourcePort,
+	): TerminalLifecycleShell => {
+		const registrations = new Map<
+			bigint,
+			Awaited<ReturnType<ShellTerminalSourcePort['addListener']>>
+		>();
+		return {
+			connectionId: owner.connectionId,
+			channelId: owner.channelId,
+			getNativeOutputDiagnostics: () => owner.getNativeOutputDiagnostics(),
+			readBuffer: (cursor) => owner.readBuffer(cursor),
+			addListener: async (listener, options) => {
+				const registration = await owner.addListener(listener, options);
+				registrations.set(registration.id, registration);
+				return registration.id;
+			},
+			removeListener: (id) => {
+				const registration = registrations.get(id);
+				if (!registration) return;
+				registrations.delete(id);
+				owner.removeListener(registration);
+			},
+		};
+	};
 
 	return {
 		transport,
 		size,
 		lifecycle,
 		view,
+		getOutputDiagnostics: () =>
+			active ? (lifecycle.getOutputDiagnostics?.() ?? null) : null,
+		getLastSize: () => (active ? size.getSnapshot().lastSize : null),
 		updateDependencies: (nextDependencies) => {
+			if (!active) return;
 			dependencies = nextDependencies;
 		},
-		updateShell: (transportKey, nextShell) => {
-			const normalizedShell = nextShell ?? null;
-			if (shell === normalizedShell && currentTransportKey === transportKey) {
-				return;
-			}
-			const clearedForReplacement = shell !== null && shell !== normalizedShell;
+		updateSource: (nextSource) => {
+			if (!active) return;
+			if (source === nextSource) return;
+			const clearedForReplacement = source !== null;
 			if (clearedForReplacement) transport.clearShell();
-			shell = normalizedShell;
-			currentTransportKey = transportKey;
-			if (shell && transportKey) {
-				transport.setShell(transportKey, sendCurrentShell);
+			source = nextSource;
+			const lifecycleSource = createLifecycleSource(source);
+			if (source.isAvailable()) {
+				transport.setShell(source.key, sendCurrentSource);
 			} else if (!clearedForReplacement) {
 				transport.clearShell();
 			}
-			lifecycle.setShell(transportKey, shell);
+			lifecycle.setShell(
+				source.key,
+				source.isAvailable() ? lifecycleSource : null,
+			);
 		},
-		updateViewModes: lifecycle.setViewModes,
+		updateViewModes: (nextViewModes) => {
+			if (!active) return;
+			viewModes = { ...nextViewModes };
+			lifecycle.setViewModes(viewModes);
+		},
 		requestAttach: (ready, hasShell) => {
-			if (!ready || !hasShell) return Promise.resolve();
+			if (!active || !ready || !hasShell) return Promise.resolve();
 			try {
 				return observeAttachFailure(lifecycle.attach());
 			} catch (error) {
@@ -247,6 +296,8 @@ export function createShellTerminalHookRuntime(input: {
 			}
 		},
 		setupDisposal: disposer.setup,
-		retry: () => dependencies.router.back(),
+		retry: () => {
+			if (active) dependencies.router.back();
+		},
 	};
 }

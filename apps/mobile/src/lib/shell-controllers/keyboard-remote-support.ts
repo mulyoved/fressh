@@ -57,7 +57,7 @@ export function isSameKeyboardRemoteTarget(
 		left.connectionId === right.connectionId &&
 		left.channelId === right.channelId &&
 		left.workmuxControlChannel === right.workmuxControlChannel &&
-		left.source === right.source
+		left.hostCommands === right.hostCommands
 	);
 }
 

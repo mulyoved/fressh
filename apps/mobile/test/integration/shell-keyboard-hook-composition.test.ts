@@ -12,8 +12,10 @@ import {
 	createKeyboardClipboardAuthority,
 	createKeyboardControllerAdmission,
 } from '../../src/lib/shell-controllers/keyboard-hook-runtime';
+import * as keyboardHookRuntime from '../../src/lib/shell-controllers/keyboard-hook-runtime';
 import { type ShellKeyboardRemoteCore } from '../../src/lib/shell-controllers/keyboard-remote-contracts';
 import { type ShellKeyboardStateCore } from '../../src/lib/shell-controllers/keyboard-state-core';
+import { type TerminalRuntimeKey } from '../../src/lib/shell-controllers/terminal-transport';
 import { createKeyboardInputHarness } from './shell-keyboard-input-controller-test-support';
 
 const shellConfigState = {
@@ -58,8 +60,6 @@ function createAdapterHarness() {
 		openFeatureRequest: () => {},
 		openWisprTextEditor: () => {},
 		openConfigurator: () => {},
-		openNewWorktreeWorkspace: () => events.push(`worktree-new:${identity}`),
-		openCloseWorktreeWorkspace: () => events.push(`worktree-close:${identity}`),
 		closeCommandMenu: () => {},
 	});
 	const stateCore = {
@@ -102,6 +102,7 @@ function createAdapterHarness() {
 				interactive: true,
 				generation: 1,
 			}),
+			subscribe: () => () => {},
 		},
 		sourceKey,
 		terminalView: {
@@ -230,21 +231,10 @@ void test('production adapter reads latest ports and guards deferred paste autho
 	const harness = createAdapterHarness();
 	const copyCallback = harness.adapter.onCopySelection;
 	await harness.adapter.runAction('OPEN_COMMANDER');
-	await harness.adapter.runAction('OPEN_NEW_WORKTREE_WORKSPACE');
-	await harness.adapter.runAction('OPEN_CLOSE_WORKTREE_WORKSPACE');
 	harness.replacePorts();
 	assert.strictEqual(harness.adapter.onCopySelection, copyCallback);
 	await harness.adapter.runAction('OPEN_COMMANDER');
-	await harness.adapter.runAction('OPEN_NEW_WORKTREE_WORKSPACE');
-	await harness.adapter.runAction('OPEN_CLOSE_WORKTREE_WORKSPACE');
-	assert.deepEqual(harness.events, [
-		'commander:old',
-		'worktree-new:old',
-		'worktree-close:old',
-		'commander:new',
-		'worktree-new:new',
-		'worktree-close:new',
-	]);
+	assert.deepEqual(harness.events, ['commander:old', 'commander:new']);
 
 	let resolveRead!: (text: string) => void;
 	harness.setClipboardRead(
@@ -281,12 +271,79 @@ void test('production adapter reads latest ports and guards deferred paste autho
 	assert.equal(harness.events.at(-1), 'bridge');
 });
 
+void test('selection changes publish the applied mode to the terminal view', () => {
+	const harness = createAdapterHarness();
+
+	harness.adapter.onSelectionModeChange(true);
+
+	assert.ok(harness.events.includes('state:true'));
+	assert.ok(harness.events.includes('view:true'));
+});
+
+void test('keyboard observes current terminal identity and retires stale work once', () => {
+	const createObserver = (
+		keyboardHookRuntime as typeof keyboardHookRuntime & {
+			createKeyboardTerminalRuntimeObserver?: (onChanged: () => void) => {
+				reconcile(view: {
+					getRuntimeKey(): string | null;
+					getRuntimeInstanceId(): string | null;
+				}): boolean;
+			};
+		}
+	).createKeyboardTerminalRuntimeObserver;
+	assert.equal(typeof createObserver, 'function');
+	if (!createObserver) return;
+	let runtimeKey: TerminalRuntimeKey | null = 'runtime-1' as TerminalRuntimeKey;
+	let instanceId: string | null = 'instance-1';
+	const invalidations: string[] = [];
+	const observer = createObserver(() => invalidations.push('runtime-reset'));
+	const view = {
+		getRuntimeKey: () => runtimeKey,
+		getRuntimeInstanceId: () => instanceId,
+	};
+
+	assert.equal(observer.reconcile(view), false);
+	runtimeKey = 'runtime-2' as TerminalRuntimeKey;
+	instanceId = 'instance-2';
+	assert.equal(observer.reconcile(view), true);
+	assert.equal(observer.reconcile(view), false);
+	assert.deepEqual(invalidations, ['runtime-reset']);
+});
+
+void test('one terminal identity change advances keyboard admission exactly once', () => {
+	let runtimeKey: TerminalRuntimeKey | null = 'runtime-1' as TerminalRuntimeKey;
+	let instanceId: string | null = 'instance-1';
+	const invalidations: string[] = [];
+	const admission = createKeyboardControllerAdmission((reason) => {
+		invalidations.push(reason);
+	});
+	assert.equal(admission.setup(), 1);
+	const observer = keyboardHookRuntime.createKeyboardTerminalRuntimeObserver(
+		() => admission.invalidate('runtime-reset'),
+	);
+	const view = {
+		getRuntimeKey: () => runtimeKey,
+		getRuntimeInstanceId: () => instanceId,
+	};
+
+	assert.equal(observer.reconcile(view), false);
+	const initialGeneration = admission.getGeneration();
+	runtimeKey = 'runtime-2' as TerminalRuntimeKey;
+	instanceId = 'instance-2';
+	assert.equal(observer.reconcile(view), true);
+	assert.equal(observer.reconcile(view), false);
+
+	assert.equal(admission.getGeneration(), (initialGeneration ?? 0) + 1);
+	assert.deepEqual(invalidations, ['runtime-reset']);
+});
+
 void test('selection mode resolves latest ports after reentrant state publication', () => {
 	const harness = createAdapterHarness();
 	harness.setSelectionStateHook(harness.replaceSelectionPorts);
 	harness.adapter.onSelectionModeChange(true);
 	assert.deepEqual(harness.events, [
 		'state:true',
+		'view:true',
 		'terminal:new:false',
 		'dismiss:new',
 		'visible:new:false',

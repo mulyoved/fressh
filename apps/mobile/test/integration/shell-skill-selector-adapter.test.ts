@@ -9,8 +9,6 @@ import {
 import { type SkillDiscoveryCache } from '../../src/lib/skill-discovery-cache';
 import { type SkillSelectorProjectLoadResult } from '../../src/lib/skill-selector-loader';
 
-type TestConnection = { id: string };
-
 const cache: SkillDiscoveryCache = {
 	read: () => null,
 	write: () => {
@@ -18,6 +16,24 @@ const cache: SkillDiscoveryCache = {
 	},
 	delete: () => {},
 };
+
+function createWorkmuxContext(workspace: {
+	panePath: string;
+	projectRoot: string;
+	projectName: string;
+}) {
+	return {
+		sessionName: 'work',
+		target: 'work:@1',
+		windowId: '@1',
+		windowName: 'shell',
+		workspaceId: 'workspace-1',
+		role: 'codex',
+		paneId: '%1',
+		paneTty: '/dev/pts/1',
+		...workspace,
+	};
+}
 
 function createArbiterHarness() {
 	let requested: Parameters<ShellModalArbiter['requestOpen']>[0] | undefined;
@@ -50,18 +66,30 @@ function createArbiterHarness() {
 }
 
 function createDependencies(
-	overrides?: Partial<SkillSelectorControllerDependencies<TestConnection>>,
-): SkillSelectorControllerDependencies<TestConnection> {
+	overrides?: Partial<SkillSelectorControllerDependencies>,
+): SkillSelectorControllerDependencies {
 	return {
-		connection: { id: 'connection' },
+		hostCommands: {
+			key: 'skill-selector' as never,
+			run: async () => ({ status: 'completed', output: 'output' }),
+		},
+		workmux: {
+			key: 'skill-selector' as never,
+			command: async () => ({
+				status: 'completed',
+				output: JSON.stringify(
+					createWorkmuxContext({
+						panePath: '/pane',
+						projectRoot: '/repo/fressh',
+						projectName: 'fressh',
+					}),
+				),
+			}),
+		},
+		input: {
+			sendSegments: async () => ({ status: 'completed' }),
+		},
 		tmuxEnabled: true,
-		runHostBrowserCommand: async () => 'output',
-		resolveHostBrowserWorkspace: async () => ({
-			panePath: '/pane',
-			projectRoot: '/repo/fressh',
-			projectName: 'fressh',
-		}),
-		sendTextRaw: () => {},
 		sourceKey: 'source-1',
 		stableConnectionId: 'stable-1',
 		tmuxTarget: 'work',
@@ -74,7 +102,7 @@ function createDependencies(
 void test('skill selector adapter rejects unavailable connection before loading', async () => {
 	let loadCount = 0;
 	const adapter = createSkillSelectorControllerAdapter({
-		getCommittedDependencies: () => createDependencies({ connection: null }),
+		getCommittedDependencies: () => createDependencies({ hostCommands: null }),
 		cache,
 		loadProject: async () => {
 			loadCount += 1;
@@ -137,10 +165,19 @@ void test('skill selector adapter forwards committed load dependencies and timeo
 	committed = createDependencies({
 		stableConnectionId: 'stable-current',
 		tmuxTarget: 'target-current',
-		resolveHostBrowserWorkspace: async () => workspace,
-		runHostBrowserCommand: async (command, timeoutMs) => {
-			commands.push({ command, timeoutMs });
-			return 'discovered';
+		workmux: {
+			key: 'workmux-current' as never,
+			command: async () => ({
+				status: 'completed',
+				output: JSON.stringify(createWorkmuxContext(workspace)),
+			}),
+		},
+		hostCommands: {
+			key: 'host-current' as never,
+			run: async (command, timeoutMs) => {
+				commands.push({ command, timeoutMs });
+				return { status: 'completed', output: 'discovered' };
+			},
 		},
 	});
 
@@ -156,7 +193,7 @@ void test('skill selector adapter forwards committed load dependencies and timeo
 	assert.equal(result.projectRoot, workspace.projectRoot);
 });
 
-void test('skill selector adapter uses current committed callbacks and conflict order', () => {
+void test('skill selector adapter uses current guarded input and conflict order', async () => {
 	const staleArbiter = createArbiterHarness();
 	const currentArbiter = createArbiterHarness();
 	const sent: string[] = [];
@@ -170,12 +207,17 @@ void test('skill selector adapter uses current committed callbacks and conflict 
 	});
 	committed = createDependencies({
 		arbiter: currentArbiter.arbiter,
-		sendTextRaw: (value) => sent.push(value),
+		input: {
+			sendSegments: async (segments) => {
+				sent.push(new TextDecoder().decode(segments[0]));
+				return { status: 'completed' };
+			},
+		},
 		getErrorMessage: () => 'current error',
 	});
 	let opened = false;
 
-	adapter.sendText('text');
+	assert.deepEqual(await adapter.sendInput('text'), { status: 'completed' });
 	assert.equal(adapter.getErrorMessage(new Error('ignored')), 'current error');
 	assert.equal(
 		adapter.requestOpen(() => {

@@ -6,10 +6,12 @@ import {
 import { type CommandBridgeEntry } from '@/lib/shell-config';
 import { type ShellConfigState } from '@/lib/shell-config-store';
 import { type WorkmuxNavScope } from '@/lib/workmux-app-commands';
-import { type WorkmuxControlChannel } from '@/lib/workmux-control-channel';
 
 import { type ControllerInvalidationReason } from './controller-core';
-import { type TerminalOutputDiagnosticSnapshot } from './terminal-output-diagnostics';
+import {
+	type ShellHostCommandPort,
+	type ShellWorkmuxPort,
+} from './session-contracts';
 
 export type ShellKeyboardRemoteOutcome =
 	| { status: 'handled' }
@@ -30,8 +32,8 @@ export type ShellKeyboardRemoteTargetContext = {
 	sessionName: string;
 	connectionId: string;
 	channelId: number;
-	workmuxControlChannel: Pick<WorkmuxControlChannel, 'command' | 'operation'>;
-	source: unknown;
+	workmuxControlChannel: Pick<ShellWorkmuxPort, 'command' | 'operation'>;
+	hostCommands: ShellHostCommandPort | null;
 };
 
 export type ShellKeyboardRemoteLogger = {
@@ -69,7 +71,6 @@ export type CreateShellKeyboardRemoteCoreOptions = {
 	closeCommandMenu(): void;
 	showAlert(title: string, message: string): void;
 	invalidateShellTransport(connectionId: string, channelId: number): void;
-	readTerminalOutputDiagnostics(): TerminalOutputDiagnosticSnapshot | null;
 	logger?: ShellKeyboardRemoteLogger;
 	now?: () => number;
 	restartCodex?: typeof restartCodexWithBridge;

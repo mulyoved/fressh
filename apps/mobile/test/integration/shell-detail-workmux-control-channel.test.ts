@@ -332,7 +332,7 @@ void describe('shell detail Workmux control channel wiring', () => {
 		assert.equal(source.match(/useWorktreeWorkspaceController\(/g)?.length, 1);
 		assert.match(
 			source,
-			/const worktreeWorkspace = useWorktreeWorkspaceController\(\{\s*connection: connection \?\? null,\s*tmuxEnabled,\s*sessionName: activeTmuxSessionName,\s*sourceKey: targetKey,\s*workmuxControlChannel,\s*arbiter: modalArbiter,\s*\}\);/,
+			/const worktreeWorkspace = useWorktreeWorkspaceController\(\{\s*connectionAvailable: connection !== null,\s*tmuxEnabled,\s*sessionName: activeTmuxSessionName,\s*sourceKey: targetKey,\s*workmux: workmuxControlChannel,\s*arbiter: modalArbiter,\s*\}\);/,
 		);
 		assert.match(
 			source,

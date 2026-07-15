@@ -41,8 +41,11 @@ import { createScrollbackLiveInputCoordinator } from './scrollback-live-input-co
 import { createScrollbackLocalUiCoordinator } from './scrollback-local-ui-coordinator';
 import { createScrollbackModeCoordinator } from './scrollback-mode-coordinator';
 import { handleShellWorkmuxScrollbackDisposeExitFailureActions } from './scrollback-policy';
+import {
+	createRemoteCopyOwnershipRef,
+	createScrollbackRetirementRegistration,
+} from './scrollback-retirement-registration';
 export type * from './scrollback-contracts';
-
 export type ShellScrollbackControllerCore =
 	ControllerCore<ShellScrollbackState> & {
 		setContext(context: ShellScrollbackContext): void;
@@ -61,7 +64,6 @@ export type ShellScrollbackControllerCore =
 			failurePolicy?: 'notify' | 'suppress';
 		}): Promise<boolean> | null;
 		jumpToLive(): void;
-		getCurrentCleanup(): Promise<boolean> | null;
 	};
 
 type CreateExecutorInput = Parameters<
@@ -93,7 +95,14 @@ export function createShellScrollbackControllerCore(
 		input.lineAccumulator ?? createTmuxScrollbackLineAccumulator();
 	const cleanupBarrier =
 		input.cleanupBarrier ?? createWorkmuxScrollbackLiveInputCleanupBarrier();
-	const remoteCopyModeActive = input.remoteCopyModeActive ?? { current: false };
+	const remoteCopyModeActiveState = input.remoteCopyModeActive ?? {
+		current: false,
+	};
+	let syncRetiringCleanupRegistration = (): void => {};
+	const remoteCopyModeActive = createRemoteCopyOwnershipRef(
+		remoteCopyModeActiveState,
+		() => syncRetiringCleanupRegistration(),
+	);
 	const remoteCopyModeGeneration = input.remoteCopyModeGeneration ?? {
 		current: 0,
 	};
@@ -111,6 +120,14 @@ export function createShellScrollbackControllerCore(
 	const warn = (message: string, error?: unknown): void => {
 		createSafeWarn(context?.logger)(message, error);
 	};
+	const retirementRegistration = createScrollbackRetirementRegistration({
+		getContext: () => context,
+		isDisposed: () => disposed,
+		warn: (ownerContext, message, error) =>
+			createSafeWarn(ownerContext.logger)(message, error),
+	});
+	syncRetiringCleanupRegistration = () =>
+		retirementRegistration.sync(remoteCopyModeActive.current);
 
 	const cleanupCoordinator = createScrollbackCleanupCoordinator({
 		cleanupBarrier,
@@ -270,7 +287,7 @@ export function createShellScrollbackControllerCore(
 			executorRevision === capturedExecutorRevision &&
 			context?.targetKey === nextContext.targetKey &&
 			context.targetName === nextContext.targetName &&
-			context.workmuxScroll === nextContext.workmuxScroll;
+			context.workmux === nextContext.workmux;
 		let createdExecutor: WorkmuxScrollbackCommandExecutor | null = null;
 		const isCurrentExecutor = () =>
 			createdExecutor !== null &&
@@ -279,7 +296,7 @@ export function createShellScrollbackControllerCore(
 			executorRevision === capturedExecutorRevision;
 		try {
 			createdExecutor = createExecutor({
-				scrollTransport: nextContext.workmuxScroll,
+				scrollTransport: nextContext.workmux.scroll,
 				onFailure: (message, failureContext) => {
 					if (!isCurrentExecutor()) return;
 					const currentContext = context;
@@ -403,6 +420,7 @@ export function createShellScrollbackControllerCore(
 		if (disposed || executorRevision !== replacementRevision) return;
 		context = nextContext;
 		buildExecutor(nextContext);
+		syncRetiringCleanupRegistration();
 	};
 	const setContext = (nextContext: ShellScrollbackContext): void => {
 		if (disposed) return;
@@ -415,7 +433,7 @@ export function createShellScrollbackControllerCore(
 			context === null ||
 			context.targetKey !== normalizedContext.targetKey ||
 			context.targetName !== normalizedContext.targetName ||
-			context.workmuxScroll !== normalizedContext.workmuxScroll ||
+			context.workmux !== normalizedContext.workmux ||
 			context.terminalTransport !== normalizedContext.terminalTransport ||
 			context.terminalView !== normalizedContext.terminalView;
 		if (requiresExecutorReplacement) {
@@ -431,6 +449,7 @@ export function createShellScrollbackControllerCore(
 			advanceRequestFreshness();
 		}
 		if (context !== null) Object.assign(context, normalizedContext);
+		syncRetiringCleanupRegistration();
 	};
 	const onTerminalRuntimeChanged = (instanceId: string | null): void => {
 		if (disposed || runtimeInstanceId === instanceId) return;
@@ -624,7 +643,6 @@ export function createShellScrollbackControllerCore(
 			);
 		},
 		jumpToLive: requestJumpToLive,
-		getCurrentCleanup: cleanupBarrier.current,
 		invalidate,
 		dispose,
 	};

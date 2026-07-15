@@ -1,3 +1,4 @@
+import { type ShellHostCommandPort } from './shell-controllers/session-contracts';
 import { buildDirectTmuxResizeWindowCommand } from './workmux-direct-tmux-control';
 
 export type TerminalFitSize = {
@@ -9,40 +10,34 @@ export type ManualTerminalFitXterm = {
 	fit: () => void;
 };
 
-export type ManualTerminalFitSideChannelResult = {
-	success: boolean;
-	output: string;
-	error?: string;
-};
-
-export type ManualTerminalFitRunnerDeps<Connection> = {
-	getConnection: () => Connection | null;
+export type ManualTerminalFitRunnerDeps = {
+	getHostCommands: () => ShellHostCommandPort | null;
 	isTmuxEnabled: () => boolean;
 	getTerminalSize: () => TerminalFitSize | null;
 	getXterm: () => ManualTerminalFitXterm | null;
 	getTargetName: () => string;
 	waitForTerminalSizeAfterFit?: () => Promise<TerminalFitSize | null>;
 	resizePty: (cols: number, rows: number) => Promise<void>;
-	executeSideChannelCommand: (
-		connection: Connection,
-		command: string,
-		timeoutMs?: number,
-	) => Promise<ManualTerminalFitSideChannelResult>;
 	showFailure: (title: string, message: string) => void;
 	getErrorMessage: (error: unknown) => string;
 };
 
 export type ManualTerminalFitRunner = {
 	run: () => Promise<void>;
+	cancelCurrent: () => void;
 };
 
 const TERMINAL_FIT_TMUX_RESIZE_TIMEOUT_MS = 30_000;
 
-export function createManualTerminalFitRunner<Connection>(
-	deps: ManualTerminalFitRunnerDeps<Connection>,
+export function createManualTerminalFitRunner(
+	deps: ManualTerminalFitRunnerDeps,
 ): ManualTerminalFitRunner {
+	let generation = 0;
+	const isCurrent = (runGeneration: number) => generation === runGeneration;
+
 	return {
 		run: async () => {
+			const runGeneration = ++generation;
 			const xterm = deps.getXterm();
 			if (!xterm) {
 				deps.showFailure(
@@ -52,27 +47,29 @@ export function createManualTerminalFitRunner<Connection>(
 				return;
 			}
 
-			const terminalSizeAfterFit = deps.waitForTerminalSizeAfterFit?.();
-			xterm.fit();
-			const terminalSize =
-				(await terminalSizeAfterFit) ?? deps.getTerminalSize();
-			if (!terminalSize) {
-				deps.showFailure(
-					'Fit terminal failed',
-					'Terminal size is not ready yet. Try again.',
-				);
-				return;
-			}
-
 			try {
+				const terminalSizeAfterFit = deps.waitForTerminalSizeAfterFit?.();
+				xterm.fit();
+				const terminalSize =
+					(await terminalSizeAfterFit) ?? deps.getTerminalSize();
+				if (!isCurrent(runGeneration)) return;
+				if (!terminalSize) {
+					deps.showFailure(
+						'Fit terminal failed',
+						'Terminal size is not ready yet. Try again.',
+					);
+					return;
+				}
+
 				await deps.resizePty(terminalSize.cols, terminalSize.rows);
+				if (!isCurrent(runGeneration)) return;
 
 				if (!deps.isTmuxEnabled()) {
 					return;
 				}
 
-				const connection = deps.getConnection();
-				if (!connection) {
+				const hostCommands = deps.getHostCommands();
+				if (!hostCommands) {
 					deps.showFailure(
 						'Fit terminal failed',
 						'No SSH connection is available.',
@@ -85,21 +82,33 @@ export function createManualTerminalFitRunner<Connection>(
 					cols: terminalSize.cols,
 					rows: terminalSize.rows,
 				});
-				const result = await deps.executeSideChannelCommand(
-					connection,
+				const result = await hostCommands.run(
 					command,
 					TERMINAL_FIT_TMUX_RESIZE_TIMEOUT_MS,
 				);
+				if (!isCurrent(runGeneration)) return;
 
-				if (!result.success) {
-					deps.showFailure(
-						'Fit terminal failed',
-						result.error || result.output || 'Could not resize tmux window.',
-					);
+				switch (result.status) {
+					case 'completed':
+					case 'superseded':
+						return;
+					case 'failed':
+						deps.showFailure('Fit terminal failed', result.failure.message);
+						return;
+					case 'unavailable':
+						deps.showFailure(
+							'Fit terminal failed',
+							'No SSH connection is available.',
+						);
+						return;
 				}
 			} catch (error) {
+				if (!isCurrent(runGeneration)) return;
 				deps.showFailure('Fit terminal failed', deps.getErrorMessage(error));
 			}
+		},
+		cancelCurrent: () => {
+			generation += 1;
 		},
 	};
 }
