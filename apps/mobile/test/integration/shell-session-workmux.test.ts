@@ -190,6 +190,45 @@ void test('failed commands preserve actionable output when error is empty', asyn
 	});
 });
 
+void test('a rejected current Workmux command becomes a typed failure', async () => {
+	const command = deferred<WorkmuxControlCommandResult>();
+	const owner = createHarness('target-1', {
+		createChannel: (label, events) => ({
+			...createChannel({ label, events }),
+			command: () => command.promise,
+		}),
+	});
+	const pending = owner.port.command(['tmux', 'reject']);
+	command.reject(new Error('transport rejected'));
+
+	assert.deepEqual(await pending, {
+		status: 'failed',
+		failure: { message: 'transport rejected' },
+	});
+});
+
+void test('a rejected retired Workmux command becomes superseded', async () => {
+	const command = deferred<WorkmuxControlCommandResult>();
+	const owner = createHarness('target-1', {
+		createChannel: (label, events) => ({
+			...createChannel({ label, events }),
+			command:
+				label === 'old'
+					? () => command.promise
+					: async () => ({
+							success: true,
+							output: '',
+						}),
+		}),
+	});
+	const pending = owner.port.command(['tmux', 'reject-after-replace']);
+	owner.runtime.replace(owner.createInput('target-2'));
+	command.reject(new Error('stale transport rejected'));
+
+	assert.deepEqual(await pending, { status: 'superseded' });
+	await owner.runtime.drain();
+});
+
 void test('channel factory failures leave an unavailable port that activation can retry', async () => {
 	const events: string[] = [];
 	const warnings: DiagnosticWarning[] = [];

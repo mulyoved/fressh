@@ -3,6 +3,63 @@ import test from 'node:test';
 import { createShellTerminalSourcePort } from '../../src/lib/shell-controllers/session-terminal-source';
 import { createShellTransportKey } from '../../src/lib/shell-controllers/source-keys';
 
+function deferred<T>() {
+	let resolve!: (value: T | PromiseLike<T>) => void;
+	const promise = new Promise<T>((resolvePromise) => {
+		resolve = resolvePromise;
+	});
+	return { promise, resolve };
+}
+
+function createDeferredTerminalSourceHarness() {
+	let generation = 41;
+	const read = deferred<{
+		chunks: [];
+		nextSeq: bigint;
+		dropped: boolean;
+	}>();
+	const listener = deferred<bigint>();
+	const send = deferred<void>();
+	const resize = deferred<void>();
+	const removedListenerIds: bigint[] = [];
+	const sentPayloads: number[][] = [];
+	const resizeCalls: [number, number][] = [];
+	const shell = {
+		readBuffer: () => read.promise,
+		addListener: () => listener.promise,
+		removeListener: (id: bigint) => removedListenerIds.push(id),
+		sendData: (bytes: ArrayBuffer) => {
+			sentPayloads.push([...new Uint8Array(bytes)]);
+			return send.promise;
+		},
+		resizePty: (cols: number, rows: number) => {
+			resizeCalls.push([cols, rows]);
+			return resize.promise;
+		},
+	} as Parameters<typeof createShellTerminalSourcePort>[0]['shell'];
+	const port = createShellTerminalSourcePort({
+		channelId: 7,
+		connectionId: 'connection-1',
+		generation,
+		getCurrentGeneration: () => generation,
+		key: createShellTransportKey('connection-1', 7),
+		shell,
+	});
+	return {
+		port,
+		read,
+		listener,
+		send,
+		resize,
+		removedListenerIds,
+		sentPayloads,
+		resizeCalls,
+		rotate: () => {
+			generation += 1;
+		},
+	};
+}
+
 void test('terminal source preserves native bigint diagnostics and hides stale generations', () => {
 	let generation = 41;
 	const values = {
@@ -45,4 +102,45 @@ void test('terminal source preserves native bigint diagnostics and hides stale g
 	});
 	generation += 1;
 	assert.equal(port.getNativeOutputDiagnostics(), null);
+});
+
+void test('in-flight buffer reads reject instead of returning retired shell output', async () => {
+	const harness = createDeferredTerminalSourceHarness();
+	const pending = harness.port.readBuffer({ mode: 'head' });
+	harness.rotate();
+	harness.read.resolve({ chunks: [], nextSeq: 12n, dropped: false });
+
+	await assert.rejects(pending, /Shell terminal source superseded/);
+});
+
+void test('late listener registration is removed once and never becomes usable', async () => {
+	const harness = createDeferredTerminalSourceHarness();
+	const pending = harness.port.addListener(() => {}, {
+		cursor: { mode: 'live' },
+	});
+	harness.rotate();
+	harness.listener.resolve(73n);
+
+	await assert.rejects(pending, /Shell terminal source superseded/);
+	assert.deepEqual(harness.removedListenerIds, [73n]);
+});
+
+void test('in-flight sends reject after source rotation without replaying bytes', async () => {
+	const harness = createDeferredTerminalSourceHarness();
+	const pending = harness.port.sendData(new Uint8Array([1, 2, 3]));
+	harness.rotate();
+	harness.send.resolve();
+
+	await assert.rejects(pending, /Shell terminal source superseded/);
+	assert.deepEqual(harness.sentPayloads, [[1, 2, 3]]);
+});
+
+void test('in-flight resizes reject after source rotation without replaying dimensions', async () => {
+	const harness = createDeferredTerminalSourceHarness();
+	const pending = harness.port.resizePty(120, 40);
+	harness.rotate();
+	harness.resize.resolve();
+
+	await assert.rejects(pending, /Shell terminal source superseded/);
+	assert.deepEqual(harness.resizeCalls, [[120, 40]]);
 });

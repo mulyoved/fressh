@@ -75,6 +75,12 @@ Status: COMPLETE
 - CE1 wave 2 GREEN: focused terminal-source and architecture guards 9/9; full
   mobile integration suite 2267/2267; mobile format, lint, and typecheck gates
   all exited 0.
+- CE1 wave 3 mutation RED: temporarily disabling the terminal post-await guards
+  and stale Workmux rejection classification produced the expected five focused
+  failures (29 passed, 5 failed). Production was restored unchanged.
+- CE1 wave 3 GREEN: deferred terminal-source and rejected Workmux command matrix
+  34/34; full mobile integration 2273/2273; component suites 15/15; mobile
+  format, lint, and typecheck plus `git diff --check` all exited 0.
 
 ## Source fidelity
 
