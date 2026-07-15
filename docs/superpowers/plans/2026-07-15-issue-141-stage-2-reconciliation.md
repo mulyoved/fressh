@@ -322,6 +322,13 @@ Write the new commit hash into the Task 1 evidence row.
 > source identity, adapt only its authority identity in this checkpoint as a
 > direct compile dependency. Retain its current public handle, raw transport
 > inputs, modal rendering, and behavior until Task 5 replaces that boundary.
+> Current `dev` output diagnostics are also authoritative. Add a narrow
+> `getNativeOutputDiagnostics(): ShellTerminalNativeOutputDiagnostics | null`
+> capability to `ShellTerminalSourcePort`, where the snapshot contains the
+> existing string fields `currentSeq`, `ringBytesCount`, `usedBytes`, `headSeq`,
+> `tailSeq`, `droppedBytesTotal`, and `chunksCount`. The session adapter alone
+> calls raw shell `bufferStats()`/`currentSeq()`; terminal lifecycle combines
+> this typed snapshot with listener and Xterm diagnostics.
 
 **Files:**
 
