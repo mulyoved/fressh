@@ -229,6 +229,8 @@ export function useShellSessionController({
 	const activeDiagnosticTraceRef = useRef(activeDiagnosticTrace);
 	const [sourceGeneration, setSourceGeneration] = useState(0);
 	const sourceGenerationRef = useRef(0);
+	const [workmuxGeneration, setWorkmuxGeneration] = useState(0);
+	const workmuxGenerationRef = useRef(0);
 	const routerRef = useRef(router);
 	const [core] = useState(() =>
 		createShellSessionCore({
@@ -246,12 +248,12 @@ export function useShellSessionController({
 	const diagnostics = useMemo(
 		() =>
 			createShellDiagnosticPort({
-				generation: sourceGeneration,
-				getCurrentGeneration: () => sourceGenerationRef.current,
+				generation: workmuxGeneration,
+				getCurrentGeneration: () => workmuxGenerationRef.current,
 				getActiveTrace: () => activeDiagnosticTraceRef.current,
 				logger,
 			}),
-		[logger, sourceGeneration],
+		[logger, workmuxGeneration],
 	);
 	const [workmuxOwner] = useState(() =>
 		createShellSessionWorkmuxOwner(
@@ -267,6 +269,7 @@ export function useShellSessionController({
 	const [lifecycle] = useState(() =>
 		createReplaySafeDisposer(() => {
 			sourceGenerationRef.current += 1;
+			workmuxGenerationRef.current += 1;
 			core.invalidate('unmount');
 			core.dispose();
 			workmuxOwner.dispose(reconnectingRef.current ? 'reconnect' : 'unmount');
@@ -368,9 +371,11 @@ export function useShellSessionController({
 			const nextGeneration = sourceGenerationRef.current + 1;
 			sourceGenerationRef.current = nextGeneration;
 			if (connectionChanged || targetChanged) {
+				const nextWorkmuxGeneration = workmuxGenerationRef.current + 1;
+				workmuxGenerationRef.current = nextWorkmuxGeneration;
 				const nextDiagnostics = createShellDiagnosticPort({
-					generation: nextGeneration,
-					getCurrentGeneration: () => sourceGenerationRef.current,
+					generation: nextWorkmuxGeneration,
+					getCurrentGeneration: () => workmuxGenerationRef.current,
 					getActiveTrace: () => activeDiagnosticTraceRef.current,
 					logger,
 				});
@@ -382,8 +387,12 @@ export function useShellSessionController({
 					}),
 				);
 				void workmuxOwner.drain().then(() => {
-					if (sourceGenerationRef.current === nextGeneration) {
+					if (
+						sourceGenerationRef.current === nextGeneration &&
+						workmuxGenerationRef.current === nextWorkmuxGeneration
+					) {
 						setSourceGeneration(nextGeneration);
+						setWorkmuxGeneration(nextWorkmuxGeneration);
 					}
 				});
 			} else {

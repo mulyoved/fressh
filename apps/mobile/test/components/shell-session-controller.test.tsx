@@ -409,12 +409,15 @@ test('terminal source capabilities rotate safely while unrelated state keeps por
 	expect(firstShell.readBuffer).toHaveBeenCalledTimes(1);
 	expect(firstShell.addListener).toHaveBeenCalledTimes(1);
 
+	const traceEvent = jest.fn();
 	act(() => {
 		mockUseAutoConnectStore.setState({
-			activeDiagnosticTrace: { event: jest.fn() },
+			activeDiagnosticTrace: { event: traceEvent },
 		});
 	});
 	expect(latest()?.ports).toBe(firstPorts);
+	const retainedWorkmuxInput =
+		mockCreateWorkmuxControlChannel.mock.calls[0]?.[0];
 
 	const replacementShell = createShell();
 	act(() => {
@@ -442,6 +445,11 @@ test('terminal source capabilities rotate safely while unrelated state keeps por
 	expect(firstShell.removeListener).toHaveBeenCalledWith(9n);
 	expect(latest()?.ports.terminalSource).not.toBe(replacementShell);
 	expect(mockCreateWorkmuxControlChannel).toHaveBeenCalledTimes(1);
+	retainedWorkmuxInput?.trace.event({ kind: 'retained-after-shell-rotation' });
+	expect(traceEvent).toHaveBeenCalledTimes(1);
+	expect(traceEvent).toHaveBeenCalledWith({
+		kind: 'retained-after-shell-rotation',
+	});
 	screen.unmount();
 });
 
