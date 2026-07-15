@@ -461,7 +461,7 @@ git add docs/run/issue-141-stage-2-reconciliation-evidence.md apps/mobile/src/ap
 git commit -m "Rebuild shell session ownership"
 ```
 
-#### Task 3 requirements (merged into Task 2; do not dispatch separately)
+#### Generation-Bound Controller Port Requirements (merged; do not dispatch separately)
 
 **Files:**
 
