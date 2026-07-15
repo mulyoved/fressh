@@ -86,6 +86,9 @@ export function createShellWisprControllerCore(
 	let statusRequestId: number | null = null;
 	let disposed = false;
 	let automation: WisprAutomationState = { phase: 'idle' };
+	let nativeTransactionOutstanding = () => false;
+	const automationBusy = () =>
+		isWisprAutomationBusy(automation) || nativeTransactionOutstanding();
 
 	const snapshot = (): ShellWisprSnapshot => ({
 		autoStartEnabled,
@@ -96,7 +99,7 @@ export function createShellWisprControllerCore(
 			autoStartEnabled,
 			automationState: automation,
 		}),
-		busy: isWisprAutomationBusy(automation),
+		busy: automationBusy(),
 	});
 	const publisher = createControllerPublisher(snapshot());
 	const safeLog = (
@@ -189,6 +192,7 @@ export function createShellWisprControllerCore(
 		info: (message) => safeLog('info', message),
 		warn: (message, error) => safeLog('warn', message, error),
 	});
+	nativeTransactionOutstanding = startProtocol.hasOutstandingNativeTransaction;
 	function settleNativeControl(
 		requestId: number,
 		settlement: WisprNativeControlSettlement,
@@ -235,7 +239,7 @@ export function createShellWisprControllerCore(
 		subscribe: publisher.subscribe,
 		openTextEditor: async () => {
 			if (disposed) return { status: 'unavailable' };
-			if (isWisprAutomationBusy(automation) || statusRequestId != null) {
+			if (automationBusy() || statusRequestId != null) {
 				safeLog('info', 'Ignoring Wispr text entry while automation is busy', {
 					phase: automation.phase,
 				});
@@ -306,7 +310,7 @@ export function createShellWisprControllerCore(
 				!enabled ||
 				!safeModalIsOpen() ||
 				availability.type !== 'ready' ||
-				isWisprAutomationBusy(automation)
+				automationBusy()
 			)
 				return;
 			startProtocol.start(startProtocol.beginRequest());

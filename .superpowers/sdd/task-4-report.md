@@ -18,9 +18,9 @@ commands expose a committed snapshot instead of a render-time `openRef`.
 
 ## GREEN
 
-- Exact Node command: 108 passed, 0 failed.
+- Exact Node command: 111 passed, 0 failed.
 - Exact Jest command: 9 passed, 0 failed.
-- Full mobile integration command: 2,357 passed, 0 failed.
+- Full mobile integration command: 2,360 passed, 0 failed.
 - Full mobile component command: 24 passed, 0 failed.
 - `pnpm run fmt:check`: exit 0.
 - `pnpm run typecheck`: exit 0.
@@ -88,6 +88,26 @@ tests passed, with no failures.
 
 Detailed mapping:
 `.superpowers/ce1/issue141-stage2-ce1/task-4/wave-1/fix-report.md`.
+
+## CE1 Wave 2 Repair
+
+CE1 wave 2 found that the public failed state became retryable while an
+uncertain native start still owned its exact authority lease. Retry could then
+replace the only request identity able to reconcile that lease. The protocol now
+exposes one authoritative outstanding-transaction signal for that timed-out
+start. Snapshot busy state, public open admission, and auto-start re-enable all
+use it without changing valid recording or already-bound cleanup behavior. Late
+rejection releases and republishes retryability; late success restores the
+original recording and serializes its close before a successor starts.
+
+The lifecycle suite is also split into acquisition/supersession,
+issued-start-cleanup, and authority/successor files of 373, 314, and 424 lines.
+The focused RED run reported 49 passed and 3 failed. The repaired exact Node
+lane reports 111 passed, the broader integration lane reports 2,360 passed, and
+all 52 split lifecycle cases pass.
+
+Detailed mapping:
+`.superpowers/ce1/issue141-stage2-ce1/task-4/wave-2/fix-report.md`.
 
 ## Concerns
 

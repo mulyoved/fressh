@@ -145,6 +145,34 @@ export function createHarness(
 	};
 }
 
+export function shareNativeControl(
+	...harnesses: ReturnType<typeof createHarness>[]
+) {
+	const taps: ReturnType<typeof deferred<unknown>>[] = [];
+	let active = false;
+	const tapControl = () => {
+		const tap = deferred<unknown>();
+		taps.push(tap);
+		return tap.promise.then((result) => {
+			active = !active;
+			return result;
+		});
+	};
+	for (const harness of harnesses) harness.native.tapControl = tapControl;
+	return {
+		taps,
+		get active() {
+			return active;
+		},
+	};
+}
+
+export const blockedCleanupFailure = {
+	phase: 'failed' as const,
+	reason: 'tap-failed' as const,
+	message: 'Wispr unavailable because prior cleanup failed.',
+};
+
 export async function openReady(harness: ReturnType<typeof createHarness>) {
 	const requestIndex = harness.statusRequests.length;
 	const opening = harness.core.openTextEditor();

@@ -41,6 +41,7 @@ export type WisprStartClose = {
 export type WisprStartProtocol = {
 	getAutomation(): WisprAutomationState;
 	getRequestGeneration(): number;
+	hasOutstandingNativeTransaction(): boolean;
 	beginRequest(): number;
 	isRequestCurrent(requestId: number): boolean;
 	start(requestId: number): void;
@@ -173,6 +174,7 @@ export function createWisprStartProtocol(
 		if (!started) {
 			clearMarkers(requestId);
 			releaseNativeControl(requestId);
+			publish();
 			return;
 		}
 		if (disposed || autoStartedRequestId !== requestId) return;
@@ -328,6 +330,9 @@ export function createWisprStartProtocol(
 	return {
 		getAutomation,
 		getRequestGeneration: () => requestGeneration,
+		hasOutstandingNativeTransaction: () =>
+			timedOutRequestId != null &&
+			controlLease?.requestId === timedOutRequestId,
 		beginRequest: () => ++requestGeneration,
 		isRequestCurrent: (requestId) =>
 			!disposed && requestGeneration === requestId,
