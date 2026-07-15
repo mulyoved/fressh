@@ -836,6 +836,43 @@ void test('structured operation errors return the bridge error message', async (
 	assert.equal(fixture.closeOptions.length, 0);
 });
 
+void test('structured operation timeouts preserve timeout classification', async () => {
+	const fixture = createBridgeFixture();
+	const client = createMdevBridgeClient({
+		connection: fixture.connection,
+		requiredOperations: ['op.one'],
+		requestTimeoutMs: 100,
+	});
+
+	const resultPromise = client.runOperation({
+		operation: 'op.one',
+		params: {},
+	});
+	await nextTick();
+	fixture.emitJson(helloResponse());
+	await nextTick();
+	fixture.emitJson({
+		id: 'mdev-bridge-2',
+		ok: false,
+		type: 'operation',
+		operation: 'op.one',
+		error: {
+			code: 'TIMEOUT',
+			message: 'Timed out after 99ms',
+		},
+		exitCode: 124,
+	});
+
+	assert.deepEqual(await resultPromise, {
+		success: false,
+		output: '',
+		error: 'Timed out after 99ms',
+		failureClass: 'timeout',
+	});
+	await nextTick();
+	assert.equal(fixture.closeOptions.length, 0);
+});
+
 void test('operation serialization failure closes stream and preserves failed state', async () => {
 	const fixture = createBridgeFixture();
 	const client = createMdevBridgeClient({

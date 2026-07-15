@@ -252,7 +252,11 @@ function validateOperationResponse(
 	if (response.ok === false) {
 		const message = bridgeErrorMessage(response.error);
 		if (message) {
-			return { result: errorResult(message), fatal: false };
+			const failureClass =
+				isRecord(response.error) && response.error.code === 'TIMEOUT'
+					? 'timeout'
+					: undefined;
+			return { result: errorResult(message, failureClass), fatal: false };
 		}
 	}
 	return fatalResult(MDEV_BRIDGE_PROTOCOL_ERROR);
