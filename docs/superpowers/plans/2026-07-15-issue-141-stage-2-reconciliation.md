@@ -310,6 +310,14 @@ Write the new commit hash into the Task 1 evidence row.
 > those raw values. A clean intermediate Task 2 snapshot would therefore need
 > a prohibited compatibility seam or fail typecheck. Keep both task bodies in
 > this single TDD, commit, stable-review, and CE1 checkpoint.
+>
+> The typed-port file list is a behavioral boundary, not a closed dependency
+> allowlist. Include the direct controller helpers and affected test fixtures
+> changed by dependency-closed range `a7a291b7^..a7da6ebc`. The exact
+> `terminal-contracts.ts` API first appears at `8c8e2b13`; selectively extract
+> only that contract and its terminal-file import move. Defer that commit's
+> session decomposition, Wispr, modal, and detail changes to Tasks 4 and 5, and
+> preserve the current Worktree Workspace UI throughout this checkpoint.
 
 **Files:**
 
