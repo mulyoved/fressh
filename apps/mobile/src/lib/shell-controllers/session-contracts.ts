@@ -117,7 +117,10 @@ export type ShellHostCommandPort = {
 		command: string,
 		timeoutMs: number,
 	): Promise<
-		ControllerOutcome<{ message: string }> & {
+		ControllerOutcome<{
+			message: string;
+			reason?: 'no-detail';
+		}> & {
 			output?: string;
 			issueUrl?: string | null;
 		}

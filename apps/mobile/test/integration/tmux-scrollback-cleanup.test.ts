@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+	type ShellWorkmuxOutcome,
+	type ShellWorkmuxScrollPort,
+} from '../../src/lib/shell-controllers/session-contracts';
+import {
 	disposeTmuxScrollbackRuntimeStateForUiReset,
 	handleTmuxScrollbackEnterRequested,
 	resetTmuxScrollbackRuntimeState,
@@ -14,12 +18,8 @@ import {
 	resetTmuxScrollbackLocalExitRequests,
 	TMUX_SCROLLBACK_LOCAL_EXIT_REQUEST_ID_LIMIT,
 } from '../../src/lib/tmux-scrollback-local-exit';
-import { type WorkmuxControlChannel } from '../../src/lib/workmux-control-channel';
 import { createTmuxScrollbackLineAccumulator } from '../../src/lib/workmux-scrollback-batch';
-import {
-	createWorkmuxScrollbackCommandExecutor as createBaseWorkmuxScrollbackCommandExecutor,
-	type WorkmuxScrollbackCommandResult,
-} from '../../src/lib/workmux-scrollback-executor';
+import { createWorkmuxScrollbackCommandExecutor as createBaseWorkmuxScrollbackCommandExecutor } from '../../src/lib/workmux-scrollback-executor';
 import {
 	buildWorkmuxScrollbackLiveInputSendPlan,
 	createWorkmuxScrollbackLiveInputCleanupBarrier,
@@ -34,8 +34,8 @@ const enterText = (sessionName = 'main') => `enter:${sessionName}`;
 const exitText = (sessionName = 'main') => `exit:${sessionName}`;
 const workmuxScrollExitCommand = exitText();
 function createRecordingScrollTransport(
-	executeCommand: (command: string) => Promise<WorkmuxScrollbackCommandResult>,
-): WorkmuxControlChannel['scroll'] {
+	executeCommand: (command: string) => Promise<ShellWorkmuxOutcome>,
+): ShellWorkmuxScrollPort {
 	return {
 		enter: ({ sessionName }) => executeCommand(enterText(sessionName)),
 		move: ({ sessionName, direction, unit, count }) =>
@@ -51,7 +51,7 @@ function createWorkmuxScrollbackCommandExecutor({
 	Parameters<typeof createBaseWorkmuxScrollbackCommandExecutor>[0],
 	'scrollTransport'
 > & {
-	executeCommand: (command: string) => Promise<WorkmuxScrollbackCommandResult>;
+	executeCommand: (command: string) => Promise<ShellWorkmuxOutcome>;
 }) {
 	return createBaseWorkmuxScrollbackCommandExecutor({
 		...options,
@@ -80,9 +80,9 @@ void test('failed active Workmux scroll exit clears local UI without recursive e
 		executeCommand: async (command) => {
 			commands.push(command);
 			if (command === workmuxScrollExitCommand) {
-				return { success: false, output: '', error: 'exit failed' };
+				return { status: 'failed', failure: { message: 'exit failed' } };
 			}
-			return { success: true, output: '' };
+			return { status: 'completed' };
 		},
 		onFailure: (message, context) => {
 			failures.push(`${context.commandKind}:${message}`);
@@ -162,9 +162,9 @@ void test('inactive Workmux scroll enter cleanup suppresses canceled enter alert
 		executeCommand: async (command) => {
 			if (command === enterText()) {
 				await commandBlock.promise;
-				return { success: false, output: '', error: 'enter failed' };
+				return { status: 'failed', failure: { message: 'enter failed' } };
 			}
-			return { success: true, output: '' };
+			return { status: 'completed' };
 		},
 		onFailure: (message) => failures.push(message),
 		onDisposeExitFailure: (message) => disposeFailures.push(message),
@@ -199,7 +199,7 @@ void test('component disposal UI reset clears line accumulator and disposes exec
 	const executor = createWorkmuxScrollbackCommandExecutor({
 		executeCommand: async (command) => {
 			commands.push(command);
-			return { success: true, output: '' };
+			return { status: 'completed' };
 		},
 		onFailure: () => {},
 	});
@@ -234,9 +234,9 @@ void test('failed UI reset exit keeps remote copy mode active and blocks later l
 		executeCommand: async (command) => {
 			commands.push(command);
 			if (command === workmuxScrollExitCommand) {
-				return { success: false, output: '', error: 'exit failed' };
+				return { status: 'failed', failure: { message: 'exit failed' } };
 			}
-			return { success: true, output: '' };
+			return { status: 'completed' };
 		},
 		onFailure: () => {},
 	});
@@ -300,7 +300,7 @@ void test('live input waits for pending app scroll enter rollback before sending
 			commands.push(command);
 			if (command === enterText()) await enterBlock.promise;
 			if (command === exitText()) await exitBlock.promise;
-			return { success: true, output: '' };
+			return { status: 'completed' };
 		},
 		onFailure: () => {},
 	});
@@ -339,9 +339,9 @@ void test('pending enter rollback exit failure notifies active reset policy and 
 			commands.push(command);
 			if (command === enterText()) await enterBlock.promise;
 			if (command === exitText()) {
-				return { success: false, output: '', error: 'exit failed' };
+				return { status: 'failed', failure: { message: 'exit failed' } };
 			}
-			return { success: true, output: '' };
+			return { status: 'completed' };
 		},
 		onFailure: (message) => failures.push(message),
 	});
@@ -378,9 +378,9 @@ void test('pending enter rollback exit failure marks remote copy mode active for
 			commands.push(command);
 			if (command === enterText()) await enterBlock.promise;
 			if (command === exitText()) {
-				return { success: false, output: '', error: 'exit failed' };
+				return { status: 'failed', failure: { message: 'exit failed' } };
 			}
-			return { success: true, output: '' };
+			return { status: 'completed' };
 		},
 		onFailure: () => {},
 	});
@@ -517,7 +517,7 @@ void test('runtime reset clears scrollback and waits for pending enter rollback'
 		executeCommand: async (command) => {
 			commands.push(command);
 			if (command === enterText()) await enterBlock.promise;
-			return { success: true, output: '' };
+			return { status: 'completed' };
 		},
 		onFailure: () => {},
 	});
@@ -661,7 +661,7 @@ void test('scrollback enter request adapter acks only after Workmux enter succee
 	const executor = createWorkmuxScrollbackCommandExecutor({
 		executeCommand: async (command) => {
 			commands.push(command);
-			return { success: true, output: '' };
+			return { status: 'completed' };
 		},
 		onFailure: () => {},
 	});
@@ -697,7 +697,10 @@ void test('scrollback enter request adapter skips ack on failed Workmux enter', 
 	const executor = createWorkmuxScrollbackCommandExecutor({
 		executeCommand: async (command) => {
 			commands.push(command);
-			return { success: false, output: '', error: 'mdev: command not found' };
+			return {
+				status: 'failed',
+				failure: { message: 'mdev: command not found' },
+			};
 		},
 		onFailure: () => {},
 	});
@@ -732,7 +735,7 @@ void test('scrollback enter request adapter clears local UI when enter is cancel
 			events.push(`command:${command}`);
 			commandStarted.resolve();
 			await commandCanFinish.promise;
-			return { success: true, output: '' };
+			return { status: 'completed' };
 		},
 		onFailure: () => {},
 	});
@@ -770,7 +773,7 @@ void test('scrollback enter request adapter clears inactive current instance and
 	const executor = createWorkmuxScrollbackCommandExecutor({
 		executeCommand: async (command) => {
 			events.push(`command:${command}`);
-			return { success: true, output: '' };
+			return { status: 'completed' };
 		},
 		onFailure: () => {},
 	});
@@ -815,7 +818,7 @@ void test('scrollback enter request adapter clears current guarded events before
 	const executor = createWorkmuxScrollbackCommandExecutor({
 		executeCommand: async (command) => {
 			commands.push(command);
-			return { success: true, output: '' };
+			return { status: 'completed' };
 		},
 		onFailure: () => {},
 	});
@@ -861,7 +864,7 @@ void test('scrollback enter request adapter ignores stale guarded events', async
 	const executor = createWorkmuxScrollbackCommandExecutor({
 		executeCommand: async (command) => {
 			commands.push(command);
-			return { success: true, output: '' };
+			return { status: 'completed' };
 		},
 		onFailure: () => {},
 	});
@@ -897,7 +900,7 @@ void test('scrollback enter request adapter suppresses async completion after di
 		executeCommand: async (command) => {
 			commands.push(command);
 			await enterBlock.promise;
-			return { success: true, output: '' };
+			return { status: 'completed' };
 		},
 		onFailure: () => {},
 	});
@@ -942,7 +945,7 @@ void test('scrollback enter request adapter exits copy mode after focus invalida
 		executeCommand: async (command) => {
 			commands.push(command);
 			await enterBlock.promise;
-			return { success: true, output: '' };
+			return { status: 'completed' };
 		},
 		onFailure: () => {},
 	});

@@ -207,6 +207,22 @@ void test('feature request preserves submission fallback messages', async () => 
 		'Failed to create issue. Make sure gh and claude CLIs are installed and authenticated on the remote host.',
 	);
 	assert.equal(failed.core.getSnapshot().isSubmitting, false);
+
+	const detailFree = createFeatureRequestHarness();
+	const detailFreePending = detailFree.core.submit(
+		'description',
+		'mulyoved/fressh',
+	);
+	detailFree.submissions[0]?.resolve({
+		status: 'failed',
+		failure: { message: 'Host command failed.', reason: 'no-detail' },
+		output: '',
+	});
+	await detailFreePending;
+	assert.equal(
+		detailFree.core.getSnapshot().error,
+		'Failed to create issue. Make sure gh and claude CLIs are installed and authenticated on the remote host.',
+	);
 });
 
 void test('feature request submission rejection logs and clears submitting', async () => {

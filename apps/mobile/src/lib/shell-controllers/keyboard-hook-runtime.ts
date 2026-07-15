@@ -2,14 +2,11 @@ import {
 	type ControllerInvalidationReason,
 	type ControllerOutcome,
 } from './controller-core';
-import { type ShellTerminalRuntimeView } from './terminal-hook-runtime';
+import { type ShellTerminalViewPort } from './terminal-contracts';
 
 export type KeyboardTerminalRuntimeObserver = {
 	reconcile(
-		view: Pick<
-			ShellTerminalRuntimeView,
-			'getRuntimeKey' | 'getRuntimeInstanceId'
-		>,
+		view: Pick<ShellTerminalViewPort, 'getRuntimeKey' | 'getRuntimeInstanceId'>,
 	): boolean;
 };
 
@@ -17,7 +14,7 @@ export function createKeyboardTerminalRuntimeObserver(
 	onChanged: () => void,
 ): KeyboardTerminalRuntimeObserver {
 	let initialized = false;
-	let runtimeKey: ReturnType<ShellTerminalRuntimeView['getRuntimeKey']> = null;
+	let runtimeKey: ReturnType<ShellTerminalViewPort['getRuntimeKey']> = null;
 	let instanceId: string | null = null;
 	return {
 		reconcile: (view) => {

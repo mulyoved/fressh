@@ -2,18 +2,18 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createScrollbackOperationOwnerRegistry } from '../../src/lib/shell-controllers/scrollback-operation-owner';
 import {
+	type ShellWorkmuxOutcome,
+	type ShellWorkmuxScrollPort,
+} from '../../src/lib/shell-controllers/session-contracts';
+import {
 	registerTmuxScrollbackRemoteCopyModeExitCleanup,
 	resetTmuxScrollbackRuntimeState,
 } from '../../src/lib/tmux-scrollback';
-import { type WorkmuxControlChannel } from '../../src/lib/workmux-control-channel';
 import {
 	createTmuxScrollbackLineAccumulator,
 	type WorkmuxScrollbackPageCommand,
 } from '../../src/lib/workmux-scrollback-batch';
-import {
-	createWorkmuxScrollbackCommandExecutor as createBaseWorkmuxScrollbackCommandExecutor,
-	type WorkmuxScrollbackCommandResult,
-} from '../../src/lib/workmux-scrollback-executor';
+import { createWorkmuxScrollbackCommandExecutor as createBaseWorkmuxScrollbackCommandExecutor } from '../../src/lib/workmux-scrollback-executor';
 import { createWorkmuxScrollbackLiveInputCleanupBarrier } from '../../src/lib/workmux-scrollback-live-input';
 
 const page = (
@@ -46,8 +46,8 @@ const enterText = (sessionName = 'main') => `enter:${sessionName}`;
 const exitText = (sessionName = 'main') => `exit:${sessionName}`;
 
 function createRecordingScrollTransport(
-	executeCommand: (command: string) => Promise<WorkmuxScrollbackCommandResult>,
-): WorkmuxControlChannel['scroll'] {
+	executeCommand: (command: string) => Promise<ShellWorkmuxOutcome>,
+): ShellWorkmuxScrollPort {
 	return {
 		enter: ({ sessionName }) => executeCommand(enterText(sessionName)),
 		move: ({ sessionName, direction, unit, count }) =>
@@ -63,7 +63,7 @@ function createWorkmuxScrollbackCommandExecutor({
 	Parameters<typeof createBaseWorkmuxScrollbackCommandExecutor>[0],
 	'scrollTransport'
 > & {
-	executeCommand: (command: string) => Promise<WorkmuxScrollbackCommandResult>;
+	executeCommand: (command: string) => Promise<ShellWorkmuxOutcome>;
 }) {
 	return createBaseWorkmuxScrollbackCommandExecutor({
 		...options,
@@ -87,15 +87,15 @@ void test('workmux scrollback executor uses typed scroll transport for enter, mo
 		scrollTransport: {
 			enter: async ({ sessionName }) => {
 				operations.push(enterText(sessionName));
-				return { success: true, output: '' };
+				return { status: 'completed' };
 			},
 			move: async ({ sessionName, direction, unit, count }) => {
 				operations.push(`move:${sessionName}:${direction}:${unit}:${count}`);
-				return { success: true, output: '' };
+				return { status: 'completed' };
 			},
 			exit: async ({ sessionName }) => {
 				operations.push(exitText(sessionName));
-				return { success: true, output: '' };
+				return { status: 'completed' };
 			},
 		},
 		onFailure: () => {},
@@ -126,7 +126,7 @@ void test('workmux scrollback executor serializes enter before scroll batches', 
 			if (command === enterText()) {
 				await firstBlock.promise;
 			}
-			return { success: true, output: '' };
+			return { status: 'completed' };
 		},
 		onFailure: () => {},
 	});
@@ -146,9 +146,8 @@ void test('workmux scrollback executor suppresses enter ack and clears pending s
 	const failures: string[] = [];
 	const executor = createWorkmuxScrollbackCommandExecutor({
 		executeCommand: async () => ({
-			success: false,
-			output: '',
-			error: 'mdev: command not found',
+			status: 'failed',
+			failure: { message: 'mdev: command not found' },
 		}),
 		onFailure: (message) => failures.push(message),
 	});
@@ -170,7 +169,7 @@ void test('workmux scrollback executor formats thrown failures and stops a batch
 		executeCommand: async (command) => {
 			commands.push(command);
 			if (command.includes(pageText(1))) throw new Error('Command timed out');
-			return { success: true, output: '' };
+			return { status: 'completed' };
 		},
 		onFailure: (message) => failures.push(message),
 	});
@@ -187,9 +186,9 @@ void test('workmux scrollback executor invokes failure cleanup hooks', async () 
 	const events: string[] = [];
 	const executor = createWorkmuxScrollbackCommandExecutor({
 		executeCommand: async () => ({
-			success: false,
+			status: 'failed',
+			failure: { message: 'permission denied' },
 			output: 'permission denied',
-			error: 'permission denied',
 		}),
 		onFailure: (message) => {
 			events.push(`failure:${message}`);
@@ -205,9 +204,8 @@ void test('workmux scrollback executor invokes failure cleanup hooks', async () 
 void test('workmux scrollback executor settles enter failure when callback throws', async () => {
 	const executor = createWorkmuxScrollbackCommandExecutor({
 		executeCommand: async () => ({
-			success: false,
-			output: '',
-			error: 'enter failed',
+			status: 'failed',
+			failure: { message: 'enter failed' },
 		}),
 		onFailure: () => {
 			throw new Error('alert failed');
@@ -225,9 +223,8 @@ void test('workmux scrollback executor attributes enter failure to exact operati
 	const failures: unknown[] = [];
 	const executor = createWorkmuxScrollbackCommandExecutor({
 		executeCommand: async () => ({
-			success: false,
-			output: '',
-			error: 'enter failed',
+			status: 'failed',
+			failure: { message: 'enter failed' },
 		}),
 		onFailure: (_message, context) => failures.push(context.operationOwner),
 	});
@@ -240,7 +237,7 @@ for (const [firstPolicy, laterPolicy] of [
 	['notify', 'suppress'],
 ] as const) {
 	void test(`canceled enter keeps ${firstPolicy} policy after later ${laterPolicy} reset`, async () => {
-		const completion = deferred<WorkmuxScrollbackCommandResult>();
+		const completion = deferred<ShellWorkmuxOutcome>();
 		const events: string[] = [];
 		const executor = createWorkmuxScrollbackCommandExecutor({
 			executeCommand: () => completion.promise,
@@ -251,15 +248,15 @@ for (const [firstPolicy, laterPolicy] of [
 		await Promise.resolve();
 		void executor.reset({ failurePolicy: firstPolicy });
 		void executor.reset({ failurePolicy: laterPolicy });
-		completion.resolve({ success: false, output: '', error: 'failed' });
+		completion.resolve({ status: 'failed', failure: { message: 'failed' } });
 		await enter;
 		assert.deepEqual(events, [firstPolicy]);
 	});
 }
 
 void test('concurrent canceled enter generations keep independent failure policies', async () => {
-	const first = deferred<WorkmuxScrollbackCommandResult>();
-	const second = deferred<WorkmuxScrollbackCommandResult>();
+	const first = deferred<ShellWorkmuxOutcome>();
+	const second = deferred<ShellWorkmuxOutcome>();
 	const secondStarted = deferred<void>();
 	const events: string[] = [];
 	let calls = 0;
@@ -275,13 +272,13 @@ void test('concurrent canceled enter generations keep independent failure polici
 	const firstEnter = executor.runEnterCommand('main');
 	await Promise.resolve();
 	void executor.reset({ failurePolicy: 'suppress' });
-	first.resolve({ success: false, output: '', error: 'first failed' });
+	first.resolve({ status: 'failed', failure: { message: 'first failed' } });
 	await firstEnter;
 
 	const secondEnter = executor.runEnterCommand('main');
 	await secondStarted.promise;
 	void executor.reset({ failurePolicy: 'notify' });
-	second.resolve({ success: false, output: '', error: 'second failed' });
+	second.resolve({ status: 'failed', failure: { message: 'second failed' } });
 	await secondEnter;
 	assert.deepEqual(events, ['suppress', 'notify']);
 });
@@ -289,9 +286,8 @@ void test('concurrent canceled enter generations keep independent failure polici
 void test('workmux scrollback executor settles scroll batch when failure callback throws', async () => {
 	const executor = createWorkmuxScrollbackCommandExecutor({
 		executeCommand: async () => ({
-			success: false,
-			output: '',
-			error: 'scroll failed',
+			status: 'failed',
+			failure: { message: 'scroll failed' },
 		}),
 		onFailure: () => {
 			throw new Error('alert failed');
@@ -304,9 +300,8 @@ void test('workmux scrollback executor settles scroll batch when failure callbac
 void test('workmux scrollback executor settles dispose exit when callback throws', async () => {
 	const executor = createWorkmuxScrollbackCommandExecutor({
 		executeCommand: async () => ({
-			success: false,
-			output: '',
-			error: 'exit failed',
+			status: 'failed',
+			failure: { message: 'exit failed' },
 		}),
 		onFailure: () => {},
 		onDisposeExitFailure: () => {
@@ -324,7 +319,7 @@ void test('workmux scrollback executor preserves pending scroll batches while sl
 		executeCommand: async (command) => {
 			commands.push(command);
 			if (command === pageText()) await firstBlock.promise;
-			return { success: true, output: '' };
+			return { status: 'completed' };
 		},
 		onFailure: () => {},
 	});
@@ -350,7 +345,7 @@ void test('workmux scrollback executor bounds pending scroll fanout while slow c
 		executeCommand: async (command) => {
 			commands.push(command);
 			if (commands.length === 1) await firstBlock.promise;
-			return { success: true, output: '' };
+			return { status: 'completed' };
 		},
 		onFailure: () => {},
 	});
@@ -386,7 +381,7 @@ void test('workmux scrollback executor runs a drained page batch as typed moves'
 	const executor = createWorkmuxScrollbackCommandExecutor({
 		executeCommand: async (command) => {
 			commands.push(command);
-			return { success: true, output: '' };
+			return { status: 'completed' };
 		},
 		onFailure: () => {},
 	});
@@ -401,7 +396,7 @@ void test('workmux scrollback executor preserves page and line typed moves', asy
 	const executor = createWorkmuxScrollbackCommandExecutor({
 		executeCommand: async (command) => {
 			commands.push(command);
-			return { success: true, output: '' };
+			return { status: 'completed' };
 		},
 		onFailure: () => {},
 	});
@@ -418,7 +413,7 @@ void test('workmux scrollback executor dispose clears pending scroll and blocks 
 		executeCommand: async (command) => {
 			commands.push(command);
 			if (command === enterText()) await firstBlock.promise;
-			return { success: true, output: '' };
+			return { status: 'completed' };
 		},
 		onFailure: () => {},
 	});
@@ -442,7 +437,7 @@ void test('workmux scrollback executor replacement after target change is usable
 		createWorkmuxScrollbackCommandExecutor({
 			executeCommand: async (command) => {
 				commands.push(command);
-				return { success: true, output: '' };
+				return { status: 'completed' };
 			},
 			onFailure: () => {},
 		});
@@ -463,7 +458,10 @@ void test('workmux scrollback executor dispose suppresses late failure callbacks
 	const executor = createWorkmuxScrollbackCommandExecutor({
 		executeCommand: async () => {
 			await commandBlock.promise;
-			return { success: false, output: '', error: 'mdev: command not found' };
+			return {
+				status: 'failed',
+				failure: { message: 'mdev: command not found' },
+			};
 		},
 		onFailure: (message) => failures.push(message),
 	});
@@ -486,7 +484,7 @@ void test('resetTmuxScrollbackRuntimeState cancels in-flight enter and unwinds r
 		executeCommand: async (command) => {
 			commands.push(command);
 			if (command === enterText()) await commandBlock.promise;
-			return { success: true, output: '' };
+			return { status: 'completed' };
 		},
 		onFailure: (message) => failures.push(message),
 	});
@@ -511,7 +509,10 @@ void test('resetTmuxScrollbackRuntimeState reports canceled enter command failur
 	const executor = createWorkmuxScrollbackCommandExecutor({
 		executeCommand: async () => {
 			await commandBlock.promise;
-			return { success: false, output: '', error: 'mdev: command not found' };
+			return {
+				status: 'failed',
+				failure: { message: 'mdev: command not found' },
+			};
 		},
 		onFailure: (message) => failures.push(message),
 	});
@@ -538,7 +539,7 @@ void test('resetTmuxScrollbackRuntimeState cancels queued enter before it starts
 		executeCommand: async (command) => {
 			commands.push(command);
 			if (command === pageText()) await commandBlock.promise;
-			return { success: true, output: '' };
+			return { status: 'completed' };
 		},
 		onFailure: () => {},
 	});
@@ -565,7 +566,7 @@ void test('resetTmuxScrollbackRuntimeState cancels pending Workmux scroll batche
 		executeCommand: async (command) => {
 			commands.push(command);
 			if (command === enterText()) await commandBlock.promise;
-			return { success: true, output: '' };
+			return { status: 'completed' };
 		},
 		onFailure: () => {},
 	});
@@ -594,12 +595,11 @@ void test('workmux scrollback executor allows failure cleanup to re-enter with a
 			commands.push(command);
 			if (command === pageText()) {
 				return {
-					success: false,
-					output: '',
-					error: 'copyable page failure',
+					status: 'failed',
+					failure: { message: 'copyable page failure' },
 				};
 			}
-			return { success: true, output: '' };
+			return { status: 'completed' };
 		},
 		onFailure: (message) => {
 			failures.push(message);
@@ -631,7 +631,7 @@ void test('resetTmuxScrollbackRuntimeState requests Workmux scroll exit for ackn
 		executeCommand: async (command) => {
 			commands.push(command);
 			if (command === pageText()) await commandBlock.promise;
-			return { success: true, output: '' };
+			return { status: 'completed' };
 		},
 		onFailure: () => {},
 	});
@@ -662,9 +662,9 @@ void test('resetTmuxScrollbackRuntimeState reports active Workmux scroll exit fa
 			commands.push(command);
 			if (command === pageText()) await commandBlock.promise;
 			if (command === exitText()) {
-				return { success: false, output: '', error: 'exit failed' };
+				return { status: 'failed', failure: { message: 'exit failed' } };
 			}
-			return { success: true, output: '' };
+			return { status: 'completed' };
 		},
 		onFailure: (message) => failures.push(message),
 		onDisposeExitFailure: (message) => disposeFailures.push(message),
@@ -694,9 +694,9 @@ void test('resetTmuxScrollbackRuntimeState reports typed Workmux scroll exit fai
 	const executor = createWorkmuxScrollbackCommandExecutor({
 		executeCommand: async (command) => {
 			if (command === exitText()) {
-				return { success: false, output: '', error: 'not in a mode' };
+				return { status: 'failed', failure: { message: 'not in a mode' } };
 			}
-			return { success: true, output: '' };
+			return { status: 'completed' };
 		},
 		onFailure: (message) => failures.push(message),
 		onDisposeExitFailure: (message) => disposeFailures.push(message),
@@ -722,7 +722,7 @@ void test('resetTmuxScrollbackRuntimeState keeps queued Workmux scroll exit afte
 		executeCommand: async (command) => {
 			commands.push(command);
 			if (command === pageText()) await commandBlock.promise;
-			return { success: true, output: '' };
+			return { status: 'completed' };
 		},
 		onFailure: () => {},
 	});
@@ -753,7 +753,7 @@ void test('resetTmuxScrollbackRuntimeState skips Workmux scroll exit before remo
 	const executor = createWorkmuxScrollbackCommandExecutor({
 		executeCommand: async (command) => {
 			commands.push(command);
-			return { success: true, output: '' };
+			return { status: 'completed' };
 		},
 		onFailure: () => {},
 	});
@@ -774,7 +774,7 @@ void test('workmux scrollback executor dispose requests Workmux scroll exit for 
 		executeCommand: async (command) => {
 			commands.push(command);
 			if (command === pageText()) await commandBlock.promise;
-			return { success: true, output: '' };
+			return { status: 'completed' };
 		},
 		onFailure: () => {},
 	});
@@ -799,7 +799,7 @@ void test('workmux scrollback executor dispose exit failures do not invoke activ
 	const executor = createWorkmuxScrollbackCommandExecutor({
 		executeCommand: async (command) => {
 			commands.push(command);
-			return { success: false, output: '', error: 'dispose exit failed' };
+			return { status: 'failed', failure: { message: 'dispose exit failed' } };
 		},
 		onFailure: (message) => failures.push(message),
 		onDisposeExitFailure: (message) => disposeFailures.push(message),
@@ -824,9 +824,12 @@ void test('workmux scrollback executor routes dispose rollback failures to dispo
 			commands.push(command);
 			if (command === enterText()) await commandBlock.promise;
 			if (command === exitText()) {
-				return { success: false, output: '', error: 'rollback exit failed' };
+				return {
+					status: 'failed',
+					failure: { message: 'rollback exit failed' },
+				};
 			}
-			return { success: true, output: '' };
+			return { status: 'completed' };
 		},
 		onFailure: (message) => failures.push(message),
 		onDisposeExitFailure: (message) => disposeFailures.push(message),
@@ -855,9 +858,12 @@ void test('dispose rollback exit failure can mark remote copy mode active for ca
 			commands.push(command);
 			if (command === enterText()) await commandBlock.promise;
 			if (command === exitText()) {
-				return { success: false, output: '', error: 'rollback exit failed' };
+				return {
+					status: 'failed',
+					failure: { message: 'rollback exit failed' },
+				};
 			}
-			return { success: true, output: '' };
+			return { status: 'completed' };
 		},
 		onFailure: () => {},
 		onDisposeExitFailure: () => {},
@@ -1129,7 +1135,7 @@ void test('resetTmuxScrollbackRuntimeState returns a cleanup barrier for inactiv
 		executeCommand: async (command) => {
 			commands.push(command);
 			if (command === enterText()) await commandBlock.promise;
-			return { success: true, output: '' };
+			return { status: 'completed' };
 		},
 		onFailure: () => {},
 	});

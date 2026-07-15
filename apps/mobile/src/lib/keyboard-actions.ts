@@ -8,6 +8,7 @@ import {
 	type MdevBridgeFailureClass,
 } from '@/lib/mdev-bridge-client';
 import { type ControllerOutcome } from '@/lib/shell-controllers/controller-core';
+import { matchControllerOutcome } from '@/lib/shell-controllers/controller-outcome';
 import {
 	WORKMUX_APP_COMMAND_UPDATE_MESSAGE,
 	buildWorkmuxAppFocusArgv,
@@ -209,32 +210,33 @@ export function createWorkmuxKeyboardCommandRunner({
 							)
 						: buildWorkmuxStatusCycleArgv(sessionName);
 			const outcome = await runWorkmuxCommand(argv, 10_000);
-			switch (outcome.status) {
-				case 'superseded':
-					return { status: 'superseded' };
-				case 'completed':
-					return commandGeneration === generation
-						? { status: 'handled' }
-						: { status: 'superseded' };
-				case 'failed':
+			return matchControllerOutcome(outcome, {
+				superseded: () => ({ status: 'superseded' as const }),
+				completed: () =>
+					commandGeneration === generation
+						? { status: 'handled' as const }
+						: { status: 'superseded' as const },
+				failed: (failed) => {
 					if (commandGeneration !== generation) {
-						return { status: 'superseded' };
+						return { status: 'superseded' as const };
 					}
 					showFailure({
 						message:
 							formatWorkmuxKeyboardCommandFailureMessage({
-								errorMessage: outcome.failure.message,
+								errorMessage: failed.failure.message,
 							}) || WORKMUX_APP_COMMAND_UPDATE_MESSAGE,
-						failureClass: outcome.failure.failureClass,
+						failureClass: failed.failure.failureClass,
 					});
-					return { status: 'handled' };
-				case 'unavailable':
+					return { status: 'handled' as const };
+				},
+				unavailable: () => {
 					if (commandGeneration !== generation) {
-						return { status: 'superseded' };
+						return { status: 'superseded' as const };
 					}
 					showFailure({ message: WORKMUX_APP_COMMAND_UPDATE_MESSAGE });
-					return { status: 'handled' };
-			}
+					return { status: 'handled' as const };
+				},
+			});
 		} catch (error) {
 			if (commandGeneration === generation) {
 				const failureClass = getWorkmuxCommandFailureClass(error);

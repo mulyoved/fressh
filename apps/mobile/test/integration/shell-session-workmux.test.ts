@@ -223,6 +223,35 @@ void test('channel factory failures leave an unavailable port that activation ca
 	});
 });
 
+for (const retirement of ['replace', 'unmount'] as const) {
+	void test(`channel-null ${retirement} runs registered retirement cleanup exactly once`, async () => {
+		let cleanupCalls = 0;
+		const createInput = (key: string): ShellSessionWorkmuxInput => ({
+			key: targetKey(key),
+			connection: null,
+			diagnostics: { event: () => {}, warn: () => {} },
+			createChannel: () => {
+				throw new Error('factory failed');
+			},
+			setTimeout,
+			clearTimeout,
+		});
+		const owner = createShellSessionWorkmuxOwner(createInput('target-1'));
+		owner.getPort().registerBeforeDispose('scrollback', async (retiring) => {
+			cleanupCalls += 1;
+			assert.deepEqual(await retiring.exitScroll({ sessionName: 'main' }), {
+				status: 'unavailable',
+			});
+		});
+
+		if (retirement === 'replace') owner.replace(createInput('target-2'));
+		else owner.dispose('unmount');
+		await owner.drain();
+
+		assert.equal(cleanupCalls, 1);
+	});
+}
+
 void test('successor factory failure settles retirement and remains retryable', async () => {
 	const owner = createHarness('target-1', {
 		createChannel: (label, events) => {
@@ -733,6 +762,39 @@ void test('current-generation diagnostic events retain the detailed persistent l
 				connectionCount: 2,
 				shellCount: 3,
 			},
+		},
+	]);
+});
+
+void test('a throwing active trace does not suppress the persistent diagnostic log', () => {
+	const details: unknown[] = [];
+	const warnings: DiagnosticWarning[] = [];
+	const port = createShellDiagnosticPort({
+		generation: 7,
+		getCurrentGeneration: () => 7,
+		getActiveTrace: () => ({
+			event: () => {
+				throw new Error('trace failed');
+			},
+		}),
+		getEventDetails: () => ({ connectionId: 'connection-1' }),
+		logger: {
+			info: (message, value) => details.push({ message, value }),
+			warn: (message, error) => warnings.push({ message, error }),
+		},
+	});
+
+	port.event({
+		kind: 'mdev-bridge.lifecycle',
+		source: 'mdev-bridge',
+		stage: 'request-started',
+	});
+
+	assert.equal(warnings.length, 1);
+	assert.deepEqual(details, [
+		{
+			message: 'Workmux diagnostic event',
+			value: { connectionId: 'connection-1' },
 		},
 	]);
 });

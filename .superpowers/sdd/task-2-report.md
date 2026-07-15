@@ -34,6 +34,13 @@ Status: COMPLETE
   current-runtime clear/context identity protocols were moved into focused
   React-free helpers, reducing `scrollback-core.ts` from 685 to 646 lines while
   preserving the 650-line ceiling.
+- CE1 wave 2 preserves the feature-request detail-free fallback, independently
+  contains trace and persistent diagnostic sinks, retires channel-null owners,
+  removes the raw scrollback result adapter and duplicate scroll pipeline,
+  canonicalizes keyboard terminal view contracts and outcome decoding, and
+  restores contained before/after terminal diagnostic sampling.
+- The terminal-source adapter is now React-free and directly verifies exact
+  native bigint conversion plus stale-generation suppression.
 
 ## TDD evidence
 
@@ -65,6 +72,9 @@ Status: COMPLETE
   mobile integration suite 2259/2259.
 - `pnpm run fmt:check`, `pnpm run typecheck`, `pnpm run lint:check`, and
   `git diff --check` all exited 0.
+- CE1 wave 2 GREEN: focused terminal-source and architecture guards 9/9; full
+  mobile integration suite 2267/2267; mobile format, lint, and typecheck gates
+  all exited 0.
 
 ## Source fidelity
 

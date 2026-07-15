@@ -71,7 +71,9 @@ void test('raw native output diagnostic calls stay confined to the session adapt
 	const offenders: string[] = [];
 	for (const file of collectSourceFiles(root)) {
 		const relativePath = relative(root, file);
-		if (relativePath === 'lib/shell-controllers/session.tsx') continue;
+		if (relativePath === 'lib/shell-controllers/session-terminal-source.ts') {
+			continue;
+		}
 		for (const invocation of findRawNativeDiagnosticInvocations(
 			readFileSync(file, 'utf8'),
 		)) {
@@ -136,7 +138,14 @@ void test('typed outcome consumers use the shared exhaustive decoder', () => {
 			/from '.\/controller-outcome'/,
 		],
 		['shell-controllers/notifications-core.ts', /from '.\/controller-outcome'/],
-		['shell-controllers/scrollback-core.ts', /from '.\/controller-outcome'/],
+		[
+			'keyboard-actions.ts',
+			/from '@\/lib\/shell-controllers\/controller-outcome'/,
+		],
+		[
+			'shell-controllers/keyboard-remote-core.ts',
+			/from '.\/controller-outcome'/,
+		],
 		[
 			'shell-controllers/skill-selector-adapter.ts',
 			/from '.\/controller-outcome'/,
@@ -153,7 +162,55 @@ void test('typed outcome consumers use the shared exhaustive decoder', () => {
 			'terminal-fit-runner.ts',
 			/from '.\/shell-controllers\/controller-outcome'/,
 		],
+		[
+			'workmux-scrollback-executor.ts',
+			/from '.\/shell-controllers\/controller-outcome'/,
+		],
 	] as const) {
 		assert.match(readFileSync(join(root, file), 'utf8'), importPattern, file);
+	}
+});
+
+void test('Workmux scrollback uses only the typed session scroll port', () => {
+	const root = resolve(import.meta.dirname, '../../src/lib');
+	const executor = readFileSync(
+		join(root, 'workmux-scrollback-executor.ts'),
+		'utf8',
+	);
+	const core = readFileSync(
+		join(root, 'shell-controllers/scrollback-core.ts'),
+		'utf8',
+	);
+	const sessionWorkmux = readFileSync(
+		join(root, 'shell-controllers/session-workmux.ts'),
+		'utf8',
+	);
+	assert.match(executor, /scrollTransport: ShellWorkmuxScrollPort/);
+	assert.doesNotMatch(executor, /WorkmuxControlChannel\['scroll'\]/);
+	assert.doesNotMatch(executor, /WorkmuxScrollbackCommandResult/);
+	assert.doesNotMatch(core, /toExecutorResult/);
+	assert.doesNotMatch(sessionWorkmux, /runScroll/);
+});
+
+void test('keyboard modules use canonical terminal views and exhaustive decoders', () => {
+	const root = resolve(import.meta.dirname, '../../src/lib');
+	for (const file of collectSourceFiles(join(root, 'shell-controllers'))) {
+		const relativePath = relative(root, file);
+		if (!relativePath.includes('keyboard')) continue;
+		const source = readFileSync(file, 'utf8');
+		assert.doesNotMatch(
+			source,
+			/from '.\/terminal-hook-runtime'/,
+			relativePath,
+		);
+		assert.doesNotMatch(source, /ShellTerminalRuntimeView/, relativePath);
+	}
+	for (const file of [
+		'keyboard-actions.ts',
+		'shell-controllers/keyboard-remote-core.ts',
+	]) {
+		const source = readFileSync(join(root, file), 'utf8');
+		assert.match(source, /matchControllerOutcome/);
+		assert.doesNotMatch(source, /switch \((?:outcome|result)\.status\)/);
 	}
 });

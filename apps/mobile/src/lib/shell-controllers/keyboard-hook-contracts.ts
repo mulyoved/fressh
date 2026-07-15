@@ -16,7 +16,8 @@ import {
 } from './keyboard-state-core';
 import { type ShellScrollbackInputPort } from './scrollback-contracts';
 import { type ShellActivityPort } from './session-contracts';
-import { type ShellTerminalRuntimeView } from './terminal-hook-runtime';
+import { type ShellTerminalViewPort } from './terminal-contracts';
+import { type TerminalOutputDiagnosticSnapshot } from './terminal-output-diagnostics';
 
 export type ShellKeyboardControllerLogger = ShellKeyboardInputLogger &
 	ShellKeyboardRemoteLogger &
@@ -36,7 +37,8 @@ export type UseShellKeyboardControllerInput = {
 	activity: ShellActivityPort;
 	sourceKey: unknown;
 	scrollbackInput: ShellScrollbackInputPort;
-	terminalView: ShellTerminalRuntimeView;
+	terminalView: ShellTerminalViewPort;
+	readTerminalOutputDiagnostics(): TerminalOutputDiagnosticSnapshot | null;
 	remoteTarget: ShellKeyboardRemoteTargetContext;
 	navScope: WorkmuxNavScope;
 	setNavScope(scope: WorkmuxNavScope): void;

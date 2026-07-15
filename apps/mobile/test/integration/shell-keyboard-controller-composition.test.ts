@@ -66,6 +66,7 @@ void describe('shell keyboard controller composition', () => {
 				} as unknown as ShellDetailKeyboardCompositionInput['scrollback']['input'],
 			},
 			terminal: {
+				getOutputDiagnostics: () => null,
 				view: {
 					getRuntimeKey: () => 'runtime-1',
 				} as unknown as ShellDetailKeyboardCompositionInput['terminal']['view'],
@@ -94,6 +95,7 @@ void describe('shell keyboard controller composition', () => {
 				} as unknown as ShellDetailKeyboardCompositionInput['scrollback']['input'],
 			},
 			terminal: {
+				getOutputDiagnostics: () => null,
 				view: {
 					getRuntimeKey: () => 'runtime-2',
 				} as unknown as ShellDetailKeyboardCompositionInput['terminal']['view'],

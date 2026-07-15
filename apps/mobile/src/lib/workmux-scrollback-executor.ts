@@ -1,18 +1,16 @@
 import { type ScrollTraceSink } from './scroll-trace';
+import { matchControllerOutcome } from './shell-controllers/controller-outcome';
 import { type ScrollbackOperationOwner } from './shell-controllers/scrollback-operation-owner';
+import {
+	type ShellWorkmuxOutcome,
+	type ShellWorkmuxScrollPort,
+} from './shell-controllers/session-contracts';
 import { formatWorkmuxAppBoundaryFailureMessage } from './workmux-app-commands';
-import { type WorkmuxControlChannel } from './workmux-control-channel';
 import {
 	coalesceWorkmuxScrollbackPendingPageCommands,
 	mergeWorkmuxScrollbackPageCommands,
 	type WorkmuxScrollbackPageCommand,
 } from './workmux-scrollback-batch';
-
-export type WorkmuxScrollbackCommandResult = {
-	success: boolean;
-	output: string;
-	error?: string;
-};
 
 type WorkmuxScrollbackCommandKind = 'enter' | 'scroll';
 export type WorkmuxScrollbackFailurePolicy = 'notify' | 'suppress';
@@ -40,7 +38,7 @@ export type WorkmuxScrollbackCommandExecutor = {
 };
 
 export type WorkmuxScrollbackCommandExecutorInput = {
-	scrollTransport: WorkmuxControlChannel['scroll'];
+	scrollTransport: ShellWorkmuxScrollPort;
 	onFailure: (
 		message: string,
 		context: WorkmuxScrollbackFailureContext,
@@ -49,27 +47,37 @@ export type WorkmuxScrollbackCommandExecutorInput = {
 	onTrace?: ScrollTraceSink;
 };
 
-export function formatWorkmuxScrollbackCommandFailureMessage(result: {
-	success: boolean;
-	output: string;
-	error?: string;
-}): string | null {
-	if (result.success) return null;
-	return formatWorkmuxAppBoundaryFailureMessage(
-		result.error || result.output || '',
-	);
+export function formatWorkmuxScrollbackCommandFailureMessage(
+	result: ShellWorkmuxOutcome,
+): string | null {
+	return matchControllerOutcome(result, {
+		completed: () => null,
+		failed: (failed) =>
+			formatWorkmuxAppBoundaryFailureMessage(
+				failed.failure.message || failed.output || '',
+			),
+		superseded: () =>
+			formatWorkmuxAppBoundaryFailureMessage(
+				'Workmux scroll command superseded.',
+			),
+		unavailable: () =>
+			formatWorkmuxAppBoundaryFailureMessage(
+				'Workmux scroll command unavailable.',
+			),
+	});
 }
 
 async function runSingleOperation(
-	operation: () => Promise<WorkmuxScrollbackCommandResult>,
-): Promise<WorkmuxScrollbackCommandResult> {
+	operation: () => Promise<ShellWorkmuxOutcome>,
+): Promise<ShellWorkmuxOutcome> {
 	try {
 		return await operation();
 	} catch (error) {
 		return {
-			success: false,
-			output: '',
-			error: error instanceof Error ? error.message : String(error),
+			status: 'failed',
+			failure: {
+				message: error instanceof Error ? error.message : String(error),
+			},
 		};
 	}
 }
@@ -177,7 +185,7 @@ export function createWorkmuxScrollbackCommandExecutor({
 		durableExit = false,
 		failurePolicy = 'notify',
 	}: {
-		operations: (() => Promise<WorkmuxScrollbackCommandResult>)[];
+		operations: (() => Promise<ShellWorkmuxOutcome>)[];
 		commandKind: WorkmuxScrollbackCommandKind;
 		operationGeneration: number;
 		rollbackTargetName?: string;
@@ -200,6 +208,28 @@ export function createWorkmuxScrollbackCommandExecutor({
 				queueDepth: pendingSerializedOperations,
 			});
 			const result = await runSingleOperation(operation);
+			const resultSummary = matchControllerOutcome(result, {
+				completed: (completed) => ({
+					success: true,
+					outputLength: completed.output?.length ?? 0,
+					error: undefined,
+				}),
+				failed: (failed) => ({
+					success: false,
+					outputLength: failed.output?.length ?? 0,
+					error: failed.failure.message,
+				}),
+				superseded: () => ({
+					success: false,
+					outputLength: 0,
+					error: 'Workmux scroll command superseded.',
+				}),
+				unavailable: () => ({
+					success: false,
+					outputLength: 0,
+					error: 'Workmux scroll command unavailable.',
+				}),
+			});
 			trace({
 				event: 'executor.command.end',
 				commandKind: durableExit ? 'exit' : commandKind,
@@ -207,10 +237,10 @@ export function createWorkmuxScrollbackCommandExecutor({
 				commandCount: operations.length,
 				durableExit,
 				operationGeneration,
-				success: result.success,
+				success: resultSummary.success,
 				durationMs: Date.now() - startedAt,
-				outputLength: result.output.length,
-				error: result.error,
+				outputLength: resultSummary.outputLength,
+				error: resultSummary.error,
 				queueDepth: pendingSerializedOperations,
 			});
 			if (!isActive(operationGeneration)) {
@@ -231,7 +261,11 @@ export function createWorkmuxScrollbackCommandExecutor({
 						notifyDisposeExitFailure(failureMessage);
 					}
 				}
-				if (commandKind === 'enter' && result.success && rollbackTargetName) {
+				if (
+					commandKind === 'enter' &&
+					result.status === 'completed' &&
+					rollbackTargetName
+				) {
 					const rollbackResult = await runSingleOperation(() =>
 						scrollTransport.exit({ sessionName: rollbackTargetName }),
 					);

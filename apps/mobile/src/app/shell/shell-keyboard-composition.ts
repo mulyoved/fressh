@@ -7,11 +7,18 @@ import { type ShellKeyboardRemoteTargetContext } from '@/lib/shell-controllers/k
 
 export type ShellDetailKeyboardCompositionInput = Omit<
 	UseShellKeyboardControllerInput,
-	'sourceKey' | 'scrollbackInput' | 'terminalView' | 'remoteTarget'
+	| 'sourceKey'
+	| 'scrollbackInput'
+	| 'terminalView'
+	| 'readTerminalOutputDiagnostics'
+	| 'remoteTarget'
 > & {
 	targetKey: ShellKeyboardRemoteTargetContext['targetKey'];
 	scrollback: { input: UseShellKeyboardControllerInput['scrollbackInput'] };
-	terminal: { view: UseShellKeyboardControllerInput['terminalView'] };
+	terminal: {
+		view: UseShellKeyboardControllerInput['terminalView'];
+		getOutputDiagnostics: UseShellKeyboardControllerInput['readTerminalOutputDiagnostics'];
+	};
 	remote: Omit<ShellKeyboardRemoteTargetContext, 'targetKey'>;
 };
 
@@ -25,6 +32,7 @@ export function createShellDetailKeyboardControllerInput(
 		sourceKey: input.targetKey,
 		scrollbackInput: input.scrollback.input,
 		terminalView: input.terminal.view,
+		readTerminalOutputDiagnostics: input.terminal.getOutputDiagnostics,
 		remoteTarget: {
 			targetKey: input.targetKey,
 			tmuxEnabled: input.remote.tmuxEnabled,

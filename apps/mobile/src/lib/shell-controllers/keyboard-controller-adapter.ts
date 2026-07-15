@@ -25,7 +25,7 @@ import { type ShellKeyboardInputCore } from './keyboard-input-contracts';
 import { type ShellKeyboardRemoteCore } from './keyboard-remote-contracts';
 import { type ShellKeyboardStateCore } from './keyboard-state-core';
 import { type ShellActivityPort } from './session-contracts';
-import { type ShellTerminalRuntimeView } from './terminal-hook-runtime';
+import { type ShellTerminalViewPort } from './terminal-contracts';
 
 export type ShellKeyboardModalCommands = {
 	toggleCommandMenu(): void;
@@ -49,7 +49,7 @@ export type ShellKeyboardControllerAdapterPorts = {
 	activity: ShellActivityPort;
 	sourceKey: unknown;
 	terminalView: Pick<
-		ShellTerminalRuntimeView,
+		ShellTerminalViewPort,
 		| 'getRuntimeKey'
 		| 'getRuntimeInstanceId'
 		| 'isCurrentInstance'

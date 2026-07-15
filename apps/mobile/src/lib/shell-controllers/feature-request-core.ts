@@ -189,7 +189,10 @@ export function createFeatureRequestControllerCore(
 					}),
 					failed: ({ failure }) => ({
 						kind: 'failed' as const,
-						message: failure.message,
+						message:
+							failure.reason === 'no-detail'
+								? 'Failed to create issue. Make sure gh and claude CLIs are installed and authenticated on the remote host.'
+								: failure.message,
 					}),
 					superseded: () => ({ kind: 'superseded' as const }),
 					unavailable: () => ({

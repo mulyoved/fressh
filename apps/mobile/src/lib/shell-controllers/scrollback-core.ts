@@ -20,7 +20,6 @@ import {
 	type ControllerInvalidationReason,
 	type ControllerOutcome,
 } from './controller-core';
-import { matchControllerOutcome } from './controller-outcome';
 import { handleScrollbackBatch } from './scrollback-batch-coordinator';
 import {
 	createSafeScrollbackWarn as createSafeWarn,
@@ -291,43 +290,8 @@ export function createShellScrollbackControllerCore(
 			executor === createdExecutor &&
 			executorRevision === capturedExecutorRevision;
 		try {
-			const toExecutorResult = async (
-				operation: Promise<
-					Awaited<ReturnType<typeof nextContext.workmux.scroll.enter>>
-				>,
-			) => {
-				const outcome = await operation;
-				return matchControllerOutcome(outcome, {
-					completed: (completed) => ({
-						success: true,
-						output: completed.output ?? '',
-					}),
-					failed: (failed) => ({
-						success: false,
-						output: failed.output ?? '',
-						error: failed.failure.message,
-					}),
-					superseded: () => ({
-						success: false,
-						output: '',
-						error: 'Workmux scroll command superseded.',
-					}),
-					unavailable: () => ({
-						success: false,
-						output: '',
-						error: 'Workmux scroll command unavailable.',
-					}),
-				});
-			};
 			createdExecutor = createExecutor({
-				scrollTransport: {
-					enter: (input) =>
-						toExecutorResult(nextContext.workmux.scroll.enter(input)),
-					move: (input) =>
-						toExecutorResult(nextContext.workmux.scroll.move(input)),
-					exit: (input) =>
-						toExecutorResult(nextContext.workmux.scroll.exit(input)),
-				},
+				scrollTransport: nextContext.workmux.scroll,
 				onFailure: (message, failureContext) => {
 					if (!isCurrentExecutor()) return;
 					const currentContext = context;

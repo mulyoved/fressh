@@ -6,6 +6,7 @@ import {
 } from '@/lib/keyboard-actions';
 import { type ShellConfigState } from '@/lib/shell-config-store';
 import { showShellWorkmuxKeyboardFailure } from '../../app/shell/shell-workmux-keyboard-policy';
+import { matchControllerOutcome } from './controller-outcome';
 import {
 	type CreateShellKeyboardRemoteCoreOptions,
 	type ShellKeyboardRemoteActivitySnapshot,
@@ -34,23 +35,30 @@ export type {
 } from './keyboard-remote-contracts';
 
 function toBridgeWorkmuxResult(outcome: ShellWorkmuxOutcome) {
-	switch (outcome.status) {
-		case 'completed':
-			return { success: true as const, output: outcome.output ?? '' };
-		case 'failed':
-			return {
-				success: false as const,
-				output: outcome.output ?? '',
-				error: outcome.failure.message,
-				...(outcome.failure.failureClass
-					? { failureClass: outcome.failure.failureClass }
-					: {}),
-			};
-		case 'superseded':
-			return { success: false as const, output: '', error: 'superseded' };
-		case 'unavailable':
-			return { success: false as const, output: '', error: 'unavailable' };
-	}
+	return matchControllerOutcome(outcome, {
+		completed: (completed) => ({
+			success: true as const,
+			output: completed.output ?? '',
+		}),
+		failed: (failed) => ({
+			success: false as const,
+			output: failed.output ?? '',
+			error: failed.failure.message,
+			...(failed.failure.failureClass
+				? { failureClass: failed.failure.failureClass }
+				: {}),
+		}),
+		superseded: () => ({
+			success: false as const,
+			output: '',
+			error: 'superseded',
+		}),
+		unavailable: () => ({
+			success: false as const,
+			output: '',
+			error: 'unavailable',
+		}),
+	});
 }
 
 export function createShellKeyboardRemoteCore({
@@ -62,6 +70,7 @@ export function createShellKeyboardRemoteCore({
 	closeCommandMenu,
 	showAlert,
 	invalidateShellTransport,
+	readTerminalOutputDiagnostics = () => null,
 	logger,
 	now = Date.now,
 	restartCodex = restartCodexWithBridge,
@@ -120,6 +129,22 @@ export function createShellKeyboardRemoteCore({
 				error,
 			);
 			return null;
+		}
+	};
+	const sampleTerminalOutputDiagnostics = (stage: 'before' | 'after') => {
+		try {
+			const diagnostics = readTerminalOutputDiagnostics();
+			if (diagnostics !== null) {
+				safeInfo('Workmux keyboard terminal output diagnostics', {
+					stage,
+					...diagnostics,
+				});
+			}
+		} catch (error) {
+			safeWarn('Failed to sample Workmux keyboard terminal output', {
+				stage,
+				error: getKeyboardRemoteErrorMessage(error),
+			});
 		}
 	};
 	const captureAuthority = (): KeyboardRemoteAuthority | null => {
@@ -185,6 +210,7 @@ export function createShellKeyboardRemoteCore({
 					timeoutMs,
 				});
 				if (!commandIsCurrent()) throw new Error('Workmux command superseded.');
+				sampleTerminalOutputDiagnostics('before');
 				try {
 					const result = await runnerTarget.workmux.command(commandArgv, {
 						timeoutMs,
@@ -227,6 +253,10 @@ export function createShellKeyboardRemoteCore({
 						});
 					}
 					throw error;
+				} finally {
+					if (commandIsCurrent()) {
+						sampleTerminalOutputDiagnostics('after');
+					}
 				}
 			},
 			showFailure: ({ message, failureClass }) => {

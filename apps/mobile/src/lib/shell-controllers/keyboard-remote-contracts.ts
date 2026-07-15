@@ -12,6 +12,7 @@ import {
 	type ShellHostCommandPort,
 	type ShellWorkmuxPort,
 } from './session-contracts';
+import { type TerminalOutputDiagnosticSnapshot } from './terminal-output-diagnostics';
 
 export type ShellKeyboardRemoteOutcome =
 	| { status: 'handled' }
@@ -71,6 +72,7 @@ export type CreateShellKeyboardRemoteCoreOptions = {
 	closeCommandMenu(): void;
 	showAlert(title: string, message: string): void;
 	invalidateShellTransport(connectionId: string, channelId: number): void;
+	readTerminalOutputDiagnostics?(): TerminalOutputDiagnosticSnapshot | null;
 	logger?: ShellKeyboardRemoteLogger;
 	now?: () => number;
 	restartCodex?: typeof restartCodexWithBridge;

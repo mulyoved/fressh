@@ -143,6 +143,8 @@ export function useShellKeyboardController(
 				committedDeps.current.showAlert(title, message),
 			invalidateShellTransport: (connectionId, channelId) =>
 				committedDeps.current.invalidateShellTransport(connectionId, channelId),
+			readTerminalOutputDiagnostics: () =>
+				committedDeps.current.readTerminalOutputDiagnostics(),
 			logger: deps.logger,
 		}),
 	);

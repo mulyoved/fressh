@@ -42,25 +42,39 @@ export function createShellDiagnosticPort({
 		event: (event) => {
 			try {
 				if (getCurrentGeneration() !== generation) return;
+			} catch (error) {
+				warnEventFailure(event, error);
+				return;
+			}
+			try {
 				getActiveTrace()?.event(event);
+			} catch (error) {
+				warnEventFailure(event, error);
+			}
+			try {
 				if (getEventDetails && logger.info) {
 					logger.info('Workmux diagnostic event', getEventDetails(event));
 				}
 			} catch (error) {
-				let fields = '';
-				try {
-					fields = formatConnectionDiagnosticEventFields(event).join(', ');
-				} catch {
-					// A malformed event must not reveal arbitrary object fields.
-				}
-				warn(
-					`Failed to record shell diagnostic event${
-						fields ? ` (${fields})` : ''
-					}`,
-					error,
-				);
+				warnEventFailure(event, error);
 			}
 		},
 		warn,
 	};
+
+	function warnEventFailure(
+		event: ConnectionDiagnosticEvent,
+		error: unknown,
+	): void {
+		let fields = '';
+		try {
+			fields = formatConnectionDiagnosticEventFields(event).join(', ');
+		} catch {
+			// A malformed event must not reveal arbitrary object fields.
+		}
+		warn(
+			`Failed to record shell diagnostic event${fields ? ` (${fields})` : ''}`,
+			error,
+		);
+	}
 }

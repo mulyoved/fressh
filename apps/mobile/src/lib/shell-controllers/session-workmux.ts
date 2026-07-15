@@ -188,26 +188,6 @@ export function createShellSessionWorkmuxOwner(
 			}
 		};
 
-		const runScroll = async (
-			invoke: (
-				channel: WorkmuxControlChannel,
-			) => Promise<WorkmuxControlCommandResult>,
-		): ReturnType<typeof runCommand> => {
-			const channel = owned.channel;
-			if (!owned.active) return Promise.resolve({ status: 'superseded' });
-			if (channel === null) return Promise.resolve({ status: 'unavailable' });
-			try {
-				const result = await invoke(channel);
-				return owned.active
-					? toCommandOutcome(result)
-					: { status: 'superseded' };
-			} catch (error) {
-				return owned.active
-					? thrownCommandOutcome(error)
-					: { status: 'superseded' };
-			}
-		};
-
 		owned.port = {
 			key: input.key,
 			command: (argv: string[], options?: { timeoutMs?: number }) =>
@@ -218,11 +198,11 @@ export function createShellSessionWorkmuxOwner(
 			) => runCommand((channel) => channel.operation(request, options)),
 			scroll: {
 				enter: (scrollInput: WorkmuxScrollTarget) =>
-					runScroll((channel) => channel.scroll.enter(scrollInput)),
+					runCommand((channel) => channel.scroll.enter(scrollInput)),
 				move: (scrollInput: WorkmuxScrollMove) =>
-					runScroll((channel) => channel.scroll.move(scrollInput)),
+					runCommand((channel) => channel.scroll.move(scrollInput)),
 				exit: (scrollInput: WorkmuxScrollTarget) =>
-					runScroll((channel) => channel.scroll.exit(scrollInput)),
+					runCommand((channel) => channel.scroll.exit(scrollInput)),
 			},
 			registerBeforeDispose: (owner, cleanup) => {
 				if (!owned.active) return () => {};
@@ -419,16 +399,12 @@ export function createShellSessionWorkmuxOwner(
 		owned.active = false;
 		const registrations = [...owned.cleanups.entries()];
 		owned.cleanups.clear();
-		if (owned.channel !== null) {
-			enqueueRetirement({
-				owned,
-				reason,
-				registrations,
-				...(afterRetire ? { afterRetire } : {}),
-			});
-		} else {
-			afterRetire?.();
-		}
+		enqueueRetirement({
+			owned,
+			reason,
+			registrations,
+			...(afterRetire ? { afterRetire } : {}),
+		});
 	}
 
 	function exposePendingReplacement(): void {

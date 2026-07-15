@@ -1,17 +1,17 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { type ShellWorkmuxScrollPort } from '../../src/lib/shell-controllers/session-contracts';
 import { handleTmuxScrollbackBatchEvent } from '../../src/lib/tmux-scrollback';
-import { type WorkmuxControlChannel } from '../../src/lib/workmux-control-channel';
 import {
 	createTmuxScrollbackLineAccumulator,
 	type WorkmuxScrollbackPageCommand,
 } from '../../src/lib/workmux-scrollback-batch';
 import { createWorkmuxScrollbackCommandExecutor } from '../../src/lib/workmux-scrollback-executor';
 
-const noopScrollTransport: WorkmuxControlChannel['scroll'] = {
-	enter: async () => ({ success: true, output: '' }),
-	move: async () => ({ success: true, output: '' }),
-	exit: async () => ({ success: true, output: '' }),
+const noopScrollTransport: ShellWorkmuxScrollPort = {
+	enter: async () => ({ status: 'completed' }),
+	move: async () => ({ status: 'completed' }),
+	exit: async () => ({ status: 'completed' }),
 };
 
 void test('scrollback batch adapter gates events and passes pageStep into command building', async () => {

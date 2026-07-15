@@ -8,7 +8,7 @@ import {
 
 import { type ShellActivitySnapshot } from './activity-core';
 import { type ControllerOutcome } from './controller-core';
-import { type ShellTerminalRuntimeView } from './terminal-hook-runtime';
+import { type ShellTerminalViewPort } from './terminal-contracts';
 
 type InputOutcome = ControllerOutcome<{ message: string }>;
 
@@ -25,7 +25,7 @@ type KeyboardInputAuthorityDependencies = {
 	getActivitySnapshot(): ShellActivitySnapshot;
 	getSourceKey(): unknown;
 	terminalView: Pick<
-		ShellTerminalRuntimeView,
+		ShellTerminalViewPort,
 		'getRuntimeKey' | 'getRuntimeInstanceId' | 'isCurrentInstance'
 	>;
 	getConfigState(): unknown;
