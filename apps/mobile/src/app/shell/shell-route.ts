@@ -1,15 +1,17 @@
+type ShellRouteParam = string | string[];
+
 export type ShellRouteParams = {
-	connectionId?: string;
-	channelId?: string;
-	storedConnectionId?: string;
-	agentConnectionId?: string;
-	agentSession?: string;
-	agentWindowId?: string;
-	agentEventId?: string;
-	agentTapToken?: string;
-	tmuxError?: string;
-	tmuxAttachFailureReason?: string;
-	tmuxSessionName?: string;
+	connectionId?: ShellRouteParam;
+	channelId?: ShellRouteParam;
+	storedConnectionId?: ShellRouteParam;
+	agentConnectionId?: ShellRouteParam;
+	agentSession?: ShellRouteParam;
+	agentWindowId?: ShellRouteParam;
+	agentEventId?: ShellRouteParam;
+	agentTapToken?: ShellRouteParam;
+	tmuxError?: ShellRouteParam;
+	tmuxAttachFailureReason?: ShellRouteParam;
+	tmuxSessionName?: ShellRouteParam;
 };
 
 export type ShellAgentRoute = {
@@ -41,7 +43,8 @@ export type ShellRouteResult =
 	| { status: 'valid'; request: ShellRouteRequest }
 	| { status: 'invalid'; error: ShellRouteError };
 
-const optional = (value?: string): string | null => value?.trim() || null;
+const optional = (value?: ShellRouteParam): string | null =>
+	typeof value === 'string' ? value.trim() || null : null;
 
 export function parseShellRoute(params: ShellRouteParams): ShellRouteResult {
 	const connectionId = optional(params.connectionId);
@@ -54,7 +57,7 @@ export function parseShellRoute(params: ShellRouteParams): ShellRouteResult {
 			},
 		};
 	}
-	const rawChannelId = params.channelId?.trim() ?? '';
+	const rawChannelId = optional(params.channelId) ?? '';
 	const channelId = Number(rawChannelId);
 	if (!/^\d+$/.test(rawChannelId) || !Number.isSafeInteger(channelId)) {
 		return {

@@ -103,3 +103,65 @@ void test('shell route preserves tmux attach failure as typed state', () => {
 		});
 	}
 });
+
+void test('shell route rejects a repeated connection id', () => {
+	assert.deepEqual(
+		parseShellRoute({
+			connectionId: ['connection-1', 'connection-2'],
+			channelId: '1',
+		}),
+		{
+			status: 'invalid',
+			error: {
+				code: 'missing-connection-id',
+				message: 'This shell link is missing a connection.',
+			},
+		},
+	);
+});
+
+void test('shell route rejects a repeated channel id', () => {
+	assert.deepEqual(
+		parseShellRoute({ connectionId: 'connection-1', channelId: ['1', '2'] }),
+		{
+			status: 'invalid',
+			error: {
+				code: 'invalid-channel-id',
+				message: 'This shell link has an invalid channel.',
+			},
+		},
+	);
+});
+
+void test('shell route ignores repeated optional parameters', () => {
+	assert.deepEqual(
+		parseShellRoute({
+			connectionId: 'connection-1',
+			channelId: '1',
+			storedConnectionId: ['saved-1', 'saved-2'],
+			agentConnectionId: ['agent-1', 'agent-2'],
+			agentSession: ['main', 'other'],
+			agentWindowId: ['1', '2'],
+			agentEventId: ['event-1', 'event-2'],
+			agentTapToken: ['token-1', 'token-2'],
+			tmuxError: ['attach-failed', 'attach-failed'],
+			tmuxAttachFailureReason: ['missing-1', 'missing-2'],
+			tmuxSessionName: ['work', 'other'],
+		}),
+		{
+			status: 'valid',
+			request: {
+				connectionId: 'connection-1',
+				channelId: 1,
+				agentRoute: {
+					connectionId: null,
+					session: null,
+					windowId: null,
+					eventId: null,
+					tapToken: null,
+				},
+				tmuxAttach: { status: 'normal', sessionName: 'main' },
+			},
+		},
+	);
+});
