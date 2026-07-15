@@ -319,9 +319,12 @@ Write the new commit hash into the Task 1 evidence row.
 > session decomposition, Wispr, modal, and detail changes to Tasks 4 and 5, and
 > preserve the current Worktree Workspace UI throughout this checkpoint.
 > Because Worktree Workspace consumes the shared `controller-lifecycle.ts`
-> source identity, adapt only its authority identity in this checkpoint as a
-> direct compile dependency. Retain its current public handle, raw transport
-> inputs, modal rendering, and behavior until Task 5 replaces that boundary.
+> identity and the session owner cannot expose a raw escape hatch, move its
+> permanent typed transport boundary forward into this checkpoint. Replace its
+> raw connection/channel inputs with connection availability, target identity,
+> and `Pick<ShellWorkmuxPort, 'command' | 'operation'>`; map typed outcomes as
+> specified in Task 5. Retain its current public handle, modal rendering, UI,
+> and behavior; Task 5 still moves rendering and completes composition.
 > Current `dev` output diagnostics are also authoritative. Add a narrow
 > `getNativeOutputDiagnostics(): ShellTerminalNativeOutputDiagnostics | null`
 > capability to `ShellTerminalSourcePort`, where the snapshot contains the
