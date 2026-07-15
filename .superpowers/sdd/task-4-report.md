@@ -18,7 +18,7 @@ commands expose a committed snapshot instead of a render-time `openRef`.
 
 ## GREEN
 
-- Exact Node command: 95 passed, 0 failed.
+- Exact Node command: 97 passed, 0 failed.
 - Exact Jest command: 9 passed, 0 failed.
 - `pnpm run fmt:check`: exit 0.
 - `pnpm run typecheck`: exit 0.
@@ -49,15 +49,32 @@ Its production contract was unchanged. The fixture was narrowed to provide the
 required diagnostics methods, use the current optional dropped range, and wrap
 the maybe-promise buffer read before `assert.rejects`.
 
+## Stable-Review Repair
+
+The stable review found that a timed-out native start could remain unsettled
+forever after close or disposal, retaining its exact authority lease and
+stranding the latest waiter. Two fake-time tests first reproduced the issue: 38
+lifecycle cases passed and the late-resolve/late-reject deadline cases failed
+because the successor remained in `waitingForBubble`.
+
+The close-after-uncertain-start obligation now binds a separate injected
+5-second cleanup deadline after the coordinator records the matching request.
+The deadline is intentionally outside ordinary UI timer cancellation. Expiry
+removes only that pending request and settles its exact lease as `unknown`,
+poisoning authority and publishing `blocked` to the current successor. Late
+resolve or reject observes the retired request and cannot publish, release,
+re-poison, or issue a cleanup toggle.
+
 ## Commit
 
 Subject: `Rebuild serialized shell Wispr ownership`. The Git commit containing
-this report is the Task 4 implementation/evidence commit.
+the stable-review repair and this updated report follows that Task 4
+implementation/evidence commit.
 
 ## Concerns
 
-- Authority poisoning is intentionally permanent for the process after failed
-  or uncertain native cleanup. This is fail-closed and requires process restart
+- Authority poisoning is intentionally permanent for the process after failed or
+  uncertain native cleanup. This is fail-closed and requires process restart
   before another Wispr owner can acquire control.
 - Native tap timeout remains an uncertainty boundary: late resolution is
   observed for native state only; authority poisons at the bounded timeout and

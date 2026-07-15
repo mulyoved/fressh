@@ -168,6 +168,10 @@ export function createShellWisprControllerCore(
 		tapScreen: (x, y) => deps.native.tapScreen(x, y),
 		pixelRatio: deps.pixelRatio,
 		...timerOwner,
+		cleanupDeadlineTimers: {
+			setTimeout: deps.setTimeout,
+			clearTimeout: deps.clearTimeout,
+		},
 		modalIsOpen: safeModalIsOpen,
 		autoStartEnabled: () => autoStartEnabled,
 		captureLifecycle: () => sessionGeneration,
@@ -202,6 +206,9 @@ export function createShellWisprControllerCore(
 				requestId: close.decision.requestId,
 				retryClose,
 			});
+			if (close.uncertainStart) {
+				startProtocol.bindUncertainStartCleanup(close.decision.requestId);
+			}
 		} else if (close.decision.type === 'close-now' && close.requestId != null) {
 			closeCoordinator.requestAfterStart({
 				requestId: close.requestId,

@@ -20,6 +20,7 @@ import { type WisprTapRunner } from './wispr-tap-runner';
 
 const TAP_TIMEOUT_MS = 750;
 const OPENING_FALLBACK_MS = 750;
+const UNCERTAIN_START_CLEANUP_TIMEOUT_MS = 5_000;
 const BLOCKED_FAILURE: WisprAutomationFailure = {
 	reason: 'tap-failed',
 	message: 'Wispr unavailable because prior cleanup failed.',
@@ -35,6 +36,7 @@ export type WisprTextInputBounds = {
 export type WisprStartClose = {
 	decision: WisprAutoCloseDecision;
 	requestId: number | null;
+	uncertainStart: boolean;
 };
 
 export type WisprStartProtocol = {
@@ -47,6 +49,7 @@ export type WisprStartProtocol = {
 	textChanged(value: string): void;
 	fail(failure: WisprAutomationFailure): void;
 	close(): WisprStartClose;
+	bindUncertainStartCleanup(requestId: number): void;
 	settleNativeControl(
 		requestId: number,
 		settlement: WisprNativeControlSettlement,
@@ -55,6 +58,7 @@ export type WisprStartProtocol = {
 };
 
 export type CreateWisprStartProtocolInput = WisprTimerPort & {
+	cleanupDeadlineTimers: WisprTimerPort;
 	tapRunner: WisprTapRunner;
 	closeCoordinator: WisprCloseCoordinator;
 	controlAuthority: WisprNativeControlAuthority;
@@ -79,6 +83,7 @@ export function createWisprStartProtocol(
 	let tapStartedRequestId: number | null = null;
 	let timedOutRequestId: number | null = null;
 	let openingTimer: unknown;
+	let cleanupDeadline: { requestId: number; timer: unknown } | null = null;
 	let controlAcquisition: {
 		requestId: number;
 		acquisition: Extract<WisprNativeControlAcquisition, { status: 'waiting' }>;
@@ -99,6 +104,29 @@ export function createWisprStartProtocol(
 			// A failed cancellation must not keep the protocol active.
 		}
 		openingTimer = undefined;
+	};
+	const clearCleanupDeadline = (requestId: number) => {
+		if (cleanupDeadline?.requestId !== requestId) return;
+		const timer = cleanupDeadline.timer;
+		cleanupDeadline = null;
+		try {
+			deps.cleanupDeadlineTimers.clearTimeout(timer);
+		} catch {
+			// Request identity still retires the callback if native cancellation fails.
+		}
+	};
+	const bindUncertainStartCleanup = (requestId: number) => {
+		if (controlLease?.requestId !== requestId || cleanupDeadline) return;
+		try {
+			const timer = deps.cleanupDeadlineTimers.setTimeout(() => {
+				if (cleanupDeadline?.requestId !== requestId) return;
+				cleanupDeadline = null;
+				deps.closeCoordinator.expirePendingStart(requestId);
+			}, UNCERTAIN_START_CLEANUP_TIMEOUT_MS);
+			cleanupDeadline = { requestId, timer };
+		} catch {
+			deps.closeCoordinator.expirePendingStart(requestId);
+		}
 	};
 	const apply = (event: WisprAutomationEvent) => {
 		automation = reduceWisprAutomationState(automation, event);
@@ -128,6 +156,7 @@ export function createWisprStartProtocol(
 		settlement: WisprNativeControlSettlement,
 	) => {
 		if (controlLease?.requestId !== requestId) return;
+		clearCleanupDeadline(requestId);
 		if (settlement === 'inactive') controlLease.lease.release();
 		else controlLease.lease.poison();
 		controlLease = null;
@@ -140,6 +169,7 @@ export function createWisprStartProtocol(
 			timedOutStartRequestId: timedOutRequestId,
 		});
 	const handleLateStart = (requestId: number, started: boolean) => {
+		clearCleanupDeadline(requestId);
 		if (deps.closeCoordinator.consumeStartResult(requestId, started)) return;
 		if (!started) {
 			clearMarkers(requestId);
@@ -317,6 +347,8 @@ export function createWisprStartProtocol(
 		close: () => {
 			const requestId = autoStartedRequestId;
 			const decision = resolveClose();
+			const uncertainStart =
+				requestId != null && timedOutRequestId === requestId;
 			cancelControlAcquisition(requestId ?? -1);
 			if (decision.type === 'none') {
 				releaseNativeControl(requestId ?? -1);
@@ -327,8 +359,9 @@ export function createWisprStartProtocol(
 			clearOpeningTimer();
 			automation = { phase: 'idle' };
 			publish();
-			return { decision, requestId };
+			return { decision, requestId, uncertainStart };
 		},
+		bindUncertainStartCleanup,
 		settleNativeControl,
 		dispose: () => {
 			if (disposed) return;

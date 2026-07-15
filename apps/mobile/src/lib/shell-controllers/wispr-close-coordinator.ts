@@ -6,6 +6,7 @@ import { type WisprNativeControlSettlement } from './wispr-native-control-author
 
 export type WisprCloseCoordinator = {
 	requestAfterStart(request: WisprPendingAutoCloseRequest): void;
+	expirePendingStart(requestId: number): boolean;
 	consumeStartResult(requestId: number, started: boolean): boolean;
 	blocksAutoStart(): boolean;
 	deferAutoStart(requestId: number): void;
@@ -90,6 +91,12 @@ export function createWisprCloseCoordinator(
 		requestAfterStart: (request) => {
 			if (disposed) return;
 			pending.set(request.requestId, request);
+		},
+		expirePendingStart: (requestId) => {
+			if (!pending.delete(requestId)) return false;
+			deps.onTransactionSettled(requestId, 'unknown');
+			clearDeferred();
+			return true;
 		},
 		consumeStartResult: (requestId, started) => {
 			const request = pending.get(requestId);
