@@ -18,8 +18,10 @@ commands expose a committed snapshot instead of a render-time `openRef`.
 
 ## GREEN
 
-- Exact Node command: 97 passed, 0 failed.
+- Exact Node command: 108 passed, 0 failed.
 - Exact Jest command: 9 passed, 0 failed.
+- Full mobile integration command: 2,357 passed, 0 failed.
+- Full mobile component command: 24 passed, 0 failed.
 - `pnpm run fmt:check`: exit 0.
 - `pnpm run typecheck`: exit 0.
 - Scoped ESLint over every edited TypeScript/TSX file: exit 0.
@@ -70,6 +72,22 @@ re-poison, or issue a cleanup toggle.
 Subject: `Rebuild serialized shell Wispr ownership`. The Git commit containing
 the stable-review repair and this updated report follows that Task 4
 implementation/evidence commit.
+
+## CE1 Wave 1 Repair
+
+CE1 wave 1 identified five follow-up issues. The repair separates compensating
+close timers from UI cancellation, binds the cleanup deadline for every issued
+start obligation (including close/invalidate/unmount before 750 ms), proves
+deadline scheduling failure poisons immediately, adds physical screen-prime
+coordinate and rejection-continuation coverage, and removes a source-text regex
+test. The focused RED run reported 61 passed and 6 failed; the repaired exact
+Node lane reports 108 passed.
+
+The broader mobile verification reports 2,357 integration tests and 24 component
+tests passed, with no failures.
+
+Detailed mapping:
+`.superpowers/ce1/issue141-stage2-ce1/task-4/wave-1/fix-report.md`.
 
 ## Concerns
 

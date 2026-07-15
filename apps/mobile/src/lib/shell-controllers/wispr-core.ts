@@ -140,8 +140,14 @@ export function createShellWisprControllerCore(
 		now: deps.now,
 		...timerOwner,
 	});
+	const nativeTimerOwner = createWisprTimerOwner(deps);
+	const closeTapRunner = createWisprTapRunner({
+		tapControl: () => deps.native.tapControl(),
+		now: deps.now,
+		...nativeTimerOwner,
+	});
 	const runClose = (retry: boolean) => {
-		return tapRunner
+		return closeTapRunner
 			.run({
 				retry,
 				// Native cleanup outlives the UI lifecycle that requested it.
@@ -206,9 +212,7 @@ export function createShellWisprControllerCore(
 				requestId: close.decision.requestId,
 				retryClose,
 			});
-			if (close.uncertainStart) {
-				startProtocol.bindUncertainStartCleanup(close.decision.requestId);
-			}
+			startProtocol.bindIssuedStartCleanup(close.decision.requestId);
 		} else if (close.decision.type === 'close-now' && close.requestId != null) {
 			closeCoordinator.requestAfterStart({
 				requestId: close.requestId,

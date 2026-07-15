@@ -583,6 +583,129 @@ for (const lateSettlement of ['resolve', 'reject'] as const) {
 	});
 }
 
+for (const retirement of ['close', 'invalidate', 'dispose'] as const) {
+	for (const lateSettlement of ['resolve', 'reject'] as const) {
+		void test(`${retirement} before start timeout bounds the issued native obligation and ignores late ${lateSettlement}`, async () => {
+			const authority = createWisprNativeControlAuthority();
+			const predecessor = createHarness('android', undefined, authority);
+			const successor = createHarness('android', undefined, authority);
+			const native = shareNativeControl(predecessor, successor);
+
+			predecessor.core.setAutoStart(true);
+			await openReady(predecessor);
+			predecessor.core.onTextEntryFocused('old');
+			assert.equal(native.taps.length, 1);
+			if (retirement === 'close') predecessor.core.closeTextEntry();
+			else if (retirement === 'invalidate') {
+				predecessor.core.invalidate('source-change');
+			} else predecessor.core.dispose();
+
+			successor.core.setAutoStart(true);
+			await openReady(successor);
+			successor.core.onTextEntryFocused('new');
+			await predecessor.clock.advance(4_999);
+			assert.equal(
+				successor.core.getSnapshot().automation.phase,
+				'waitingForBubble',
+			);
+			await predecessor.clock.advance(1);
+			assert.deepEqual(
+				successor.core.getSnapshot().automation,
+				blockedCleanupFailure,
+			);
+			assert.equal(authority.acquire().status, 'blocked');
+			assert.equal(native.taps.length, 1);
+			if (lateSettlement === 'resolve') {
+				native.taps[0]!.resolve('late old start');
+			} else {
+				native.taps[0]!.reject(new Error('late old start rejection'));
+			}
+			await settled();
+			assert.deepEqual(
+				successor.core.getSnapshot().automation,
+				blockedCleanupFailure,
+			);
+			assert.equal(authority.acquire().status, 'blocked');
+			assert.equal(native.taps.length, 1);
+		});
+	}
+}
+
+for (const lateSettlement of ['resolve', 'reject'] as const) {
+	void test(`disposing during issued close preserves its deadline and ignores late ${lateSettlement}`, async () => {
+		const authority = createWisprNativeControlAuthority();
+		const predecessor = createHarness('android', undefined, authority);
+		const successor = createHarness('android', undefined, authority);
+		const native = shareNativeControl(predecessor, successor);
+
+		predecessor.core.setAutoStart(true);
+		await openReady(predecessor);
+		predecessor.core.onTextEntryFocused('old');
+		native.taps[0]!.resolve('old start');
+		await settled();
+		assert.equal(predecessor.core.getSnapshot().automation.phase, 'recording');
+		predecessor.core.closeTextEntry();
+		assert.equal(native.taps.length, 2);
+		predecessor.core.dispose();
+		successor.core.setAutoStart(true);
+		await openReady(successor);
+		successor.core.onTextEntryFocused('new');
+		await predecessor.clock.advance(750);
+		assert.deepEqual(
+			successor.core.getSnapshot().automation,
+			blockedCleanupFailure,
+		);
+		assert.equal(authority.acquire().status, 'blocked');
+		assert.equal(native.taps.length, 2);
+
+		if (lateSettlement === 'resolve') {
+			native.taps[1]!.resolve('late old close');
+		} else {
+			native.taps[1]!.reject(new Error('late old close rejection'));
+		}
+		await settled();
+		assert.deepEqual(
+			successor.core.getSnapshot().automation,
+			blockedCleanupFailure,
+		);
+		assert.equal(authority.acquire().status, 'blocked');
+		assert.equal(native.taps.length, 2);
+	});
+}
+
+void test('cleanup deadline scheduling failure immediately poisons exact authority lease', async () => {
+	const authority = createWisprNativeControlAuthority();
+	const predecessor = createHarness(
+		'android',
+		(clock) => {
+			const schedule = clock.setTimeout;
+			clock.setTimeout = (task, delayMs) => {
+				if (delayMs === 5_000) throw new Error('cleanup timer unavailable');
+				return schedule(task, delayMs);
+			};
+		},
+		authority,
+	);
+	const successor = createHarness('android', undefined, authority);
+	const native = shareNativeControl(predecessor, successor);
+
+	predecessor.core.setAutoStart(true);
+	await openReady(predecessor);
+	predecessor.core.onTextEntryFocused('old');
+	successor.core.setAutoStart(true);
+	await openReady(successor);
+	successor.core.onTextEntryFocused('new');
+	predecessor.core.dispose();
+	await settled();
+
+	assert.deepEqual(
+		successor.core.getSnapshot().automation,
+		blockedCleanupFailure,
+	);
+	assert.equal(authority.acquire().status, 'blocked');
+	assert.equal(native.taps.length, 1);
+});
+
 void test('late uncertain rejection releases authority without requiring disposal', async () => {
 	const authority = createWisprNativeControlAuthority();
 	const predecessor = createHarness('android', undefined, authority);

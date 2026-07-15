@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import {
@@ -39,11 +38,6 @@ void test('ordinary Wispr timers cancel without a fake cancellation callback', (
 
 	assert.equal(fired, false);
 	assert.equal(timers.cleared.length, 1);
-	const source = readFileSync(
-		'src/lib/shell-controllers/wispr-timer-owner.ts',
-		'utf8',
-	);
-	assert.doesNotMatch(source, /schedule\(task, delayMs, \(\) => \{\}\)/);
 });
 
 void test('cancellable Wispr sleep rejects once when all timers are cancelled', async () => {

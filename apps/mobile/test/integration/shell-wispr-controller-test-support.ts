@@ -73,6 +73,7 @@ export function createHarness(
 		serviceConnected: boolean;
 	}>[] = [];
 	const taps: Deferred<unknown>[] = [];
+	const screenTaps: [number, number][] = [];
 	const warnings: { message: string; error: unknown }[] = [];
 	let modalOpen = false;
 	let nativeActive = false;
@@ -94,7 +95,9 @@ export function createHarness(
 				return result;
 			});
 		},
-		tapScreen: async () => undefined,
+		tapScreen: async (x, y) => {
+			screenTaps.push([x, y]);
+		},
 		openSettings: async () => {
 			settingsCalls += 1;
 		},
@@ -128,6 +131,7 @@ export function createHarness(
 		native,
 		statusRequests,
 		taps,
+		screenTaps,
 		warnings,
 		get modalOpen() {
 			return modalOpen;

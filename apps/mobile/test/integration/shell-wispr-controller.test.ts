@@ -199,6 +199,45 @@ void test('opening fallback waits exactly 750 ms before starting', async () => {
 	assert.equal(harness.taps.length, 1);
 });
 
+void test('screen prime uses physical pixels before starting Wispr control', async () => {
+	const harness = createHarness();
+	harness.core.setAutoStart(true);
+	await openReady(harness);
+	harness.core.onTextEntryFocused('before', {
+		x: 10,
+		y: 20,
+		width: 100,
+		height: 200,
+	});
+	await settled();
+	assert.deepEqual(harness.screenTaps, [[120, 136]]);
+	assert.equal(harness.taps.length, 1);
+});
+
+void test('screen prime rejection warns and still starts Wispr control', async () => {
+	const harness = createHarness();
+	harness.native.tapScreen = async (x, y) => {
+		harness.screenTaps.push([x, y]);
+		throw new Error('screen prime rejected');
+	};
+	harness.core.setAutoStart(true);
+	await openReady(harness);
+	harness.core.onTextEntryFocused('before', {
+		x: 10,
+		y: 20,
+		width: 100,
+		height: 200,
+	});
+	await settled();
+	assert.deepEqual(harness.screenTaps, [[120, 136]]);
+	assert.equal(harness.warnings.length, 1);
+	assert.equal(
+		harness.warnings[0]!.message,
+		'Failed to prime Wispr text field',
+	);
+	assert.equal(harness.taps.length, 1);
+});
+
 void test('dispose orders one bounded cleanup after its in-flight start', async () => {
 	const harness = createHarness();
 	harness.core.setAutoStart(true);
@@ -206,7 +245,7 @@ void test('dispose orders one bounded cleanup after its in-flight start', async 
 	harness.core.onTextEntryFocused('');
 	harness.core.dispose();
 	assert.equal(harness.taps.length, 1);
-	assert.equal(harness.clock.timers.size, 0);
+	assert.equal(harness.clock.timers.size, 1);
 	harness.taps[0]!.resolve('started');
 	await settled();
 	assert.equal(harness.taps.length, 2);
