@@ -318,6 +318,10 @@ Write the new commit hash into the Task 1 evidence row.
 > only that contract and its terminal-file import move. Defer that commit's
 > session decomposition, Wispr, modal, and detail changes to Tasks 4 and 5, and
 > preserve the current Worktree Workspace UI throughout this checkpoint.
+> Because Worktree Workspace consumes the shared `controller-lifecycle.ts`
+> source identity, adapt only its authority identity in this checkpoint as a
+> direct compile dependency. Retain its current public handle, raw transport
+> inputs, modal rendering, and behavior until Task 5 replaces that boundary.
 
 **Files:**
 
