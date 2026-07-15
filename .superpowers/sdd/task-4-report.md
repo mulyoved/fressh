@@ -120,3 +120,60 @@ Detailed mapping:
 - Text-entry modal arbitration propagates refusal and includes the Task 2
   worktree workspace in its conflict set.
 - No known Task 4 verification failures remain.
+
+## CE1 Wave 3 Fix
+
+Implemented the complete blocking queue `CE1-T4-008` through `CE1-T4-011`. The
+timeout wrapper now preserves its wrapped resolved-value type with a generic
+`Promise<T>` contract. Focused controller coverage now proves both Android
+setup-required status variants, definitive retry exhaustion and exact shared
+authority handoff, and active plus stale native-settings rejection outcomes.
+
+Changed files:
+
+- `apps/mobile/src/lib/wispr-automation.ts`
+- `apps/mobile/test/integration/wispr-automation.test.ts`
+- `apps/mobile/test/integration/shell-wispr-controller.test.ts`
+- `apps/mobile/test/integration/shell-wispr-controller-authority.test.ts`
+- `.superpowers/sdd/task-4-report.md`
+
+RED evidence:
+
+- `cd apps/mobile && pnpm run typecheck` exited 2 after the generic contract
+  test was added and before production changed. TypeScript reported TS2322:
+  `Promise<unknown>` was not assignable to the wrapped object `Promise` type at
+  `test/integration/wispr-automation.test.ts`.
+- The first focused Node execution exposed two test-construction mistakes rather
+  than production defects: fake time advanced before the first rejected attempt
+  had scheduled its retry, then the expected canonical failure copy was too
+  specific. The test was corrected to settle the first attempt before advancing
+  time and to assert the existing `Wispr bubble not found.` contract.
+
+GREEN evidence:
+
+- Focused new-coverage lane plus typecheck: 72 Node tests passed and mobile
+  typecheck exited 0.
+- Complete Task 4 Node controller/lifecycle lane: 117 passed, 0 failed.
+- `pnpm exec jest --config jest.config.cjs --runInBand test/components/shell-wispr-controller.test.tsx`:
+  9 passed, 0 failed.
+- `pnpm run typecheck`: exit 0.
+- Scoped Prettier, scoped ESLint, and `git diff --check`: exit 0.
+
+Self-review:
+
+- The production change is type-only and leaves timeout, late-settlement, and
+  invocation behavior unchanged.
+- Disabled and disconnected statuses are driven through the controller with
+  auto-start enabled; both publish the precise setup-required snapshot, open the
+  modal, remain non-busy, and issue no native control tap.
+- Retry exhaustion uses repeated definitive native rejections through the full
+  2.5-second window. It asserts the final non-busy failure and proves that the
+  same process-wide authority grants the waiting successor its first native tap.
+- Settings rejection tests distinguish an active typed failure plus warning from
+  stale invalidation, which returns `superseded` without warning or
+  current-state failure publication.
+- No generated files or unrelated work were modified.
+- Residual risks remain unchanged: hook-level `openTextEditor` is intentionally
+  fire-and-forget, authority poison is process-lifetime permanent, and the
+  diagnostic-only exception branches listed by the wave-3 testing reviewer
+  remain outside the blocking queue.

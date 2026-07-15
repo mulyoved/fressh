@@ -77,6 +77,38 @@ void test('unsupported platform opens editor without native work and publishes e
 	assert.equal(harness.core.getSnapshot().automation.phase, 'failed');
 });
 
+for (const status of [
+	{ serviceEnabled: false, serviceConnected: false },
+	{ serviceEnabled: true, serviceConnected: false },
+] as const) {
+	void test(`Android setup-required status ${JSON.stringify(status)} opens text entry without native taps`, async () => {
+		const harness = createHarness();
+		harness.core.setAutoStart(true);
+		const opening = harness.core.openTextEditor();
+		harness.statusRequests[0]!.resolve(status);
+
+		assert.deepEqual(await opening, { status: 'completed' });
+		assert.equal(harness.modalOpen, true);
+		assert.deepEqual(harness.core.getSnapshot(), {
+			autoStartEnabled: true,
+			availability: {
+				type: 'setup-required',
+				reason: 'service-disabled',
+				message: 'Wispr automation is disabled. Text entry is still available.',
+				openAccessibilitySettings: false,
+			},
+			automation: {
+				phase: 'failed',
+				reason: 'service-disabled',
+				message: 'Wispr automation is disabled. Text entry is still available.',
+			},
+			control: { type: 'setup-pill', label: 'Wispr disabled' },
+			busy: false,
+		});
+		assert.equal(harness.taps.length, 0);
+	});
+}
+
 void test('repeated opens are ignored throughout active automation', async () => {
 	const harness = createHarness();
 	harness.core.setAutoStart(true);
@@ -275,6 +307,38 @@ void test('invalidation silences a pending settings completion', async () => {
 	harness.core.invalidate('source-change');
 	settings.resolve(undefined);
 	assert.deepEqual(await opening, { status: 'superseded' });
+});
+
+void test('active settings rejection returns a typed failure and warns', async () => {
+	const harness = createHarness();
+	const rejection = new Error('settings rejected');
+	harness.native.openSettings = async () => {
+		throw rejection;
+	};
+
+	assert.deepEqual(await harness.core.openSettings(), {
+		status: 'failed',
+		failure: {
+			reason: 'service-disabled',
+			message: 'Failed to open accessibility settings.',
+		},
+	});
+	assert.deepEqual(harness.warnings, [
+		{ message: 'Failed to open accessibility settings', error: rejection },
+	]);
+});
+
+void test('stale settings rejection returns superseded without warning', async () => {
+	const harness = createHarness();
+	const settings = deferred<unknown>();
+	harness.native.openSettings = () => settings.promise;
+	const opening = harness.core.openSettings();
+	harness.core.invalidate('source-change');
+	settings.reject(new Error('stale settings rejection'));
+
+	assert.deepEqual(await opening, { status: 'superseded' });
+	assert.deepEqual(harness.warnings, []);
+	assert.deepEqual(harness.core.getSnapshot().automation, { phase: 'idle' });
 });
 
 void test('throwing logger cannot break native failure publication', async () => {

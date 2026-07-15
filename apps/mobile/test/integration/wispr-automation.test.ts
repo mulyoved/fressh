@@ -108,6 +108,16 @@ void test('Wispr tap timeout reports late native success', async () => {
 	assert.equal(lateSuccessCount, 1);
 });
 
+void test('Wispr tap timeout preserves the wrapped resolved value type', async () => {
+	const expected = { attempt: 3, result: 'started' } as const;
+	const pending: Promise<typeof expected> = tapWisprControlWithTimeout({
+		tapWisprControl: async () => expected,
+		timeoutMs: 750,
+	});
+
+	assert.deepEqual(await pending, expected);
+});
+
 void test('Wispr tap timeout reports late native failure', async () => {
 	let rejectTap: (error: Error) => void = () => {};
 	let lateFailureCount = 0;

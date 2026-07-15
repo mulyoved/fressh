@@ -315,7 +315,7 @@ export function withTimeout<T>(
 	});
 }
 
-export function tapWisprControlWithTimeout({
+export function tapWisprControlWithTimeout<T>({
 	tapWisprControl,
 	timeoutMs,
 	onLateSuccess,
@@ -324,14 +324,14 @@ export function tapWisprControlWithTimeout({
 	setTimeout: scheduleTimeout = defaultWisprTimerPort.setTimeout,
 	clearTimeout: cancelTimeout = defaultWisprTimerPort.clearTimeout,
 }: {
-	tapWisprControl: () => Promise<unknown>;
+	tapWisprControl: () => Promise<T>;
 	timeoutMs: number;
 	onLateSuccess?: () => void;
 	onLateFailure?: () => void;
 	onInvocation?: () => void;
 	setTimeout?: WisprTimerPort['setTimeout'];
 	clearTimeout?: WisprTimerPort['clearTimeout'];
-}): Promise<unknown> {
+}): Promise<T> {
 	let timedOut = false;
 	let nativeWorkIssued = false;
 	let timeout: unknown;
@@ -348,7 +348,7 @@ export function tapWisprControlWithTimeout({
 		return Promise.reject(error);
 	}
 	if (timedOut) return timeoutPromise;
-	let tapPromise: Promise<unknown>;
+	let tapPromise: Promise<T>;
 	try {
 		tapPromise = tapWisprControl();
 	} catch (error) {

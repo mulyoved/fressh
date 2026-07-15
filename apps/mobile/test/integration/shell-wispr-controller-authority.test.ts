@@ -107,6 +107,46 @@ void test('predecessor rejection releases waiting successor without a blind clos
 	assert.equal(native.active, false);
 });
 
+void test('definitive retry exhaustion releases its exact lease to a waiting successor', async () => {
+	const authority = createWisprNativeControlAuthority();
+	const predecessor = createHarness('android', undefined, authority);
+	const successor = createHarness('android', undefined, authority);
+	let predecessorAttempts = 0;
+	predecessor.native.tapControl = async () => {
+		predecessorAttempts += 1;
+		throw new Error('bubble not found');
+	};
+
+	predecessor.core.setAutoStart(true);
+	await openReady(predecessor);
+	predecessor.core.onTextEntryFocused('old');
+	await settled();
+	assert.equal(predecessorAttempts, 1);
+
+	successor.core.setAutoStart(true);
+	await openReady(successor);
+	successor.core.onTextEntryFocused('new');
+	assert.equal(successor.taps.length, 0);
+	assert.equal(
+		successor.core.getSnapshot().automation.phase,
+		'waitingForBubble',
+	);
+
+	await predecessor.clock.advance(2_500);
+
+	assert.equal(predecessorAttempts, 14);
+	assert.deepEqual(predecessor.core.getSnapshot().automation, {
+		phase: 'failed',
+		reason: 'bubble-not-found',
+		message: 'Wispr bubble not found.',
+	});
+	assert.equal(predecessor.core.getSnapshot().busy, false);
+	assert.equal(successor.taps.length, 1);
+	successor.taps[0]!.resolve('successor start');
+	await settled();
+	assert.equal(successor.core.getSnapshot().automation.phase, 'recording');
+});
+
 for (const lateSettlement of ['resolve', 'reject'] as const) {
 	void test(`uncertain predecessor ${lateSettlement} settles before successor native start`, async () => {
 		const authority = createWisprNativeControlAuthority();
