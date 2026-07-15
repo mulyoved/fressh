@@ -695,6 +695,12 @@ void test('worktree workspace adapter turns failed results and malformed output 
 			error: `Unsupported operation ${WORKTREE_WORKSPACE_PREPARE_NEW_OPERATION_ID}`,
 		},
 		{ success: true, output: '{}' },
+		{
+			success: false,
+			output: '',
+			error: 'Timed out after 60000ms',
+			failureClass: 'timeout',
+		},
 	];
 	const channel: Pick<WorkmuxControlChannel, 'command' | 'operation'> = {
 		command: async () => ({
@@ -739,6 +745,17 @@ void test('worktree workspace adapter turns failed results and malformed output 
 			assert.deepEqual(classifyWorktreeWorkspaceFailure(error), {
 				kind: 'invalid-response',
 				message: 'Invalid worktree workspace bridge response.',
+			});
+			return true;
+		},
+	);
+	await assert.rejects(
+		adapter.prepareCloseWorktreeWorkspace(APP_CONTEXT.target),
+		(error) => {
+			assert.deepEqual(classifyWorktreeWorkspaceFailure(error), {
+				kind: 'timeout',
+				message:
+					'Worktree workspace request timed out. The remote operation may have completed; inspect the workspace list before trying again.',
 			});
 			return true;
 		},

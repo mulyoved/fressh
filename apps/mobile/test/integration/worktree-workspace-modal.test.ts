@@ -1,13 +1,26 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { registerHooks } from 'node:module';
 import { join } from 'node:path';
 import test from 'node:test';
+import React from 'react';
+import {
+	act,
+	create,
+	type ReactTestInstance,
+	type ReactTestRenderer,
+} from 'react-test-renderer';
 import ts from 'typescript';
 import { type WorktreeWorkspaceState } from '../../src/lib/shell-controllers/worktree-workspace-contracts';
+import { type WorktreeWorkspaceModalProps } from '../../src/lib/shell-controllers/worktree-workspace-modal-props';
 import {
 	type CloseWorktreeWorkspacePreparation,
 	type NewWorktreeWorkspacePreparation,
 } from '../../src/lib/worktree-workspace-bridge';
+
+(
+	globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
+).IS_REACT_ACT_ENVIRONMENT = true;
 
 const componentPath = join(
 	process.cwd(),
@@ -45,6 +58,95 @@ async function loadModalPropsModule() {
 	return import(
 		'../../src/lib/shell-controllers/worktree-workspace-modal-props'
 	);
+}
+
+const reactNativeShim = `
+	export const ActivityIndicator = 'ActivityIndicator';
+	export const KeyboardAvoidingView = 'KeyboardAvoidingView';
+	export const Modal = 'Modal';
+	export const Platform = { OS: 'ios' };
+	export const Pressable = 'Pressable';
+	export const ScrollView = 'ScrollView';
+	export const Text = 'Text';
+	export const TextInput = 'TextInput';
+	export const View = 'View';
+`;
+const themeShim = `
+	const colors = new Proxy({}, { get: () => '#000000' });
+	export function useTheme() { return { colors }; }
+`;
+
+registerHooks({
+	resolve(specifier, context, nextResolve) {
+		if (specifier === 'react-native') {
+			return {
+				url: `data:text/javascript,${encodeURIComponent(reactNativeShim)}`,
+				shortCircuit: true,
+			};
+		}
+		if (specifier === '@/lib/theme') {
+			return {
+				url: `data:text/javascript,${encodeURIComponent(themeShim)}`,
+				shortCircuit: true,
+			};
+		}
+		return nextResolve(specifier, context);
+	},
+});
+
+async function loadMountedModal() {
+	return import('../../src/app/shell/components/WorktreeWorkspaceModal');
+}
+
+function renderedText(instance: ReactTestInstance): string {
+	return instance.children
+		.map((child) => (typeof child === 'string' ? child : renderedText(child)))
+		.join('');
+}
+
+function host(root: ReactTestInstance, type: string): ReactTestInstance {
+	return root.findByType(type as never);
+}
+
+function hostWithText(
+	root: ReactTestInstance,
+	type: string,
+	label: string,
+): ReactTestInstance {
+	const instance = root
+		.findAllByType(type as never)
+		.filter((candidate) => renderedText(candidate).includes(label))
+		.sort(
+			(left, right) => renderedText(left).length - renderedText(right).length,
+		)[0];
+	assert.ok(instance, `${type} containing ${label} was not rendered`);
+	return instance;
+}
+
+async function mountModal(
+	props: WorktreeWorkspaceModalProps,
+): Promise<ReactTestRenderer> {
+	const { WorktreeWorkspaceModal } = await loadMountedModal();
+	let renderer: ReactTestRenderer | undefined;
+	const originalConsoleError = console.error;
+	console.error = (...args: unknown[]) => {
+		if (
+			typeof args[0] === 'string' &&
+			args[0].startsWith('react-test-renderer is deprecated.')
+		) {
+			return;
+		}
+		originalConsoleError(...args);
+	};
+	try {
+		await act(async () => {
+			renderer = create(React.createElement(WorktreeWorkspaceModal, props));
+		});
+	} finally {
+		console.error = originalConsoleError;
+	}
+	assert.ok(renderer);
+	return renderer;
 }
 
 function jsxElements(tagName: string): ts.JsxElement[] {
@@ -308,6 +410,133 @@ void test('draft reset key preserves only the same prepared target and root', as
 		getWorktreeWorkspaceDraftResetKey({ open: false, mode: 'closed' }),
 		null,
 	);
+});
+
+void test('mounted new modal preserves and resets its draft by preparation identity', async () => {
+	const { WorktreeWorkspaceModal } = await loadMountedModal();
+	const created: string[] = [];
+	const props = {
+		open: true,
+		mode: 'new',
+		phase: 'editing',
+		preparation: NEW_PREPARATION,
+		error: null,
+		onRetry: () => {},
+		onClose: () => true,
+		onCreate: (branch: string) => created.push(branch),
+		bottomOffset: 0,
+	} as const;
+	const renderer = await mountModal(props);
+
+	await act(async () => {
+		host(renderer.root, 'TextInput').props.onChangeText('custom-branch');
+	});
+	assert.equal(host(renderer.root, 'TextInput').props.value, 'custom-branch');
+
+	await act(async () => {
+		renderer.update(
+			React.createElement(WorktreeWorkspaceModal, {
+				...props,
+				preparation: {
+					...NEW_PREPARATION,
+					suggestedBranch: 'ignored-suggestion',
+				},
+			}),
+		);
+	});
+	assert.equal(host(renderer.root, 'TextInput').props.value, 'custom-branch');
+	await act(async () => {
+		hostWithText(renderer.root, 'Pressable', 'Create').props.onPress();
+	});
+	assert.deepEqual(created, ['custom-branch']);
+
+	await act(async () => {
+		renderer.update(
+			React.createElement(WorktreeWorkspaceModal, {
+				...props,
+				preparation: {
+					...NEW_PREPARATION,
+					target: 'main:other',
+					suggestedBranch: 'reset-branch',
+				},
+			}),
+		);
+	});
+	assert.equal(host(renderer.root, 'TextInput').props.value, 'reset-branch');
+	await act(async () => renderer.unmount());
+});
+
+void test('mounted close modal blocks busy actions and enables idle actions', async () => {
+	const { WorktreeWorkspaceModal } = await loadMountedModal();
+	let closeCalls = 0;
+	let confirmCalls = 0;
+	const callbacks = {
+		onRetry: () => {},
+		onClose: () => {
+			closeCalls += 1;
+			return true;
+		},
+		onConfirm: () => {
+			confirmCalls += 1;
+		},
+	};
+	const busyProps = {
+		open: true,
+		mode: 'close',
+		phase: 'submitting',
+		preview: CLOSE_PREPARATION,
+		error: null,
+		...callbacks,
+		bottomOffset: 0,
+	} as const;
+	const renderer = await mountModal(busyProps);
+	const busyModal = host(renderer.root, 'Modal');
+	const busyBackdrop = renderer.root.findByProps({
+		testID: 'worktree-workspace-backdrop',
+	});
+	const busyCancel = hostWithText(renderer.root, 'Pressable', 'Cancel');
+	const busyRemove = hostWithText(renderer.root, 'Pressable', 'Removing…');
+	assert.equal(busyBackdrop.props.disabled, true);
+	assert.equal(busyCancel.props.disabled, true);
+	assert.equal(busyRemove.props.disabled, true);
+	await act(async () => {
+		busyModal.props.onRequestClose();
+		busyBackdrop.props.onPress();
+		busyCancel.props.onPress();
+		busyRemove.props.onPress();
+	});
+	assert.equal(closeCalls, 0);
+	assert.equal(confirmCalls, 0);
+
+	await act(async () => {
+		renderer.update(
+			React.createElement(WorktreeWorkspaceModal, {
+				...busyProps,
+				phase: 'confirming',
+			}),
+		);
+	});
+	const idleModal = host(renderer.root, 'Modal');
+	const idleBackdrop = renderer.root.findByProps({
+		testID: 'worktree-workspace-backdrop',
+	});
+	const idleCancel = hostWithText(renderer.root, 'Pressable', 'Cancel');
+	const idleRemove = hostWithText(
+		renderer.root,
+		'Pressable',
+		'Remove Worktree',
+	);
+	assert.equal(idleBackdrop.props.disabled, false);
+	assert.equal(idleCancel.props.disabled, false);
+	assert.equal(idleRemove.props.disabled, false);
+	await act(async () => {
+		idleModal.props.onRequestClose();
+		idleBackdrop.props.onPress();
+		idleRemove.props.onPress();
+	});
+	assert.equal(closeCalls, 2);
+	assert.equal(confirmCalls, 1);
+	await act(async () => renderer.unmount());
 });
 
 void test('modal source renders the native controls, labels, and complete preview', () => {
