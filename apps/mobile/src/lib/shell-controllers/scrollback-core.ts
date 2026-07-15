@@ -7,7 +7,8 @@ import {
 } from '../workmux-scrollback-batch';
 import {
 	createWorkmuxScrollbackCommandExecutor,
-	type WorkmuxScrollbackCommandExecutor,
+	type WorkmuxScrollbackCommandExecutor as Executor,
+	type WorkmuxScrollbackCommandExecutorInput as ExecutorInput,
 } from '../workmux-scrollback-executor';
 import {
 	createWorkmuxScrollbackLiveInputCleanupBarrier,
@@ -28,6 +29,12 @@ import {
 } from './scrollback-callback-safety';
 import { createScrollbackCleanupCoordinator } from './scrollback-cleanup-coordinator';
 import { createScrollbackClearCoordinator } from './scrollback-clear-coordinator';
+import {
+	INITIAL_SCROLLBACK_STATE as initialState,
+	isSameScrollbackTarget,
+	normalizeScrollbackContext,
+	requiresScrollbackExecutorReplacement,
+} from './scrollback-context-identity';
 import {
 	type ScrollbackBatchEvent,
 	type ScrollbackEnterRequestedEvent,
@@ -67,23 +74,13 @@ export type ShellScrollbackControllerCore =
 		jumpToLive(): void;
 	};
 
-type CreateExecutorInput = Parameters<
-	typeof createWorkmuxScrollbackCommandExecutor
->[0];
-
 export type CreateShellScrollbackControllerCoreInput = {
-	createExecutor?(input: CreateExecutorInput): WorkmuxScrollbackCommandExecutor;
+	createExecutor?(input: ExecutorInput): Executor;
 	lineAccumulator?: TmuxScrollbackLineAccumulator;
 	cleanupBarrier?: WorkmuxScrollbackLiveInputCleanupBarrier;
 	remoteCopyModeActive?: { current: boolean };
 	remoteCopyModeGeneration?: { current: number };
 	localExitRequestIds?: Set<number>;
-};
-
-const initialState: ShellScrollbackState = {
-	active: false,
-	phase: 'active',
-	runtimeInstanceId: null,
 };
 
 export function createShellScrollbackControllerCore(
@@ -108,8 +105,8 @@ export function createShellScrollbackControllerCore(
 		current: 0,
 	};
 	const localExitRequestIds = input.localExitRequestIds ?? new Set<number>();
-	let context: ShellScrollbackContext | null = null;
-	let executor: WorkmuxScrollbackCommandExecutor | null = null;
+	let context: ShellScrollbackContext | null = null,
+		executor: Executor | null = null;
 	let runtimeInstanceId: string | null = null;
 	const requestGenerations = { enter: 0, liveInput: 0 };
 	let executorRevision = 0;
@@ -172,12 +169,6 @@ export function createShellScrollbackControllerCore(
 		activeTraceId = `scroll-${nextTraceId}`;
 	};
 
-	const targetsEqual = (
-		left: ShellScrollbackContext,
-		right: ShellScrollbackContext,
-	): boolean =>
-		left.targetKey === right.targetKey && left.targetName === right.targetName;
-
 	const safelyTrace = (
 		ownerContext: ShellScrollbackContext,
 		event: Parameters<ScrollTraceSink>[0],
@@ -196,7 +187,12 @@ export function createShellScrollbackControllerCore(
 		warn: (ownerContext, message, error) =>
 			createSafeWarn(ownerContext.logger)(message, error),
 	});
-	const clearCoordinator = createScrollbackClearCoordinator({
+	const {
+		clear: clearScrollbackState,
+		clearCurrentRuntime: requestJumpToLive,
+		clearLocal: clearLocalScrollbackUiState,
+		startCurrent: startCurrentClear,
+	} = createScrollbackClearCoordinator({
 		getCurrentState: () => ({
 			context,
 			disposed,
@@ -208,11 +204,10 @@ export function createShellScrollbackControllerCore(
 			snapshot: publisher.getSnapshot(),
 			targetOwnershipRevision,
 		}),
+		isTerminalInstanceCurrent,
 		reset: resetExecutorWithAuthority,
 		runClearLocal: runClearLocalScrollbackUiState,
 	});
-	const clearLocalScrollbackUiState = clearCoordinator.clearLocal;
-	const clearScrollbackState = clearCoordinator.clear;
 	const liveInputCoordinator = createScrollbackLiveInputCoordinator({
 		advanceFreshness: advanceRequestFreshness,
 		clearInactive: () => {
@@ -236,7 +231,7 @@ export function createShellScrollbackControllerCore(
 		}),
 		scrollbackExitDelayMs: 10,
 		scrollbackExitKeyPayload: new Uint8Array([0x71]),
-		startCleanup: clearCoordinator.startCurrent,
+		startCleanup: startCurrentClear,
 	});
 
 	const entryCoordinator = createScrollbackEntryCoordinator({
@@ -289,7 +284,7 @@ export function createShellScrollbackControllerCore(
 			context?.targetKey === nextContext.targetKey &&
 			context.targetName === nextContext.targetName &&
 			context.workmux === nextContext.workmux;
-		let createdExecutor: WorkmuxScrollbackCommandExecutor | null = null;
+		let createdExecutor: Executor | null = null;
 		const isCurrentExecutor = () =>
 			createdExecutor !== null &&
 			isBuildCurrent() &&
@@ -409,7 +404,8 @@ export function createShellScrollbackControllerCore(
 		const previousExecutor = executor;
 		const previousContext = context;
 		const targetChanged =
-			previousContext !== null && !targetsEqual(previousContext, nextContext);
+			previousContext !== null &&
+			!isSameScrollbackTarget(previousContext, nextContext);
 		if (targetChanged) targetOwnershipRevision += 1;
 		executor = null;
 		executorRevision += 1;
@@ -460,19 +456,14 @@ export function createShellScrollbackControllerCore(
 	};
 	const setContext = (nextContext: ShellScrollbackContext): void => {
 		if (disposed) return;
-		const normalizedContext = {
-			...nextContext,
-			targetName: nextContext.targetName.trim() || 'main',
-		};
-		const requiresExecutorReplacement =
-			executor === null ||
-			context === null ||
-			context.targetKey !== normalizedContext.targetKey ||
-			context.targetName !== normalizedContext.targetName ||
-			context.workmux !== normalizedContext.workmux ||
-			context.terminalTransport !== normalizedContext.terminalTransport ||
-			context.terminalView !== normalizedContext.terminalView;
-		if (requiresExecutorReplacement) {
+		const normalizedContext = normalizeScrollbackContext(nextContext);
+		if (
+			requiresScrollbackExecutorReplacement({
+				current: context,
+				executorAvailable: executor !== null,
+				next: normalizedContext,
+			})
+		) {
 			replaceExecutor(normalizedContext);
 			return;
 		}
@@ -571,36 +562,6 @@ export function createShellScrollbackControllerCore(
 			context = null;
 			publisher.disposePublisher();
 		}
-	};
-
-	const requestJumpToLive = (): Promise<boolean> | null => {
-		const ownerContext = context;
-		const ownerExecutor = executor;
-		const instanceId = runtimeInstanceId;
-		const ownerTargetOwnershipRevision = targetOwnershipRevision;
-		if (
-			disposed ||
-			ownerContext === null ||
-			ownerExecutor === null ||
-			instanceId === null ||
-			runtimeInstanceId !== instanceId
-		)
-			return null;
-		const isCurrent = () =>
-			!disposed &&
-			context === ownerContext &&
-			executor === ownerExecutor &&
-			runtimeInstanceId === instanceId &&
-			targetOwnershipRevision === ownerTargetOwnershipRevision;
-		if (!isTerminalInstanceCurrent(ownerContext, instanceId) || !isCurrent())
-			return null;
-		return clearScrollbackState(ownerContext, 'notify', {
-			context: ownerContext,
-			executor: ownerExecutor,
-			instanceId,
-			targetOwnershipRevision: ownerTargetOwnershipRevision,
-			isCurrent,
-		});
 	};
 
 	return {

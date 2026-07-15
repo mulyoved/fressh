@@ -39,6 +39,16 @@ export type WorkmuxScrollbackCommandExecutor = {
 	dispose: (options?: { targetName?: string }) => Promise<boolean> | null;
 };
 
+export type WorkmuxScrollbackCommandExecutorInput = {
+	scrollTransport: WorkmuxControlChannel['scroll'];
+	onFailure: (
+		message: string,
+		context: WorkmuxScrollbackFailureContext,
+	) => void;
+	onDisposeExitFailure?: (message: string) => void;
+	onTrace?: ScrollTraceSink;
+};
+
 export function formatWorkmuxScrollbackCommandFailureMessage(result: {
 	success: boolean;
 	output: string;
@@ -69,15 +79,7 @@ export function createWorkmuxScrollbackCommandExecutor({
 	onFailure,
 	onDisposeExitFailure,
 	onTrace,
-}: {
-	scrollTransport: WorkmuxControlChannel['scroll'];
-	onFailure: (
-		message: string,
-		context: WorkmuxScrollbackFailureContext,
-	) => void;
-	onDisposeExitFailure?: (message: string) => void;
-	onTrace?: ScrollTraceSink;
-}): WorkmuxScrollbackCommandExecutor {
+}: WorkmuxScrollbackCommandExecutorInput): WorkmuxScrollbackCommandExecutor {
 	let tail: Promise<unknown> = Promise.resolve();
 	let closed = false;
 	let disposed = false;

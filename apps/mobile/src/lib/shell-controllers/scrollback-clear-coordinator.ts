@@ -17,6 +17,7 @@ type ClearAuthority =
 
 export function createScrollbackClearCoordinator({
 	getCurrentState,
+	isTerminalInstanceCurrent,
 	reset,
 	runClearLocal,
 }: {
@@ -31,6 +32,10 @@ export function createScrollbackClearCoordinator({
 		snapshot: ShellScrollbackState;
 		targetOwnershipRevision: number;
 	};
+	isTerminalInstanceCurrent(
+		context: ShellScrollbackContext,
+		instanceId: string,
+	): boolean;
 	reset(input: {
 		failurePolicy: 'notify' | 'suppress';
 		ownerContext: ShellScrollbackContext;
@@ -142,11 +147,33 @@ export function createScrollbackClearCoordinator({
 	): Promise<boolean> | null =>
 		start(ownerContext, failurePolicy, providedAuthority)?.cleanup ?? null;
 
+	const clearCurrentRuntime = (): Promise<boolean> | null => {
+		const current = getCurrentState();
+		const ownerContext = current.context;
+		const instanceId = current.runtimeInstanceId;
+		if (ownerContext === null || instanceId === null) return null;
+		const authority = captureAuthority(ownerContext);
+		if (
+			authority === null ||
+			!isTerminalInstanceCurrent(ownerContext, instanceId) ||
+			!authority.isCurrent()
+		) {
+			return null;
+		}
+		return clear(ownerContext, 'notify', authority);
+	};
+
 	const startCurrent = (): ScrollbackLiveInputCleanupStart => {
 		const current = getCurrentState();
 		const started = current.context ? start(current.context) : null;
 		return started ?? { authority: captureCurrentAuthority(), cleanup: null };
 	};
 
-	return { captureAuthority, clear, clearLocal, startCurrent };
+	return {
+		captureAuthority,
+		clear,
+		clearCurrentRuntime,
+		clearLocal,
+		startCurrent,
+	};
 }

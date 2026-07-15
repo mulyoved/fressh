@@ -1,4 +1,5 @@
 import { HOST_BROWSER_NO_CONNECTION_MESSAGE } from './host-browser-actions';
+import { unwrapControllerOutput } from './shell-controllers/controller-outcome';
 import {
 	type ShellHostCommandPort,
 	type ShellWorkmuxPort,
@@ -32,13 +33,10 @@ export async function runHostCommandWithBoundary({
 				throw new Error(WORKMUX_APP_COMMAND_UPDATE_MESSAGE);
 			}
 			const result = await workmux.command(argv, { timeoutMs });
-			if (result.status === 'completed') return result.output ?? '';
-			if (result.status === 'failed') throw new Error(result.failure.message);
-			throw new Error(
-				result.status === 'superseded'
-					? 'Workmux command superseded.'
-					: 'Workmux command unavailable.',
-			);
+			return unwrapControllerOutput(result, {
+				superseded: 'Workmux command superseded.',
+				unavailable: 'Workmux command unavailable.',
+			});
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			throw new Error(formatWorkmuxAppCommandFailureMessage(message));
@@ -46,14 +44,8 @@ export async function runHostCommandWithBoundary({
 	}
 
 	const result = await hostCommands.run(command, timeoutMs);
-	if (result.status !== 'completed') {
-		throw new Error(
-			result.status === 'failed'
-				? result.failure.message
-				: result.status === 'superseded'
-					? 'Host command superseded.'
-					: HOST_BROWSER_NO_CONNECTION_MESSAGE,
-		);
-	}
-	return (result.output ?? '').trim();
+	return unwrapControllerOutput(result, {
+		superseded: 'Host command superseded.',
+		unavailable: HOST_BROWSER_NO_CONNECTION_MESSAGE,
+	}).trim();
 }

@@ -2,6 +2,11 @@ import { type ControllerOutcome } from './controller-core';
 
 type OutcomeWithFailure = ControllerOutcome<unknown>;
 
+type OutcomeFailure<TOutcome extends OutcomeWithFailure> =
+	Extract<TOutcome, { status: 'failed' }> extends { failure: infer TFailure }
+		? TFailure
+		: never;
+
 type OutcomeHandlers<TOutcome extends OutcomeWithFailure> = {
 	completed(outcome: Extract<TOutcome, { status: 'completed' }>): unknown;
 	failed(outcome: Extract<TOutcome, { status: 'failed' }>): unknown;
@@ -45,13 +50,20 @@ export function unwrapControllerOutput<
 	TOutcome extends OutcomeWithFailure & { output?: string },
 >(
 	outcome: TOutcome,
-	messages: { superseded: string; unavailable: string },
+	messages: {
+		superseded: string;
+		unavailable: string;
+		failureToError?: (failure: OutcomeFailure<TOutcome>) => Error;
+	},
 ): string {
 	return matchControllerOutcome(outcome, {
 		completed: (completed) => completed.output ?? '',
 		failed: (failed) => {
-			const failure = failed.failure as { message: string };
-			throw new Error(failure.message);
+			const failure = failed.failure as OutcomeFailure<TOutcome>;
+			if (messages.failureToError) {
+				throw messages.failureToError(failure);
+			}
+			throw new Error((failure as { message: string }).message);
 		},
 		superseded: () => {
 			throw new Error(messages.superseded);

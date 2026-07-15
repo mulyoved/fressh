@@ -22,6 +22,7 @@ import {
 	WORKTREE_WORKSPACE_PREPARE_CLOSE_OPERATION_ID,
 	WORKTREE_WORKSPACE_PREPARE_NEW_OPERATION_ID,
 } from '../worktree-workspace-bridge';
+import { unwrapControllerOutput } from './controller-outcome';
 import { type ShellModalArbiter } from './modal-arbiter';
 import {
 	type ShellWorkmuxOutcome,
@@ -159,24 +160,16 @@ function requestError(
 	);
 }
 
-function unwrapWorkmuxOutcome(outcome: ShellWorkmuxOutcome): string {
-	switch (outcome.status) {
-		case 'completed':
-			return outcome.output ?? '';
-		case 'failed':
-			throw requestError(outcome.failure.message, outcome.failure.failureClass);
-		case 'superseded':
-			throw requestError('Worktree workspace request was superseded.');
-		case 'unavailable':
-			throw requestError('Worktree workspace request is unavailable.');
-	}
-}
-
 async function runBridgeRequest(
 	request: () => Promise<ShellWorkmuxOutcome>,
 ): Promise<string> {
 	try {
-		return unwrapWorkmuxOutcome(await request());
+		return unwrapControllerOutput(await request(), {
+			superseded: 'Worktree workspace request was superseded.',
+			unavailable: 'Worktree workspace request is unavailable.',
+			failureToError: (failure) =>
+				requestError(failure.message, failure.failureClass),
+		});
 	} catch (error) {
 		if (error instanceof WorktreeWorkspaceRequestError) throw error;
 		throw requestError(readMessage(error), readFailureClass(error));

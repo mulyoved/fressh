@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import test from 'node:test';
+import { findRawNativeDiagnosticInvocations } from '../helpers/raw-native-diagnostic-ownership';
 
 function collectSourceFiles(dir: string): string[] {
 	const files: string[] = [];
@@ -65,6 +66,35 @@ void test('raw Workmux factory and diagnostic ownership stay confined to the ses
 	assert.deepEqual(offenders, []);
 });
 
+void test('raw native output diagnostic calls stay confined to the session adapter', () => {
+	const root = resolve(import.meta.dirname, '../../src');
+	const offenders: string[] = [];
+	for (const file of collectSourceFiles(root)) {
+		const relativePath = relative(root, file);
+		if (relativePath === 'lib/shell-controllers/session.tsx') continue;
+		for (const invocation of findRawNativeDiagnosticInvocations(
+			readFileSync(file, 'utf8'),
+		)) {
+			offenders.push(`${relativePath}:${invocation}`);
+		}
+	}
+	assert.deepEqual(offenders, []);
+});
+
+void test('raw native diagnostic ownership matcher detects calls but ignores definitions and types', () => {
+	const fixture = readFileSync(
+		resolve(
+			import.meta.dirname,
+			'../fixtures/architecture/raw-native-diagnostic-offender.ts.txt',
+		),
+		'utf8',
+	);
+	assert.deepEqual(findRawNativeDiagnosticInvocations(fixture), [
+		'bufferStats',
+		'currentSeq',
+	]);
+});
+
 void test('public shell contracts expose typed final ports without raw compatibility vocabulary', () => {
 	const root = resolve(import.meta.dirname, '../../src/lib/shell-controllers');
 	const sessionContracts = readFileSync(
@@ -91,19 +121,39 @@ void test('public shell contracts expose typed final ports without raw compatibi
 });
 
 void test('typed outcome consumers use the shared exhaustive decoder', () => {
-	const root = resolve(import.meta.dirname, '../../src/lib/shell-controllers');
-	for (const file of [
-		'browser-actions-adapter.ts',
-		'feature-request-core.ts',
-		'notifications-core.ts',
-		'scrollback-core.ts',
-		'skill-selector-adapter.ts',
-		'skill-selector-core.ts',
-	]) {
-		assert.match(
-			readFileSync(join(root, file), 'utf8'),
+	const root = resolve(import.meta.dirname, '../../src/lib');
+	for (const [file, importPattern] of [
+		[
+			'host-command-router.ts',
+			/from '.\/shell-controllers\/controller-outcome'/,
+		],
+		[
+			'shell-controllers/browser-actions-adapter.ts',
 			/from '.\/controller-outcome'/,
-			file,
-		);
+		],
+		[
+			'shell-controllers/feature-request-core.ts',
+			/from '.\/controller-outcome'/,
+		],
+		['shell-controllers/notifications-core.ts', /from '.\/controller-outcome'/],
+		['shell-controllers/scrollback-core.ts', /from '.\/controller-outcome'/],
+		[
+			'shell-controllers/skill-selector-adapter.ts',
+			/from '.\/controller-outcome'/,
+		],
+		[
+			'shell-controllers/skill-selector-core.ts',
+			/from '.\/controller-outcome'/,
+		],
+		[
+			'shell-controllers/worktree-workspace-adapter.ts',
+			/from '.\/controller-outcome'/,
+		],
+		[
+			'terminal-fit-runner.ts',
+			/from '.\/shell-controllers\/controller-outcome'/,
+		],
+	] as const) {
+		assert.match(readFileSync(join(root, file), 'utf8'), importPattern, file);
 	}
 });

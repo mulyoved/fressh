@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import test from 'node:test';
 import { HOST_BROWSER_NO_CONNECTION_MESSAGE } from '../../src/lib/host-browser-actions';
 import { WORKMUX_KEYBOARD_COMMAND_DISABLED_MESSAGE } from '../../src/lib/keyboard-actions';
 import { MDEV_BRIDGE_UPDATE_MESSAGE } from '../../src/lib/mdev-bridge-client';
+import { createShellModalArbiter } from '../../src/lib/shell-controllers/modal-arbiter';
 import {
 	type ShellWorkmuxOutcome,
 	type ShellWorkmuxPort,
@@ -78,9 +81,114 @@ const REMOTE_FAILURE: WorktreeWorkspaceFailure = {
 	message: 'Worktrunk failed safely.',
 };
 
+function createWorktreeAdapter(
+	arbiter: ReturnType<typeof createShellModalArbiter>,
+) {
+	return createWorktreeWorkspaceControllerAdapter({
+		getCommittedDependencies: () => ({
+			connectionAvailable: true,
+			tmuxEnabled: true,
+			sessionName: 'main',
+			sourceKey: SOURCE_KEY,
+			workmux: {
+				command: async () => ({ status: 'unavailable' as const }),
+				operation: async () => ({ status: 'unavailable' as const }),
+			},
+			arbiter,
+		}),
+		reportPrecondition: () => {},
+		logger: { error: () => {} },
+	});
+}
+
 function tick(): Promise<void> {
 	return new Promise((resolve) => setImmediate(resolve));
 }
+
+void test('worktree admission closes every conflicting modal in order before opening', () => {
+	const events: string[] = [];
+	const arbiter = createShellModalArbiter();
+	const conflicts = [
+		'command-menu',
+		'commander',
+		'text-entry',
+		'configure',
+		'browser-actions',
+		'feature-request',
+		'skill-selector',
+	] as const;
+	for (const conflict of conflicts) {
+		arbiter.register(conflict, ({ opening }) => {
+			assert.equal(opening, 'worktree-workspace');
+			events.push(`close:${conflict}`);
+		});
+	}
+
+	const adapter = createWorktreeAdapter(arbiter);
+	assert.equal(
+		adapter.requestOpen(() => events.push('open:worktree-workspace')),
+		true,
+	);
+	assert.deepEqual(events, [
+		...conflicts.map((conflict) => `close:${conflict}`),
+		'open:worktree-workspace',
+	]);
+});
+
+void test('worktree admission stops when a conflicting modal blocks close', () => {
+	const events: string[] = [];
+	const arbiter = createShellModalArbiter();
+	arbiter.register('command-menu', () => {
+		events.push('close:command-menu');
+	});
+	arbiter.register('commander', () => {
+		events.push('block:commander');
+		return false;
+	});
+	arbiter.register('text-entry', () => {
+		events.push('close:text-entry');
+	});
+
+	const adapter = createWorktreeAdapter(arbiter);
+	assert.equal(
+		adapter.requestOpen(() => events.push('opened')),
+		false,
+	);
+	assert.deepEqual(events, ['close:command-menu', 'block:commander']);
+});
+
+void test('worktree hook owns committed typed source lifecycle without a terminal-input escape hatch', () => {
+	const hookSource = readFileSync(
+		join(process.cwd(), 'src/lib/shell-controllers/worktree-workspace.tsx'),
+		'utf8',
+	);
+	const adapterSource = readFileSync(
+		join(
+			process.cwd(),
+			'src/lib/shell-controllers/worktree-workspace-adapter.ts',
+		),
+		'utf8',
+	);
+
+	assert.match(
+		hookSource,
+		/getCommittedDependencies: \(\) => committedDepsRef\.current/,
+	);
+	assert.match(
+		hookSource,
+		/syncControllerSource\(\{[\s\S]*?dependencies: deps,[\s\S]*?core,[\s\S]*?\}\)/,
+	);
+	assert.match(hookSource, /createReplaySafeControllerLifecycle\(core\)/);
+	assert.match(hookSource, /adapter\.registerClose\(core\.close\)/);
+	assert.match(
+		hookSource,
+		/Alert\.alert\('Worktree Workspace', failure\.message/,
+	);
+	assert.doesNotMatch(
+		`${hookSource}\n${adapterSource}`,
+		/sendTextRaw|sendBytes|sendData|runCommandSteps|terminal-transport|onTerminalInput/,
+	);
+});
 
 function createCoreHarness(input?: {
 	connected?: boolean;

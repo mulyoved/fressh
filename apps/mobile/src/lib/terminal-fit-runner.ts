@@ -1,3 +1,4 @@
+import { matchControllerOutcome } from './shell-controllers/controller-outcome';
 import { type ShellHostCommandPort } from './shell-controllers/session-contracts';
 import { buildDirectTmuxResizeWindowCommand } from './workmux-direct-tmux-control';
 
@@ -88,20 +89,17 @@ export function createManualTerminalFitRunner(
 				);
 				if (!isCurrent(runGeneration)) return;
 
-				switch (result.status) {
-					case 'completed':
-					case 'superseded':
-						return;
-					case 'failed':
-						deps.showFailure('Fit terminal failed', result.failure.message);
-						return;
-					case 'unavailable':
+				return matchControllerOutcome(result, {
+					completed: () => {},
+					superseded: () => {},
+					failed: ({ failure }) =>
+						deps.showFailure('Fit terminal failed', failure.message),
+					unavailable: () =>
 						deps.showFailure(
 							'Fit terminal failed',
 							'No SSH connection is available.',
-						);
-						return;
-				}
+						),
+				});
 			} catch (error) {
 				if (!isCurrent(runGeneration)) return;
 				deps.showFailure('Fit terminal failed', deps.getErrorMessage(error));
