@@ -5,9 +5,9 @@ import {
 	rmSync,
 	writeFileSync,
 } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { tmpdir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 import React from 'react';
 import {
