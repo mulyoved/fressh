@@ -2,11 +2,11 @@
 import { afterEach, beforeEach, expect, jest, test } from '@jest/globals';
 import { act, render } from '@testing-library/react-native';
 import React from 'react';
-import { type UseShellKeyboardControllerInput } from '../../src/lib/shell-controllers/keyboard';
+import { type UseShellKeyboardControllerInput } from '@/lib/shell-controllers/keyboard';
 import {
 	type ShellHostCommandPort,
 	type ShellWorkmuxPort,
-} from '../../src/lib/shell-controllers/session-contracts';
+} from '@/lib/shell-controllers/session-contracts';
 
 const mockEvents: string[] = [];
 type KeyboardInput = Pick<

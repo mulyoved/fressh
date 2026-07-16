@@ -130,6 +130,10 @@ covered by `command-menu.test.ts`, `keyboard-config.test.ts`, and
 - Complete CE1 rerun: the exact shell lane reports 86 passed, Worktree/config
   reports 66 passed, and the exact component lane reports 4 suites / 13 tests
   passed.
+- Stable follow-up: all production type imports added by CE1-T5-001 now use the
+  required `@/` aliases. They remain type-only, canonical fixtures and runtime
+  modal assertions are unchanged, and neither relative `../../src` imports nor
+  `workmuxControlChannel` remain in the test.
 
 ## Self-review
 
