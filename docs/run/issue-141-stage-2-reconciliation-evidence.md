@@ -14,6 +14,21 @@
 | Task 2 | Session Node: exit 1, missing `session-core` and `session-diagnostics`; session Jest: exit 1, missing `session`; typed controller group: 87 passed, 63 failed; Worktree typed adapter: 13 passed, 2 failed because it still read the raw channel; stable review successor exposure: 0 passed, 1 failed; stable review generation-bound diagnostics: 0 passed, 1 failed; stale architecture suites: 8 passed, 13 failed; stable re-review shell-only diagnostics: 0 passed, 1 failed; final stable successor-publication interleaving: 0 passed, 1 failed                                                                                                                                                                                                                           | Session Node: 33 passed; session/activity Jest: 11 passed; typed controllers: 174 passed; Worktree/keyboard: 28 passed; session/typed-terminal architecture: 8 passed; Worktree modal: 2 passed; retained-shell, replaced-channel, and deferred-retirement interleaving diagnostics: 3 passed; formatting, typecheck, scoped ESLint, and diff check: exit 0                                     | `68e60f0f..52347f98`, `a7a291b7..a7da6ebc`, selective `8c8e2b13` contract                         | `4faea527`, stable-review fixes `4ba4bde3`, `74ea1a9b`, `9a9210b3`                                                                                                   |
 | Task 4 | Exact Node command: exit 1, five test files failed with `ERR_MODULE_NOT_FOUND` for the absent close coordinator, core, native-control authority, and timer owner; exact Jest command: exit 1, missing `shell-controllers/wispr`; stable-review fake-time cases: 38 passed, 2 failed because an uncertain native start had no cleanup deadline; CE1 wave 1: 61 passed, 6 failed on pre-timeout retirement, disposal-cancelled close deadlines, and scheduler failure; CE1 wave 2: 49 passed, 3 failed because opener retry created a second status request and auto-start re-enable replaced the unresolved transaction; CE1 wave 3: `cd apps/mobile && pnpm run typecheck` exited 2 with TS2322 because `Promise<unknown>` was not assignable to the wrapped object `Promise` type | Exact Node command after CE1 wave 3: 117 passed, 0 failed; exact Jest command: 9 passed, 0 failed; `pnpm run typecheck`: exit 0; full mobile integration: 2,360 passed; full mobile components: 24 passed; split lifecycle suites before wave 3: 52 passed; scoped Prettier, ESLint, and `git diff --check`: exit 0; modal composition: 2 passed; shell detail/component composition: 10 passed | `ad219e88..0d54b653`, with final cases from `5dc97c87` and authority hardening through `0d54b653` | `661dad8e`, `e5a986bc`, `06a41f3e`; CE1 wave-2 design `d7cadc6c`, plan `ff4ba887`, and repair commit containing `wave-2/fix-report.md`; CE1 wave-3 repair `91ca65a0` |
 
+### Complete replacement commit ledger
+
+The ranges below are contiguous and non-overlapping. Every replacement commit
+after the recorded base is assigned to exactly one reconciliation slice; `HEAD`
+in the final row also captures final-review-only evidence repairs whose commit
+cannot self-reference its resulting SHA.
+
+| Slice                                                                                      | Replacement commits                                                  | Source rationale                                                                                                                                                                     |
+| ------------------------------------------------------------------------------------------ | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Task 1 route boundary                                                                      | `a87f21f6..0c088a35` (inclusive: `a87f21f6`, `7d49da64`, `0c088a35`) | Rebuild `597a3b9c` / `f4ad565a`, then close CE1 repeated-parameter behavior.                                                                                                         |
+| Task 2 typed session, terminal, Workmux, diagnostics, and former Task 3 dependency closure | `25368a7f..6366345c` (inclusive)                                     | Reconcile `68e60f0f..52347f98`, `a7a291b7..a7da6ebc`, and the selective `8c8e2b13` contract; the range contains all stable and four CE1-wave repairs.                                |
+| Task 4 serialized Wispr ownership (including former Task 6)                                | `661dad8e..081920e1` (inclusive)                                     | Reconcile `ad219e88..0d54b653`, including the final `5dc97c87` cases and all six CE1-wave repairs.                                                                                   |
+| Task 5 shell view/lifetime and Worktree boundary (including former Task 7)                 | `914e05b1..40543ede` (inclusive)                                     | Reconcile `8751a1d0`, `75aa4de1`, `cbbac86b`, `601d2230`, `8c8e2b13`, and `73c7a20a`; includes stable integration/tmux fixes and the CE1 modal-contract repair.                      |
+| Task 8 acceptance and final-review evidence                                                | `ca5cad3d..HEAD` (inclusive)                                         | Acceptance-only canonical adapter reuse, dead teardown removal, Workmux type-hole removal, shared test fixture extraction, verification evidence, and final review evidence closure. |
+
 ### Task 4 CE1 wave 4
 
 - RED:
@@ -138,7 +153,7 @@
 
 ## Thermo-Nuclear Review
 
-- Review artifact: `.superpowers/sdd/task-8-thermo-review.md`.
+- Review artifact: `docs/run/issue-141-stage-2-thermo-nuclear-review.md`.
 - Final result: zero blocking maintainability findings after extracting the
   duplicated typed scrollback fixture and removing the production Workmux type
   hole. Focused repair lanes passed 66/66 and 37/37 respectively, followed by
