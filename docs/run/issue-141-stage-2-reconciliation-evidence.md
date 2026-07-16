@@ -228,11 +228,12 @@ cannot self-reference its resulting SHA.
 
 ## Android Preview
 
-- Exact local `preview` EAS command completed again after final CE1 production
-  repairs at source head `ed5f10af378ebd32f9296ef8967e336c2546dafd` and produced
-  `apps/mobile/build-1784192322073.apk` (164,955,109 bytes).
+- Exact local `preview` EAS command completed again after final CE1 wave 3
+  production repairs at source head
+  `e2cbf480f533ed4e8e5c844ec8515311ede429dd` and produced
+  `apps/mobile/build-1784212577172.apk` (164,955,565 bytes).
 - APK SHA-256:
-  `3709c06a67ff50c19456b38a8b56d15737e183213e2bff9c604194e46e6e3afc`.
+  `5debeb07bcffa5360300d79ab3e2fd53c0db5535a4556b87da1f336059b93b4c`.
 - Manifest identity: `com.finalapp.vibe2`, version code 5, version name 0.0.5,
   compile SDK 36. APK signer certificate SHA-256:
   `f3ae9ba5f33128ddd74a416da68209a1ca1fba79e2e0c520443e5a6b080e0b41`.
