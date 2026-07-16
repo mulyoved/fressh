@@ -157,7 +157,7 @@ void test('late listener registration retries native retirement while preserving
 	assert.deepEqual(harness.removedListenerIds, [74n, 74n]);
 });
 
-void test('ordinary listener removal retains authority after a native failure', async () => {
+void test('ordinary listener removal retries one native failure and completes idempotently', async () => {
 	const harness = createDeferredTerminalSourceHarness();
 	let removalAttempts = 0;
 	harness.shell.removeListener = (id: bigint) => {
@@ -171,10 +171,7 @@ void test('ordinary listener removal retains authority after a native failure', 
 	harness.listener.resolve(75n);
 	const registration = await registrationPromise;
 
-	assert.throws(
-		() => harness.port.removeListener(registration),
-		/native removal failed/,
-	);
+	assert.doesNotThrow(() => harness.port.removeListener(registration));
 	assert.doesNotThrow(() => harness.port.removeListener(registration));
 	assert.deepEqual(harness.removedListenerIds, [75n, 75n]);
 });
@@ -187,7 +184,7 @@ void test('pending retry from a later add completes the original registration on
 	harness.shell.removeListener = (id: bigint) => {
 		harness.removedListenerIds.push(id);
 		removalAttempts += 1;
-		if (removalAttempts === 1) throw new Error('native removal failed');
+		if (removalAttempts <= 2) throw new Error('native removal failed');
 	};
 	const original = await harness.port.addListener(() => {}, {
 		cursor: { mode: 'live' },
@@ -199,7 +196,7 @@ void test('pending retry from a later add completes the original registration on
 	);
 	await harness.port.addListener(() => {}, { cursor: { mode: 'live' } });
 	assert.doesNotThrow(() => harness.port.removeListener(original));
-	assert.deepEqual(harness.removedListenerIds, [76n, 76n]);
+	assert.deepEqual(harness.removedListenerIds, [76n, 76n, 76n]);
 });
 
 void test('in-flight sends reject after source rotation without replaying bytes', async () => {

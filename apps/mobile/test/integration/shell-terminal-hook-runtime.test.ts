@@ -4,6 +4,10 @@ import test from 'node:test';
 import type { XtermWebViewHandle } from '@fressh/react-native-xtermjs-webview';
 import { createReplaySafeDisposer } from '../../src/lib/shell-controllers/controller-core';
 import { type ShellTerminalSourcePort } from '../../src/lib/shell-controllers/session-contracts';
+import {
+	createShellTerminalSourcePort,
+	type ShellTerminalNativeSource,
+} from '../../src/lib/shell-controllers/session-terminal-source';
 import { createShellTransportKey } from '../../src/lib/shell-controllers/source-keys';
 import {
 	createShellTerminalHookRuntime,
@@ -188,6 +192,11 @@ function createShell(
 
 function createXterm(calls: string[]): XtermWebViewHandle {
 	return {
+		write: (bytes: Uint8Array) => calls.push(`write:${bytes.join(',')}`),
+		writeMany: (chunks: Uint8Array[]) =>
+			calls.push(`writeMany:${chunks.length}`),
+		flush: () => calls.push('flush'),
+		focus: () => calls.push('focus'),
 		fit: () => calls.push('fit'),
 		setSystemKeyboardEnabled: (enabled: boolean) =>
 			calls.push(`keyboard:${enabled}`),
@@ -362,6 +371,58 @@ void test('same-key shell replacement stales delayed transport work before redir
 	assert.ok(sameObjectLease);
 	runtime.updateSource(shellB);
 	assert.equal(runtime.transport.isLeaseCurrent(sameObjectLease), true);
+	runtime.lifecycle.dispose();
+	runtime.size.dispose();
+	runtime.transport.dispose();
+});
+
+void test('source replacement retries one failed canonical listener retirement before discarding the port', async () => {
+	let generation = 1;
+	let removalAttempts = 0;
+	const nativeSource = {
+		bufferStats: () => ({
+			ringBytesCount: 0n,
+			usedBytes: 0n,
+			headSeq: 0n,
+			tailSeq: 0n,
+			droppedBytesTotal: 0n,
+			chunksCount: 0n,
+		}),
+		currentSeq: () => 0n,
+		readBuffer: async () => ({ chunks: [], nextSeq: 0n }),
+		addListener: async () => 81n,
+		removeListener: () => {
+			removalAttempts += 1;
+			if (removalAttempts === 1) throw new Error('native removal failed');
+		},
+		sendData: async () => {},
+		resizePty: async () => {},
+	} satisfies ShellTerminalNativeSource;
+	const source = createShellTerminalSourcePort({
+		channelId: 7,
+		connectionId: 'connection-a',
+		generation,
+		getCurrentGeneration: () => generation,
+		key: createShellTransportKey('connection-a', 7),
+		shell: nativeSource,
+	});
+	const calls: string[] = [];
+	const runtime = createShellTerminalHookRuntime({
+		xtermRef: { current: createXterm(calls) },
+		platformOS: 'android',
+		dependencies: {
+			logger: { info: () => {}, warn: () => {} },
+			router: { back: () => {} },
+		},
+	});
+	runtime.updateSource(source);
+	runtime.lifecycle.handleInitialized('runtime-1');
+	await runtime.requestAttach(true, true);
+
+	generation += 1;
+	runtime.updateSource(createShell([], { generation }));
+
+	assert.equal(removalAttempts, 2);
 	runtime.lifecycle.dispose();
 	runtime.size.dispose();
 	runtime.transport.dispose();

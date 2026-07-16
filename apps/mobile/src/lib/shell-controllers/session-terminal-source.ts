@@ -120,11 +120,17 @@ export function createShellTerminalSourcePort({
 		removeListener: (registration) => {
 			const owned = registrations.get(registration);
 			if (!owned || owned.removed || shell === undefined) return;
+			const wasPending = pendingListenerRemovals.has(owned.id);
 			retryPendingListenerRemovals(shell);
 			if (owned.removed) return;
-			retireListener(shell, owned.id, () => {
-				owned.removed = true;
-			});
+			try {
+				retireListener(shell, owned.id, () => {
+					owned.removed = true;
+				});
+			} catch (error) {
+				if (!wasPending) retryPendingListenerRemovals(shell);
+				if (!owned.removed) throw error;
+			}
 		},
 		sendData: async (bytes) => {
 			const owner = requireCurrent();

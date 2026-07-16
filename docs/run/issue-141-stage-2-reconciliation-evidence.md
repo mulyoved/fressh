@@ -160,17 +160,21 @@ cannot self-reference its resulting SHA.
 - Retry-bookkeeping RED: the follow-up suite reported 7/8 because cleanup
   retried during a later add but did not complete the original registration,
   allowing a third native removal.
+- Stable re-review RED: a production hook-runtime replacement test observed one
+  native removal attempt instead of two because the retired port would receive
+  no future call to drain its pending cleanup.
 - GREEN: pending native listener IDs retain an optional registration-completion
   callback until cleanup succeeds. Stale cleanup retries within the boundary
-  while preserving the superseded result; ordinary cleanup remains retryable and
-  becomes idempotent after direct or deferred success.
+  while preserving the superseded result; ordinary cleanup owns one bounded
+  retry in the same call, remains retryable after two failures, and becomes
+  idempotent after direct or deferred success.
 - Maintainability closure: the duplicated raw-source terminal publication guard
   and redundant suite were removed; behavioral publication coverage remains in
   the hook-runtime suite. Three partial double-asserted terminal source ports
   were replaced by one complete fixture checked with
   `satisfies ShellTerminalSourcePort`.
-- Focused terminal closure: 170/170. Complete mobile closure: formatting,
-  ESLint, TypeScript, 2,372 integration tests, and 9 component suites / 38 tests
+- Focused terminal closure: 171/171. Complete mobile closure: formatting,
+  ESLint, TypeScript, 2,373 integration tests, and 9 component suites / 38 tests
   passed. `git diff --check` exits 0.
 
 ## Thermo-Nuclear Review
