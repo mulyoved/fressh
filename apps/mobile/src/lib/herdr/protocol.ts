@@ -146,28 +146,46 @@ function decodeLine(bytes: Uint8Array): string {
 	}
 }
 
-function joinBytes(left: Uint8Array, right: Uint8Array): Uint8Array {
-	if (left.byteLength === 0) return right.slice();
-	if (right.byteLength === 0) return left;
-	const joined = new Uint8Array(left.byteLength + right.byteLength);
-	joined.set(left);
-	joined.set(right, left.byteLength);
-	return joined;
-}
-
 export function createHerdrLineDecoder(): Readonly<{
 	push(chunk: Uint8Array | ArrayBuffer): string[];
 	finish(): string[];
 }> {
 	let pending: Uint8Array<ArrayBufferLike> = new Uint8Array();
+	let pendingByteLength = 0;
 
 	function assertBounded(additionalBytes: number): void {
 		if (
-			pending.byteLength + additionalBytes >
+			pendingByteLength + additionalBytes >
 			HERDR_MAX_INCOMPLETE_LINE_BYTES
 		) {
 			throw new HerdrProtocolError('oversized-record');
 		}
+	}
+
+	function appendPending(bytes: Uint8Array): void {
+		assertBounded(bytes.byteLength);
+		const requiredByteLength = pendingByteLength + bytes.byteLength;
+		if (requiredByteLength > pending.byteLength) {
+			let capacity = Math.max(1024, pending.byteLength);
+			while (capacity < requiredByteLength) {
+				capacity = Math.min(
+					capacity * 2,
+					HERDR_MAX_INCOMPLETE_LINE_BYTES,
+				);
+			}
+			const grown = new Uint8Array(capacity);
+			grown.set(pending.subarray(0, pendingByteLength));
+			pending = grown;
+		}
+		pending.set(bytes, pendingByteLength);
+		pendingByteLength = requiredByteLength;
+	}
+
+	function takePendingLine(): string {
+		const line = decodeLine(pending.subarray(0, pendingByteLength));
+		pending = new Uint8Array();
+		pendingByteLength = 0;
+		return line;
 	}
 
 	return {
@@ -178,21 +196,16 @@ export function createHerdrLineDecoder(): Readonly<{
 			for (let index = 0; index < bytes.byteLength; index += 1) {
 				if (bytes[index] !== 0x0a) continue;
 				const segment = bytes.subarray(segmentStart, index);
-				assertBounded(segment.byteLength);
-				lines.push(decodeLine(joinBytes(pending, segment)));
-				pending = new Uint8Array();
+				appendPending(segment);
+				lines.push(takePendingLine());
 				segmentStart = index + 1;
 			}
 			const remainder = bytes.subarray(segmentStart);
-			assertBounded(remainder.byteLength);
-			pending = joinBytes(pending, remainder);
+			appendPending(remainder);
 			return lines;
 		},
 		finish() {
-			if (pending.byteLength === 0) return [];
-			const line = decodeLine(pending);
-			pending = new Uint8Array();
-			return [line];
+			return pendingByteLength === 0 ? [] : [takePendingLine()];
 		},
 	};
 }

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import test from 'node:test';
+import test, { mock } from 'node:test';
 
 import {
 	buildHerdrTerminalControlCommand,
@@ -206,6 +206,43 @@ void test('rejects an incomplete line beyond four MiB before retaining it', () =
 	);
 });
 
+void test('copies a chunked pending line only a constant number of times', () => {
+	const chunk = new Uint8Array(4 * 1024).fill(0x61);
+	const chunkCount = 64;
+	const lineByteLength = chunk.byteLength * chunkCount;
+	const originalSet = Uint8Array.prototype.set;
+	let copiedByteCount = 0;
+	const instrumentedSet = mock.method(
+		Uint8Array.prototype,
+		'set',
+		function (
+			this: Uint8Array,
+			source: ArrayLike<number>,
+			offset?: number,
+		): void {
+			copiedByteCount += source.length;
+			originalSet.call(this, source, offset);
+		},
+	);
+
+	try {
+		const lineDecoder = createHerdrLineDecoder();
+		for (let index = 0; index < chunkCount; index += 1) {
+			assert.deepEqual(lineDecoder.push(chunk), []);
+		}
+		const records = lineDecoder.push(Uint8Array.of(0x0a));
+		assert.equal(records.length, 1);
+		assert.equal(records[0]?.length, lineByteLength);
+	} finally {
+		instrumentedSet.mock.restore();
+	}
+
+	assert.ok(
+		copiedByteCount <= lineByteLength * 2,
+		`copied ${copiedByteCount} bytes while framing ${lineByteLength} bytes`,
+	);
+});
+
 void test('parses valid terminal frames and decodes canonical Base64 bytes', () => {
 	assert.deepEqual(
 		parseHerdrRecord(
@@ -255,6 +292,8 @@ void test('rejects malformed known frames and non-canonical Base64', () => {
 		{ ...valid, bytes: 'AA' },
 		{ ...valid, bytes: 'A===' },
 		{ ...valid, bytes: 'AA=A' },
+		{ ...valid, bytes: 'AB==' },
+		{ ...valid, bytes: 'AAB=' },
 		{ ...valid, bytes: 'AA==\n' },
 	];
 	for (const frame of invalidFrames) {
