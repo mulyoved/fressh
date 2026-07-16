@@ -524,6 +524,137 @@ test('stale tmux resolution is ignored and real connection or target changes rep
 	screen.unmount();
 });
 
+test('same-target tmux enablement publishes immediately without replacing downstream ports', async () => {
+	const resolution = deferred<unknown>();
+	mockFetchQuery.mockReturnValue(resolution.promise);
+	mockUseSshStore.setState({
+		connections: { 'connection-1': createConnection() },
+		shells: { 'connection-1-7': createShell() },
+	});
+	const onHandle = jest.fn<(handle: ShellSessionControllerHandle) => void>();
+	const latest = () => onHandle.mock.calls.at(-1)?.[0];
+	const screen = render(
+		<SessionHarness
+			onHandle={onHandle}
+			useController={getUseShellSessionController()}
+		/>,
+	);
+	const targetKey = latest()?.identity.targetKey;
+	const workmux = latest()?.ports.workmux;
+
+	await act(async () => {
+		resolution.resolve({
+			value: { useTmux: true, tmuxSessionName: ' main ' },
+		});
+		await Promise.resolve();
+		await Promise.resolve();
+	});
+
+	expect(latest()?.tmux).toEqual({ enabled: true, target: 'main' });
+	expect(latest()?.identity.targetKey).toBe(targetKey);
+	expect(latest()?.ports.workmux).toBe(workmux);
+	expect(mockCreateWorkmuxControlChannel).toHaveBeenCalledTimes(1);
+	screen.unmount();
+});
+
+test('same-target tmux disablement publishes immediately to the existing downstream port', async () => {
+	const resolutions = new Map<string, ReturnType<typeof deferred<unknown>>>();
+	mockFetchQuery.mockImplementation(({ queryKey }) => {
+		const pending = deferred<unknown>();
+		resolutions.set(queryKey[0] ?? '', pending);
+		return pending.promise;
+	});
+	mockUseSshStore.setState({
+		connections: { 'connection-1': createConnection() },
+		shells: { 'connection-1-7': createShell() },
+	});
+	const onHandle = jest.fn<(handle: ShellSessionControllerHandle) => void>();
+	const latest = () => onHandle.mock.calls.at(-1)?.[0];
+	const useController = getUseShellSessionController();
+	const screen = render(
+		<SessionHarness onHandle={onHandle} useController={useController} />,
+	);
+
+	await act(async () => {
+		resolutions.get('saved-1')?.resolve({
+			value: { useTmux: true, tmuxSessionName: 'main' },
+		});
+		await Promise.resolve();
+		await Promise.resolve();
+	});
+	expect(latest()?.tmux).toEqual({ enabled: true, target: 'main' });
+	const targetKey = latest()?.identity.targetKey;
+	const workmux = latest()?.ports.workmux;
+
+	screen.rerender(
+		<SessionHarness
+			onHandle={onHandle}
+			request={{ ...request, storedConnectionId: 'saved-2' }}
+			useController={useController}
+		/>,
+	);
+	await act(async () => {
+		resolutions.get('saved-2')?.resolve({
+			value: { useTmux: false, tmuxSessionName: 'main' },
+		});
+		await Promise.resolve();
+		await Promise.resolve();
+	});
+
+	expect(latest()?.tmux).toEqual({ enabled: false, target: 'main' });
+	expect(latest()?.identity.targetKey).toBe(targetKey);
+	expect(latest()?.ports.workmux).toBe(workmux);
+	expect(mockCreateWorkmuxControlChannel).toHaveBeenCalledTimes(1);
+	screen.unmount();
+});
+
+test('target-changing tmux resolution waits for predecessor retirement before publication', async () => {
+	const resolution = deferred<unknown>();
+	mockFetchQuery.mockReturnValue(resolution.promise);
+	mockUseSshStore.setState({
+		connections: { 'connection-1': createConnection() },
+		shells: { 'connection-1-7': createShell() },
+	});
+	const onHandle = jest.fn<(handle: ShellSessionControllerHandle) => void>();
+	const latest = () => onHandle.mock.calls.at(-1)?.[0];
+	const screen = render(
+		<SessionHarness
+			onHandle={onHandle}
+			useController={getUseShellSessionController()}
+		/>,
+	);
+	const predecessorKey = latest()?.identity.targetKey;
+	const predecessorPort = latest()?.ports.workmux;
+	const cleanupStarted = deferred();
+	const releaseCleanup = deferred();
+	predecessorPort?.registerBeforeDispose('tmux-resolution-test', async () => {
+		cleanupStarted.resolve();
+		await releaseCleanup.promise;
+	});
+
+	await act(async () => {
+		resolution.resolve({
+			value: { useTmux: true, tmuxSessionName: 'beta' },
+		});
+		await Promise.resolve();
+		await Promise.resolve();
+	});
+	await cleanupStarted.promise;
+	expect(latest()?.tmux).toEqual({ enabled: false, target: 'main' });
+	expect(latest()?.identity.targetKey).toBe(predecessorKey);
+	expect(latest()?.ports.workmux).toBe(predecessorPort);
+
+	await act(async () => {
+		releaseCleanup.resolve();
+		await Promise.resolve();
+		await Promise.resolve();
+	});
+	expect(latest()?.tmux).toEqual({ enabled: true, target: 'beta' });
+	expect(latest()?.identity.targetKey).not.toBe(predecessorKey);
+	expect(latest()?.ports.workmux).not.toBe(predecessorPort);
+	screen.unmount();
+});
+
 test('reconnect cleanup retires Workmux without invalidating SSH resources', async () => {
 	const onHandle = jest.fn<(handle: ShellSessionControllerHandle) => void>();
 	const screen = render(

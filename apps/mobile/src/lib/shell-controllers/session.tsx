@@ -260,10 +260,19 @@ export function useShellSessionController({
 		targetOwner.activate();
 		resolvedTmuxRef.current = resolvedTmux;
 		const nextKey = createShellTargetKey(transportKey, resolvedTmux.target);
+		const targetKeyChanged = targetOwner.getPublication().key !== nextKey;
 		targetOwner.update({
 			key: nextKey,
 			connection: connection ?? null,
 		});
+		if (!targetKeyChanged) {
+			setTarget((current) =>
+				current.tmux.enabled === resolvedTmux.enabled &&
+				current.tmux.target === resolvedTmux.target
+					? current
+					: { ...current, tmux: resolvedTmux },
+			);
+		}
 	}, [connection, resolvedTmux, targetOwner, transportKey]);
 
 	useLayoutEffect(() => {

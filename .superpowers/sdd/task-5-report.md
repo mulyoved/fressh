@@ -56,7 +56,7 @@ only the two obsolete keyboard composition files named in the brief.
 
 ## GREEN Evidence
 
-- Exact shell composition Node lane: 85 passed, 0 failed.
+- Exact shell composition Node lane: 86 passed, 0 failed.
 - Exact Worktree/config Node lane: 66 passed, 0 failed.
 - Exact component Jest lane: 4 suites, 13 tests passed.
 - `pnpm run fmt:check`: exit 0.
@@ -96,6 +96,26 @@ covered by `command-menu.test.ts`, `keyboard-config.test.ts`, and
   focused controller composition and typed `ports.workmux`/`remoteTarget`
   contracts instead of the deleted keyboard shim.
 
+### Stable-review publication and Worktree-command repair
+
+- RED tmux publication: the session component lane reported 11 passed and 2
+  failed. Same-normalized-target false-to-true resolution remained publicly
+  false, which also prevented the true-to-false case from establishing its
+  prerequisite state. The target-changing retirement-barrier control passed.
+- GREEN tmux publication: the same lane reports 13 passed. Both same-target
+  directions publish immediately while preserving the exact target key and
+  Workmux port; a target-changing resolution remains withheld until predecessor
+  cleanup drains.
+- RED Worktree command contract: the keyboard-hook lane reported 7 passed and 1
+  failed because both modal callbacks and both calls were optional.
+- GREEN Worktree command contract: the same lane reports 8 passed. Both
+  callbacks are required, invoked directly, and the new/close actions each reach
+  their exact modal destination once. Mobile typecheck exits 0 with every
+  production and test harness supplying the required contract.
+- Complete repair verification: the exact Task 5 shell lane reports 86 passed,
+  the Worktree/config lane reports 66 passed, and the combined Task 5 plus
+  session-lifecycle component lane reports 5 suites / 26 tests passed.
+
 ## Self-review
 
 Review target: the complete uncommitted Task 5 diff against `081920e1`.
@@ -126,6 +146,15 @@ maintainability, test-coverage, UI, security, or data finding remained. The
 final combined component rerun included the session controller and reports 5
 suites / 23 tests passed; the additional scrollback/diagnostic lane reports 166
 passed, complementing the exact Task 5 lanes above.
+
+The final publication/command repair received a fresh diff review. Same-key
+metadata publication cannot expose a future target port, while the owner
+subscription remains the only key-changing publication path; stale tmux
+resolution remains generation-guarded. Required modal callbacks resolve from
+current ports for every action and have both adapter-level and ShellDetail
+destination coverage. No additional finding remained. Core review ran;
+external Codex, simplify, UI, React, and AI-slop adapters are absent; security
+and data review are not applicable; CI-equivalent focused checks pass.
 
 ## Concerns
 

@@ -55,6 +55,12 @@ function createAdapterHarness() {
 		openCommander() {
 			events.push(`commander:${this.identity}`);
 		},
+		openNewWorktreeWorkspace() {
+			events.push(`worktree:new:${this.identity}`);
+		},
+		openCloseWorktreeWorkspace() {
+			events.push(`worktree:close:${this.identity}`);
+		},
 		openSkillSelector: () => {},
 		openBrowserActions: () => {},
 		openFeatureRequest: () => {},
@@ -269,6 +275,23 @@ void test('production adapter reads latest ports and guards deferred paste autho
 	await settleAdapter();
 	assert.deepEqual(harness.input.sent, [[[0x78]]]);
 	assert.equal(harness.events.at(-1), 'bridge');
+});
+
+void test('Worktree actions require and reach their exact modal destinations once', async () => {
+	const source = readFileSync(
+		`${process.cwd()}/src/lib/shell-controllers/keyboard-controller-adapter.ts`,
+		'utf8',
+	);
+	assert.doesNotMatch(source, /openNewWorktreeWorkspace\?\(\): void/);
+	assert.doesNotMatch(source, /openCloseWorktreeWorkspace\?\(\): void/);
+	assert.doesNotMatch(source, /openNewWorktreeWorkspace\?\.\(\)/);
+	assert.doesNotMatch(source, /openCloseWorktreeWorkspace\?\.\(\)/);
+
+	const harness = createAdapterHarness();
+	await harness.adapter.runAction('OPEN_NEW_WORKTREE_WORKSPACE');
+	await harness.adapter.runAction('OPEN_CLOSE_WORKTREE_WORKSPACE');
+
+	assert.deepEqual(harness.events, ['worktree:new:old', 'worktree:close:old']);
 });
 
 void test('selection changes publish the applied mode to the terminal view', () => {

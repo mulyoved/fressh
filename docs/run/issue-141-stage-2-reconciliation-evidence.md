@@ -66,7 +66,7 @@
 - RED component command: the exact four-file Jest lane exited 1 with 3 failed
   suites and 1 passed suite. Failures covered the old shell composition shape,
   old connection-debug delivery shape, and absent target-lifetime owners.
-- GREEN shell composition command: the exact eight-file Node lane reports 85
+- GREEN shell composition command: the exact eight-file Node lane reports 86
   passed and 0 failed. The boundary measures 498 nonblank `detail.tsx` lines and
   299 physical `ShellDetail` lines.
 - GREEN Worktree/config command: the exact six-file Node lane reports 66 passed
@@ -86,6 +86,20 @@
   production paths, successor publication remains retirement-barrier ordered,
   transport diagnostics are generation-checked, target failure mapping preserves
   error/output/no-detail, and legacy diagnostic-delivery fields are removed.
+- Final stable-review RED: the session component lane reported 11 passed and 2
+  failed because same-target false-to-true tmux resolution remained publicly
+  false and prevented the true-to-false prerequisite state. Its target-changing
+  retirement-barrier control passed. The keyboard-hook lane reported 7 passed
+  and 1 failed because both Worktree modal callbacks and calls were optional.
+- Final stable-review GREEN: the session component lane reports 13 passed, with
+  both same-target directions publishing immediately through the unchanged
+  target key/Workmux port and target-changing publication still delayed until
+  predecessor cleanup drains. The keyboard-hook lane reports 8 passed, with
+  required direct new/close callbacks reaching their exact modal destinations
+  once each; mobile typecheck exits 0.
+- Complete final repair rerun: exact Task 5 shell composition reports 86 passed,
+  Worktree/config reports 66 passed, and the combined component lane reports 5
+  suites / 26 tests passed.
 
 ## Full Verification
 

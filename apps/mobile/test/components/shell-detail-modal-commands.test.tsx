@@ -6,6 +6,8 @@ import React from 'react';
 type ModalCommands = {
 	toggleCommandMenu(): void;
 	openCommander(): void;
+	openNewWorktreeWorkspace(): void;
+	openCloseWorktreeWorkspace(): void;
 	openSkillSelector(): void;
 	openBrowserActions(): void;
 	openFeatureRequest(): void;
@@ -161,6 +163,11 @@ const mockWispr = {
 const mockSkillSelector = {
 	open: () => mockEvents.push('open-skill'),
 	close: () => mockEvents.push('close-skill'),
+	modalProps: {},
+};
+const mockWorktreeWorkspace = {
+	openNew: () => mockEvents.push('open-worktree-new'),
+	openClose: () => mockEvents.push('open-worktree-close'),
 	modalProps: {},
 };
 const mockKeyboardHandle = {
@@ -332,6 +339,9 @@ jest.mock('@/lib/shell-controllers/terminal', () => ({
 		return mockTerminal;
 	},
 }));
+jest.mock('@/lib/shell-controllers/worktree-workspace', () => ({
+	useWorktreeWorkspaceController: () => mockWorktreeWorkspace,
+}));
 jest.mock('@/lib/shell-controllers/wispr', () => ({
 	useShellWisprController: () => mockWispr,
 }));
@@ -484,6 +494,14 @@ test('ShellDetail supplies modal commands with exact ordering and real destinati
 		'close-skill',
 		'close-wispr',
 		'open-commander',
+	]);
+	act(() => {
+		commands.openNewWorktreeWorkspace();
+		commands.openCloseWorktreeWorkspace();
+	});
+	expect(mockEvents.splice(0)).toEqual([
+		'open-worktree-new',
+		'open-worktree-close',
 	]);
 
 	act(() => {
