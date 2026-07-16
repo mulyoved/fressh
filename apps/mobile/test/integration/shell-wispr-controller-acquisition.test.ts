@@ -229,10 +229,16 @@ void test('dispose after definitive failure cancels retry without cleanup', asyn
 void test('synchronous zero-tap timeout creates no close or cleanup obligation', async () => {
 	const closeDelays: number[] = [];
 	const closeHarness = createHarness('android', (clock) => {
+		const schedule = clock.setTimeout;
+		let scheduled = 0;
 		clock.setTimeout = (task, delayMs) => {
 			closeDelays.push(delayMs);
-			task();
-			return clock.nextId++;
+			scheduled += 1;
+			if (scheduled > 1) {
+				task();
+				return clock.nextId++;
+			}
+			return schedule(task, delayMs);
 		};
 		clock.clearTimeout = () => {};
 	});
@@ -240,16 +246,22 @@ void test('synchronous zero-tap timeout creates no close or cleanup obligation',
 	await openReady(closeHarness);
 	await settled();
 	assert.equal(closeHarness.taps.length, 0);
-	assert.deepEqual(closeDelays, [750, 750]);
+	assert.deepEqual(closeDelays, [750, 750, 750]);
 	closeHarness.core.closeTextEntry();
-	assert.deepEqual(closeDelays, [750, 750]);
+	assert.deepEqual(closeDelays, [750, 750, 750]);
 
 	const disposeDelays: number[] = [];
 	const disposeHarness = createHarness('android', (clock) => {
+		const schedule = clock.setTimeout;
+		let scheduled = 0;
 		clock.setTimeout = (task, delayMs) => {
 			disposeDelays.push(delayMs);
-			task();
-			return clock.nextId++;
+			scheduled += 1;
+			if (scheduled > 1) {
+				task();
+				return clock.nextId++;
+			}
+			return schedule(task, delayMs);
 		};
 		clock.clearTimeout = () => {};
 	});
@@ -257,9 +269,9 @@ void test('synchronous zero-tap timeout creates no close or cleanup obligation',
 	await openReady(disposeHarness);
 	await settled();
 	assert.equal(disposeHarness.taps.length, 0);
-	assert.deepEqual(disposeDelays, [750, 750]);
+	assert.deepEqual(disposeDelays, [750, 750, 750]);
 	disposeHarness.core.dispose();
-	assert.deepEqual(disposeDelays, [750, 750]);
+	assert.deepEqual(disposeDelays, [750, 750, 750]);
 });
 
 void test('stale text-field priming rejection does not warn', async () => {
@@ -277,6 +289,30 @@ void test('stale text-field priming rejection does not warn', async () => {
 	harness.core.invalidate('focus-lost');
 	priming.reject(new Error('stale prime'));
 	await settled();
+	assert.deepEqual(harness.warnings, []);
+});
+
+void test('dispose preserves the bound for a permanently pending screen prime', async () => {
+	const harness = createHarness();
+	harness.native.tapScreen = () => new Promise<never>(() => {});
+	harness.core.setAutoStart(true);
+	await openReady(harness);
+	harness.core.onTextEntryFocused('', {
+		x: 10,
+		y: 20,
+		width: 100,
+		height: 80,
+	});
+	assert.equal(harness.clock.timers.size, 1);
+
+	harness.core.dispose();
+	assert.equal(harness.clock.timers.size, 1);
+	await harness.clock.advance(749);
+	assert.equal(harness.clock.timers.size, 1);
+	assert.equal(harness.taps.length, 0);
+	await harness.clock.advance(1);
+	assert.equal(harness.clock.timers.size, 0);
+	assert.equal(harness.taps.length, 0);
 	assert.deepEqual(harness.warnings, []);
 });
 

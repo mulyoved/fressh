@@ -26,6 +26,7 @@ export type WisprFocusProtocol = {
 };
 
 export type CreateWisprFocusProtocolInput = WisprTimerPort & {
+	primeDeadlineTimers: WisprTimerPort;
 	tapScreen(x: number, y: number): Promise<unknown>;
 	pixelRatio(): number;
 	requestCurrent(requestId: number, capture: number): boolean;
@@ -67,7 +68,11 @@ export function createWisprFocusProtocol(
 					const ratio = deps.pixelRatio();
 					const x = (bounds.x + bounds.width / 2) * ratio;
 					const y = (bounds.y + Math.min(bounds.height / 2, 48)) * ratio;
-					await withTimeout(deps.tapScreen(x, y), TAP_TIMEOUT_MS, deps);
+					await withTimeout(
+						deps.tapScreen(x, y),
+						TAP_TIMEOUT_MS,
+						deps.primeDeadlineTimers,
+					);
 					if (!deps.requestCurrent(requestId, capture)) return;
 				} catch (error) {
 					if (!deps.requestCurrent(requestId, capture)) return;

@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createWisprNativeControlAuthority } from '../../src/lib/shell-controllers/wispr-native-control-authority';
+import {
+	createWisprNativeControlAuthority,
+	type WisprNativeControlAuthority,
+} from '../../src/lib/shell-controllers/wispr-native-control-authority';
 import {
 	blockedCleanupFailure,
 	createHarness,
@@ -9,6 +12,24 @@ import {
 	shareNativeControl,
 	startRecording,
 } from './shell-wispr-controller-test-support';
+
+function createCountingAuthority() {
+	const settlements: ('release' | 'poison')[] = [];
+	const authority: WisprNativeControlAuthority = {
+		acquire: () => {
+			const lease = {
+				release: () => settlements.push('release'),
+				poison: () => settlements.push('poison'),
+			};
+			return {
+				status: 'acquired',
+				lease,
+				outcome: Promise.resolve({ status: 'acquired', lease }),
+			};
+		},
+	};
+	return { authority, settlements };
+}
 
 for (const reason of ['focus-lost', 'app-inactive', 'source-change'] as const) {
 	void test(`${reason} reconciles an issued start before closing native recording`, async () => {
@@ -43,6 +64,45 @@ void test('invalidation after start settlement issues one compensating close', a
 
 	assert.equal(harness.nativeActive, false);
 	assert.equal(harness.taps.length, 2);
+});
+
+void test('repeated close during pending start reconciles one close and one exact lease', async () => {
+	const { authority, settlements } = createCountingAuthority();
+	const harness = createHarness('android', undefined, authority);
+	harness.core.setAutoStart(true);
+	await openReady(harness);
+	harness.core.onTextEntryFocused('pending');
+
+	harness.core.closeTextEntry();
+	harness.core.closeTextEntry();
+	assert.equal(harness.taps.length, 1);
+	harness.taps[0]!.resolve('started');
+	await settled();
+	assert.equal(harness.taps.length, 2);
+	harness.taps[1]!.resolve('closed');
+	await settled();
+	assert.deepEqual(settlements, ['release']);
+
+	await harness.clock.advance(5_000);
+	assert.equal(harness.taps.length, 2);
+	assert.deepEqual(settlements, ['release']);
+});
+
+void test('repeated close during recording issues one close and settles one exact lease', async () => {
+	const { authority, settlements } = createCountingAuthority();
+	const harness = createHarness('android', undefined, authority);
+	await startRecording(harness);
+
+	harness.core.closeTextEntry();
+	harness.core.closeTextEntry();
+	assert.equal(harness.taps.length, 2);
+	harness.taps[1]!.resolve('closed');
+	await settled();
+	assert.deepEqual(settlements, ['release']);
+
+	await harness.clock.advance(5_000);
+	assert.equal(harness.taps.length, 2);
+	assert.deepEqual(settlements, ['release']);
 });
 
 void test('late uncertain start success is reconciled after invalidation', async () => {

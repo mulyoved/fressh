@@ -208,3 +208,61 @@ Commands and results:
   `git diff --check`: exit 0.
 - Nonblank line verification: `wispr-start-protocol.ts` 344 and
   `wispr-focus-protocol.ts` 90, both within the 350-line cap.
+
+## CE1 wave 4 fix
+
+Implemented the complete blocking queue `CE1-T4-012` through `CE1-T4-014`.
+Issued screen priming now retains a bounded transaction-owned deadline when UI
+timer disposal runs. Native status discovery has the same 750 ms owned bound,
+clears only the current request through the existing identity checks, publishes
+the existing unavailable failure, and admits a fresh same-session retry.
+Repeated-close coverage proves idempotent cleanup for both an in-flight start
+and an established recording.
+
+Changed files:
+
+- `apps/mobile/src/lib/shell-controllers/wispr-core.ts`
+- `apps/mobile/src/lib/shell-controllers/wispr-focus-protocol.ts`
+- `apps/mobile/src/lib/shell-controllers/wispr-start-protocol.ts`
+- `apps/mobile/src/lib/shell-controllers/wispr-status-request.ts`
+- `apps/mobile/test/integration/shell-wispr-controller.test.ts`
+- `apps/mobile/test/integration/shell-wispr-controller-acquisition.test.ts`
+- `apps/mobile/test/integration/shell-wispr-controller-issued-cleanup.test.ts`
+- `docs/run/issue-141-stage-2-reconciliation-evidence.md`
+- `.superpowers/sdd/task-4-report.md`
+
+RED evidence:
+
+- Focused command:
+  `pnpm exec tsx --test test/integration/shell-wispr-controller.test.ts test/integration/shell-wispr-controller-acquisition.test.ts test/integration/shell-wispr-controller-issued-cleanup.test.ts`.
+- Result: exit 1, 63 passed and 2 failed. The pending screen-prime timer count
+  became zero on disposal, and the hung status admission outcome remained
+  `undefined` after 750 ms. Both repeated-close tests passed before production
+  changes and therefore characterize the existing idempotent behavior.
+
+GREEN evidence:
+
+- Focused command: 65 passed, 0 failed; mobile typecheck exited 0.
+- Exact Task 4 Node lane: 121 passed, 0 failed.
+- Jest component lane: 9 passed, 0 failed.
+- Final mobile typecheck, touched-file Prettier, touched-file ESLint, nonblank
+  line verification, and `git diff --check`: exit 0.
+
+Self-review:
+
+- Raw injected timers now own the two issued transaction deadlines; ordinary UI
+  fallback and retry timers remain under idempotent `cancelAll()` ownership.
+- Screen-prime timeout completion rechecks lifecycle/request identity and cannot
+  issue `tapControl` after disposal.
+- Status timeout reuses the established unavailable/failure publication and
+  warning path. A stale native completion cannot clear or publish over a newer
+  request, and deadline cleanup exceptions cannot turn a successful status into
+  failure.
+- Repeated pending-start and recording closes each produce at most one
+  compensating native close, one exact lease release, and no delayed extra tap.
+- Public types, exact lease identity, request generation, and process-lifetime
+  poison behavior are unchanged.
+- Residual risks and diagnostic-only gaps from wave 4 remain recorded: hook
+  admission is intentionally fire-and-forget, authority poison requires process
+  restart, and defensive modal/timer exception branches remain outside the
+  blocking queue.

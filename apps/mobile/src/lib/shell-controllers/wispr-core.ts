@@ -21,6 +21,7 @@ import {
 	createWisprStartProtocol,
 	type WisprTextInputBounds,
 } from './wispr-start-protocol';
+import { requestWisprStatus } from './wispr-status-request';
 import { createWisprTapRunner } from './wispr-tap-runner';
 import { createWisprTimerOwner } from './wispr-timer-owner';
 
@@ -177,10 +178,8 @@ export function createShellWisprControllerCore(
 		tapScreen: (x, y) => deps.native.tapScreen(x, y),
 		pixelRatio: deps.pixelRatio,
 		...timerOwner,
-		cleanupDeadlineTimers: {
-			setTimeout: deps.setTimeout,
-			clearTimeout: deps.clearTimeout,
-		},
+		cleanupDeadlineTimers: deps,
+		focusDeadlineTimers: deps,
 		modalIsOpen: safeModalIsOpen,
 		autoStartEnabled: () => autoStartEnabled,
 		captureLifecycle: () => sessionGeneration,
@@ -264,7 +263,10 @@ export function createShellWisprControllerCore(
 			const capture = sessionGeneration;
 			statusRequestId = requestId;
 			try {
-				const status = await deps.native.getStatus();
+				const status = await requestWisprStatus(
+					() => deps.native.getStatus(),
+					deps,
+				);
 				if (!requestCurrent(requestId, capture)) {
 					return { status: 'superseded' };
 				}

@@ -61,6 +61,40 @@ void test('rejected modal arbitration cannot report a completed Wispr open', asy
 	assert.equal(core.getSnapshot().automation.phase, 'failed');
 });
 
+void test('hung status admission times out and permits a same-session retry', async () => {
+	const harness = createHarness();
+	const firstOpening = harness.core.openTextEditor();
+	let firstOutcome: Awaited<typeof firstOpening> | undefined;
+	void firstOpening.then((outcome) => {
+		firstOutcome = outcome;
+	});
+
+	await harness.clock.advance(749);
+	assert.equal(firstOutcome, undefined);
+	await harness.clock.advance(1);
+	assert.deepEqual(firstOutcome, {
+		status: 'failed',
+		failure: {
+			reason: 'service-disabled',
+			message: 'Wispr automation is unavailable.',
+		},
+	});
+	assert.equal(harness.modalOpen, true);
+	assert.deepEqual(harness.core.getSnapshot().automation, {
+		phase: 'failed',
+		reason: 'service-disabled',
+		message: 'Wispr automation is unavailable.',
+	});
+
+	const retry = harness.core.openTextEditor();
+	assert.equal(harness.statusRequests.length, 2);
+	harness.statusRequests[1]!.resolve({
+		serviceEnabled: true,
+		serviceConnected: true,
+	});
+	assert.deepEqual(await retry, { status: 'completed' });
+});
+
 void test('unsupported platform opens editor without native work and publishes existing copy', async () => {
 	const harness = createHarness('ios');
 	assert.deepEqual(await harness.core.openTextEditor(), {

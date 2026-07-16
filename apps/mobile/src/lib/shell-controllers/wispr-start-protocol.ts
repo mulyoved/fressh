@@ -55,6 +55,7 @@ export type WisprStartProtocol = {
 
 export type CreateWisprStartProtocolInput = WisprTimerPort & {
 	cleanupDeadlineTimers: WisprTimerPort;
+	focusDeadlineTimers: WisprTimerPort;
 	tapRunner: WisprTapRunner;
 	closeCoordinator: WisprCloseCoordinator;
 	controlAuthority: WisprNativeControlAuthority;
@@ -249,6 +250,7 @@ export function createWisprStartProtocol(
 	const focusProtocol = createWisprFocusProtocol({
 		setTimeout: deps.setTimeout,
 		clearTimeout: deps.clearTimeout,
+		primeDeadlineTimers: deps.focusDeadlineTimers,
 		tapScreen: deps.tapScreen,
 		pixelRatio: deps.pixelRatio,
 		requestCurrent,
