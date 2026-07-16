@@ -39,6 +39,7 @@ import {
 	createKeyboardAnimationController,
 	createKeyboardClipboardAuthority,
 	createKeyboardControllerAdmission,
+	createKeyboardTerminalRuntimeObserver,
 	invalidateKeyboardControllerDomains,
 	subscribeKeyboardVisibility,
 	type KeyboardAnimationController,
@@ -101,15 +102,18 @@ export function useShellKeyboardController(
 	deps: UseShellKeyboardControllerInput,
 ): ShellKeyboardControllerHandle {
 	const committedDeps = useRef(deps);
+	const activitySnapshot = useSyncExternalStore(
+		deps.activity.subscribe,
+		deps.activity.getSnapshot,
+		deps.activity.getSnapshot,
+	);
 	const visibleRef = useRef(false);
 	const lastVisibleRef = useRef(false);
 	const [clipboardAuthority] = useState(createKeyboardClipboardAuthority);
 	const [flashName, setFlashName] = useState<string | null>(null);
 	const [flashOpacity] = useState(() => new Animated.Value(0));
 	const [activityTransition] = useState(() =>
-		createKeyboardActivityTransitionController(
-			deps.activity.snapshot.interactive,
-		),
+		createKeyboardActivityTransitionController(activitySnapshot.interactive),
 	);
 
 	useLayoutEffect(() => {
@@ -140,7 +144,7 @@ export function useShellKeyboardController(
 			invalidateShellTransport: (connectionId, channelId) =>
 				committedDeps.current.invalidateShellTransport(connectionId, channelId),
 			readTerminalOutputDiagnostics: () =>
-				committedDeps.current.terminalView.getOutputDiagnostics(),
+				committedDeps.current.readTerminalOutputDiagnostics(),
 			logger: deps.logger,
 		}),
 	);
@@ -188,6 +192,11 @@ export function useShellKeyboardController(
 				(nextReason) => inputCore.invalidate(nextReason),
 				(nextReason) => remoteCore.invalidate(nextReason),
 			]);
+		}),
+	);
+	const [terminalRuntimeObserver] = useState(() =>
+		createKeyboardTerminalRuntimeObserver(() => {
+			admission.invalidate('runtime-reset');
 		}),
 	);
 	const [lifecycle] = useState(() =>
@@ -272,6 +281,13 @@ export function useShellKeyboardController(
 			if (adapterRef.current === adapter) adapterRef.current = null;
 		};
 	}, [adapter]);
+	useLayoutEffect(() => {
+		try {
+			terminalRuntimeObserver.reconcile(committedDeps.current.terminalView);
+		} catch (error) {
+			safeWarn('Failed to reconcile terminal runtime identity', error);
+		}
+	});
 
 	useLayoutEffect(() => {
 		stateCore.setShellConfigState(deps.initialShellConfigState);
@@ -323,7 +339,7 @@ export function useShellKeyboardController(
 			scheduleDelayedDismiss: scheduler.schedule,
 		});
 		activityTransition.reconcile(
-			deps.activity.snapshot.interactive,
+			activitySnapshot.interactive,
 			{
 				setupInitialKeyboard: () => {
 					try {
@@ -346,9 +362,9 @@ export function useShellKeyboardController(
 		);
 		return scheduler.cancel;
 	}, [
+		activitySnapshot.generation,
+		activitySnapshot.interactive,
 		activityTransition,
-		deps.activity.snapshot.generation,
-		deps.activity.snapshot.interactive,
 		deps.platformOS,
 		safeWarn,
 		stateCore,

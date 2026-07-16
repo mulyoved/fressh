@@ -13,7 +13,7 @@ import {
 } from './controller-core';
 import { type ShellKeyboardStateSnapshot } from './keyboard-state-core';
 import { type ShellScrollbackInputPort } from './scrollback-contracts';
-import { type ShellTerminalRuntimeView } from './terminal-hook-runtime';
+import { type ShellTerminalViewPort } from './terminal-contracts';
 
 export type KeyboardInputOutcome = ControllerOutcome<{ message: string }>;
 export type KeyboardInputTimerHandle = unknown;
@@ -65,7 +65,7 @@ export type CreateShellKeyboardInputCoreOptions = {
 	state: ShellKeyboardInputStatePort;
 	scrollbackInput: ShellScrollbackInputPort;
 	terminalView: Pick<
-		ShellTerminalRuntimeView,
+		ShellTerminalViewPort,
 		| 'getRuntimeKey'
 		| 'getRuntimeInstanceId'
 		| 'isCurrentInstance'

@@ -8,6 +8,17 @@ import {
 	createShellTransportKey,
 } from '../../src/lib/shell-controllers/source-keys';
 
+export function createTestNotificationWorkmux(
+	run: (argv: string[], timeoutMs: number) => Promise<string>,
+) {
+	return {
+		command: async (argv: string[], options?: { timeoutMs?: number }) => ({
+			status: 'completed' as const,
+			output: await run(argv, options?.timeoutMs ?? 0),
+		}),
+	};
+}
+
 type Deferred<T> = {
 	promise: Promise<T>;
 	resolve(value: T): void;
@@ -129,7 +140,7 @@ export function createNotificationsHarness(
 		context: context(),
 		platformOS: 'android',
 		commandPortKey: defaultCommandPortKey,
-		runWorkmuxCommand: defaultCommandPort,
+		workmux: createTestNotificationWorkmux(defaultCommandPort),
 		consumeAuthorizedRouteToken: (
 			connectionId,
 			session,
@@ -200,7 +211,7 @@ export function createNotificationsHarness(
 		replaceCommandPort: (
 			nextPort: (argv: string[], timeoutMs: number) => Promise<string>,
 			nextKey: object = {},
-		) => core.setCommandPort(nextKey, nextPort),
+		) => core.setCommandPort(nextKey, createTestNotificationWorkmux(nextPort)),
 		restoredTokens,
 		routeCommands,
 		tick: () => new Promise((resolve) => setTimeout(resolve, 0)),

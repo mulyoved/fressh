@@ -20,6 +20,7 @@ import {
 import {
 	buildWorkmuxWindowOutput,
 	createNotificationsHarness,
+	createTestNotificationWorkmux,
 } from './shell-notifications-test-support';
 
 type Deferred<T> = {
@@ -44,7 +45,7 @@ function createCommandPortReplacementHarness() {
 		context: ShellNotificationContext;
 		route: ShellNotificationRoute;
 		commandPortKey: ShellNotificationCommandPortKey;
-		runWorkmuxCommand(argv: string[], timeoutMs: number): Promise<string>;
+		workmux: ReturnType<typeof createTestNotificationWorkmux>;
 	};
 	const oldCommands: Deferred<string>[] = [];
 	const newCommands: Deferred<string>[] = [];
@@ -66,7 +67,7 @@ function createCommandPortReplacementHarness() {
 		context: base.context(),
 		route: base.validRoute(),
 		commandPortKey: {},
-		runWorkmuxCommand: oldPort,
+		workmux: createTestNotificationWorkmux(oldPort),
 	};
 	const orchestrator = createShellNotificationHookOrchestrator(initial);
 	const core = createShellNotificationsControllerCore({
@@ -74,7 +75,7 @@ function createCommandPortReplacementHarness() {
 		context: initial.context,
 		platformOS: 'android',
 		commandPortKey: initial.commandPortKey,
-		runWorkmuxCommand: initial.runWorkmuxCommand,
+		workmux: initial.workmux,
 		consumeAuthorizedRouteToken: () => {
 			if (!authorized) return false;
 			authorized = false;
@@ -92,10 +93,10 @@ function createCommandPortReplacementHarness() {
 	});
 	const commit = (
 		commandPortKey: Input['commandPortKey'],
-		runWorkmuxCommand: Input['runWorkmuxCommand'],
+		workmux: Input['workmux'],
 		afterCommit: () => void = () => {},
 	) => {
-		const next = { ...initial, commandPortKey, runWorkmuxCommand };
+		const next = { ...initial, commandPortKey, workmux };
 		orchestrator.commitLayout(
 			next,
 			core.setCommandPort,
@@ -112,10 +113,10 @@ function createCommandPortReplacementHarness() {
 		initial,
 		newCommands,
 		newKey: {},
-		newPort,
+		newPort: createTestNotificationWorkmux(newPort),
 		oldCommands,
 		oldKey: initial.commandPortKey,
-		oldPort,
+		oldPort: initial.workmux,
 		orchestrator,
 		get restores() {
 			return restores;
@@ -145,7 +146,7 @@ void test('hook orchestration commits latest input before context and route effe
 		context: ShellNotificationContext;
 		route: ShellNotificationRoute;
 		commandPortKey: ShellNotificationCommandPortKey;
-		runWorkmuxCommand(argv: string[], timeoutMs: number): Promise<string>;
+		workmux: ReturnType<typeof createTestNotificationWorkmux>;
 		logger: { warn(message: string, error: unknown): void };
 	};
 	const harness = createNotificationsHarness();
@@ -163,10 +164,10 @@ void test('hook orchestration commits latest input before context and route effe
 		context: initialContext,
 		route: { ...harness.validRoute(), agentConnectionId: null },
 		commandPortKey: {},
-		runWorkmuxCommand: async () => {
+		workmux: createTestNotificationWorkmux(async () => {
 			observations.push('initial');
 			return '';
-		},
+		}),
 		logger: { warn: () => warnings.push('initial') },
 	};
 	const orchestrator = createShellNotificationHookOrchestrator(initial);
@@ -180,11 +181,12 @@ void test('hook orchestration commits latest input before context and route effe
 				interactive: true,
 				generation: 0,
 			}),
+			subscribe: () => () => {},
 		},
 		context: initialContext,
 		platformOS: 'android',
 		commandPortKey: initial.commandPortKey,
-		runWorkmuxCommand: initial.runWorkmuxCommand,
+		workmux: initial.workmux,
 		consumeAuthorizedRouteToken: (
 			connectionId,
 			session,
@@ -214,10 +216,10 @@ void test('hook orchestration commits latest input before context and route effe
 		context: harness.context(),
 		route: { ...harness.validRoute(), agentConnectionId: null },
 		commandPortKey: {},
-		runWorkmuxCommand: async () => {
+		workmux: createTestNotificationWorkmux(async () => {
 			observations.push('latest');
 			return '';
-		},
+		}),
 		logger: { warn: () => warnings.push('latest') },
 	};
 	const latestRouteEffectKey = orchestrator.createRouteEffectKey(latest);
@@ -296,7 +298,7 @@ void test('stable command port key accepts fresh delegates without semantic work
 	let requestedAgain = true;
 	harness.commit(
 		harness.oldKey,
-		(argv, timeoutMs) => harness.oldPort(argv, timeoutMs),
+		{ command: (argv, options) => harness.oldPort.command(argv, options) },
 		() => {
 			requestedAgain = requestAutomaticVisible(
 				harness,
@@ -306,9 +308,9 @@ void test('stable command port key accepts fresh delegates without semantic work
 		},
 	);
 	const adoptedRoute = harness.core.handleRoute(harness.initial.route);
-	harness.commit(harness.oldKey, (argv, timeoutMs) =>
-		harness.oldPort(argv, timeoutMs),
-	);
+	harness.commit(harness.oldKey, {
+		command: (argv, options) => harness.oldPort.command(argv, options),
+	});
 
 	assert.equal(harness.core.getSnapshot().commandPortRevision, 0);
 	assert.equal(requestedAgain, false);
@@ -436,7 +438,7 @@ void test('multiple layout commits retain only the latest automatic visible atte
 	harness.commit(harness.newKey, harness.newPort, () => {
 		requestAutomaticVisible(harness, automaticAcknowledger, requests);
 	});
-	harness.commit(latestKey, latestPort, () => {
+	harness.commit(latestKey, createTestNotificationWorkmux(latestPort), () => {
 		requestAutomaticVisible(harness, automaticAcknowledger, requests);
 	});
 	harness.oldCommands[0]?.resolve(buildWorkmuxWindowOutput('@12'));
@@ -607,7 +609,10 @@ void test('automatic acknowledgement keys requests by command port revision', ()
 		false,
 	);
 	const replacementPort = async () => '';
-	harness.core.setCommandPort({}, replacementPort);
+	harness.core.setCommandPort(
+		{},
+		createTestNotificationWorkmux(replacementPort),
+	);
 	assert.equal(
 		automaticAcknowledger.request(
 			activity,

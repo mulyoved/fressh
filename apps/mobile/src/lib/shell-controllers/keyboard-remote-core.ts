@@ -5,11 +5,8 @@ import {
 	type WorkmuxKeyboardCommandRunResult,
 } from '@/lib/keyboard-actions';
 import { type ShellConfigState } from '@/lib/shell-config-store';
-import {
-	runShellWorkmuxKeyboardCommand,
-	showShellWorkmuxKeyboardFailure,
-} from '../../app/shell/shell-workmux-keyboard-policy';
-
+import { showShellWorkmuxKeyboardFailure } from '../../app/shell/shell-workmux-keyboard-policy';
+import { matchControllerOutcome } from './controller-outcome';
 import {
 	type CreateShellKeyboardRemoteCoreOptions,
 	type ShellKeyboardRemoteActivitySnapshot,
@@ -25,6 +22,7 @@ import {
 	type KeyboardRemoteCancellation,
 	type QueuedKeyboardRemoteWorkmux,
 } from './keyboard-remote-support';
+import { type ShellWorkmuxOutcome } from './session-contracts';
 
 export type {
 	CreateShellKeyboardRemoteCoreOptions,
@@ -36,6 +34,33 @@ export type {
 	ShellKeyboardRemoteTargetContext,
 } from './keyboard-remote-contracts';
 
+function toBridgeWorkmuxResult(outcome: ShellWorkmuxOutcome) {
+	return matchControllerOutcome(outcome, {
+		completed: (completed) => ({
+			success: true as const,
+			output: completed.output ?? '',
+		}),
+		failed: (failed) => ({
+			success: false as const,
+			output: failed.output ?? '',
+			error: failed.failure.message,
+			...(failed.failure.failureClass
+				? { failureClass: failed.failure.failureClass }
+				: {}),
+		}),
+		superseded: () => ({
+			success: false as const,
+			output: '',
+			error: 'superseded',
+		}),
+		unavailable: () => ({
+			success: false as const,
+			output: '',
+			error: 'unavailable',
+		}),
+	});
+}
+
 export function createShellKeyboardRemoteCore({
 	initialTargetContext,
 	getActivitySnapshot,
@@ -45,7 +70,7 @@ export function createShellKeyboardRemoteCore({
 	closeCommandMenu,
 	showAlert,
 	invalidateShellTransport,
-	readTerminalOutputDiagnostics,
+	readTerminalOutputDiagnostics = () => null,
 	logger,
 	now = Date.now,
 	restartCodex = restartCodexWithBridge,
@@ -106,13 +131,20 @@ export function createShellKeyboardRemoteCore({
 			return null;
 		}
 	};
-	const sampleTerminalOutput = (phase: 'before' | 'after'): void => {
+	const sampleTerminalOutputDiagnostics = (stage: 'before' | 'after') => {
 		try {
-			const snapshot = readTerminalOutputDiagnostics();
-			if (snapshot === null) return;
-			safeInfo('Terminal output diagnostics', { phase, snapshot });
+			const diagnostics = readTerminalOutputDiagnostics();
+			if (diagnostics !== null) {
+				safeInfo('Workmux keyboard terminal output diagnostics', {
+					stage,
+					...diagnostics,
+				});
+			}
 		} catch (error) {
-			safeWarn('Failed to read terminal output diagnostics', error);
+			safeWarn('Failed to sample Workmux keyboard terminal output', {
+				stage,
+				error: getKeyboardRemoteErrorMessage(error),
+			});
 		}
 	};
 	const captureAuthority = (): KeyboardRemoteAuthority | null => {
@@ -178,55 +210,54 @@ export function createShellKeyboardRemoteCore({
 					timeoutMs,
 				});
 				if (!commandIsCurrent()) throw new Error('Workmux command superseded.');
-				return runShellWorkmuxKeyboardCommand({
-					argv: commandArgv,
-					runCommand: async (nextArgv, options) => {
-						sampleTerminalOutput('before');
-						try {
-							const result = await runnerTarget.workmuxControlChannel.command(
-								[...nextArgv],
-								options,
-							);
-							sampleTerminalOutput('after');
-							if (commandIsCurrent()) {
-								const finishedAtMs = readClock();
-								if (!commandIsCurrent()) return result;
-								safeInfo('Workmux keyboard command result', {
-									connectionId: runnerTarget.connectionId,
-									channelId: runnerTarget.channelId,
-									argv: [...nextArgv],
-									timeoutMs: options.timeoutMs,
-									...(startedAtMs === null || finishedAtMs === null
-										? {}
-										: { elapsedMs: finishedAtMs - startedAtMs }),
-									success: result.success,
-									failureClass: result.failureClass,
-									error: result.error,
-									outputBytes: result.output.length,
-								});
-							}
-							return result;
-						} catch (error) {
-							sampleTerminalOutput('after');
-							if (commandIsCurrent()) {
-								const failedAtMs = readClock();
-								if (!commandIsCurrent()) throw error;
-								safeWarn('Workmux keyboard command threw', {
-									connectionId: runnerTarget.connectionId,
-									channelId: runnerTarget.channelId,
-									argv: [...nextArgv],
-									timeoutMs: options.timeoutMs,
-									...(startedAtMs === null || failedAtMs === null
-										? {}
-										: { elapsedMs: failedAtMs - startedAtMs }),
-									error: getKeyboardRemoteErrorMessage(error),
-								});
-							}
-							throw error;
-						}
-					},
-					timeoutMs,
-				});
+				sampleTerminalOutputDiagnostics('before');
+				try {
+					const result = await runnerTarget.workmux.command(commandArgv, {
+						timeoutMs,
+					});
+					if (commandIsCurrent()) {
+						const finishedAtMs = readClock();
+						if (!commandIsCurrent()) return result;
+						safeInfo('Workmux keyboard command result', {
+							connectionId: runnerTarget.connectionId,
+							channelId: runnerTarget.channelId,
+							argv: commandArgv,
+							timeoutMs,
+							...(startedAtMs === null || finishedAtMs === null
+								? {}
+								: { elapsedMs: finishedAtMs - startedAtMs }),
+							status: result.status,
+							failureClass:
+								result.status === 'failed'
+									? result.failure.failureClass
+									: undefined,
+							error:
+								result.status === 'failed' ? result.failure.message : undefined,
+							outputBytes: result.output?.length ?? 0,
+						});
+					}
+					return result;
+				} catch (error) {
+					if (commandIsCurrent()) {
+						const failedAtMs = readClock();
+						if (!commandIsCurrent()) throw error;
+						safeWarn('Workmux keyboard command threw', {
+							connectionId: runnerTarget.connectionId,
+							channelId: runnerTarget.channelId,
+							argv: commandArgv,
+							timeoutMs,
+							...(startedAtMs === null || failedAtMs === null
+								? {}
+								: { elapsedMs: failedAtMs - startedAtMs }),
+							error: getKeyboardRemoteErrorMessage(error),
+						});
+					}
+					throw error;
+				} finally {
+					if (commandIsCurrent()) {
+						sampleTerminalOutputDiagnostics('after');
+					}
+				}
 			},
 			showFailure: ({ message, failureClass }) => {
 				if (!commandIsCurrent()) return;
@@ -478,31 +509,32 @@ export function createShellKeyboardRemoteCore({
 							command: (argv, commandOptions) => {
 								if (!requestIsCurrent()) {
 									return Promise.resolve({
-										success: false,
+										success: false as const,
 										output: '',
-										error: 'Codex restart superseded.',
+										error: 'superseded',
 									});
 								}
-								return authority.target.workmuxControlChannel.command(
-									[...argv],
-									commandOptions,
-								);
+								return authority.target.workmux
+									.command([...argv], commandOptions)
+									.then(toBridgeWorkmuxResult);
 							},
 							operation: (request, commandOptions) => {
 								if (!requestIsCurrent()) {
 									return Promise.resolve({
-										success: false,
+										success: false as const,
 										output: '',
-										error: 'Codex restart superseded.',
+										error: 'superseded',
 									});
 								}
-								return authority.target.workmuxControlChannel.operation(
-									{
-										operation: request.operation,
-										params: { ...request.params },
-									},
-									commandOptions,
-								);
+								return authority.target.workmux
+									.operation(
+										{
+											operation: request.operation,
+											params: { ...request.params },
+										},
+										commandOptions,
+									)
+									.then(toBridgeWorkmuxResult);
 							},
 						},
 						showFailure: (message) => {

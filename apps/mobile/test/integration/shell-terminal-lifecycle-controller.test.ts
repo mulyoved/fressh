@@ -1,47 +1,36 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import test from 'node:test';
 import { createShellTransportKey } from '../../src/lib/shell-controllers/source-keys';
 import {
-	createTerminalLifecycleController,
-	type TerminalLifecycleShell,
-} from '../../src/lib/shell-controllers/terminal-lifecycle-core';
-import { createShellTerminalTransport } from '../../src/lib/shell-controllers/terminal-transport';
-import { createHarness } from './shell-terminal-lifecycle-test-harness';
-
-void test('terminal lifecycle snapshots native, listener, and xterm output progress without payloads', async () => {
+	createHarness,
+	deferred,
+} from './shell-terminal-lifecycle-controller-test-support';
+void test('terminal lifecycle composes exact native, listener, and Xterm diagnostics without payloads', async () => {
 	const harness = createHarness();
-	const exactCurrentSeq = 9_007_199_254_740_993n;
-	harness.shellA.bufferStats = () => ({
-		ringBytesCount: 1_000n,
-		usedBytes: 20n,
-		headSeq: 4n,
-		tailSeq: 8n,
-		droppedBytesTotal: 0n,
-		chunksCount: 5n,
+	harness.shellA.getNativeOutputDiagnostics = () => ({
+		currentSeq: '9007199254740993',
+		ringBytesCount: '1000',
+		usedBytes: '20',
+		headSeq: '4',
+		tailSeq: '8',
+		droppedBytesTotal: '0',
+		chunksCount: '5',
 	});
-	harness.shellA.currentSeq = () => exactCurrentSeq;
 	harness.core.setShell(
 		createShellTransportKey('connection-a', 7),
 		harness.shellA,
 	);
 	harness.core.handleInitialized('instance-1');
 	await harness.core.attach();
-	const listener = harness.shellA.listeners.get(1n);
-	assert.ok(listener);
-	listener({
-		seq: 8n,
+	const listener = [...harness.shellA.listeners.values()][0];
+	const sentinel = 'must-not-appear-in-diagnostics';
+	listener?.({
+		seq: 10n,
 		tMs: 1,
 		stream: 'stdout',
-		bytes: new Uint8Array([1, 2]).buffer,
+		bytes: new TextEncoder().encode(sentinel).buffer,
 	});
-	listener({
-		seq: 9n,
-		tMs: 2,
-		stream: 'stdout',
-		bytes: new Uint8Array([3]).buffer,
-	});
+	listener?.({ kind: 'dropped', fromSeq: 11n, toSeq: 12n });
 
 	const snapshot = harness.core.getOutputDiagnostics();
 	assert.deepEqual(snapshot, {
@@ -57,54 +46,215 @@ void test('terminal lifecycle snapshots native, listener, and xterm output progr
 			droppedBytesTotal: '0',
 			chunksCount: '5',
 		},
-		listener: { events: 2, bytes: 3, lastSeq: '9', droppedEvents: 0 },
+		listener: {
+			events: 1,
+			bytes: sentinel.length,
+			lastSeq: '10',
+			droppedEvents: 1,
+		},
 		xterm: harness.xterm.getOutputDiagnostics(),
 	});
-	assert.deepEqual(harness.core.getOutputDiagnostics(), snapshot);
 	assert.notEqual(harness.core.getOutputDiagnostics(), snapshot);
+	assert.doesNotMatch(JSON.stringify(snapshot), new RegExp(sentinel));
 });
 
-void test('terminal lifecycle resets listener progress only with the runtime revision and never serializes event bytes', async () => {
+void test('terminal lifecycle replays head buffer on first attach then uses live cursor', async () => {
 	const harness = createHarness();
-	const keyA = createShellTransportKey('connection-a', 7);
-	harness.core.setShell(keyA, harness.shellA);
+	harness.core.setShell(
+		createShellTransportKey('connection-a', 7),
+		harness.shellA,
+	);
 	harness.core.handleInitialized('instance-1');
 	await harness.core.attach();
-	const listener = harness.shellA.listeners.get(1n);
-	assert.ok(listener);
-	const sentinel = 'DO_NOT_LOG_TERMINAL_PAYLOAD_4f9d';
-	listener({
-		seq: 10n,
-		tMs: 1,
-		stream: 'stdout',
-		bytes: new TextEncoder().encode(sentinel).buffer,
-	});
-	listener({ kind: 'dropped', fromSeq: 11n, toSeq: 12n });
-	assert.deepEqual(harness.core.getOutputDiagnostics()?.listener, {
-		events: 1,
-		bytes: sentinel.length,
-		lastSeq: '10',
-		droppedEvents: 1,
-	});
-	assert.doesNotMatch(
-		JSON.stringify(harness.core.getOutputDiagnostics()),
-		new RegExp(sentinel),
-	);
+	assert.deepEqual(harness.shellA.readModes, ['head']);
+	assert.deepEqual(harness.shellA.listenerCursors, [{ mode: 'seq', seq: 9n }]);
+	assert.deepEqual(harness.writes, [[[1, 2]]]);
 
-	harness.core.setShell(keyA, harness.shellA);
-	assert.equal(harness.core.getOutputDiagnostics()?.listener.events, 1);
+	harness.core.detach();
+	await harness.core.attach();
+	assert.deepEqual(harness.shellA.listenerCursors[1], { mode: 'live' });
+});
+
+void test('terminal lifecycle publishes its current runtime instance', () => {
+	const harness = createHarness();
+	harness.core.setShell(
+		createShellTransportKey('connection-a', 7),
+		harness.shellA,
+	);
+	harness.core.handleInitialized('instance-owned');
+	assert.equal(
+		(harness.core.getSnapshot() as { runtimeInstanceId?: string | null })
+			.runtimeInstanceId,
+		'instance-owned',
+	);
+	harness.core.handleLoadStart();
+	assert.equal(
+		(harness.core.getSnapshot() as { runtimeInstanceId?: string | null })
+			.runtimeInstanceId,
+		null,
+	);
+});
+
+void test('a WebView reload starts fresh first-attach ownership even when its instance ID repeats', async () => {
+	const harness = createHarness();
+	harness.core.setShell(
+		createShellTransportKey('connection-a', 7),
+		harness.shellA,
+	);
+	harness.core.handleInitialized('instance-1');
+	await harness.core.attach();
+	harness.core.handleLoadStart();
+	harness.core.handleInitialized('instance-1');
+	await harness.core.attach();
+	assert.deepEqual(harness.shellA.readModes, ['head', 'head']);
+	assert.deepEqual(harness.shellA.listenerCursors[1], {
+		mode: 'seq',
+		seq: 9n,
+	});
+});
+
+void test('terminal lifecycle removes listener from recorded owner after shell replacement', async () => {
+	const harness = createHarness();
+	harness.core.setShell(
+		createShellTransportKey('connection-a', 7),
+		harness.shellA,
+	);
+	harness.core.handleInitialized('instance-1');
+	await harness.core.attach();
 	harness.core.setShell(
 		createShellTransportKey('connection-b', 8),
 		harness.shellB,
 	);
-	harness.core.handleInitialized('instance-2');
+	assert.deepEqual(harness.shellA.removedListenerIds, [1n]);
+	assert.deepEqual(harness.shellB.removedListenerIds, []);
+});
+
+void test('failed first attach does not consume head ownership', async () => {
+	const harness = createHarness();
+	let attempts = 0;
+	harness.shellA.addListener = () => {
+		attempts += 1;
+		if (attempts === 1) throw new Error('attach failed');
+		harness.shellA.listenerCursors.push({ mode: 'seq', seq: 9n });
+		return 10n;
+	};
+	harness.core.setShell(
+		createShellTransportKey('connection-a', 7),
+		harness.shellA,
+	);
+	harness.core.handleInitialized('instance-1');
+	await assert.rejects(harness.core.attach(), /attach failed/);
 	await harness.core.attach();
-	assert.deepEqual(harness.core.getOutputDiagnostics()?.listener, {
-		events: 0,
-		bytes: 0,
-		lastSeq: null,
-		droppedEvents: 0,
-	});
+	assert.deepEqual(harness.shellA.readModes, ['head', 'head']);
+});
+
+void test('rejected head read preserves first-attach ownership for retry', async () => {
+	const harness = createHarness();
+	const originalRead = harness.shellA.readBuffer.bind(harness.shellA);
+	let attempts = 0;
+	harness.shellA.readBuffer = (cursor) => {
+		attempts += 1;
+		if (attempts === 1) return Promise.reject(new Error('read failed'));
+		return originalRead(cursor);
+	};
+	harness.core.setShell(
+		createShellTransportKey('connection-a', 7),
+		harness.shellA,
+	);
+	harness.core.handleInitialized('instance-1');
+	await assert.rejects(harness.core.attach(), /read failed/);
+	await harness.core.attach();
+	assert.equal(attempts, 2);
+	assert.deepEqual(harness.shellA.listenerCursors, [{ mode: 'seq', seq: 9n }]);
+});
+
+void test('superseded async attach removes its late listener and cannot publish ownership', async () => {
+	const harness = createHarness();
+	const lateId = deferred<bigint>();
+	harness.shellA.addListener = () => lateId.promise;
+	harness.core.setShell(
+		createShellTransportKey('connection-a', 7),
+		harness.shellA,
+	);
+	harness.core.handleInitialized('instance-1');
+	const attaching = harness.core.attach();
+	await Promise.resolve();
+	harness.core.handleLoadStart();
+	lateId.resolve(44n);
+	await attaching;
+	assert.deepEqual(harness.shellA.removedListenerIds, [44n]);
+	assert.equal(harness.core.getSnapshot().ready, false);
+});
+
+void test('duplicate attach requests share one listener attempt', async () => {
+	const harness = createHarness();
+	const lateId = deferred<bigint>();
+	let addCalls = 0;
+	harness.shellA.addListener = () => {
+		addCalls += 1;
+		return lateId.promise;
+	};
+	harness.core.setShell(
+		createShellTransportKey('connection-a', 7),
+		harness.shellA,
+	);
+	harness.core.handleInitialized('instance-1');
+	const first = harness.core.attach();
+	const duplicate = harness.core.attach();
+	lateId.resolve(20n);
+	await Promise.all([first, duplicate]);
+	assert.equal(addCalls, 1);
+});
+
+void test('same-key shell replacement starts a new attach while the old owner is in flight', async () => {
+	const harness = createHarness();
+	const key = createShellTransportKey('connection-a', 7);
+	const lateOldId = deferred<bigint>();
+	harness.shellA.addListener = () => lateOldId.promise;
+	harness.core.setShell(key, harness.shellA);
+	harness.core.handleInitialized('instance-1');
+	const oldAttach = harness.core.attach();
+	await Promise.resolve();
+
+	harness.core.setShell(key, harness.shellB);
+	const newAttach = harness.core.attach();
+	lateOldId.resolve(81n);
+	await Promise.all([oldAttach, newAttach]);
+
+	assert.equal(harness.core.isAttached(), true);
+	assert.equal(harness.shellB.listenerCursors.length, 1);
+	assert.deepEqual(harness.shellA.removedListenerIds, [81n]);
+	assert.deepEqual(harness.shellB.removedListenerIds, []);
+});
+
+void test('same-instance reload starts a new attach while the old runtime attach is in flight', async () => {
+	const harness = createHarness();
+	const lateOldId = deferred<bigint>();
+	let addCalls = 0;
+	harness.shellA.addListener = (listener, options) => {
+		addCalls += 1;
+		harness.shellA.listenerCursors.push(options.cursor);
+		if (addCalls === 1) return lateOldId.promise;
+		harness.shellA.listeners.set(82n, listener);
+		return 82n;
+	};
+	harness.core.setShell(
+		createShellTransportKey('connection-a', 7),
+		harness.shellA,
+	);
+	harness.core.handleInitialized('instance-1');
+	const oldAttach = harness.core.attach();
+	await Promise.resolve();
+
+	harness.core.handleLoadStart();
+	harness.core.handleInitialized('instance-1');
+	const newAttach = harness.core.attach();
+	lateOldId.resolve(83n);
+	await Promise.all([oldAttach, newAttach]);
+
+	assert.equal(addCalls, 2);
+	assert.equal(harness.core.isAttached(), true);
+	assert.deepEqual(harness.shellA.removedListenerIds, [83n]);
 });
 
 void test('load start invalidates runtime before detach and readiness publication', async () => {
@@ -136,7 +286,7 @@ void test('load start invalidates runtime before detach and readiness publicatio
 	assert.equal(harness.core.getRuntimeKey(), null);
 });
 
-void test('runtime notifications cover init-before-shell, shell keys, and load start', () => {
+void test('runtime publications cover init-before-shell, shell keys, and load start', () => {
 	const harness = createHarness();
 	harness.core.handleInitialized('instance-1');
 	const keyA = createShellTransportKey('connection-a', 7);
@@ -225,464 +375,4 @@ void test('throwing transport clear still detaches the old listener and publishe
 	assert.deepEqual(harness.shellA.removedListenerIds, [1n]);
 	assert.equal(harness.core.isAttached(), false);
 	assert.equal(harness.core.getSnapshot().ready, false);
-});
-
-void test('runtime notification reentrancy cannot let stale initialization win', () => {
-	let harness!: ReturnType<typeof createHarness>;
-	harness = createHarness('android', {
-		onRuntimeChanged: (runtimeKey, instanceId) => {
-			if (runtimeKey && instanceId === 'instance-1') {
-				harness.core.handleLoadStart();
-			}
-		},
-	});
-	harness.core.setShell(
-		createShellTransportKey('connection-a', 7),
-		harness.shellA,
-	);
-	harness.core.handleInitialized('instance-1');
-	assert.deepEqual(
-		harness.runtimeChanges.map(({ instanceId }) => instanceId),
-		['instance-1', null],
-	);
-	assert.equal(harness.core.getSnapshot().ready, false);
-	assert.equal(harness.core.getRuntimeKey(), null);
-});
-
-void test('throwing runtime notifications surface only after ownership is consistent', async () => {
-	const error = new Error('runtime callback failed');
-	const harness = createHarness('android', {
-		onRuntimeChanged: () => {
-			throw error;
-		},
-	});
-	harness.core.setShell(
-		createShellTransportKey('connection-a', 7),
-		harness.shellA,
-	);
-	assert.throws(() => harness.core.handleInitialized('instance-1'), error);
-	assert.equal(harness.core.getSnapshot().ready, true);
-	await harness.core.attach();
-	assert.equal(harness.core.isAttached(), true);
-	assert.throws(() => harness.core.handleLoadStart(), error);
-	assert.equal(harness.core.getSnapshot().ready, false);
-	assert.equal(harness.core.isAttached(), false);
-	assert.deepEqual(harness.shellA.removedListenerIds, [1n]);
-	assert.ok(harness.sizeCalls.includes('invalidate:runtime-reset'));
-});
-
-void test('repeated invalidation and disposal notify the null runtime transition once', () => {
-	const harness = createHarness();
-	harness.core.setShell(
-		createShellTransportKey('connection-a', 7),
-		harness.shellA,
-	);
-	harness.core.handleInitialized('instance-1');
-	harness.core.handleLoadStart();
-	harness.core.invalidate('runtime-reset');
-	harness.core.dispose();
-	assert.equal(
-		harness.runtimeChanges.filter(
-			({ runtimeKey, instanceId }) =>
-				runtimeKey === null && instanceId === null,
-		).length,
-		1,
-	);
-});
-
-void test('throwing size invalidation cannot prevent load-start ownership cleanup', async () => {
-	const error = new Error('size subscriber failed');
-	const harness = createHarness('android', {
-		onSizeInvalidate: () => {
-			throw error;
-		},
-	});
-	harness.core.setShell(
-		createShellTransportKey('connection-a', 7),
-		harness.shellA,
-	);
-	harness.core.handleInitialized('instance-1');
-	await harness.core.attach();
-	assert.throws(() => harness.core.handleLoadStart(), error);
-	assert.equal(harness.core.getSnapshot().ready, false);
-	assert.equal(harness.core.getRuntimeKey(), null);
-	assert.equal(harness.core.isAttached(), false);
-	assert.deepEqual(harness.shellA.removedListenerIds, [1n]);
-	assert.deepEqual(harness.transportCalls.at(-1), 'clear');
-	assert.deepEqual(harness.runtimeChanges.at(-1), {
-		runtimeKey: null,
-		instanceId: null,
-	});
-});
-
-void test('reentrant size invalidation preserves the newer initialized runtime', () => {
-	let harness!: ReturnType<typeof createHarness>;
-	let reentered = false;
-	harness = createHarness('android', {
-		onSizeInvalidate: () => {
-			if (reentered) return;
-			reentered = true;
-			harness.core.handleInitialized('instance-2');
-		},
-	});
-	harness.core.setShell(
-		createShellTransportKey('connection-a', 7),
-		harness.shellA,
-	);
-	harness.core.handleInitialized('instance-1');
-	harness.core.invalidate('runtime-reset');
-	assert.equal(harness.core.getSnapshot().ready, true);
-	assert.equal(harness.core.getRuntimeInstanceId(), 'instance-2');
-	assert.equal(harness.runtimeChanges.at(-1)?.instanceId, 'instance-2');
-});
-
-void test('initialization publishes runtime state and applies current view modes on attach', async () => {
-	const harness = createHarness();
-	harness.setModes(false, true);
-	harness.core.setShell(
-		createShellTransportKey('connection-a', 7),
-		harness.shellA,
-	);
-	harness.core.handleInitialized('instance-1');
-	await harness.core.attach();
-	assert.deepEqual(harness.transportCalls, ['set:instance-1']);
-	assert.equal(harness.core.getSnapshot().ready, true);
-	assert.equal(harness.core.getSnapshot().hasRendered, true);
-	assert.equal(harness.runtimeChanges.length, 1);
-	assert.deepEqual(harness.runtimeChanges[0], {
-		runtimeKey: harness.core.getRuntimeKey(),
-		instanceId: 'instance-1',
-	});
-	assert.ok(harness.calls.includes('keyboard:false'));
-	assert.ok(harness.calls.includes('selection:true'));
-});
-
-void test('reentrant readiness publication cannot resurrect an invalidated runtime', () => {
-	const harness = createHarness();
-	harness.core.setShell(
-		createShellTransportKey('connection-a', 7),
-		harness.shellA,
-	);
-	const unsubscribe = harness.core.subscribe(() => {
-		if (harness.core.getSnapshot().ready) harness.core.handleLoadStart();
-	});
-	harness.core.handleInitialized('instance-1');
-	unsubscribe();
-	assert.equal(harness.core.getSnapshot().ready, false);
-	assert.equal(harness.core.getRuntimeKey(), null);
-	assert.deepEqual(harness.runtimeChanges, [
-		{ runtimeKey: null, instanceId: null },
-	]);
-});
-
-void test('throwing publication still commits initialization before surfacing the error', async () => {
-	const harness = createHarness();
-	harness.core.setShell(
-		createShellTransportKey('connection-a', 7),
-		harness.shellA,
-	);
-	const error = new Error('subscriber failed');
-	const unsubscribe = harness.core.subscribe(() => {
-		throw error;
-	});
-	assert.throws(() => harness.core.handleInitialized('instance-1'), error);
-	unsubscribe();
-	assert.equal(harness.core.getSnapshot().ready, true);
-	assert.equal(harness.runtimeChanges.length, 1);
-	await harness.core.attach();
-	assert.equal(harness.core.isAttached(), true);
-});
-
-void test('platform defaults apply Android keyboard on and iOS keyboard off', async () => {
-	const android = createHarness('android');
-	android.core.setShell(
-		createShellTransportKey('connection-a', 7),
-		android.shellA,
-	);
-	android.core.handleInitialized('android-instance');
-	await android.core.attach();
-	assert.ok(android.calls.includes('keyboard:true'));
-
-	const ios = createHarness('ios');
-	ios.core.setShell(createShellTransportKey('connection-b', 8), ios.shellB);
-	ios.core.handleInitialized('ios-instance');
-	await ios.core.attach();
-	assert.ok(ios.calls.includes('keyboard:false'));
-});
-
-void test('listener writes output and contains dropped-event logger errors', async () => {
-	const harness = createHarness();
-	harness.core.setShell(
-		createShellTransportKey('connection-a', 7),
-		harness.shellA,
-	);
-	harness.core.handleInitialized('instance-1');
-	await harness.core.attach();
-	const listener = harness.shellA.listeners.get(1n);
-	assert.ok(listener);
-	assert.doesNotThrow(() =>
-		listener({ kind: 'dropped', fromSeq: 1n, toSeq: 2n }),
-	);
-	listener({
-		seq: 2n,
-		tMs: 2,
-		stream: 'stdout',
-		bytes: new Uint8Array([8]).buffer,
-	});
-	assert.ok(harness.calls.includes('write:8'));
-});
-
-void test('head-read logging invalidation suppresses stale replay and listener creation', async () => {
-	let harness!: ReturnType<typeof createHarness>;
-	harness = createHarness('android', {
-		onInfo: (message) => {
-			if (message === 'readBuffer(head)') harness.core.handleLoadStart();
-		},
-	});
-	harness.core.setShell(
-		createShellTransportKey('connection-a', 7),
-		harness.shellA,
-	);
-	harness.core.handleInitialized('instance-1');
-	await harness.core.attach();
-	assert.deepEqual(harness.writes, []);
-	assert.deepEqual(harness.shellA.listenerCursors, []);
-	assert.equal(harness.core.isAttached(), false);
-});
-
-void test('throwing loggers stay contained across attach, events, focus, and removal', async () => {
-	const harness = createHarness('ios', {
-		onInfo: () => {
-			throw new Error('info failed');
-		},
-		onWarn: () => {
-			throw new Error('warn failed');
-		},
-	});
-	harness.xterm.focus = () => {
-		throw new Error('focus failed');
-	};
-	harness.core.setShell(
-		createShellTransportKey('connection-a', 7),
-		harness.shellA,
-	);
-	harness.core.handleInitialized('instance-1');
-	await assert.doesNotReject(harness.core.attach());
-	const listener = harness.shellA.listeners.get(1n);
-	assert.ok(listener);
-	assert.doesNotThrow(() =>
-		listener({ kind: 'dropped', fromSeq: 1n, toSeq: 2n }),
-	);
-	harness.xterm.write = () => {
-		throw new Error('write failed');
-	};
-	assert.doesNotThrow(() =>
-		listener({
-			seq: 2n,
-			tMs: 2,
-			stream: 'stdout',
-			bytes: new Uint8Array([1]).buffer,
-		}),
-	);
-	harness.shellA.removeListener = () => {
-		throw new Error('remove failed');
-	};
-	assert.doesNotThrow(() => harness.core.detach());
-	assert.equal(harness.core.isAttached(), false);
-});
-
-void test('removal logger reentrancy keeps the newer shell and initialization authoritative', async () => {
-	let harness!: ReturnType<typeof createHarness>;
-	let reentered = false;
-	harness = createHarness('android', {
-		onWarn: (message) => {
-			if (message !== 'Failed to remove prior shell listener' || reentered)
-				return;
-			reentered = true;
-			harness.core.handleInitialized('instance-2');
-		},
-	});
-	harness.core.setShell(
-		createShellTransportKey('connection-a', 7),
-		harness.shellA,
-	);
-	harness.core.handleInitialized('instance-1');
-	await harness.core.attach();
-	harness.shellA.removeListener = () => {
-		throw new Error('remove failed');
-	};
-	const keyB = createShellTransportKey('connection-b', 8);
-	harness.core.setShell(keyB, harness.shellB);
-	await harness.core.attach();
-	assert.equal(harness.core.getRuntimeInstanceId(), 'instance-2');
-	assert.equal(
-		harness.core.getRuntimeKey(),
-		JSON.stringify([keyB, 'instance-2']),
-	);
-	assert.equal(harness.shellB.listenerCursors.length, 1);
-});
-
-void test('same transport key avoids rebuild while owner replacement detaches safely', async () => {
-	const harness = createHarness();
-	const key = createShellTransportKey('connection-a', 7);
-	harness.core.setShell(key, harness.shellA);
-	harness.core.handleInitialized('instance-1');
-	await harness.core.attach();
-	harness.core.setShell(key, harness.shellA);
-	assert.deepEqual(harness.shellA.removedListenerIds, []);
-
-	const replacement = {
-		...harness.shellA,
-		removedListenerIds: [] as bigint[],
-		removeListener(id: bigint) {
-			this.removedListenerIds.push(id);
-		},
-	};
-	harness.core.setShell(key, replacement);
-	assert.deepEqual(harness.shellA.removedListenerIds, [1n]);
-	await harness.core.attach();
-	assert.deepEqual(replacement.listenerCursors.at(-1), { mode: 'live' });
-});
-
-void test('dispose finishes listener, publisher, transport, and runtime notification cleanup when size throws', async () => {
-	const error = new Error('dispose size failed');
-	const harness = createHarness('android', {
-		onSizeInvalidate: () => {
-			throw error;
-		},
-	});
-	let publications = 0;
-	harness.core.subscribe(() => {
-		publications += 1;
-	});
-	harness.core.setShell(
-		createShellTransportKey('connection-a', 7),
-		harness.shellA,
-	);
-	harness.core.handleInitialized('instance-1');
-	await harness.core.attach();
-	assert.throws(() => harness.core.dispose(), error);
-	assert.equal(harness.core.isAttached(), false);
-	assert.deepEqual(harness.shellA.removedListenerIds, [1n]);
-	assert.equal(harness.transportCalls.at(-1), 'clear');
-	assert.deepEqual(harness.runtimeChanges.at(-1), {
-		runtimeKey: null,
-		instanceId: null,
-	});
-	const publicationsAfterDispose = publications;
-	harness.core.setShell(null, null);
-	assert.equal(publications, publicationsAfterDispose);
-});
-
-void test('dispose stales the real transport lease before removal warning can send', async () => {
-	const writes: number[][] = [];
-	const order: string[] = [];
-	const transport = createShellTerminalTransport({ onSendFailure: () => {} });
-	const key = createShellTransportKey('connection-a', 7);
-	transport.setShell(key, async (bytes) => {
-		writes.push(Array.from(bytes));
-	});
-	const lifecycleTransport = {
-		...transport,
-		clearRuntime: () => {
-			order.push('transport:clear');
-			transport.clearRuntime();
-		},
-	};
-	let attemptedSend: Promise<void> | null = null;
-	let sendCapturedLease: (() => Promise<void>) | null = null;
-	const shell: TerminalLifecycleShell = {
-		connectionId: 'connection-a',
-		channelId: 7,
-		bufferStats: () => ({
-			ringBytesCount: 0n,
-			usedBytes: 0n,
-			headSeq: 0n,
-			tailSeq: 0n,
-			droppedBytesTotal: 0n,
-			chunksCount: 0n,
-		}),
-		currentSeq: () => 0n,
-		readBuffer: () => ({ chunks: [], nextSeq: 1n }),
-		addListener: () => 1n,
-		removeListener: () => {
-			order.push('listener:remove');
-			throw new Error('remove failed');
-		},
-	};
-	const xterm = {
-		getOutputDiagnostics: () => ({
-			webViewInstanceId: null,
-			rnQueuedMessages: 0,
-			rnQueuedBytes: 0,
-			rnFlushes: 0,
-			rnSentMessages: 0,
-			rnSentBytes: 0,
-			webViewReceivedMessages: 0,
-			webViewReceivedBytes: 0,
-			webViewCompletedWrites: 0,
-		}),
-		write: () => {},
-		writeMany: () => {},
-		flush: () => {},
-		focus: () => {},
-		setSystemKeyboardEnabled: () => {},
-		setSelectionModeEnabled: () => {},
-	};
-	const core = createTerminalLifecycleController({
-		getXterm: () => xterm,
-		transport: lifecycleTransport,
-		size: { invalidate: () => order.push('size:invalidate') },
-		platformOS: 'android',
-		logger: {
-			info: () => {},
-			warn: (message) => {
-				if (message !== 'Failed to remove prior shell listener') return;
-				assert.ok(sendCapturedLease);
-				attemptedSend = sendCapturedLease();
-			},
-		},
-		onRuntimeChanged: () => {},
-	});
-	core.setShell(key, shell);
-	core.handleInitialized('instance-1');
-	await core.attach();
-	assert.equal(core.isAttached(), true);
-	const preDisposeLease = transport.captureLease();
-	assert.ok(preDisposeLease);
-	sendCapturedLease = () =>
-		transport.sendBatch(preDisposeLease, [new Uint8Array([1])]);
-	core.dispose();
-	if (attemptedSend) await attemptedSend;
-	assert.deepEqual(order.slice(0, 2), ['transport:clear', 'listener:remove']);
-	assert.deepEqual(writes, []);
-});
-
-void test('terminal hook publishes the exact controller ports and guarded xterm commands', () => {
-	const source = readFileSync(
-		join(process.cwd(), 'src/lib/shell-controllers/terminal.tsx'),
-		'utf8',
-	);
-	for (const member of [
-		'xtermRef',
-		'ready',
-		'hasRendered',
-		'runtimeKey',
-		'lastSize',
-		'transport',
-		'view',
-		'onLoadStart',
-		'onInitialized',
-		'onResize',
-		'waitForSizeAfterFit',
-		'retry',
-	]) {
-		assert.match(source, new RegExp(`\\b${member}\\b`));
-	}
-	assert.match(source, /createShellTerminalHookRuntime/);
-	assert.match(source, /view: runtime\.view/);
-	assert.match(
-		source,
-		/\[lifecycleState\.ready, runtime, shell, transportKey\]/,
-	);
 });

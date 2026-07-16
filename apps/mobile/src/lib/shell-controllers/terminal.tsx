@@ -1,4 +1,3 @@
-import { type SshShell } from '@fressh/react-native-uniffi-russh';
 import { type XtermWebViewHandle } from '@fressh/react-native-xtermjs-webview';
 import {
 	type RefObject,
@@ -10,11 +9,11 @@ import {
 	useSyncExternalStore,
 } from 'react';
 import { type TerminalFitSize } from '../terminal-fit-runner';
-import { type ShellTransportKey } from './source-keys';
+import { type ShellTerminalSourcePort } from './session-contracts';
+import { type ShellTerminalViewPort } from './terminal-contracts';
 import {
 	createShellTerminalHookRuntime,
 	type ShellTerminalRuntimeRouter,
-	type ShellTerminalRuntimeView,
 } from './terminal-hook-runtime';
 import { type TerminalLifecycleLogger } from './terminal-lifecycle-core';
 import {
@@ -22,16 +21,20 @@ import {
 	type TerminalRuntimeKey,
 } from './terminal-transport';
 
-export type ShellTerminalViewPort = ShellTerminalRuntimeView;
+export type { ShellTerminalViewPort } from './terminal-contracts';
 
 export type ShellTerminalControllerHandle = {
 	xtermRef: RefObject<XtermWebViewHandle | null>;
 	ready: boolean;
 	hasRendered: boolean;
 	runtimeKey: TerminalRuntimeKey | null;
-	lastSize: TerminalFitSize | null;
+	runtimeInstanceId: string | null;
 	transport: ShellTerminalTransportPort;
 	view: ShellTerminalViewPort;
+	getOutputDiagnostics(): ReturnType<
+		ReturnType<typeof createShellTerminalHookRuntime>['getOutputDiagnostics']
+	>;
+	getLastSize(): TerminalFitSize | null;
 	onLoadStart(): void;
 	onInitialized(instanceId: string): void;
 	onResize(cols: number, rows: number): void;
@@ -42,35 +45,26 @@ export type ShellTerminalControllerHandle = {
 export type ShellTerminalRouter = ShellTerminalRuntimeRouter;
 
 export type UseShellTerminalControllerInput = {
-	shell: SshShell | null | undefined;
-	transportKey: ShellTransportKey | null;
+	source: ShellTerminalSourcePort;
 	platformOS: string;
 	systemKeyboardEnabled: boolean;
-	selectionModeEnabled: boolean;
 	logger: TerminalLifecycleLogger;
 	router: ShellTerminalRouter;
-	onRuntimeChanged(
-		runtimeKey: TerminalRuntimeKey | null,
-		instanceId: string | null,
-	): void;
 };
 
 export function useShellTerminalController({
-	shell,
-	transportKey,
+	source,
 	platformOS,
 	systemKeyboardEnabled,
-	selectionModeEnabled,
 	logger,
 	router,
-	onRuntimeChanged,
 }: UseShellTerminalControllerInput): ShellTerminalControllerHandle {
 	const xtermRef = useRef<XtermWebViewHandle>(null);
 	const [runtime] = useState(() =>
 		createShellTerminalHookRuntime({
 			xtermRef,
 			platformOS,
-			dependencies: { logger, router, onRuntimeChanged },
+			dependencies: { logger, router },
 		}),
 	);
 	const { transport, size, lifecycle } = runtime;
@@ -79,30 +73,24 @@ export function useShellTerminalController({
 		lifecycle.getSnapshot,
 		lifecycle.getSnapshot,
 	);
-	const sizeState = useSyncExternalStore(
-		size.subscribe,
-		size.getSnapshot,
-		size.getSnapshot,
-	);
+	useLayoutEffect(() => {
+		runtime.updateDependencies({ logger, router });
+	}, [logger, router, runtime]);
 
 	useLayoutEffect(() => {
-		runtime.updateDependencies({ logger, router, onRuntimeChanged });
-	}, [logger, onRuntimeChanged, router, runtime]);
-
-	useLayoutEffect(() => {
-		runtime.updateShell(transportKey, shell);
-	}, [runtime, shell, transportKey]);
+		runtime.updateSource(source);
+	}, [runtime, source]);
 
 	useLayoutEffect(() => {
 		runtime.updateViewModes({
 			systemKeyboardEnabled,
-			selectionModeEnabled,
+			selectionModeEnabled: runtime.view.getSelectionModeEnabled(),
 		});
-	}, [runtime, selectionModeEnabled, systemKeyboardEnabled]);
+	}, [runtime, systemKeyboardEnabled]);
 
 	useEffect(() => {
-		void runtime.requestAttach(lifecycleState.ready, Boolean(shell));
-	}, [lifecycleState.ready, runtime, shell, transportKey]);
+		void runtime.requestAttach(lifecycleState.ready, source.isAvailable());
+	}, [lifecycleState.ready, runtime, source]);
 
 	useEffect(() => runtime.setupDisposal(), [runtime]);
 
@@ -112,15 +100,17 @@ export function useShellTerminalController({
 			ready: lifecycleState.ready,
 			hasRendered: lifecycleState.hasRendered,
 			runtimeKey: lifecycleState.runtimeKey,
-			lastSize: sizeState.lastSize,
+			runtimeInstanceId: lifecycleState.runtimeInstanceId,
 			transport,
 			view: runtime.view,
+			getOutputDiagnostics: runtime.getOutputDiagnostics,
+			getLastSize: runtime.getLastSize,
 			onLoadStart: lifecycle.handleLoadStart,
 			onInitialized: lifecycle.handleInitialized,
 			onResize: size.handleResize,
 			waitForSizeAfterFit: size.waitForSizeAfterFit,
 			retry: runtime.retry,
 		}),
-		[lifecycle, lifecycleState, runtime, size, sizeState, transport],
+		[lifecycle, lifecycleState, runtime, size, transport],
 	);
 }

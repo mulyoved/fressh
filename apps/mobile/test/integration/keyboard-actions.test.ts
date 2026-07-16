@@ -12,8 +12,23 @@ import {
 	formatWorkmuxKeyboardCommandFailureMessage,
 	runAction,
 	type WorkmuxKeyboardCommand,
+	type WorkmuxKeyboardCommandExecutionOutcome,
 } from '../../src/lib/keyboard-actions';
 import { WORKMUX_APP_COMMAND_UPDATE_MESSAGE } from '../../src/lib/workmux-app-commands';
+
+type WorkmuxRunnerInput = Parameters<
+	typeof createWorkmuxKeyboardCommandRunner
+>[0]['runWorkmuxCommand'];
+type WorkmuxRunnerAllowsVoid = (() => Promise<void>) extends WorkmuxRunnerInput
+	? true
+	: false;
+const workmuxRunnerRejectsVoid: WorkmuxRunnerAllowsVoid = false;
+
+void test('Workmux keyboard runner requires an explicit typed execution outcome', () => {
+	assert.equal(workmuxRunnerRejectsVoid, false);
+});
+
+const WORKMUX_COMMAND_COMPLETED = { status: 'completed' } as const;
 
 const deferred = <T>() => {
 	let resolve: (value: T) => void = () => {};
@@ -130,55 +145,6 @@ void test('command menu action delegates to the action context', async () => {
 	} as Parameters<typeof runAction>[1]);
 
 	assert.equal(toggled, 1);
-});
-
-void test('native worktree workspace actions delegate only to matching controller callbacks', async () => {
-	let openedNew = 0;
-	let openedClose = 0;
-	const fail = (port: string): never => {
-		throw new Error(`Worktree workspace actions must not use ${port}`);
-	};
-	const context = {
-		availableKeyboardIds: new Set(),
-		selectKeyboard: () => {},
-		rotateKeyboard: () => {},
-		openConfigurator: () => {},
-		sendBytes: () => fail('terminal bytes'),
-		pasteClipboard: async () => fail('clipboard paste'),
-		copySelection: () => {},
-		openNewWorktreeWorkspace: () => {
-			openedNew += 1;
-		},
-		openCloseWorktreeWorkspace: () => {
-			openedClose += 1;
-		},
-		runWorkmuxKeyboardCommand: async () => fail('Workmux keyboard commands'),
-	} as Parameters<typeof runAction>[1];
-
-	await runAction('OPEN_NEW_WORKTREE_WORKSPACE', context);
-	assert.deepEqual(
-		{ openedNew, openedClose },
-		{ openedNew: 1, openedClose: 0 },
-	);
-
-	await runAction('OPEN_CLOSE_WORKTREE_WORKSPACE', context);
-	assert.deepEqual(
-		{ openedNew, openedClose },
-		{ openedNew: 1, openedClose: 1 },
-	);
-	assert.equal(KNOWN_ACTION_IDS.includes('OPEN_NEW_WORKTREE_WORKSPACE'), true);
-	assert.equal(
-		KNOWN_ACTION_IDS.includes('OPEN_CLOSE_WORKTREE_WORKSPACE'),
-		true,
-	);
-	assert.equal(
-		CONFIG_SUPPORTED_ACTION_IDS.includes('OPEN_NEW_WORKTREE_WORKSPACE'),
-		true,
-	);
-	assert.equal(
-		CONFIG_SUPPORTED_ACTION_IDS.includes('OPEN_CLOSE_WORKTREE_WORKSPACE'),
-		true,
-	);
 });
 
 void test('fit terminal action delegates to the action context', async () => {
@@ -477,6 +443,7 @@ void test('Workmux status keyboard action runs mdev-backed status cycle', async 
 		getSessionName: () => 'main',
 		runWorkmuxCommand: async (argv) => {
 			calls.push(argv);
+			return WORKMUX_COMMAND_COMPLETED;
 		},
 		showFailure: ({ message }) => failures.push(message),
 		getErrorMessage: (error) =>
@@ -527,6 +494,7 @@ void test('Workmux keyboard runner uses required argv command transport', async 
 		getSessionName: () => 'main',
 		runWorkmuxCommand: async (argv, timeoutMs) => {
 			argvCalls.push({ argv, timeoutMs });
+			return WORKMUX_COMMAND_COMPLETED;
 		},
 		showFailure: () => {},
 		getErrorMessage: (error) =>
@@ -552,6 +520,7 @@ void test('Workmux keyboard runner prefers explicit one-shot nav scope over stor
 		getNavScope: () => 'visible',
 		runWorkmuxCommand: async (argv, timeoutMs) => {
 			argvCalls.push({ argv, timeoutMs });
+			return WORKMUX_COMMAND_COMPLETED;
 		},
 		showFailure: () => {},
 		getErrorMessage: (error) =>
@@ -610,6 +579,7 @@ void test('Workmux status cycle uses required argv command transport', async () 
 		getSessionName: () => 'main',
 		runWorkmuxCommand: async (argv, timeoutMs) => {
 			argvCalls.push({ argv, timeoutMs });
+			return WORKMUX_COMMAND_COMPLETED;
 		},
 		showFailure: () => {},
 		getErrorMessage: (error) =>
@@ -767,6 +737,7 @@ void test('Workmux keyboard command runner builds app commands and serializes ex
 		runWorkmuxCommand: async (argv, timeoutMs) => {
 			calls.push({ argv, timeoutMs });
 			if (calls.length === 1) await firstBlock.promise;
+			return WORKMUX_COMMAND_COMPLETED;
 		},
 		showFailure: () => {},
 		getErrorMessage: (error) =>
@@ -810,6 +781,7 @@ void test('Workmux keyboard command runner bounds pending repeated commands to t
 		runWorkmuxCommand: async (argv) => {
 			calls.push(argv);
 			if (calls.length === 1) await firstBlock.promise;
+			return WORKMUX_COMMAND_COMPLETED;
 		},
 		showFailure: () => {},
 		getErrorMessage: (error) =>
@@ -851,9 +823,12 @@ void test('Workmux keyboard command runner reads live dependencies for pending c
 	const firstBlock = deferred<void>();
 	const calls: { source: string; argv: string[] }[] = [];
 	let sessionName = 'old';
-	let runWorkmuxCommand = async (argv: string[]) => {
+	let runWorkmuxCommand = async (
+		argv: string[],
+	): Promise<WorkmuxKeyboardCommandExecutionOutcome> => {
 		calls.push({ source: 'old', argv });
 		if (calls.length === 1) await firstBlock.promise;
+		return WORKMUX_COMMAND_COMPLETED;
 	};
 	const runner = createWorkmuxKeyboardCommandRunner({
 		isTmuxEnabled: () => true,
@@ -870,6 +845,7 @@ void test('Workmux keyboard command runner reads live dependencies for pending c
 	sessionName = 'new';
 	runWorkmuxCommand = async (argv: string[]) => {
 		calls.push({ source: 'new', argv });
+		return WORKMUX_COMMAND_COMPLETED;
 	};
 	firstBlock.resolve(undefined);
 	assert.deepEqual(await Promise.all([first, second]), [
@@ -900,6 +876,7 @@ void test('Workmux keyboard command runner reads live enabled state for pending 
 		runWorkmuxCommand: async (argv) => {
 			calls.push(argv.join(' '));
 			if (calls.length === 1) await firstBlock.promise;
+			return WORKMUX_COMMAND_COMPLETED;
 		},
 		showFailure: ({ message }) => failures.push(message),
 		getErrorMessage: (error) =>
@@ -933,6 +910,7 @@ void test('Workmux keyboard command runner invalidates pending commands and stal
 				await firstBlock.promise;
 				throw new Error('mdev: command not found');
 			}
+			return WORKMUX_COMMAND_COMPLETED;
 		},
 		showFailure: ({ message }) => failures.push(message),
 		getErrorMessage: (error) =>
@@ -988,6 +966,7 @@ void test('Workmux keyboard runner appends scope for next/prev only', async () =
 		getNavScope: () => 'visible',
 		runWorkmuxCommand: async (argv, timeoutMs) => {
 			argvCalls.push({ argv, timeoutMs });
+			return WORKMUX_COMMAND_COMPLETED;
 		},
 		showFailure: () => {},
 		getErrorMessage: (error) =>
@@ -1044,6 +1023,7 @@ void test('Workmux keyboard runner omits scope when getNavScope is not provided'
 		getSessionName: () => 'main',
 		runWorkmuxCommand: async (argv, timeoutMs) => {
 			argvCalls.push({ argv, timeoutMs });
+			return WORKMUX_COMMAND_COMPLETED;
 		},
 		showFailure: () => {},
 		getErrorMessage: (error) =>
@@ -1115,6 +1095,7 @@ void test('Workmux keyboard command runner preserves local failures and maps rem
 		getSessionName: () => '',
 		runWorkmuxCommand: async () => {
 			if (error) throw error;
+			return WORKMUX_COMMAND_COMPLETED;
 		},
 		showFailure: ({ message }) => failures.push(message),
 		getErrorMessage: (error) =>

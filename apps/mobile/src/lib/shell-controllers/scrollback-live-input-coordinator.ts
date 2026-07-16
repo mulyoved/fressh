@@ -11,7 +11,7 @@ import { type TerminalInputLease } from './terminal-transport';
 
 type LiveInputContext = Pick<
 	ShellScrollbackContext,
-	| 'getActivitySnapshot'
+	| 'activity'
 	| 'getErrorMessage'
 	| 'logger'
 	| 'targetKey'
@@ -129,7 +129,7 @@ export function createScrollbackLiveInputCoordinator({
 		if (!isInternalTokenCurrent(token)) return false;
 		let activity;
 		try {
-			activity = token.context.getActivitySnapshot();
+			activity = token.context.activity.getSnapshot();
 		} catch (error) {
 			warn(
 				token.context,
@@ -191,7 +191,7 @@ export function createScrollbackLiveInputCoordinator({
 		}
 		let activity;
 		try {
-			activity = context.getActivitySnapshot();
+			activity = context.activity.getSnapshot();
 		} catch (error) {
 			warn(context, 'Failed to read shell activity for live input', error);
 			return null;
@@ -436,9 +436,9 @@ export function createScrollbackLiveInputCoordinator({
 		const invocationEpoch = ++activityInvocationEpoch;
 		const state = getCurrentState();
 		if (state.disposed || state.context === null) return;
-		let activity: ReturnType<LiveInputContext['getActivitySnapshot']>;
+		let activity: ReturnType<LiveInputContext['activity']['getSnapshot']>;
 		try {
-			activity = state.context.getActivitySnapshot();
+			activity = state.context.activity.getSnapshot();
 		} catch (error) {
 			warn(state.context, 'Failed to read scrollback activity', error);
 			return;

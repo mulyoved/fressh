@@ -7,6 +7,7 @@ import {
 	type ShellNotificationRoute,
 	type ShellNotificationsState,
 } from './notifications-core';
+import { type ShellWorkmuxPort } from './session-contracts';
 
 export function createShellNotificationAutomaticAcknowledger(): {
 	request(
@@ -52,7 +53,7 @@ export function createShellNotificationHookOrchestrator<
 		context: ShellNotificationContext;
 		route: ShellNotificationRoute;
 		commandPortKey: ShellNotificationCommandPortKey;
-		runWorkmuxCommand(argv: string[], timeoutMs: number): Promise<string>;
+		workmux: Pick<ShellWorkmuxPort, 'command'>;
 	},
 >(
 	initialInput: TInput,
@@ -63,7 +64,7 @@ export function createShellNotificationHookOrchestrator<
 		nextInput: TInput,
 		setCommandPort: (
 			key: TInput['commandPortKey'],
-			runWorkmuxCommand: TInput['runWorkmuxCommand'],
+			workmux: TInput['workmux'],
 		) => void,
 		setContext: (context: ShellNotificationContext) => void,
 		afterContextCommit: () => void,
@@ -85,7 +86,7 @@ export function createShellNotificationHookOrchestrator<
 			afterContextCommit,
 		) => {
 			committedInput = nextInput;
-			setCommandPort(nextInput.commandPortKey, nextInput.runWorkmuxCommand);
+			setCommandPort(nextInput.commandPortKey, nextInput.workmux);
 			setContext(nextInput.context);
 			afterContextCommit();
 		},

@@ -12,7 +12,6 @@ import {
 	restoreAuthorizedAgentNotificationRouteToken,
 } from '../agent-notification-route-store';
 import { subscribeAgentNotificationPending } from '../agent-notification-visibility';
-import { type ShellActivityControllerHandle } from './activity';
 import { type ControllerInvalidationReason } from './controller-core';
 import { createReplaySafeControllerLifecycle } from './controller-lifecycle';
 import {
@@ -27,6 +26,10 @@ import {
 	setupShellNotificationActivityEffect,
 	setupShellNotificationPendingEffect,
 } from './notifications-lifecycle';
+import {
+	type ShellActivityPort,
+	type ShellWorkmuxPort,
+} from './session-contracts';
 
 export type ShellNotificationsControllerHandle = {
 	acknowledgeVisible(): Promise<void>;
@@ -38,11 +41,11 @@ export type ShellNotificationsLogger = {
 };
 
 export type UseShellNotificationsControllerInput = {
-	activity: ShellActivityControllerHandle;
+	activity: ShellActivityPort;
 	context: ShellNotificationContext;
 	route: ShellNotificationRoute;
 	commandPortKey: ShellNotificationCommandPortKey;
-	runWorkmuxCommand(argv: string[], timeoutMs: number): Promise<string>;
+	workmux: Pick<ShellWorkmuxPort, 'command'>;
 	logger: ShellNotificationsLogger;
 };
 
@@ -69,14 +72,11 @@ export function useShellNotificationsController(
 	);
 	const [core] = useState(() =>
 		createShellNotificationsControllerCore({
-			activity: {
-				getSnapshot: () =>
-					hookOrchestrator.getCommittedInput().activity.getSnapshot(),
-			},
+			activity: input.activity,
 			context: input.context,
 			platformOS: Platform.OS,
 			commandPortKey: input.commandPortKey,
-			runWorkmuxCommand: input.runWorkmuxCommand,
+			workmux: input.workmux,
 			consumeAuthorizedRouteToken: consumeAuthorizedAgentNotificationRouteToken,
 			restoreAuthorizedRouteToken: restoreAuthorizedAgentNotificationRouteToken,
 			acknowledge: acknowledgeRoutedAgentNotification,

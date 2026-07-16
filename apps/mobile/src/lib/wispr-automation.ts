@@ -4,6 +4,33 @@ export type WisprAutomationFailureReason =
 	| 'tap-failed'
 	| 'unsupported-platform';
 
+export type WisprAutomationFailure = {
+	reason: WisprAutomationFailureReason;
+	message: string;
+};
+
+function getWisprErrorMessage(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
+}
+
+export function resolveWisprTapFailure(error: unknown): WisprAutomationFailure {
+	const errorMessage = getWisprErrorMessage(error);
+	const reason: WisprAutomationFailureReason = errorMessage
+		.toLowerCase()
+		.includes('not found')
+		? 'bubble-not-found'
+		: 'tap-failed';
+	if (reason === 'bubble-not-found') {
+		return { reason, message: 'Wispr bubble not found.' };
+	}
+	return {
+		reason,
+		message: errorMessage
+			? `Wispr tap failed: ${errorMessage}`
+			: 'Wispr tap failed.',
+	};
+}
+
 export type WisprAutomationState =
 	| { phase: 'idle' }
 	| { phase: 'openingTextEntry' }
@@ -255,42 +282,81 @@ export function canStartWisprTextEntryAutomation({
 }
 
 export class WisprTapTimeoutError extends Error {
-	constructor() {
+	constructor(readonly nativeWorkIssued = true) {
 		super('Wispr tap timed out');
 		this.name = 'WisprTapTimeoutError';
 	}
 }
 
+export type WisprTimerPort = {
+	setTimeout(task: () => void, delayMs: number): unknown;
+	clearTimeout(timer: unknown): void;
+};
+
+const defaultWisprTimerPort: WisprTimerPort = {
+	setTimeout: (task, delayMs) => setTimeout(task, delayMs),
+	clearTimeout: (timer) => clearTimeout(timer as ReturnType<typeof setTimeout>),
+};
+
 export function withTimeout<T>(
 	promise: Promise<T>,
 	timeoutMs: number,
+	timerPort: WisprTimerPort = defaultWisprTimerPort,
 ): Promise<T> {
-	let timeout: ReturnType<typeof setTimeout> | undefined;
+	let timeout: unknown;
 	const timeoutPromise = new Promise<never>((_, reject) => {
-		timeout = setTimeout(() => {
+		timeout = timerPort.setTimeout(() => {
 			reject(new WisprTapTimeoutError());
 		}, timeoutMs);
 	});
 
 	return Promise.race([promise, timeoutPromise]).finally(() => {
-		if (timeout) clearTimeout(timeout);
+		if (timeout !== undefined) timerPort.clearTimeout(timeout);
 	});
 }
 
-export function tapWisprControlWithTimeout({
+export function tapWisprControlWithTimeout<T>({
 	tapWisprControl,
 	timeoutMs,
 	onLateSuccess,
 	onLateFailure,
+	onInvocation,
+	setTimeout: scheduleTimeout = defaultWisprTimerPort.setTimeout,
+	clearTimeout: cancelTimeout = defaultWisprTimerPort.clearTimeout,
 }: {
-	tapWisprControl: () => Promise<string>;
+	tapWisprControl: () => Promise<T>;
 	timeoutMs: number;
 	onLateSuccess?: () => void;
 	onLateFailure?: () => void;
-}): Promise<string> {
+	onInvocation?: () => void;
+	setTimeout?: WisprTimerPort['setTimeout'];
+	clearTimeout?: WisprTimerPort['clearTimeout'];
+}): Promise<T> {
 	let timedOut = false;
-	let timeout: ReturnType<typeof setTimeout> | undefined;
-	const tapPromise = tapWisprControl();
+	let nativeWorkIssued = false;
+	let timeout: unknown;
+	let rejectTimeout!: (error: WisprTapTimeoutError) => void;
+	const timeoutPromise = new Promise<never>((_, reject) => {
+		rejectTimeout = reject;
+	});
+	try {
+		timeout = scheduleTimeout(() => {
+			timedOut = true;
+			rejectTimeout(new WisprTapTimeoutError(nativeWorkIssued));
+		}, timeoutMs);
+	} catch (error) {
+		return Promise.reject(error);
+	}
+	if (timedOut) return timeoutPromise;
+	let tapPromise: Promise<T>;
+	try {
+		tapPromise = tapWisprControl();
+	} catch (error) {
+		cancelTimeout(timeout);
+		return Promise.reject(error);
+	}
+	nativeWorkIssued = true;
+	onInvocation?.();
 	tapPromise.then(
 		() => {
 			if (timedOut) onLateSuccess?.();
@@ -299,13 +365,7 @@ export function tapWisprControlWithTimeout({
 			if (timedOut) onLateFailure?.();
 		},
 	);
-	const timeoutPromise = new Promise<never>((_, reject) => {
-		timeout = setTimeout(() => {
-			timedOut = true;
-			reject(new WisprTapTimeoutError());
-		}, timeoutMs);
-	});
 	return Promise.race([tapPromise, timeoutPromise]).finally(() => {
-		if (timeout) clearTimeout(timeout);
+		if (timeout !== undefined) cancelTimeout(timeout);
 	});
 }

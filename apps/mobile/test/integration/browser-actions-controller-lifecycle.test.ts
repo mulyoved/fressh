@@ -61,7 +61,9 @@ void test('tmux-only dependency change invalidates stale browser work once', asy
 		getErrorMessage: String,
 	});
 	const committed = { current: { sourceKey, tmuxEnabled, connection } };
-	const tracked = { current: { sourceKey, tmuxEnabled, connection } };
+	const tracked = {
+		current: { sourceKey, tmuxEnabled, authority: connection },
+	};
 	const pending = core.openGitHubTarget('issues');
 
 	tmuxEnabled = false;
@@ -69,6 +71,7 @@ void test('tmux-only dependency change invalidates stale browser work once', asy
 		committedDependencies: committed,
 		trackedSource: tracked,
 		dependencies: { sourceKey, tmuxEnabled, connection },
+		getAuthority: (current) => current.connection,
 		core,
 	});
 	repository.resolve('mulyoved/fressh');
@@ -118,7 +121,7 @@ void test('connection loss invalidates stale browser work with an unchanged rout
 		current: {
 			sourceKey,
 			tmuxEnabled: true,
-			connection: connection as object | null,
+			authority: connection as object | null,
 		},
 	};
 	const pending = core.openGitHubTarget('issues');
@@ -127,6 +130,7 @@ void test('connection loss invalidates stale browser work with an unchanged rout
 		committedDependencies: committed,
 		trackedSource: tracked,
 		dependencies: { sourceKey, tmuxEnabled: true, connection: null },
+		getAuthority: (current) => current.connection,
 		core,
 	});
 	repository.resolve('mulyoved/fressh');
@@ -164,10 +168,11 @@ void test('source synchronization avoids a second invalidation when target key c
 			current: {
 				sourceKey: firstKey,
 				tmuxEnabled: true,
-				connection: firstConnection,
+				authority: firstConnection,
 			},
 		},
 		dependencies,
+		getAuthority: (current) => current.connection,
 		core: {
 			setSourceKey: () => events.push('set-source'),
 			invalidate: () => events.push('invalidate'),

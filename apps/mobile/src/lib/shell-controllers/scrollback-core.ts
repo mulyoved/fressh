@@ -41,8 +41,11 @@ import { createScrollbackLiveInputCoordinator } from './scrollback-live-input-co
 import { createScrollbackLocalUiCoordinator } from './scrollback-local-ui-coordinator';
 import { createScrollbackModeCoordinator } from './scrollback-mode-coordinator';
 import { handleShellWorkmuxScrollbackDisposeExitFailureActions } from './scrollback-policy';
+import {
+	createScrollbackRemoteCopyModeOwner,
+	type ScrollbackRemoteCopyModeOwner,
+} from './scrollback-remote-copy-mode-owner';
 export type * from './scrollback-contracts';
-
 export type ShellScrollbackControllerCore =
 	ControllerCore<ShellScrollbackState> & {
 		setContext(context: ShellScrollbackContext): void;
@@ -61,7 +64,6 @@ export type ShellScrollbackControllerCore =
 			failurePolicy?: 'notify' | 'suppress';
 		}): Promise<boolean> | null;
 		jumpToLive(): void;
-		getCurrentCleanup(): Promise<boolean> | null;
 	};
 
 type CreateExecutorInput = Parameters<
@@ -72,8 +74,7 @@ export type CreateShellScrollbackControllerCoreInput = {
 	createExecutor?(input: CreateExecutorInput): WorkmuxScrollbackCommandExecutor;
 	lineAccumulator?: TmuxScrollbackLineAccumulator;
 	cleanupBarrier?: WorkmuxScrollbackLiveInputCleanupBarrier;
-	remoteCopyModeActive?: { current: boolean };
-	remoteCopyModeGeneration?: { current: number };
+	remoteCopyMode?: ScrollbackRemoteCopyModeOwner;
 	localExitRequestIds?: Set<number>;
 };
 
@@ -93,10 +94,6 @@ export function createShellScrollbackControllerCore(
 		input.lineAccumulator ?? createTmuxScrollbackLineAccumulator();
 	const cleanupBarrier =
 		input.cleanupBarrier ?? createWorkmuxScrollbackLiveInputCleanupBarrier();
-	const remoteCopyModeActive = input.remoteCopyModeActive ?? { current: false };
-	const remoteCopyModeGeneration = input.remoteCopyModeGeneration ?? {
-		current: 0,
-	};
 	const localExitRequestIds = input.localExitRequestIds ?? new Set<number>();
 	let context: ShellScrollbackContext | null = null;
 	let executor: WorkmuxScrollbackCommandExecutor | null = null;
@@ -111,6 +108,12 @@ export function createShellScrollbackControllerCore(
 	const warn = (message: string, error?: unknown): void => {
 		createSafeWarn(context?.logger)(message, error);
 	};
+	const remoteCopyMode =
+		input.remoteCopyMode ??
+		createScrollbackRemoteCopyModeOwner({
+			warn: (ownerContext, message, error) =>
+				createSafeWarn(ownerContext.logger)(message, error),
+		});
 
 	const cleanupCoordinator = createScrollbackCleanupCoordinator({
 		cleanupBarrier,
@@ -121,8 +124,7 @@ export function createShellScrollbackControllerCore(
 			targetOwnershipRevision,
 		}),
 		lineAccumulator,
-		remoteCopyModeActive,
-		remoteCopyModeGeneration,
+		remoteCopyMode,
 		warn: (logger, message, error) => createSafeWarn(logger)(message, error),
 	});
 	const captureCleanupOwnership = cleanupCoordinator.captureOwnership;
@@ -184,8 +186,8 @@ export function createShellScrollbackControllerCore(
 			disposed,
 			executor,
 			localModeRevision,
-			remoteCopyModeActive: remoteCopyModeActive.current,
-			remoteCopyModeGeneration: remoteCopyModeGeneration.current,
+			remoteCopyModeActive: remoteCopyMode.isOwned(),
+			remoteCopyModeGeneration: remoteCopyMode.generation(),
 			runtimeInstanceId,
 			snapshot: publisher.getSnapshot(),
 			targetOwnershipRevision,
@@ -209,8 +211,8 @@ export function createShellScrollbackControllerCore(
 			disposed,
 			liveInputGeneration: requestGenerations.liveInput,
 			localModeRevision,
-			remoteCopyModeActive: remoteCopyModeActive.current,
-			remoteCopyModeGeneration: remoteCopyModeGeneration.current,
+			remoteCopyModeActive: remoteCopyMode.isOwned(),
+			remoteCopyModeGeneration: remoteCopyMode.generation(),
 			runtimeInstanceId,
 			scrollbackActive: publisher.getSnapshot().active,
 			scrollbackPhase: publisher.getSnapshot().phase,
@@ -227,7 +229,7 @@ export function createShellScrollbackControllerCore(
 			context,
 			disposed,
 			executor,
-			remoteCopyModeGeneration: remoteCopyModeGeneration.current,
+			remoteCopyModeGeneration: remoteCopyMode.generation(),
 			requestGeneration: requestGenerations.enter,
 			runtimeInstanceId,
 			targetOwnershipRevision,
@@ -243,8 +245,7 @@ export function createShellScrollbackControllerCore(
 				restoreRemoteOnFailure: true,
 			});
 		},
-		remoteCopyModeActive,
-		remoteCopyModeGeneration,
+		remoteCopyMode,
 		reserveRequestGeneration: () => ++requestGenerations.enter,
 		trace: safelyTrace,
 		warn: (logger, message, error) => createSafeWarn(logger)(message, error),
@@ -255,8 +256,7 @@ export function createShellScrollbackControllerCore(
 			void clearScrollbackState(ownerContext, failurePolicy);
 		},
 		isCurrentContext: (ownerContext) => !disposed && context === ownerContext,
-		remoteCopyModeActive,
-		remoteCopyModeGeneration,
+		remoteCopyMode,
 		trace: safelyTrace,
 		warn: (logger, message, error) => createSafeWarn(logger)(message, error),
 	});
@@ -270,7 +270,7 @@ export function createShellScrollbackControllerCore(
 			executorRevision === capturedExecutorRevision &&
 			context?.targetKey === nextContext.targetKey &&
 			context.targetName === nextContext.targetName &&
-			context.workmuxScroll === nextContext.workmuxScroll;
+			context.workmux === nextContext.workmux;
 		let createdExecutor: WorkmuxScrollbackCommandExecutor | null = null;
 		const isCurrentExecutor = () =>
 			createdExecutor !== null &&
@@ -279,7 +279,7 @@ export function createShellScrollbackControllerCore(
 			executorRevision === capturedExecutorRevision;
 		try {
 			createdExecutor = createExecutor({
-				scrollTransport: nextContext.workmuxScroll,
+				scrollTransport: nextContext.workmux.scroll,
 				onFailure: (message, failureContext) => {
 					if (!isCurrentExecutor()) return;
 					const currentContext = context;
@@ -300,10 +300,7 @@ export function createShellScrollbackControllerCore(
 					if (!isCurrentExecutor()) return;
 					const currentContext = context;
 					if (currentContext === null) return;
-					if (!remoteCopyModeActive.current) {
-						remoteCopyModeGeneration.current += 1;
-						remoteCopyModeActive.current = true;
-					}
+					if (!remoteCopyMode.isOwned()) remoteCopyMode.acquire();
 					try {
 						handleShellWorkmuxScrollbackDisposeExitFailureActions({
 							message,
@@ -362,16 +359,16 @@ export function createShellScrollbackControllerCore(
 		executorRevision += 1;
 		const replacementRevision = executorRevision;
 		advanceRequestFreshness();
-		remoteCopyModeGeneration.current += 1;
+		const replacementToken = remoteCopyMode.transition();
 		const ownership = previousContext
 			? captureCleanupOwnership(previousContext)
 			: null;
-		const remoteWasActive = remoteCopyModeActive.current;
+		const remoteWasActive = remoteCopyMode.isOwned();
 		const restoreRemoteOnFailure = previousContext !== null && !targetChanged;
 		const previousSafeWarn = createSafeWarn(previousContext?.logger);
 		clearLocalState();
 		if (targetChanged) {
-			remoteCopyModeActive.current = false;
+			remoteCopyMode.settle(replacementToken, false);
 			safelyPublish({ ...initialState, runtimeInstanceId });
 		}
 		if (previousExecutor) {
@@ -388,7 +385,7 @@ export function createShellScrollbackControllerCore(
 					ownership !== null &&
 					isCleanupFailureCurrent(ownership)
 				) {
-					remoteCopyModeActive.current = true;
+					remoteCopyMode.settle(replacementToken, true);
 				}
 			}
 			void registerCleanup({
@@ -402,6 +399,7 @@ export function createShellScrollbackControllerCore(
 		}
 		if (disposed || executorRevision !== replacementRevision) return;
 		context = nextContext;
+		remoteCopyMode.setContext(nextContext);
 		buildExecutor(nextContext);
 	};
 	const setContext = (nextContext: ShellScrollbackContext): void => {
@@ -415,7 +413,7 @@ export function createShellScrollbackControllerCore(
 			context === null ||
 			context.targetKey !== normalizedContext.targetKey ||
 			context.targetName !== normalizedContext.targetName ||
-			context.workmuxScroll !== normalizedContext.workmuxScroll ||
+			context.workmux !== normalizedContext.workmux ||
 			context.terminalTransport !== normalizedContext.terminalTransport ||
 			context.terminalView !== normalizedContext.terminalView;
 		if (requiresExecutorReplacement) {
@@ -443,7 +441,7 @@ export function createShellScrollbackControllerCore(
 			return;
 		}
 		const ownerContext = context;
-		const remoteWasActive = remoteCopyModeActive.current;
+		const remoteWasActive = remoteCopyMode.isOwned();
 		void resetExecutor({
 			failurePolicy: 'suppress',
 			ownerContext,
@@ -464,7 +462,7 @@ export function createShellScrollbackControllerCore(
 		advanceRequestFreshness();
 		const invalidationGeneration = requestGenerations.liveInput;
 		const ownerContext = context;
-		const remoteWasActive = remoteCopyModeActive.current;
+		const remoteWasActive = remoteCopyMode.isOwned();
 		clearLocalState();
 		void resetExecutor({
 			failurePolicy: 'suppress',
@@ -483,14 +481,13 @@ export function createShellScrollbackControllerCore(
 		targetOwnershipRevision += 1;
 		executorRevision += 1;
 		advanceRequestFreshness();
-		remoteCopyModeGeneration.current += 1;
 		const activeExecutor = executor;
 		const disposeContext = context;
 		const disposeSafeWarn = createSafeWarn(disposeContext?.logger);
 		executor = null;
-		const remoteWasActive = remoteCopyModeActive.current;
+		const remoteWasActive = remoteCopyMode.isOwned();
 		clearLocalState();
-		remoteCopyModeActive.current = false;
+		remoteCopyMode.dispose();
 		try {
 			safelyPublish(initialState);
 			if (activeExecutor) {
@@ -574,12 +571,12 @@ export function createShellScrollbackControllerCore(
 					activeTraceId = `scroll-${nextTraceId}`;
 				},
 				publish: safelyPublish,
-				remoteCopyModeActive: remoteCopyModeActive.current,
+				remoteCopyModeActive: remoteCopyMode.isOwned(),
 				resetRemote: () => {
 					void resetExecutor({
 						failurePolicy: 'notify',
 						ownerContext,
-						remoteWasActive: remoteCopyModeActive.current,
+						remoteWasActive: remoteCopyMode.isOwned(),
 					});
 				},
 				trace: (traceEvent) => safelyTrace(ownerContext, traceEvent),
@@ -607,7 +604,7 @@ export function createShellScrollbackControllerCore(
 					handleCommandFailure(ownerContext, message, {
 						commandKind: 'scroll',
 					}),
-				remoteCopyModeActive: remoteCopyModeActive.current,
+				remoteCopyModeActive: remoteCopyMode.isOwned(),
 				scrollbackActive: publisher.getSnapshot().active,
 				trace: (traceEvent) => safelyTrace(ownerContext, traceEvent),
 				warn: (message, error) =>
@@ -624,7 +621,6 @@ export function createShellScrollbackControllerCore(
 			);
 		},
 		jumpToLive: requestJumpToLive,
-		getCurrentCleanup: cleanupBarrier.current,
 		invalidate,
 		dispose,
 	};

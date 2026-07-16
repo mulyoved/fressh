@@ -8,7 +8,10 @@ function replaceAuthority(harness: ReturnType<typeof createScrollbackHarness>) {
 		...harness.context,
 		targetKey: createShellTargetKey('transport' as never, 'other'),
 		targetName: 'other',
-		workmuxScroll: { ...harness.scroll },
+		workmux: {
+			...harness.context.workmux,
+			scroll: { ...harness.scroll },
+		},
 	});
 	harness.core.onTerminalRuntimeChanged('instance-2');
 }

@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createBrowserActionsControllerAdapter } from '../../src/lib/shell-controllers/browser-actions-adapter';
+import {
+	createBrowserActionsControllerAdapter,
+	type BrowserActionsControllerDependencies,
+} from '../../src/lib/shell-controllers/browser-actions-adapter';
 import { createBrowserActionsControllerCore } from '../../src/lib/shell-controllers/browser-actions-core';
 import { createShellModalArbiter } from '../../src/lib/shell-controllers/modal-arbiter';
 import {
@@ -449,42 +452,49 @@ void test('host URL same-source supersession stops before the stale read command
 });
 
 void test('public resolvers use the real adapter and current committed dependencies', async () => {
-	type Connection = { id: string };
 	const arbiter = createShellModalArbiter();
 	const sideCalls: unknown[][] = [];
 	const workmuxCalls: unknown[][] = [];
 	const reports: { error: unknown; context: unknown }[] = [];
 	let failRepository = false;
-	let dependencies = {
-		connection: null as Connection | null,
+	let currentConnectionId = 'current';
+	const createHostCommands = (id: string) => ({
+		key: sourceKey,
+		run: async (command: string, timeoutMs: number) => {
+			sideCalls.push([id, command, timeoutMs]);
+			if (command.includes('git remote get-url') && failRepository) {
+				return {
+					status: 'failed' as const,
+					failure: { message: 'remote denied' },
+				};
+			}
+			if (command.includes('git remote get-url')) {
+				return {
+					status: 'completed' as const,
+					output: 'git@github.com:mulyoved/fressh.git',
+				};
+			}
+			if (command === 'fail') {
+				return {
+					status: 'failed' as const,
+					failure: { message: 'remote denied' },
+				};
+			}
+			return { status: 'completed' as const, output: '  side output  ' };
+		},
+	});
+	let dependencies: BrowserActionsControllerDependencies = {
+		hostCommands: null,
+		workmux: {
+			key: sourceKey,
+			command: async (argv, options) => {
+				workmuxCalls.push([currentConnectionId, argv, options?.timeoutMs]);
+				return { status: 'completed', output: workmuxContext };
+			},
+		},
 		tmuxEnabled: true,
 		tmuxTarget: 'main',
 		sourceKey,
-		executeSideChannelCommand: async (
-			connection: Connection,
-			command: string,
-			timeoutMs: number,
-		) => {
-			sideCalls.push([connection.id, command, timeoutMs]);
-			if (command.includes('git remote get-url') && failRepository) {
-				return { success: false, output: '', error: 'remote denied' };
-			}
-			if (command.includes('git remote get-url')) {
-				return { success: true, output: 'git@github.com:mulyoved/fressh.git' };
-			}
-			if (command === 'fail') {
-				return { success: false, output: '', error: 'remote denied' };
-			}
-			return { success: true, output: '  side output  ' };
-		},
-		runWorkmuxCommand: async (
-			connection: Connection,
-			argv: string[],
-			timeoutMs: number,
-		) => {
-			workmuxCalls.push([connection.id, argv, timeoutMs]);
-			return workmuxContext;
-		},
 		getErrorMessage: (error: unknown) =>
 			error instanceof Error ? `converted: ${error.message}` : String(error),
 		arbiter,
@@ -510,7 +520,11 @@ void test('public resolvers use the real adapter and current committed dependenc
 		core.runHostBrowserCommand('pwd'),
 		/No SSH connection available/,
 	);
-	dependencies = { ...dependencies, connection: { id: 'current' } };
+	currentConnectionId = 'current';
+	dependencies = {
+		...dependencies,
+		hostCommands: createHostCommands('current'),
+	};
 	assert.equal(await core.runHostBrowserCommand('pwd'), 'side output');
 	assert.equal(await core.runHostBrowserCommand('pwd', 1234), 'side output');
 	assert.equal(

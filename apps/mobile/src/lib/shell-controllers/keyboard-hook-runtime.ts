@@ -2,6 +2,40 @@ import {
 	type ControllerInvalidationReason,
 	type ControllerOutcome,
 } from './controller-core';
+import { type ShellTerminalViewPort } from './terminal-contracts';
+
+export type KeyboardTerminalRuntimeObserver = {
+	reconcile(
+		view: Pick<ShellTerminalViewPort, 'getRuntimeKey' | 'getRuntimeInstanceId'>,
+	): boolean;
+};
+
+export function createKeyboardTerminalRuntimeObserver(
+	onChanged: () => void,
+): KeyboardTerminalRuntimeObserver {
+	let initialized = false;
+	let runtimeKey: ReturnType<ShellTerminalViewPort['getRuntimeKey']> = null;
+	let instanceId: string | null = null;
+	return {
+		reconcile: (view) => {
+			const nextRuntimeKey = view.getRuntimeKey();
+			const nextInstanceId = view.getRuntimeInstanceId();
+			if (!initialized) {
+				initialized = true;
+				runtimeKey = nextRuntimeKey;
+				instanceId = nextInstanceId;
+				return false;
+			}
+			if (runtimeKey === nextRuntimeKey && instanceId === nextInstanceId) {
+				return false;
+			}
+			runtimeKey = nextRuntimeKey;
+			instanceId = nextInstanceId;
+			onChanged();
+			return true;
+		},
+	};
+}
 
 export type KeyboardActivityTransitionController = {
 	reconcile(
@@ -199,6 +233,7 @@ export function applyKeyboardSelectionMode(input: {
 	platformOS: string;
 	isCurrent(): boolean;
 	setSelectionMode(enabled: boolean): void;
+	setTerminalSelectionMode(enabled: boolean): void;
 	setTerminalSystemKeyboard(enabled: boolean): void;
 	dismissKeyboard(): void;
 	clearKeyboardVisibility(): void;
@@ -209,6 +244,13 @@ export function applyKeyboardSelectionMode(input: {
 		input.setSelectionMode(input.enabled);
 	} catch (error) {
 		input.warn('Failed to change selection state', error);
+		return;
+	}
+	if (!input.isCurrent()) return;
+	try {
+		input.setTerminalSelectionMode(input.enabled);
+	} catch (error) {
+		input.warn('Failed to publish terminal selection mode', error);
 		return;
 	}
 	if (!input.isCurrent() || input.platformOS !== 'android') return;

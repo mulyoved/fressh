@@ -109,9 +109,12 @@ void test('equivalent context commit preserves blocked input authority and refre
 	let latestActivityReads = 0;
 	harness.core.setContext({
 		...harness.context,
-		getActivitySnapshot: () => {
-			latestActivityReads += 1;
-			return harness.context.getActivitySnapshot();
+		activity: {
+			...harness.context.activity,
+			getSnapshot: () => {
+				latestActivityReads += 1;
+				return harness.context.activity.getSnapshot();
+			},
 		},
 		getErrorMessage: () => 'latest formatter',
 		logger: { warn: () => {} },
@@ -144,7 +147,10 @@ void test('genuine target and authority-port replacements supersede blocked inpu
 		if (replacement === 'target') {
 			next.targetKey = createShellTargetKey('replacement' as never, 'main');
 		} else if (replacement === 'workmux') {
-			next.workmuxScroll = { ...harness.context.workmuxScroll };
+			next.workmux = {
+				...harness.context.workmux,
+				scroll: { ...harness.context.workmux.scroll },
+			};
 		} else if (replacement === 'transport') {
 			next.terminalTransport = { ...harness.context.terminalTransport };
 		} else {

@@ -31,6 +31,7 @@ export type SkillSelectorModalProps = {
 	updatedAt: string | null;
 	isLoading: boolean;
 	isRefreshing: boolean;
+	isSelecting: boolean;
 	error: string | null;
 	refreshError: string | null;
 	onClose: () => void;
@@ -45,14 +46,14 @@ export type SkillSelectorControllerHandle = {
 	close: () => void;
 };
 
-export function useSkillSelectorController<TConnection>(
-	deps: SkillSelectorControllerDependencies<TConnection>,
+export function useSkillSelectorController(
+	deps: SkillSelectorControllerDependencies,
 ): SkillSelectorControllerHandle {
 	const committedDepsRef = useRef(deps);
 	const trackedSourceRef = useRef({
 		sourceKey: deps.sourceKey,
 		tmuxEnabled: deps.tmuxEnabled,
-		connection: deps.connection,
+		authority: deps.hostCommands,
 	});
 	const [adapter] = useState(() =>
 		createSkillSelectorControllerAdapter({
@@ -65,7 +66,7 @@ export function useSkillSelectorController<TConnection>(
 		createSkillSelectorControllerCore({
 			initialSourceKey: deps.sourceKey,
 			loadProject: adapter.loadProject,
-			sendText: adapter.sendText,
+			sendInput: adapter.sendInput,
 			requestOpen: adapter.requestOpen,
 			getErrorMessage: adapter.getErrorMessage,
 		}),
@@ -84,6 +85,7 @@ export function useSkillSelectorController<TConnection>(
 			committedDependencies: committedDepsRef,
 			trackedSource: trackedSourceRef,
 			dependencies: deps,
+			getAuthority: (dependencies) => dependencies.hostCommands,
 			core,
 		});
 	}, [core, deps]);

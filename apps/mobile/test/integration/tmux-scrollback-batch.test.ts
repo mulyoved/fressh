@@ -276,17 +276,13 @@ void test('accumulateWorkmuxScrollbackBatchCommands clamps malformed huge line b
 void test('formatWorkmuxScrollbackCommandFailureMessage formats missing mdev failures', () => {
 	assert.equal(
 		formatWorkmuxScrollbackCommandFailureMessage({
-			success: false,
-			output: '',
-			error: 'mdev: command not found',
+			status: 'failed',
+			failure: { message: 'mdev: command not found' },
 		}),
 		'Update mdev on the remote machine; this action requires mdev tmux app commands.',
 	);
 	assert.equal(
-		formatWorkmuxScrollbackCommandFailureMessage({
-			success: true,
-			output: '',
-		}),
+		formatWorkmuxScrollbackCommandFailureMessage({ status: 'completed' }),
 		null,
 	);
 });
@@ -294,9 +290,8 @@ void test('formatWorkmuxScrollbackCommandFailureMessage formats missing mdev fai
 void test('formatWorkmuxScrollbackCommandFailureMessage preserves local no-connection failures', () => {
 	assert.equal(
 		formatWorkmuxScrollbackCommandFailureMessage({
-			success: false,
-			output: '',
-			error: 'No SSH connection available for main.',
+			status: 'failed',
+			failure: { message: 'No SSH connection available for main.' },
 		}),
 		'No SSH connection available for main.',
 	);

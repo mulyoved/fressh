@@ -89,9 +89,11 @@ void test('debug command closes menu, probes latest saved entry, and pastes prom
 			throw new Error('connect should be passed to probe');
 		},
 		recovery: readyRecovery,
-		allowTerminalPaste: true,
-		pasteIntoTerminal: (prompt) => {
-			calls.push(`paste:${prompt.includes('probe.called')}`);
+		delivery: {
+			type: 'terminal',
+			paste: (prompt) => {
+				calls.push(`paste:${prompt.includes('probe.called')}`);
+			},
 		},
 		copyToClipboard: async () => {
 			calls.push('copy');
@@ -156,10 +158,7 @@ void test('debug command includes recorded reconnect trace history', async () =>
 		},
 		connect: async () => ({ connectionId: 'conn-1' }) as never,
 		recovery: readyRecovery,
-		allowTerminalPaste: false,
-		pasteIntoTerminal: () => {
-			throw new Error('paste should not run');
-		},
+		delivery: { type: 'clipboard-only' },
 		copyToClipboard: async (prompt) => {
 			copiedPrompt = prompt;
 		},
@@ -208,10 +207,7 @@ void test('debug command reports key resolution failure through prompt delivery'
 			throw new Error('connect should not run');
 		},
 		recovery: readyRecovery,
-		allowTerminalPaste: false,
-		pasteIntoTerminal: () => {
-			throw new Error('paste should not run');
-		},
+		delivery: { type: 'clipboard-only' },
 		copyToClipboard: async (prompt) => {
 			calls.push(`copy:${prompt.includes('key.missing')}`);
 		},
@@ -293,9 +289,11 @@ void test('debug command wires shell dependencies into probe and delivery', asyn
 		},
 		connect,
 		recovery: readyRecovery,
-		allowTerminalPaste: true,
-		pasteIntoTerminal: (prompt) => {
-			calls.push(`paste:${prompt.includes('command.probe.called')}`);
+		delivery: {
+			type: 'terminal',
+			paste: (prompt) => {
+				calls.push(`paste:${prompt.includes('command.probe.called')}`);
+			},
 		},
 		copyToClipboard: async (prompt) => {
 			calls.push(`copy:${prompt.length > 0}`);
@@ -338,10 +336,7 @@ void test('debug command wires logger, clipboard, and alert dependencies', async
 		},
 		connect: async () => ({ connectionId: 'conn-1' }) as never,
 		recovery: readyRecovery,
-		allowTerminalPaste: false,
-		pasteIntoTerminal: () => {
-			throw new Error('paste should not run');
-		},
+		delivery: { type: 'clipboard-only' },
 		copyToClipboard: async (prompt) => {
 			calls.push(`copy:${prompt.includes('key.missing')}`);
 		},
@@ -399,10 +394,7 @@ void test('debug command forwards manual diagnostic signal into probe operation 
 		},
 		connect: async () => ({ connectionId: 'conn-1' }) as never,
 		recovery: readyRecovery,
-		allowTerminalPaste: false,
-		pasteIntoTerminal: () => {
-			throw new Error('paste should not run');
-		},
+		delivery: { type: 'clipboard-only' },
 		copyToClipboard: async (prompt) => {
 			calls.push(`copy:${prompt}`);
 		},
@@ -476,10 +468,7 @@ void test('debug command can use an injected manual diagnostic runner', async ()
 		},
 		connect: async () => ({ connectionId: 'conn-1' }) as never,
 		recovery: readyRecovery,
-		allowTerminalPaste: false,
-		pasteIntoTerminal: () => {
-			throw new Error('paste should not run');
-		},
+		delivery: { type: 'clipboard-only' },
 		copyToClipboard: async (prompt) => {
 			calls.push(`copy:${prompt}`);
 		},

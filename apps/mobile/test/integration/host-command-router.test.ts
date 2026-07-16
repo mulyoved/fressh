@@ -7,15 +7,14 @@ import { WORKMUX_APP_COMMAND_UPDATE_MESSAGE } from '../../src/lib/workmux-app-co
 void test('runHostCommandWithBoundary sends Workmux app commands to bridge argv transport', async () => {
 	const calls: { argv: string[]; timeoutMs: number }[] = [];
 	const output = await runHostCommandWithBoundary({
-		connection: { id: 'conn' },
+		hostCommands: { key: 'host' as never, run: async () => assert.fail() },
 		command: "mdev tmux app window --session 'main'",
 		timeoutMs: 10_000,
-		runWorkmuxCommand: async (_connection, argv, timeoutMs) => {
-			calls.push({ argv, timeoutMs });
-			return '{"windowId":"@12"}';
-		},
-		executeSideChannelCommand: async () => {
-			throw new Error('side channel should not run');
+		workmux: {
+			command: async (argv, options) => {
+				calls.push({ argv, timeoutMs: options?.timeoutMs ?? 0 });
+				return { status: 'completed', output: '{"windowId":"@12"}' };
+			},
 		},
 	});
 
@@ -27,20 +26,17 @@ void test('runHostCommandWithBoundary sends Workmux app commands to bridge argv 
 
 void test('runHostCommandWithBoundary rejects missing connection before any transport', async () => {
 	let workmuxCalls = 0;
-	let sideChannelCalls = 0;
 
 	await assert.rejects(
 		runHostCommandWithBoundary({
-			connection: null,
+			hostCommands: null,
 			command: "mdev tmux app window --session 'main'",
 			timeoutMs: 10_000,
-			runWorkmuxCommand: async () => {
-				workmuxCalls += 1;
-				return '';
-			},
-			executeSideChannelCommand: async () => {
-				sideChannelCalls += 1;
-				return { success: true, output: '' };
+			workmux: {
+				command: async () => {
+					workmuxCalls += 1;
+					return { status: 'completed', output: '' };
+				},
 			},
 		}),
 		(error) =>
@@ -48,21 +44,19 @@ void test('runHostCommandWithBoundary rejects missing connection before any tran
 			error.message === HOST_BROWSER_NO_CONNECTION_MESSAGE,
 	);
 	assert.equal(workmuxCalls, 0);
-	assert.equal(sideChannelCalls, 0);
 });
 
 void test('runHostCommandWithBoundary parses quoted Workmux app command values', async () => {
 	const calls: string[][] = [];
 	await runHostCommandWithBoundary({
-		connection: { id: 'conn' },
+		hostCommands: { key: 'host' as never, run: async () => assert.fail() },
 		command: "mdev tmux app focus 'don'\\''t' --session 'main session'",
 		timeoutMs: 10_000,
-		runWorkmuxCommand: async (_connection, argv) => {
-			calls.push(argv);
-			return '';
-		},
-		executeSideChannelCommand: async () => {
-			throw new Error('side channel should not run');
+		workmux: {
+			command: async (argv) => {
+				calls.push(argv);
+				return { status: 'completed', output: '' };
+			},
 		},
 	});
 
@@ -74,13 +68,18 @@ void test('runHostCommandWithBoundary parses quoted Workmux app command values',
 void test('runHostCommandWithBoundary preserves side channel for non-Workmux commands', async () => {
 	const calls: string[] = [];
 	const output = await runHostCommandWithBoundary({
-		connection: { id: 'conn' },
+		hostCommands: {
+			key: 'host' as never,
+			run: async (command, timeoutMs) => {
+				calls.push(`side:${command}:${timeoutMs}`);
+				return {
+					status: 'completed',
+					output: 'git@github.com:mulyoved/fressh.git\n',
+				};
+			},
+		},
 		command: 'git remote get-url origin',
 		timeoutMs: 20_000,
-		executeSideChannelCommand: async (_connection, command, timeoutMs) => {
-			calls.push(`side:${command}:${timeoutMs}`);
-			return { success: true, output: 'git@github.com:mulyoved/fressh.git\n' };
-		},
 	});
 
 	assert.equal(output, 'git@github.com:mulyoved/fressh.git');
@@ -96,13 +95,12 @@ void test('runHostCommandWithBoundary does not emit debug fetches for side-chann
 	}) as typeof fetch;
 	try {
 		const output = await runHostCommandWithBoundary({
-			connection: { id: 'conn' },
+			hostCommands: {
+				key: 'host' as never,
+				run: async () => ({ status: 'completed', output: 'clean\n' }),
+			},
 			command: 'git status',
 			timeoutMs: 20_000,
-			executeSideChannelCommand: async () => ({
-				success: true,
-				output: 'clean\n',
-			}),
 		});
 
 		assert.equal(output, 'clean');
@@ -115,14 +113,14 @@ void test('runHostCommandWithBoundary does not emit debug fetches for side-chann
 void test('runHostCommandWithBoundary tells users to update mdev for old Workmux command failures', async () => {
 	await assert.rejects(
 		runHostCommandWithBoundary({
-			connection: { id: 'conn' },
+			hostCommands: { key: 'host' as never, run: async () => assert.fail() },
 			command: "mdev tmux app context --session 'main'",
 			timeoutMs: 10_000,
-			runWorkmuxCommand: async () => {
-				throw new Error('Unknown tmux command: nav');
-			},
-			executeSideChannelCommand: async () => {
-				throw new Error('side channel should not run');
+			workmux: {
+				command: async () => ({
+					status: 'failed',
+					failure: { message: 'Unknown tmux command: nav' },
+				}),
 			},
 		}),
 		(error) =>
@@ -134,14 +132,15 @@ void test('runHostCommandWithBoundary tells users to update mdev for old Workmux
 void test('runHostCommandWithBoundary throws side-channel failures', async () => {
 	await assert.rejects(
 		runHostCommandWithBoundary({
-			connection: { id: 'conn' },
+			hostCommands: {
+				key: 'host' as never,
+				run: async () => ({
+					status: 'failed',
+					failure: { message: 'Remote command failed.' },
+				}),
+			},
 			command: 'git status',
 			timeoutMs: 10_000,
-			executeSideChannelCommand: async () => ({
-				success: false,
-				output: '',
-				error: 'Remote command failed.',
-			}),
 		}),
 		/Remote command failed/,
 	);

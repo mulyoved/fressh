@@ -73,40 +73,50 @@ void test('shell detail delegates activity and notification lifecycle', () => {
 		notificationComposition,
 		'route: {',
 	);
-	assert.match(notificationComposition, /^\s*activity,\s*$/m);
+	assert.match(notificationComposition, /^\s*activity:\s*activityPort,\s*$/m);
 	assert.match(notificationContext, /^\s*transportKey,\s*$/m);
 	assert.match(notificationContext, /^\s*targetKey,\s*$/m);
 	assert.match(
 		notificationContext,
-		/storedConnectionId:\s*connectionStoredConnectionId\s*\?\?\s*null/,
+		/storedConnectionId:\s*storedConnectionId\s*\?\?\s*null/,
 	);
 	assert.match(notificationContext, /^\s*channelId,\s*$/m);
 	assert.match(notificationContext, /^\s*tmuxEnabled,\s*$/m);
 	assert.match(notificationContext, /^\s*tmuxTarget,\s*$/m);
-	assert.match(notificationRoute, /^\s*agentConnectionId,\s*$/m);
-	assert.match(notificationRoute, /^\s*agentSession,\s*$/m);
-	assert.match(notificationRoute, /^\s*agentWindowId,\s*$/m);
-	assert.match(notificationRoute, /^\s*agentEventId,\s*$/m);
-	assert.match(notificationRoute, /^\s*agentTapToken,\s*$/m);
 	assert.match(
-		notificationComposition,
-		/^\s*runWorkmuxCommand:\s*runNotificationWorkmuxCommand,\s*$/m,
+		notificationRoute,
+		/agentConnectionId:\s*agentRoute\.connectionId/,
 	);
+	assert.match(notificationRoute, /agentSession:\s*agentRoute\.session/);
+	assert.match(notificationRoute, /agentWindowId:\s*agentRoute\.windowId/);
+	assert.match(notificationRoute, /agentEventId:\s*agentRoute\.eventId/);
+	assert.match(notificationRoute, /agentTapToken:\s*agentRoute\.tapToken/);
+	assert.match(notificationComposition, /^\s*workmux:\s*ports\.workmux,\s*$/m);
 	assert.match(notificationComposition, /^\s*logger,\s*$/m);
 	assert.doesNotMatch(
 		notificationContext,
-		/storedConnectionId:\s*(?:searchParams\.)?storedConnectionId\b/,
+		/searchParams\.storedConnectionId\b/,
 	);
 
-	assert.match(source, /const getActivitySnapshot = activity\.getSnapshot/);
-	const keyboardComposition = extractObjectBlock(
-		source.slice(source.indexOf('createShellDetailKeyboardControllerInput({')),
-		'createShellDetailKeyboardControllerInput({',
+	assert.match(source, /const activityPort = ports\.activity/);
+	assert.match(source, /useSyncExternalStore\(/);
+	assert.doesNotMatch(
+		source,
+		/const getActivitySnapshot = activity\.getSnapshot/,
 	);
-	assert.match(keyboardComposition, /^\s*activity,\s*$/m);
-	assert.match(keyboardComposition, /^\s*targetKey,\s*$/m);
+	const keyboardComposition = extractObjectBlock(
+		source.slice(source.indexOf('useShellKeyboardController({')),
+		'useShellKeyboardController({',
+	);
+	assert.match(keyboardComposition, /^\s*activity:\s*activityPort,\s*$/m);
+	assert.match(keyboardComposition, /^\s*sourceKey:\s*targetKey,\s*$/m);
 	assert.match(source, /useShellScrollbackController\(\{/);
+	assert.match(source, /^\s*activity:\s*activityPort,\s*$/m);
 	assert.doesNotMatch(source, /createShellActivityRetainedDomainBridge/);
 	assert.doesNotMatch(source, /createShellActivityKeyboardActions/);
 	assert.doesNotMatch(source, /invalidateKeyboardRunner/);
+	assert.doesNotMatch(
+		source,
+		/executeSessionHostCommand|runBrowserActionsWorkmuxCommand|runNotificationWorkmuxCommand/,
+	);
 });

@@ -2,6 +2,7 @@ import { type SavedEntryTailscaleRecovery } from './auto-connect-saved-entry';
 import {
 	deliverConnectionDiagnosticPrompt,
 	type ConnectionDiagnosticDeliveryResult,
+	type DiagnosticDelivery,
 } from './connection-diagnostic-delivery';
 import {
 	manualConnectionDiagnosticRunner,
@@ -34,8 +35,7 @@ export type ConnectionDebugCommandArgs = {
 	runDiagnosticShellProbe: typeof runDiagnosticShellProbe;
 	connect: Parameters<typeof runDiagnosticShellProbe>[0]['connect'];
 	recovery: SavedEntryTailscaleRecovery;
-	allowTerminalPaste: boolean;
-	pasteIntoTerminal: (value: string) => void;
+	delivery: DiagnosticDelivery;
 	copyToClipboard: (value: string) => Promise<void>;
 	showAlert: (title: string, message: string) => void;
 	logger: ConnectionDebugLogger;
@@ -135,8 +135,7 @@ export async function runConnectionDebugCommand(
 		: diagnostic.prompt;
 	const delivery = await deliverConnectionDiagnosticPrompt({
 		prompt,
-		allowTerminalPaste: args.allowTerminalPaste,
-		pasteIntoTerminal: args.pasteIntoTerminal,
+		delivery: args.delivery,
 		copyToClipboard: args.copyToClipboard,
 		showAlert: args.showAlert,
 	});

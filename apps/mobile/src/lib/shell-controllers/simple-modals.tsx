@@ -2,10 +2,8 @@ import {
 	useCallback,
 	useEffect,
 	useMemo,
-	useRef,
 	useState,
 	useSyncExternalStore,
-	type RefObject,
 } from 'react';
 import {
 	createControllerPublisher,
@@ -37,11 +35,12 @@ export type SimpleModalHandle = {
 	onClose: () => void;
 };
 
-export type TextEntryModalHandle = SimpleModalHandle & {
-	openRef: RefObject<boolean>;
+export type TextEntryModalHandle = Omit<SimpleModalHandle, 'onOpen'> & {
+	onOpen: () => boolean;
 };
 
 export type ShellSimpleModalsHandle = {
+	getSnapshot(): ShellSimpleModalsState;
 	commandMenu: SimpleModalHandle;
 	commander: SimpleModalHandle;
 	textEntry: TextEntryModalHandle;
@@ -54,6 +53,16 @@ const CLOSED_STATE: ShellSimpleModalsState = {
 	textEntry: false,
 	configure: false,
 };
+
+const TEXT_ENTRY_CONFLICTS: readonly ShellModalId[] = [
+	'command-menu',
+	'commander',
+	'configure',
+	'browser-actions',
+	'feature-request',
+	'worktree-workspace',
+	'skill-selector',
+];
 
 function getStateKey(id: ShellSimpleModalId): keyof ShellSimpleModalsState {
 	switch (id) {
@@ -110,8 +119,6 @@ export function useShellSimpleModals(
 		core.getSnapshot,
 		core.getSnapshot,
 	);
-	const textEntryOpenRef = useRef(snapshot.textEntry);
-	textEntryOpenRef.current = snapshot.textEntry;
 
 	useEffect(() => {
 		const unregisterCommandMenu = arbiter.register('command-menu', () => {
@@ -139,14 +146,16 @@ export function useShellSimpleModals(
 	);
 	const openCommander = useCallback(() => core.open('commander'), [core]);
 	const closeCommander = useCallback(() => core.close('commander'), [core]);
-	const openTextEntry = useCallback(() => {
-		core.open('text-entry');
-		textEntryOpenRef.current = core.getSnapshot().textEntry;
-	}, [core]);
-	const closeTextEntry = useCallback(() => {
-		core.close('text-entry');
-		textEntryOpenRef.current = core.getSnapshot().textEntry;
-	}, [core]);
+	const openTextEntry = useCallback(
+		() =>
+			arbiter.requestOpen({
+				target: 'text-entry',
+				conflicts: TEXT_ENTRY_CONFLICTS,
+				onOpen: () => core.open('text-entry'),
+			}),
+		[arbiter, core],
+	);
+	const closeTextEntry = useCallback(() => core.close('text-entry'), [core]);
 	const openConfigure = useCallback(() => core.open('configure'), [core]);
 	const closeConfigure = useCallback(() => core.close('configure'), [core]);
 
@@ -169,7 +178,6 @@ export function useShellSimpleModals(
 	const textEntry = useMemo<TextEntryModalHandle>(
 		() => ({
 			open: snapshot.textEntry,
-			openRef: textEntryOpenRef,
 			onOpen: openTextEntry,
 			onClose: closeTextEntry,
 		}),
@@ -184,5 +192,11 @@ export function useShellSimpleModals(
 		[snapshot.configure, openConfigure, closeConfigure],
 	);
 
-	return { commandMenu, commander, textEntry, configure };
+	return {
+		getSnapshot: core.getSnapshot,
+		commandMenu,
+		commander,
+		textEntry,
+		configure,
+	};
 }

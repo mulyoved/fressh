@@ -3,6 +3,11 @@ import {
 	createShellScrollbackControllerCore,
 	type ShellScrollbackContext,
 } from '../../src/lib/shell-controllers/scrollback-core';
+import { createScrollbackRemoteCopyModeOwner } from '../../src/lib/shell-controllers/scrollback-remote-copy-mode-owner';
+import {
+	type RetiringWorkmuxCleanupPort,
+	type ShellWorkmuxPort,
+} from '../../src/lib/shell-controllers/session-contracts';
 import { createShellTargetKey } from '../../src/lib/shell-controllers/source-keys';
 import { createTmuxScrollbackLineAccumulator } from '../../src/lib/workmux-scrollback-batch';
 import {
@@ -52,8 +57,30 @@ export function createScrollbackHarness(
 	} = {},
 ) {
 	const events: string[] = [];
-	const remoteCopyModeActive = { current: false };
-	const remoteCopyModeGeneration = { current: 0 };
+	const remoteCopyMode = createScrollbackRemoteCopyModeOwner({
+		warn: () => {},
+	});
+	const remoteCopyModeActive = {
+		get current() {
+			return remoteCopyMode.isOwned();
+		},
+		set current(owned: boolean) {
+			if (owned !== remoteCopyMode.isOwned()) {
+				if (owned) remoteCopyMode.acquire();
+				else remoteCopyMode.release();
+			}
+		},
+	};
+	const remoteCopyModeGeneration = {
+		get current() {
+			return remoteCopyMode.generation();
+		},
+		set current(generation: number) {
+			while (remoteCopyMode.generation() < generation) {
+				remoteCopyMode.transition();
+			}
+		},
+	};
 	const lineAccumulator = createTmuxScrollbackLineAccumulator();
 	const localExitRequestIds = new Set<number>();
 	const resetCalls: unknown[] = [];
@@ -70,6 +97,14 @@ export function createScrollbackHarness(
 		interactive: true,
 		generation: 0,
 	} as const;
+	const activityListeners = new Set<() => void>();
+	const activity = {
+		getSnapshot: () => activitySnapshot,
+		subscribe: (listener: () => void) => {
+			activityListeners.add(listener);
+			return () => activityListeners.delete(listener);
+		},
+	};
 	let selectionModeEnabled = false;
 	const executorInputs: Parameters<
 		typeof createWorkmuxScrollbackCommandExecutor
@@ -113,7 +148,7 @@ export function createScrollbackHarness(
 	const terminalView = {
 		getRuntimeKey: () => null,
 		getRuntimeInstanceId: () => null,
-		getOutputDiagnostics: () => null,
+		getSelectionModeEnabled: () => selectionModeEnabled,
 		isCurrentInstance: () => true,
 		fit: () => {},
 		setSystemKeyboardEnabled: () => {},
@@ -132,21 +167,40 @@ export function createScrollbackHarness(
 		sendBatch: async () => {},
 	};
 	const scroll = {
-		enter: async () => ({ success: true, output: '' }),
-		move: async () => ({ success: true, output: '' }),
-		exit: async () => ({ success: true, output: '' }),
+		enter: async () => ({ status: 'completed' as const, output: '' }),
+		move: async () => ({ status: 'completed' as const, output: '' }),
+		exit: async () => ({ status: 'completed' as const, output: '' }),
 	};
-	const context: ShellScrollbackContext = {
+	const workmuxBeforeDispose = new Map<
+		string,
+		(port: RetiringWorkmuxCleanupPort) => Promise<void>
+	>();
+	let workmuxUnregisterCount = 0;
+	const workmux = {
+		key: targetKey,
+		scroll,
+		registerBeforeDispose: (owner, cleanup) => {
+			workmuxBeforeDispose.set(owner, cleanup);
+			return () => {
+				if (workmuxBeforeDispose.get(owner) !== cleanup) return;
+				workmuxBeforeDispose.delete(owner);
+				workmuxUnregisterCount += 1;
+			};
+		},
+	} satisfies Pick<
+		ShellWorkmuxPort,
+		'key' | 'scroll' | 'registerBeforeDispose'
+	>;
+	const context = {
 		targetKey,
 		targetName: 'main',
 		connectionAvailable: true,
 		shellAvailable: true,
 		tmuxEnabled: true,
-		getActivitySnapshot: () => activitySnapshot,
-		getSelectionModeEnabled: () => selectionModeEnabled,
+		activity,
 		terminalTransport,
 		terminalView,
-		workmuxScroll: scroll,
+		workmux,
 		trace: (event) => traces.push(event),
 		feedback: {
 			alert: (title, message) => alerts.push({ title, message }),
@@ -159,7 +213,7 @@ export function createScrollbackHarness(
 			} satisfies ShellScrollbackContext['logger']),
 		getErrorMessage: (error) =>
 			error instanceof Error ? error.message : String(error),
-	};
+	} as ShellScrollbackContext & { workmux: typeof workmux };
 	const core = createShellScrollbackControllerCore({
 		createExecutor,
 		lineAccumulator,
@@ -167,8 +221,7 @@ export function createScrollbackHarness(
 			options.cleanupBarrier ??
 			createWorkmuxScrollbackLiveInputCleanupBarrier(),
 		localExitRequestIds,
-		remoteCopyModeActive,
-		remoteCopyModeGeneration,
+		remoteCopyMode,
 	});
 	core.setContext(context);
 
@@ -186,6 +239,7 @@ export function createScrollbackHarness(
 		localExitRequestIds,
 		remoteCopyModeActive,
 		remoteCopyModeGeneration,
+		remoteCopyMode,
 		resetCalls,
 		scroll,
 		setExecutorFactoryOverride: (override: typeof executorFactoryOverride) => {
@@ -196,11 +250,15 @@ export function createScrollbackHarness(
 				...activitySnapshot,
 				...next,
 			} as typeof activitySnapshot;
+			for (const listener of [...activityListeners]) listener();
 		},
 		setSelectionModeEnabled: (enabled: boolean) => {
 			selectionModeEnabled = enabled;
 		},
 		traces,
 		warnings,
+		workmux,
+		workmuxBeforeDispose,
+		workmuxUnregisterCount: () => workmuxUnregisterCount,
 	};
 }

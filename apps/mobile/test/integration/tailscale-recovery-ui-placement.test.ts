@@ -44,20 +44,31 @@ void test('AutoConnectManager does not render Tailscale recovery UI directly', (
 	assert.doesNotMatch(source, /<TailscaleRecoveryBanner/);
 });
 
-void test('shell detail routes host-page reconnect outcomes to the host page', () => {
-	const source = readFileSync(
+void test('shell session owns host-page reconnect routing outside shell detail', () => {
+	const detailSource = readFileSync(
 		require.resolve('../../src/app/shell/detail.tsx'),
 		'utf8',
 	);
-
-	assert.match(source, /lastReconnectOutcome/);
-	assert.match(source, /lastReconnectOutcome\.destination\s*===\s*'hostPage'/);
-	assert.match(source, /isReconnecting\s*===\s*false/);
-	assert.match(source, /pathname:\s*'\/'/);
-	assert.match(
-		source,
-		/editConnectionId:\s*storedConnectionId\s*\?\?\s*connectionId/,
+	const sessionSource = readFileSync(
+		require.resolve('../../src/lib/shell-controllers/session.tsx'),
+		'utf8',
 	);
+	const coreSource = readFileSync(
+		require.resolve('../../src/lib/shell-controllers/session-core.ts'),
+		'utf8',
+	);
+
+	assert.match(sessionSource, /state\) => state\.lastReconnectOutcome/);
+	assert.match(sessionSource, /state\) => state\.isReconnecting/);
+	assert.match(sessionSource, /lastReconnectOutcome,/);
+	assert.match(
+		coreSource,
+		/lastReconnectOutcome\?\.destination !== 'hostPage'/,
+	);
+	assert.match(sessionSource, /pathname:\s*'\/'/);
+	assert.match(sessionSource, /params:\s*\{ editConnectionId \}/);
+	assert.doesNotMatch(detailSource, /lastReconnectOutcome/);
+	assert.doesNotMatch(detailSource, /state\) => state\.isReconnecting/);
 });
 
 void test('Inline Tailscale panel does not use overlay positioning', () => {

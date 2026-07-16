@@ -160,9 +160,9 @@ void test('mode activation during authenticated capture starts cleanup from the 
 	const fixture = createFixture();
 	const cleanup = createDeferred<boolean>();
 	fixture.setStartedCleanup(cleanup.promise);
-	const getActivity = fixture.context.getActivitySnapshot;
+	const getActivity = fixture.context.activity.getSnapshot;
 	let activate = true;
-	fixture.context.getActivitySnapshot = () => {
+	fixture.context.activity.getSnapshot = () => {
 		if (activate) {
 			activate = false;
 			fixture.setScrollbackActive(true);
@@ -329,9 +329,9 @@ void test('onAccepted reentry advances freshness before transport invocation', a
 void test('stale outer inactivity notification cannot override reentrant newer activity', () => {
 	const fixture = createFixture();
 	fixture.coordinator.onActivityChanged();
-	const readActivity = fixture.context.getActivitySnapshot;
+	const readActivity = fixture.context.activity.getSnapshot;
 	let reenter = true;
-	fixture.context.getActivitySnapshot = () => {
+	fixture.context.activity.getSnapshot = () => {
 		if (!reenter) return readActivity();
 		reenter = false;
 		const staleInactive = {
@@ -353,9 +353,9 @@ void test('stale outer inactivity notification cannot override reentrant newer a
 void test('reentrant newer inactivity wins over a stale outer interactive notification once', () => {
 	const fixture = createFixture();
 	fixture.coordinator.onActivityChanged();
-	const readActivity = fixture.context.getActivitySnapshot;
+	const readActivity = fixture.context.activity.getSnapshot;
 	let reenter = true;
-	fixture.context.getActivitySnapshot = () => {
+	fixture.context.activity.getSnapshot = () => {
 		if (!reenter) return readActivity();
 		reenter = false;
 		const staleInteractive = { ...readActivity(), generation: 4 };

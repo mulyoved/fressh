@@ -7,6 +7,8 @@ import {
 	isMdevBridgeFailureClass,
 	type MdevBridgeFailureClass,
 } from '@/lib/mdev-bridge-client';
+import { type ControllerOutcome } from '@/lib/shell-controllers/controller-core';
+import { matchControllerOutcome } from '@/lib/shell-controllers/controller-outcome';
 import {
 	WORKMUX_APP_COMMAND_UPDATE_MESSAGE,
 	buildWorkmuxAppFocusArgv,
@@ -118,6 +120,10 @@ export type ShowWorkmuxKeyboardFailure = (failure: {
 	message: string;
 	failureClass?: MdevBridgeFailureClass;
 }) => void;
+export type WorkmuxKeyboardCommandExecutionOutcome = ControllerOutcome<{
+	message: string;
+	failureClass?: MdevBridgeFailureClass;
+}> & { output?: string };
 export const WORKMUX_KEYBOARD_COMMAND_DISABLED_MESSAGE =
 	'Workmux actions require a Workmux-enabled connection.';
 
@@ -155,7 +161,10 @@ export function createWorkmuxKeyboardCommandRunner({
 	isTmuxEnabled: () => boolean;
 	getSessionName: () => string;
 	getNavScope?: () => WorkmuxNavScope;
-	runWorkmuxCommand: (argv: string[], timeoutMs: number) => Promise<unknown>;
+	runWorkmuxCommand: (
+		argv: string[],
+		timeoutMs: number,
+	) => Promise<WorkmuxKeyboardCommandExecutionOutcome>;
 	showFailure: ShowWorkmuxKeyboardFailure;
 	getErrorMessage: (error: unknown) => string;
 }): WorkmuxKeyboardCommandRunner {
@@ -200,10 +209,34 @@ export function createWorkmuxKeyboardCommandRunner({
 								navScope,
 							)
 						: buildWorkmuxStatusCycleArgv(sessionName);
-			await runWorkmuxCommand(argv, 10_000);
-			return commandGeneration === generation
-				? { status: 'handled' }
-				: { status: 'superseded' };
+			const outcome = await runWorkmuxCommand(argv, 10_000);
+			return matchControllerOutcome(outcome, {
+				superseded: () => ({ status: 'superseded' as const }),
+				completed: () =>
+					commandGeneration === generation
+						? { status: 'handled' as const }
+						: { status: 'superseded' as const },
+				failed: (failed) => {
+					if (commandGeneration !== generation) {
+						return { status: 'superseded' as const };
+					}
+					showFailure({
+						message:
+							formatWorkmuxKeyboardCommandFailureMessage({
+								errorMessage: failed.failure.message,
+							}) || WORKMUX_APP_COMMAND_UPDATE_MESSAGE,
+						failureClass: failed.failure.failureClass,
+					});
+					return { status: 'handled' as const };
+				},
+				unavailable: () => {
+					if (commandGeneration !== generation) {
+						return { status: 'superseded' as const };
+					}
+					showFailure({ message: WORKMUX_APP_COMMAND_UPDATE_MESSAGE });
+					return { status: 'handled' as const };
+				},
+			});
 		} catch (error) {
 			if (commandGeneration === generation) {
 				const failureClass = getWorkmuxCommandFailureClass(error);

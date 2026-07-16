@@ -2,7 +2,9 @@ import { type DiscoveredSkill } from '../skill-discovery';
 import {
 	createControllerPublisher,
 	type ControllerCore,
+	type ControllerOutcome,
 } from './controller-core';
+import { matchControllerOutcome } from './controller-outcome';
 
 export type SkillSelectorProject = {
 	projectName: string;
@@ -19,6 +21,7 @@ export type SkillSelectorState = {
 	updatedAt: string | null;
 	isLoading: boolean;
 	isRefreshing: boolean;
+	isSelecting: boolean;
 	error: string | null;
 	refreshError: string | null;
 };
@@ -40,6 +43,7 @@ const CLOSED_STATE: SkillSelectorState = {
 	updatedAt: null,
 	isLoading: false,
 	isRefreshing: false,
+	isSelecting: false,
 	error: null,
 	refreshError: null,
 };
@@ -47,7 +51,7 @@ const CLOSED_STATE: SkillSelectorState = {
 export function createSkillSelectorControllerCore(deps: {
 	initialSourceKey: string;
 	loadProject(input: { forceRefresh: boolean }): Promise<SkillSelectorProject>;
-	sendText(value: string): void;
+	sendInput(value: string): Promise<ControllerOutcome<{ message: string }>>;
 	requestOpen(onOpen: () => void): boolean;
 	getErrorMessage(error: unknown): string;
 }): SkillSelectorControllerCore {
@@ -65,10 +69,12 @@ export function createSkillSelectorControllerCore(deps: {
 		!disposed && requestId === id && sourceKey === requestSourceKey;
 
 	const load = async (forceRefresh: boolean) => {
-		if (disposed || !publisher.getSnapshot().open) return;
+		const currentSnapshot = publisher.getSnapshot();
+		if (disposed || !currentSnapshot.open || currentSnapshot.isSelecting)
+			return;
 		const requestSourceKey = sourceKey;
 		const id = ++requestId;
-		const snapshot = publisher.getSnapshot();
+		const snapshot = currentSnapshot;
 		const refreshVisibleSkills = forceRefresh && snapshot.projectRoot !== null;
 		publisher.publish(
 			refreshVisibleSkills
@@ -96,6 +102,7 @@ export function createSkillSelectorControllerCore(deps: {
 				updatedAt: project.updatedAt,
 				isLoading: false,
 				isRefreshing: false,
+				isSelecting: false,
 				error: null,
 				refreshError: null,
 			});
@@ -117,6 +124,45 @@ export function createSkillSelectorControllerCore(deps: {
 		if (disposed) return;
 		clear();
 	};
+	const select = async (skill: DiscoveredSkill): Promise<void> => {
+		const snapshot = publisher.getSnapshot();
+		if (disposed || !snapshot.open || snapshot.isSelecting) return;
+		const requestSourceKey = sourceKey;
+		const id = ++requestId;
+		publisher.publish({ ...snapshot, isSelecting: true, error: null });
+		let outcome: ControllerOutcome<{ message: string }>;
+		try {
+			outcome = await deps.sendInput(`$${skill.name} `);
+		} catch (error) {
+			if (!isCurrent(id, requestSourceKey)) return;
+			outcome = {
+				status: 'failed',
+				failure: { message: deps.getErrorMessage(error) },
+			};
+		}
+		if (!isCurrent(id, requestSourceKey)) return;
+		const selectionResult = matchControllerOutcome(outcome, {
+			completed: () => ({ completed: true as const, error: null }),
+			failed: ({ failure }) => ({
+				completed: false as const,
+				error: failure.message,
+			}),
+			superseded: () => ({ completed: false as const, error: null }),
+			unavailable: () => ({
+				completed: false as const,
+				error: 'Terminal input is unavailable.',
+			}),
+		});
+		if (selectionResult.completed) {
+			close();
+			return;
+		}
+		publisher.publish({
+			...publisher.getSnapshot(),
+			isSelecting: false,
+			error: selectionResult.error,
+		});
+	};
 
 	return {
 		getSnapshot: publisher.getSnapshot,
@@ -132,11 +178,7 @@ export function createSkillSelectorControllerCore(deps: {
 		close,
 		retry: () => void load(true),
 		refresh: () => void load(true),
-		select: (skill) => {
-			if (disposed || !publisher.getSnapshot().open) return;
-			deps.sendText(`$${skill.name} `);
-			close();
-		},
+		select: (skill) => void select(skill),
 		setSourceKey: (nextSourceKey) => {
 			if (disposed || sourceKey === nextSourceKey) return;
 			sourceKey = nextSourceKey;

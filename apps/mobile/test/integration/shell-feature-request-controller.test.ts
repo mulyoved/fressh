@@ -139,7 +139,7 @@ void test('feature request close vetoes while submission is active', async () =>
 	assert.equal(harness.core.close(), false);
 	harness.core.markSourceStale();
 	harness.submissions[0]?.resolve({
-		success: true,
+		status: 'completed',
 		output: '',
 		issueUrl: 'https://github.com/mulyoved/fressh/issues/1',
 	});
@@ -156,7 +156,7 @@ void test('feature request current success closes and alerts once', async () => 
 	const repository = 'mulyoved/fressh';
 	const pending = harness.core.submit(description, repository);
 	harness.submissions[0]?.resolve({
-		success: true,
+		status: 'completed',
 		output: '',
 		issueUrl: null,
 	});
@@ -193,13 +193,36 @@ void test('feature request preserves submission fallback messages', async () => 
 
 	const failed = createFeatureRequestHarness();
 	const pending = failed.core.submit('description', 'mulyoved/fressh');
-	failed.submissions[0]?.resolve({ success: false, output: '' });
+	failed.submissions[0]?.resolve({
+		status: 'failed',
+		failure: {
+			message:
+				'Failed to create issue. Make sure gh and claude CLIs are installed and authenticated on the remote host.',
+		},
+		output: '',
+	});
 	await pending;
 	assert.equal(
 		failed.core.getSnapshot().error,
 		'Failed to create issue. Make sure gh and claude CLIs are installed and authenticated on the remote host.',
 	);
 	assert.equal(failed.core.getSnapshot().isSubmitting, false);
+
+	const detailFree = createFeatureRequestHarness();
+	const detailFreePending = detailFree.core.submit(
+		'description',
+		'mulyoved/fressh',
+	);
+	detailFree.submissions[0]?.resolve({
+		status: 'failed',
+		failure: { message: 'Host command failed.', reason: 'no-detail' },
+		output: '',
+	});
+	await detailFreePending;
+	assert.equal(
+		detailFree.core.getSnapshot().error,
+		'Failed to create issue. Make sure gh and claude CLIs are installed and authenticated on the remote host.',
+	);
 });
 
 void test('feature request submission rejection logs and clears submitting', async () => {
@@ -220,9 +243,9 @@ void test('feature request suppresses resolver success after a newer submission 
 	const pending = harness.core.submit('description', 'pinned/repository');
 	assert.equal(harness.core.getSnapshot().isResolvingTarget, false);
 	harness.submissions[0]?.resolve({
-		success: false,
+		status: 'failed',
 		output: '',
-		error: 'pinned submission failed',
+		failure: { message: 'pinned submission failed' },
 	});
 	await pending;
 	harness.resolves[0]?.resolve('resolved/current');
@@ -239,9 +262,9 @@ void test('feature request suppresses resolver rejection after a newer submissio
 	const pending = harness.core.submit('description', 'pinned/repository');
 	assert.equal(harness.core.getSnapshot().isResolvingTarget, false);
 	harness.submissions[0]?.resolve({
-		success: false,
+		status: 'failed',
 		output: '',
-		error: 'pinned submission failed',
+		failure: { message: 'pinned submission failed' },
 	});
 	await pending;
 	harness.resolves[0]?.reject(new Error('older resolution failed'));
@@ -270,7 +293,7 @@ void test('feature request pinned success closes exactly and suppresses older re
 	harness.core.open();
 	const pending = harness.core.submit('description', 'pinned/repository');
 	harness.submissions[0]?.resolve({
-		success: true,
+		status: 'completed',
 		output: '',
 		issueUrl: 'https://github.com/pinned/repository/issues/83',
 	});
@@ -297,7 +320,7 @@ void test('feature request pinned success suppresses older resolver rejection', 
 	const harness = createFeatureRequestHarness();
 	harness.core.open();
 	const pending = harness.core.submit('description', 'pinned/repository');
-	harness.submissions[0]?.resolve({ success: true, output: '' });
+	harness.submissions[0]?.resolve({ status: 'completed', output: '' });
 	await pending;
 	harness.resolves[0]?.reject(new Error('older resolution failed'));
 	await harness.settled();
@@ -321,9 +344,9 @@ void test('feature request open during submission starts no new work', async () 
 	assert.equal(harness.commands.length, 1);
 	assert.equal(harness.submissions.length, 1);
 	harness.submissions[0]?.resolve({
-		success: false,
+		status: 'failed',
 		output: '',
-		error: 'failed',
+		failure: { message: 'failed' },
 	});
 	await pending;
 });
@@ -355,9 +378,9 @@ void test('feature request ignores repeated submission while one is active', asy
 	assert.equal(harness.commands.length, 1);
 	assert.equal(harness.submissions.length, 1);
 	harness.submissions[0]?.resolve({
-		success: false,
+		status: 'failed',
 		output: '',
-		error: 'failed',
+		failure: { message: 'failed' },
 	});
 	await first;
 });
@@ -368,7 +391,7 @@ void test('feature request disposal suppresses an active submission', async () =
 	const pending = harness.core.submit('description', 'mulyoved/fressh');
 	harness.core.dispose();
 	harness.submissions[0]?.resolve({
-		success: true,
+		status: 'completed',
 		output: '',
 		issueUrl: 'https://github.com/mulyoved/fressh/issues/83',
 	});
@@ -392,7 +415,7 @@ void test('feature request lifecycle invalidates synchronously before replay-saf
 
 	cleanup();
 	harness.submissions[0]?.resolve({
-		success: true,
+		status: 'completed',
 		output: '',
 		issueUrl: 'https://github.com/mulyoved/fressh/issues/83',
 	});
@@ -464,7 +487,7 @@ function createArbiterHarness() {
 }
 
 function createAdapterDependencies(input?: {
-	connection?: TestConnection | null;
+	hostCommands?: TestConnection | null;
 	arbiter?: ShellModalArbiter;
 	executions?: {
 		connection: TestConnection;
@@ -473,20 +496,25 @@ function createAdapterDependencies(input?: {
 	}[];
 }) {
 	const executions = input?.executions ?? [];
+	const connection =
+		input && 'hostCommands' in input
+			? (input.hostCommands ?? null)
+			: ({ id: 'connection' } satisfies TestConnection);
 	return {
-		connection:
-			input && 'connection' in input
-				? (input.connection ?? null)
-				: ({ id: 'connection' } satisfies TestConnection),
+		hostCommands: connection
+			? {
+					key: 'test-host' as never,
+					run: async (command: string, timeoutMs: number) => {
+						executions.push({ connection, command, timeoutMs });
+						return {
+							status: 'completed' as const,
+							output: '',
+							issueUrl: null,
+						};
+					},
+				}
+			: null,
 		resolveCurrentGitHubRepository: async () => 'mulyoved/fressh',
-		executeSideChannelCommand: async (
-			connection: TestConnection,
-			command: string,
-			timeoutMs: number,
-		) => {
-			executions.push({ connection, command, timeoutMs });
-			return { success: true, output: '', issueUrl: null };
-		},
 		getErrorMessage: (error: unknown) => String(error),
 		logger: {
 			info: () => {},
@@ -502,14 +530,14 @@ void test('feature request adapter reads committed submission dependencies', asy
 		command: string;
 		timeoutMs: number;
 	}[] = [];
-	let committed = createAdapterDependencies({ connection: null, executions });
+	let committed = createAdapterDependencies({ hostCommands: null, executions });
 	const alerts: (string | null)[] = [];
 	const adapter = createFeatureRequestControllerAdapter({
 		getCommittedDependencies: () => committed,
 		showSubmittedAlert: (issueUrl) => alerts.push(issueUrl),
 	});
 	committed = createAdapterDependencies({
-		connection: { id: 'current' },
+		hostCommands: { id: 'current' },
 		executions,
 	});
 

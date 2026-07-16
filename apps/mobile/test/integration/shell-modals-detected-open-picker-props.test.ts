@@ -20,6 +20,10 @@ const browserActionsFacadeSourcePath = join(
 	'src/lib/shell-controllers/browser-actions-facade.ts',
 );
 const shellDetailSourcePath = join(process.cwd(), 'src/app/shell/detail.tsx');
+const shellViewSourcePath = join(
+	process.cwd(),
+	'src/app/shell/ShellScreenView.tsx',
+);
 
 function assertCallBefore(
 	source: string,
@@ -130,12 +134,17 @@ void test('browser actions controller cancels detected open work before other br
 });
 
 void test('shell detail renders detected open picker modal with browser action props', () => {
-	const source = readFileSync(shellDetailSourcePath, 'utf8');
+	const detailSource = readFileSync(shellDetailSourcePath, 'utf8');
+	const viewSource = readFileSync(shellViewSourcePath, 'utf8');
 
-	assert.match(source, /import \{ BrowserActionsModal \}/);
-	assert.match(source, /import \{ DetectedOpenPickerModal \}/);
-	assert.match(source, /<DetectedOpenPickerModal/);
-	assert.match(source, /\{\.\.\.browserActions\.detectedOpenPickerProps\}/);
+	assert.match(viewSource, /import \{ BrowserActionsModal \}/);
+	assert.match(viewSource, /import \{ DetectedOpenPickerModal \}/);
+	assert.match(viewSource, /<DetectedOpenPickerModal/);
+	assert.match(viewSource, /\{\.\.\.modals\.browser\.detectedOpenPicker\}/);
+	assert.match(
+		detailSource,
+		/detectedOpenPicker:\s*browserActions\.detectedOpenPickerProps/,
+	);
 });
 
 void test('detected open picker keys stay unique for duplicate candidates', () => {

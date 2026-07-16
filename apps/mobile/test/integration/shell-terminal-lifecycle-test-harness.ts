@@ -72,15 +72,15 @@ export function createHarness(
 			listenerCursors: [] as unknown[],
 			removedListenerIds: [] as bigint[],
 			listeners: new Map(),
-			bufferStats: () => ({
-				ringBytesCount: 0n,
-				usedBytes: 0n,
-				headSeq: 0n,
-				tailSeq: 0n,
-				droppedBytesTotal: 0n,
-				chunksCount: 0n,
+			getNativeOutputDiagnostics: () => ({
+				currentSeq: '0',
+				ringBytesCount: '0',
+				usedBytes: '0',
+				headSeq: '0',
+				tailSeq: '0',
+				droppedBytesTotal: '0',
+				chunksCount: '0',
 			}),
-			currentSeq: () => 0n,
 			readBuffer(cursor: { mode: string }) {
 				this.readModes.push(cursor.mode);
 				return {
@@ -167,10 +167,19 @@ export function createHarness(
 				hooks.onWarn?.(message);
 			},
 		},
-		onRuntimeChanged: (runtimeKey, instanceId) => {
-			runtimeChanges.push({ runtimeKey, instanceId });
-			hooks.onRuntimeChanged?.(runtimeKey, instanceId);
-		},
+	});
+	let previousRuntime = '';
+	core.subscribe(() => {
+		const snapshot = core.getSnapshot();
+		const signature = `${snapshot.runtimeKey}:${snapshot.runtimeInstanceId}`;
+		if (signature === previousRuntime) return;
+		previousRuntime = signature;
+		const change = {
+			runtimeKey: snapshot.runtimeKey,
+			instanceId: snapshot.runtimeInstanceId,
+		};
+		runtimeChanges.push(change);
+		hooks.onRuntimeChanged?.(change.runtimeKey, change.instanceId);
 	});
 	const shellA = createShell('connection-a', 7);
 	const shellB = createShell('connection-b', 8);

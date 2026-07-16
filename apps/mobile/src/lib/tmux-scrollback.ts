@@ -61,11 +61,16 @@ export type TmuxScrollbackCleanupFailureReportingPolicy =
 			): void;
 	  };
 
+export type TmuxScrollbackRemoteCopyModeSettlement = {
+	isOwned(): boolean;
+	settle(owned: boolean): void;
+};
+
 export function registerTmuxScrollbackRemoteCopyModeExitCleanup({
 	barrier,
 	cleanup,
-	remoteCopyModeActiveRef,
-	remoteCopyModeWasActive = remoteCopyModeActiveRef.current,
+	remoteCopyMode,
+	remoteCopyModeWasActive = remoteCopyMode.isOwned(),
 	freshness,
 	failureOwnership,
 	successOwnership,
@@ -73,7 +78,7 @@ export function registerTmuxScrollbackRemoteCopyModeExitCleanup({
 }: {
 	barrier: WorkmuxScrollbackLiveInputCleanupBarrier;
 	cleanup?: Promise<boolean> | null;
-	remoteCopyModeActiveRef: { current: boolean };
+	remoteCopyMode: TmuxScrollbackRemoteCopyModeSettlement;
 	remoteCopyModeWasActive?: boolean;
 	freshness: TmuxScrollbackCleanupFreshnessPolicy;
 	failureOwnership: TmuxScrollbackCleanupFailureOwnershipPolicy;
@@ -119,7 +124,7 @@ export function registerTmuxScrollbackRemoteCopyModeExitCleanup({
 			if (!isCurrent(exited ? 'success' : 'failure')) return;
 			if (exited) {
 				if (successOwnership === 'clear') {
-					remoteCopyModeActiveRef.current = false;
+					remoteCopyMode.settle(false);
 				}
 				return;
 			}
@@ -127,16 +132,16 @@ export function registerTmuxScrollbackRemoteCopyModeExitCleanup({
 				case 'ignore':
 					break;
 				case 'restore':
-					remoteCopyModeActiveRef.current = true;
+					remoteCopyMode.settle(true);
 					break;
 				case 'preserve-if-cleared': {
 					const wasClearedDuringCleanup =
-						remoteCopyModeWasActive && !remoteCopyModeActiveRef.current;
+						remoteCopyModeWasActive && !remoteCopyMode.isOwned();
 					if (
 						!wasClearedDuringCleanup &&
 						(remoteCopyModeWasActive || failureOwnership.acquireOnFailure)
 					) {
-						remoteCopyModeActiveRef.current = true;
+						remoteCopyMode.settle(true);
 					}
 					break;
 				}
@@ -146,7 +151,7 @@ export function registerTmuxScrollbackRemoteCopyModeExitCleanup({
 		(error) => {
 			if (!isCurrent('failure')) return;
 			if (failureOwnership.kind === 'restore') {
-				remoteCopyModeActiveRef.current = true;
+				remoteCopyMode.settle(true);
 			}
 			reportFailure(error, { kind: 'rejected' });
 		},
@@ -178,6 +183,12 @@ function runTmuxScrollbackRemoteCopyModeCleanupForUiReset({
 	}) => Promise<boolean> | null;
 }): Promise<boolean> | null {
 	const remoteCopyModeWasActive = remoteCopyModeActiveRef.current;
+	const remoteCopyMode: TmuxScrollbackRemoteCopyModeSettlement = {
+		isOwned: () => remoteCopyModeActiveRef.current,
+		settle: (owned) => {
+			remoteCopyModeActiveRef.current = owned;
+		},
+	};
 	const cleanupTargetName = remoteCopyModeWasActive ? targetName : undefined;
 	clearTmuxScrollbackLineAccumulator(lineAccumulator);
 	const cleanup = commandExecutor
@@ -190,7 +201,7 @@ function runTmuxScrollbackRemoteCopyModeCleanupForUiReset({
 	return registerTmuxScrollbackRemoteCopyModeExitCleanup({
 		barrier: cleanupBarrier,
 		cleanup,
-		remoteCopyModeActiveRef,
+		remoteCopyMode,
 		remoteCopyModeWasActive,
 		freshness: cleanupGeneration
 			? { kind: 'generation', generation: cleanupGeneration }
@@ -315,8 +326,7 @@ export async function handleTmuxScrollbackEnterRequested({
 	connectionAvailable,
 	targetName,
 	commandExecutor,
-	remoteCopyModeActiveRef,
-	remoteCopyModeGenerationRef,
+	remoteCopyModeOwnership,
 	clearLocalScrollbackUiState,
 	sendScrollbackEnterAck,
 	isRequestCurrent = () => true,
@@ -334,8 +344,9 @@ export async function handleTmuxScrollbackEnterRequested({
 	connectionAvailable: boolean;
 	targetName: string;
 	commandExecutor: WorkmuxScrollbackCommandExecutor;
-	remoteCopyModeActiveRef: { current: boolean };
-	remoteCopyModeGenerationRef: { current: number };
+	remoteCopyModeOwnership: {
+		acquire(): Readonly<{ generation: number }>;
+	};
 	clearLocalScrollbackUiState: () => void;
 	sendScrollbackEnterAck: (requestId: number, instanceId: string) => void;
 	isRequestCurrent?: () => boolean;
@@ -465,14 +476,13 @@ export async function handleTmuxScrollbackEnterRequested({
 		clearLocalScrollbackUiState();
 		return;
 	}
-	remoteCopyModeGenerationRef.current += 1;
-	remoteCopyModeActiveRef.current = true;
+	const remoteCopyModeToken = remoteCopyModeOwnership.acquire();
 	if (
 		!emitTrace({
 			event: 'rn.enter.acked',
 			requestId: event.requestId,
 			instanceId: event.instanceId,
-			remoteGeneration: remoteCopyModeGenerationRef.current,
+			remoteGeneration: remoteCopyModeToken.generation,
 		})
 	) {
 		await rollback();
