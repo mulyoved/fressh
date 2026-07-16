@@ -155,8 +155,8 @@ The protocol codec owns all wire representations:
 - Incremental UTF-8 decoding across arbitrary stdout chunks.
 - Incremental newline framing across arbitrary chunks.
 - A 4 MiB maximum incomplete NDJSON line.
-- JSON classification for known terminal records.
-- Base64 decoding for ANSI terminal bytes.
+- JSON classification and validation for known terminal records.
+- Strict Base64 decoding for ANSI terminal bytes.
 - Exact newline-terminated input, resize, scroll, and release records.
 
 The codec is pure and contains no React, navigation, SSH lifecycle, or xterm
@@ -169,7 +169,8 @@ The terminal owner is a provider-specific lifecycle object. It owns:
 - A monotonically increasing generation.
 - Stream startup and the ten-second first-frame deadline.
 - Stdout decoding and a bounded 16 KiB sanitized stderr tail.
-- Frame sequencing and ordered renderer delivery.
+- Full-frame baseline validation, contiguous frame sequencing, and ordered
+  renderer delivery.
 - A serialized outbound command queue.
 - Resize coalescing.
 - Scroll command emission.
@@ -228,8 +229,10 @@ visible.
 1. The user selects an agent row.
 2. The terminal route fits xterm to obtain initial columns and rows.
 3. The owner starts normal control without takeover.
-4. The first valid frame replaces the loading state and is written to xterm.
-5. Later frames, input, resize, and scroll remain ordered through the owner.
+4. The first valid `full: true` frame establishes the renderer baseline,
+   replaces the loading state, and is written to xterm.
+5. Later contiguous frames, input, resize, and scroll remain ordered through the
+   owner.
 
 ### Controller already owned
 
@@ -289,14 +292,27 @@ Known stdout frames have this shape:
 }
 ```
 
-The owner accepts ANSI frames with valid Base64 bytes and writes decoded bytes
-to xterm in stream order. Duplicate or older sequence numbers are ignored.
-Unknown record types are ignored. `terminal.closed` retires the stream and
-surfaces its sanitized reason when it was not caused by expected cleanup.
+The first accepted terminal frame in every generation must be a valid
+`full: true` ANSI frame with a positive sequence number. It establishes xterm's
+rendering baseline and the owner's last accepted sequence number. The owner then
+accepts only the next sequence number and writes its decoded bytes to xterm in
+stream order. Duplicate or older frames are ignored because their effects were
+already applied. A forward sequence gap fails the generation; later partial
+frames must never be applied to an incomplete baseline.
 
-Invalid JSON or invalid Base64 is counted and skipped. An oversized incomplete
-line terminates the generation to prevent unbounded memory use. A stream that
-never produces a valid frame fails after ten seconds.
+A malformed NDJSON record, a malformed known terminal record, or invalid Base64
+in `terminal.frame` also fails the generation because the owner cannot prove
+that a required delta was not lost. An oversized incomplete line fails the
+generation to prevent unbounded memory use. Unknown but well-formed record types
+are ignored. `terminal.closed` retires the stream and surfaces its sanitized
+reason when it was not caused by expected cleanup.
+
+On any frame-integrity failure, the owner stops renderer delivery, retires and
+releases/closes the current stream, and presents a recoverable terminal
+synchronization error. Retry creates a fresh generation without takeover. No
+rendering resumes until that generation supplies its initial `full: true` frame,
+which replaces the invalid baseline. A stream that never supplies that frame
+fails after ten seconds.
 
 ### Input
 
@@ -400,8 +416,10 @@ User-facing errors are classified rather than presented as raw process output:
   host. A successful reconnect reloads the snapshot before reopening a target.
 - **Unexpected exit or close:** show the sanitized reason and offer Retry or
   Back to Agents.
-- **Malformed or oversized stream:** fail the current generation without
-  crashing the app.
+- **Frame synchronization lost:** for a malformed record, invalid frame payload,
+  forward sequence gap, or oversized stream, retire and release/close the
+  current generation, stop rendering partial frames, and offer Retry. The new
+  generation must begin with a full frame before rendering resumes.
 
 There is no indefinite hidden retry loop. Foreground reacquisition is the only
 automatic terminal retry. All other retries are explicit user actions.
@@ -416,7 +434,8 @@ POC diagnostics record:
 - Command-stream start and stop.
 - Time to first frame.
 - Frame count and decoded byte count.
-- Invalid record count.
+- Invalid record count, synchronization-failure kind, and last accepted sequence
+  number.
 - Resize and scroll command counts.
 - Takeover requests.
 - Background, foreground, switch, back, error, and unmount cleanup reasons.
@@ -455,7 +474,7 @@ Stream buffers, one-shot output, stderr, and log fields remain bounded.
 - Multiple records in one chunk.
 - Empty lines and CRLF.
 - UTF-8 split across chunks.
-- Malformed JSON followed by a valid record.
+- Malformed JSON is reported as a fatal protocol error.
 - Oversized incomplete line.
 - Final line without a newline at process exit.
 
@@ -463,7 +482,9 @@ Stream buffers, one-shot output, stderr, and log fields remain bounded.
 
 - Valid and invalid Base64 ANSI frames.
 - Empty frames.
-- Duplicate and out-of-order sequence numbers.
+- Required initial full frame.
+- Duplicate and older sequence numbers are ignored.
+- Forward sequence gaps fail the generation.
 - Exact input, resize, scroll, and release JSON.
 - Exactly one trailing newline per command.
 - Positive dimension and line-count validation.
@@ -486,7 +507,8 @@ simulate close failures.
 
 Verify:
 
-- First valid frame reaches xterm.
+- First valid full frame reaches xterm.
+- A partial first frame retires the generation without reaching xterm.
 - Multiple frames retain order.
 - Text and every required special key become exact input bytes.
 - Resize coalescing sends only the latest size.
@@ -500,7 +522,12 @@ Verify:
 - Foreground reacquires the same target.
 - Missing foreground target returns to the refreshed list.
 - First-frame timeout closes the stream.
-- Malformed records do not crash the app.
+- Unknown well-formed records are ignored.
+- Malformed JSON, malformed frame payloads, invalid frame Base64, and forward
+  sequence gaps retire the generation without crashing the app.
+- No partial frame reaches xterm after synchronization is lost.
+- Explicit Retry starts a fresh non-takeover generation, and rendering resumes
+  only after its initial full frame.
 
 ### Component tests
 
