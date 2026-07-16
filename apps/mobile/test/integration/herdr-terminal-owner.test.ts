@@ -100,17 +100,17 @@ class FakeClock {
 	}
 }
 
-type Deferred = Readonly<{
-	promise: Promise<void>;
-	resolve(): void;
+type Deferred<T = void> = Readonly<{
+	promise: Promise<T>;
+	resolve(value?: T): void;
 	reject(error: unknown): void;
 }>;
 
-function deferred(): Deferred {
-	let resolve!: () => void;
+function deferred<T = void>(): Deferred<T> {
+	let resolve!: (value?: T) => void;
 	let reject!: (error: unknown) => void;
-	const promise = new Promise<void>((onResolve, onReject) => {
-		resolve = onResolve;
+	const promise = new Promise<T>((onResolve, onReject) => {
+		resolve = (value) => onResolve(value as T);
 		reject = onReject;
 	});
 	return { promise, resolve, reject };
@@ -121,9 +121,14 @@ class FakeStream implements HerdrCommandStream {
 	readonly pendingSends: Deferred[] = [];
 	closeCalls = 0;
 	controlSends = false;
+	rejectSends = false;
+	controlClose = false;
+	closeError: unknown = null;
+	readonly pendingCloses: Deferred[] = [];
 
 	async sendData(data: ArrayBuffer): Promise<void> {
 		this.sent.push(new Uint8Array(data).slice());
+		if (this.rejectSends) throw new Error('release rejected');
 		if (!this.controlSends) return;
 		const pending = deferred();
 		this.pendingSends.push(pending);
@@ -132,6 +137,11 @@ class FakeStream implements HerdrCommandStream {
 
 	async close(): Promise<void> {
 		this.closeCalls += 1;
+		if (this.closeError) throw this.closeError;
+		if (!this.controlClose) return;
+		const pending = deferred();
+		this.pendingCloses.push(pending);
+		return pending.promise;
 	}
 
 	sentRecords(): unknown[] {
@@ -150,12 +160,24 @@ type StartCall = Readonly<{
 class FakeConnection implements HerdrTerminalConnection {
 	readonly calls: StartCall[] = [];
 	readonly streams: FakeStream[] = [];
+	readonly pendingStarts: Deferred<HerdrCommandStream>[] = [];
+	controlStarts = false;
+	disconnectCalls = 0;
 
 	startCommandStream(input: StartCall): Promise<HerdrCommandStream> {
 		this.calls.push(input);
 		const stream = new FakeStream();
 		this.streams.push(stream);
+		if (this.controlStarts) {
+			const pending = deferred<HerdrCommandStream>();
+			this.pendingStarts.push(pending);
+			return pending.promise;
+		}
 		return Promise.resolve(stream);
+	}
+
+	disconnect(): void {
+		this.disconnectCalls += 1;
 	}
 }
 
@@ -305,7 +327,7 @@ void test('a forward sequence gap retires the generation before any later render
 
 void test('retry creates a non-takeover generation requiring a new full baseline', async () => {
 	const harness = createHarness();
-	harness.owner.start({ cols: 80, rows: 24, takeover: true });
+	harness.owner.takeOver({ cols: 80, rows: 24 });
 	await flushMicrotasks();
 	harness.connection.calls[0]?.onEvent(
 		frame({ seq: 2, full: false, bytes: [2] }),
@@ -634,4 +656,226 @@ void test('writes are rejected as soon as retirement begins', async () => {
 
 	await retirement;
 	assert.equal(harness.connection.streams[0]?.closeCalls, 1);
+});
+
+void test('controller conflict is owned elsewhere until explicit takeover', async () => {
+	const harness = createHarness();
+	harness.owner.start({ cols: 80, rows: 24 });
+	await flushMicrotasks();
+	const reason =
+		'controller already has an attached client; retry with --takeover';
+
+	harness.connection.calls[0]?.onEvent(
+		stdoutLine({ type: 'terminal.closed', reason }),
+	);
+	await flushMicrotasks();
+
+	assert.deepEqual(harness.owner.getState(), {
+		phase: 'owned-elsewhere',
+		generation: 1,
+		reason,
+	});
+	assert.equal(harness.connection.calls.length, 1);
+	assert.equal(harness.connection.streams[0]?.closeCalls, 1);
+	assert.equal(harness.owner.sendInput(Uint8Array.of(1)), false);
+
+	harness.owner.takeOver({ cols: 100, rows: 40 });
+	await flushMicrotasks();
+
+	assert.equal(harness.connection.calls.length, 2);
+	assert.match(harness.connection.calls[1]?.command ?? '', /--takeover$/);
+	assert.deepEqual(harness.owner.getState(), {
+		phase: 'starting',
+		generation: 2,
+	});
+});
+
+void test('normal, retry, and foreground starts never add takeover', async () => {
+	const harness = createHarness();
+	harness.owner.start({ cols: 80, rows: 24 });
+	await flushMicrotasks();
+	assert.doesNotMatch(harness.connection.calls[0]?.command ?? '', /takeover/);
+
+	harness.owner.background();
+	harness.owner.start({ cols: 90, rows: 30 });
+	await flushMicrotasks();
+	assert.equal(harness.connection.calls.length, 2);
+	assert.doesNotMatch(harness.connection.calls[1]?.command ?? '', /takeover/);
+
+	harness.owner.retry({ cols: 100, rows: 40 });
+	await flushMicrotasks();
+	assert.equal(harness.connection.calls.length, 3);
+	assert.doesNotMatch(harness.connection.calls[2]?.command ?? '', /takeover/);
+	assert.equal(harness.connection.disconnectCalls, 0);
+});
+
+void test('graceful retirement is idempotent and closes after a bounded release window', async (t) => {
+	for (const reason of [
+		'back',
+		'switch',
+		'retry',
+		'failure',
+		'unmount',
+	] as const) {
+		await t.test(reason, async () => {
+			const harness = createHarness();
+			harness.owner.start({ cols: 80, rows: 24 });
+			await flushMicrotasks();
+			const stream = harness.connection.streams[0];
+			assert.ok(stream);
+			stream.controlSends = true;
+
+			if (reason === 'failure') {
+				harness.connection.calls[0]?.onEvent(
+					stdout(encoder.encode('{broken\n')),
+				);
+			}
+			const first = harness.owner.retire(reason);
+			const second = harness.owner.retire(reason);
+			assert.strictEqual(first, second);
+			assert.equal(harness.owner.sendInput(Uint8Array.of(1)), false);
+			await flushMicrotasks();
+
+			assert.deepEqual(stream.sentRecords(), [{ type: 'terminal.release' }]);
+			assert.equal(stream.closeCalls, 0);
+			const delays = harness.clock.pendingDelays();
+			assert.equal(delays.length, 1);
+			assert.ok((delays[0] ?? 0) > 0);
+			harness.clock.advanceBy(delays[0] ?? 0);
+			await flushMicrotasks();
+
+			await first;
+			assert.equal(stream.closeCalls, 1);
+			assert.deepEqual(stream.sentRecords(), [{ type: 'terminal.release' }]);
+			assert.equal(harness.connection.disconnectCalls, 0);
+		});
+	}
+});
+
+void test('graceful retirement closes after release rejection and does not await close settlement', async () => {
+	const harness = createHarness();
+	harness.owner.start({ cols: 80, rows: 24 });
+	await flushMicrotasks();
+	const stream = harness.connection.streams[0];
+	assert.ok(stream);
+	stream.rejectSends = true;
+	stream.controlClose = true;
+
+	let settled = false;
+	const retirement = harness.owner.retire('unmount').then(() => {
+		settled = true;
+	});
+	await flushMicrotasks();
+
+	assert.equal(stream.closeCalls, 1);
+	assert.equal(stream.pendingCloses.length, 1);
+	assert.equal(settled, true);
+	assert.deepEqual(stream.sentRecords(), [{ type: 'terminal.release' }]);
+	assert.equal(harness.connection.disconnectCalls, 0);
+	stream.pendingCloses[0]?.resolve();
+	await retirement;
+});
+
+void test('retry and takeover wait until prior native close is invoked', async (t) => {
+	for (const action of ['retry', 'takeover'] as const) {
+		await t.test(action, async () => {
+			const harness = createHarness();
+			harness.owner.start({ cols: 80, rows: 24 });
+			await flushMicrotasks();
+			const stream = harness.connection.streams[0];
+			assert.ok(stream);
+			stream.controlSends = true;
+
+			if (action === 'retry') {
+				harness.owner.retry({ cols: 90, rows: 30 });
+			} else {
+				harness.owner.takeOver({ cols: 90, rows: 30 });
+			}
+			await flushMicrotasks();
+			assert.equal(harness.connection.calls.length, 1);
+			assert.equal(stream.closeCalls, 0);
+
+			const delays = harness.clock.pendingDelays();
+			assert.equal(delays.length, 1);
+			harness.clock.advanceBy(delays[0] ?? 0);
+			assert.equal(stream.closeCalls, 1);
+			assert.equal(harness.connection.calls.length, 1);
+			await flushMicrotasks();
+
+			assert.equal(harness.connection.calls.length, 2);
+			if (action === 'takeover') {
+				assert.match(harness.connection.calls[1]?.command ?? '', /--takeover$/);
+			} else {
+				assert.doesNotMatch(
+					harness.connection.calls[1]?.command ?? '',
+					/takeover/,
+				);
+			}
+		});
+	}
+});
+
+void test('background synchronously stops admission, publishes, and invokes native close', async () => {
+	const harness = createHarness();
+	harness.owner.start({ cols: 80, rows: 24 });
+	await flushMicrotasks();
+	const stream = harness.connection.streams[0];
+	assert.ok(stream);
+	stream.controlSends = true;
+
+	harness.owner.background();
+
+	assert.deepEqual(harness.owner.getState(), {
+		phase: 'backgrounded',
+		generation: 1,
+	});
+	assert.equal(harness.owner.sendInput(Uint8Array.of(1)), false);
+	assert.equal(stream.closeCalls, 1);
+	assert.deepEqual(stream.sentRecords(), [{ type: 'terminal.release' }]);
+	assert.equal(harness.connection.disconnectCalls, 0);
+});
+
+void test('a stream resolving after background closes immediately and stays inert', async () => {
+	const harness = createHarness();
+	harness.connection.controlStarts = true;
+	harness.owner.start({ cols: 80, rows: 24 });
+	const events = harness.connection.calls[0];
+	const stream = harness.connection.streams[0];
+	assert.ok(stream);
+	stream.closeError = new Error('private close details');
+
+	harness.owner.background();
+	assert.deepEqual(harness.owner.getState(), {
+		phase: 'backgrounded',
+		generation: 1,
+	});
+	assert.equal(harness.owner.sendInput(Uint8Array.of(1)), false);
+	assert.equal(stream.closeCalls, 0);
+
+	harness.connection.pendingStarts[0]?.resolve(stream);
+	await flushMicrotasks();
+	assert.equal(stream.closeCalls, 1);
+
+	events?.onEvent(frame({ seq: 1, full: true, bytes: [1] }));
+	events?.onEvent({
+		type: 'stderr',
+		bytes: arrayBuffer(encoder.encode('late private stderr')),
+	});
+	events?.onEvent({ type: 'exitStatus', exitStatus: 1 });
+	events?.onEvent({ type: 'exitSignal', signalName: 'TERM' });
+	events?.onEvent({ type: 'closed' });
+	await flushMicrotasks();
+
+	assert.deepEqual(harness.owner.getState(), {
+		phase: 'backgrounded',
+		generation: 1,
+	});
+	assert.deepEqual(harness.replaced, []);
+	assert.deepEqual(harness.appended, []);
+	const serializedLogs = JSON.stringify(harness.logs);
+	assert.match(serializedLogs, /Herdr terminal cleanup failed/);
+	assert.match(serializedLogs, /"operation":"close"/);
+	assert.match(serializedLogs, /"errorClass":"Error"/);
+	assert.equal(serializedLogs.includes('private close details'), false);
+	assert.equal(serializedLogs.includes('late private stderr'), false);
 });

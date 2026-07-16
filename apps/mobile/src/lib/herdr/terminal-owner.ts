@@ -12,6 +12,7 @@ import {
 
 export const HERDR_FIRST_FRAME_TIMEOUT_MS = 10_000;
 export const HERDR_RESIZE_COALESCE_MS = 100;
+export const HERDR_RELEASE_GRACE_MS = 250;
 
 export type HerdrTerminalState =
 	| Readonly<{ phase: 'starting'; generation: number }>
@@ -73,7 +74,7 @@ export type HerdrTerminalClock = Readonly<{
 export type HerdrTerminalOwner = Readonly<{
 	getState(): HerdrTerminalState;
 	subscribe(listener: (state: HerdrTerminalState) => void): () => void;
-	start(input: { cols: number; rows: number; takeover?: boolean }): void;
+	start(input: { cols: number; rows: number }): void;
 	retry(input: { cols: number; rows: number }): void;
 	takeOver(input: { cols: number; rows: number }): void;
 	sendInput(bytes: Uint8Array): boolean;
@@ -95,8 +96,12 @@ type Generation = {
 	retired: boolean;
 	admitting: boolean;
 	releaseQueued: boolean;
+	releaseWindowExpired: boolean;
 	stream: HerdrCommandStream | null;
 	streamPromise: Promise<HerdrCommandStream> | null;
+	closeImmediatelyWhenStarted: boolean;
+	closeInvoked: boolean;
+	closeInvokedReady: ResizeReady;
 	decoder: ReturnType<typeof createHerdrLineDecoder>;
 	stderr: ReturnType<typeof createBoundedHerdrStderr>;
 	lastSeq: number | null;
@@ -126,6 +131,8 @@ const defaultClock: HerdrTerminalClock = {
 const synchronizationReason = 'Herdr terminal output lost synchronization.';
 const timeoutReason =
 	'Herdr terminal did not provide an initial frame in time.';
+const ownershipConflictPhrase =
+	'already has an attached client; retry with --takeover';
 
 function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
 	return bytes.buffer.slice(
@@ -213,10 +220,66 @@ export function createHerdrTerminalOwner(
 		});
 	}
 
-	function beginCleanup(generation: Generation): Promise<void> {
+	function resolveCloseWithoutStream(generation: Generation): void {
+		if (generation.closeInvoked) return;
+		generation.closeInvoked = true;
+		generation.closeInvokedReady.resolve();
+	}
+
+	function invokeClose(
+		generation: Generation,
+		stream: HerdrCommandStream,
+	): void {
+		if (generation.closeInvoked) return;
+		generation.closeInvoked = true;
+		let close: Promise<void>;
+		try {
+			close = stream.close();
+		} catch (error) {
+			logCleanupFailure(generation, 'close', error);
+			generation.closeInvokedReady.resolve();
+			return;
+		}
+		generation.closeInvokedReady.resolve();
+		void close.catch((error) => {
+			logCleanupFailure(generation, 'close', error);
+		});
+	}
+
+	function beginGracefulCleanup(generation: Generation): Promise<void> {
 		if (generation.cleanupPromise) return generation.cleanupPromise;
+		const shouldQueueRelease = !generation.releaseQueued;
 		generation.releaseQueued = true;
-		const cleanup = generation.queue.then(async () => {
+
+		let resolveCleanup!: () => void;
+		const cleanup = new Promise<void>((resolve) => {
+			resolveCleanup = resolve;
+		});
+		generation.cleanupPromise = cleanup;
+
+		let finished = false;
+		let releaseTimer: ReturnType<typeof setTimeout> | null = null;
+		const finish = (): void => {
+			if (finished) return;
+			finished = true;
+			if (releaseTimer !== null) {
+				clock.clearTimeout(releaseTimer);
+				releaseTimer = null;
+			}
+			generation.closeImmediatelyWhenStarted = true;
+			if (generation.stream) {
+				invokeClose(generation, generation.stream);
+			} else if (!generation.streamPromise) {
+				resolveCloseWithoutStream(generation);
+			}
+			resolveCleanup();
+		};
+
+		const release = (
+			shouldQueueRelease ? generation.queue : Promise.resolve()
+		).then(async () => {
+			if (!shouldQueueRelease) return;
+			if (generation.releaseWindowExpired || generation.closeInvoked) return;
 			let stream = generation.stream;
 			if (!stream && generation.streamPromise) {
 				try {
@@ -225,20 +288,47 @@ export function createHerdrTerminalOwner(
 					return;
 				}
 			}
-			if (!stream) return;
+			if (
+				!stream ||
+				generation.releaseWindowExpired ||
+				generation.closeInvoked
+			) {
+				return;
+			}
 			try {
 				await stream.sendData(toArrayBuffer(encodeHerdrRelease()));
 			} catch (error) {
 				logCleanupFailure(generation, 'release', error);
 			}
-			try {
-				await stream.close();
-			} catch (error) {
-				logCleanupFailure(generation, 'close', error);
-			}
 		});
-		generation.cleanupPromise = cleanup;
+		void release.then(finish, finish);
+
+		releaseTimer = clock.setTimeout(() => {
+			generation.releaseWindowExpired = true;
+			finish();
+		}, HERDR_RELEASE_GRACE_MS);
+		const maybeNodeTimer = releaseTimer as ReturnType<typeof setTimeout> & {
+			unref?: () => void;
+		};
+		maybeNodeTimer.unref?.();
 		return cleanup;
+	}
+
+	function bestEffortReleaseWithoutBlockingClose(generation: Generation): void {
+		if (generation.releaseQueued) return;
+		generation.releaseQueued = true;
+		const stream = generation.stream;
+		if (!stream) return;
+		let release: Promise<void>;
+		try {
+			release = stream.sendData(toArrayBuffer(encodeHerdrRelease()));
+		} catch (error) {
+			logCleanupFailure(generation, 'release', error);
+			return;
+		}
+		void release.catch((error) => {
+			logCleanupFailure(generation, 'release', error);
+		});
 	}
 
 	function fail(
@@ -263,7 +353,25 @@ export function createHerdrTerminalOwner(
 			kind,
 			lastSequence: generation.lastSeq,
 		});
-		void beginCleanup(generation);
+		void beginGracefulCleanup(generation);
+	}
+
+	function failOwnershipConflict(generation: Generation, reason: string): void {
+		if (!isCurrentAndLive(generation)) return;
+		generation.admitting = false;
+		generation.retired = true;
+		clearFirstFrameTimer(generation);
+		cancelPendingResize(generation);
+		discardRawStderr(generation);
+		publish({
+			phase: 'owned-elsewhere',
+			generation: generation.id,
+			reason,
+		});
+		input.logger.debug('Herdr terminal is owned by another controller.', {
+			generation: generation.id,
+		});
+		void beginGracefulCleanup(generation);
 	}
 
 	function failSynchronization(generation: Generation): void {
@@ -325,6 +433,10 @@ export function createHerdrTerminalOwner(
 				}
 				if (record.type === 'terminal.closed') {
 					const reason = sanitizeHerdrDiagnostic(record.reason ?? '');
+					if (reason.includes(ownershipConflictPhrase)) {
+						failOwnershipConflict(generation, reason);
+						continue;
+					}
 					fail(generation, 'closed', reason || 'Herdr terminal stream closed.');
 				}
 			}
@@ -408,8 +520,12 @@ export function createHerdrTerminalOwner(
 			retired: false,
 			admitting: true,
 			releaseQueued: false,
+			releaseWindowExpired: false,
 			stream: null,
 			streamPromise: null,
+			closeImmediatelyWhenStarted: false,
+			closeInvoked: false,
+			closeInvokedReady: createResizeReady(),
 			decoder: createHerdrLineDecoder(),
 			stderr: createBoundedHerdrStderr(),
 			lastSeq: null,
@@ -458,16 +574,22 @@ export function createHerdrTerminalOwner(
 			(stream) => {
 				const live = isCurrentAndLive(generation);
 				generation.stream = stream;
-				if (!live) void beginCleanup(generation);
+				if (!live && generation.closeImmediatelyWhenStarted) {
+					invokeClose(generation, stream);
+				}
 			},
 			(error) => {
-				if (!isCurrentAndLive(generation)) return;
+				if (!isCurrentAndLive(generation)) {
+					resolveCloseWithoutStream(generation);
+					return;
+				}
 				input.logger.warn('Herdr terminal stream start failed.', {
 					generation: generation.id,
 					errorClass:
 						error instanceof Error && error.name ? error.name : typeof error,
 				});
 				fail(generation, 'transport', 'Herdr terminal stream failed to start.');
+				resolveCloseWithoutStream(generation);
 			},
 		);
 		input.logger.debug('Herdr terminal generation started.', {
@@ -488,10 +610,12 @@ export function createHerdrTerminalOwner(
 			startGeneration({ ...startInput, takeover });
 			return;
 		}
-		const cleanup = previous.retired
-			? beginCleanup(previous)
-			: retireGeneration(previous, 'retry');
-		void cleanup.then(() => {
+		if (previous.retired) {
+			void beginGracefulCleanup(previous);
+		} else {
+			void retireGeneration(previous, 'retry');
+		}
+		void previous.closeInvokedReady.promise.then(() => {
 			if (current !== previous) return;
 			startGeneration({ ...startInput, takeover });
 		});
@@ -501,7 +625,7 @@ export function createHerdrTerminalOwner(
 		generation: Generation,
 		reason: 'back' | 'switch' | 'retry' | 'failure' | 'unmount',
 	): Promise<void> {
-		if (generation.retired) return beginCleanup(generation);
+		if (generation.retired) return beginGracefulCleanup(generation);
 		generation.admitting = false;
 		generation.retired = true;
 		clearFirstFrameTimer(generation);
@@ -514,7 +638,7 @@ export function createHerdrTerminalOwner(
 			generation: generation.id,
 			reason,
 		});
-		return beginCleanup(generation);
+		return beginGracefulCleanup(generation);
 	}
 
 	return {
@@ -527,12 +651,12 @@ export function createHerdrTerminalOwner(
 		},
 		start(startInput) {
 			if (current) {
-				startAfterRetirement(startInput, startInput.takeover === true);
+				startAfterRetirement(startInput, false);
 				return;
 			}
 			startGeneration({
 				...startInput,
-				takeover: startInput.takeover === true,
+				takeover: false,
 			});
 		},
 		retry(startInput) {
@@ -624,7 +748,23 @@ export function createHerdrTerminalOwner(
 		},
 		background() {
 			if (!current) return;
-			void retireGeneration(current, 'failure');
+			const generation = current;
+			generation.admitting = false;
+			generation.retired = true;
+			clearFirstFrameTimer(generation);
+			cancelPendingResize(generation);
+			discardRawStderr(generation);
+			publish({ phase: 'backgrounded', generation: generation.id });
+			input.logger.debug('Herdr terminal generation backgrounded.', {
+				generation: generation.id,
+			});
+			bestEffortReleaseWithoutBlockingClose(generation);
+			generation.closeImmediatelyWhenStarted = true;
+			if (generation.stream) {
+				invokeClose(generation, generation.stream);
+			} else if (!generation.streamPromise) {
+				resolveCloseWithoutStream(generation);
+			}
 		},
 	};
 }
