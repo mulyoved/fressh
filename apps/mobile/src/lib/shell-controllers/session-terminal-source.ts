@@ -45,6 +45,28 @@ export function createShellTerminalSourcePort({
 		ShellTerminalListenerRegistration,
 		{ id: bigint; removed: boolean }
 	>();
+	const pendingListenerRemovals = new Map<bigint, (() => void) | undefined>();
+	const retryPendingListenerRemovals = (owner: ShellTerminalNativeSource) => {
+		for (const [id, complete] of pendingListenerRemovals) {
+			try {
+				owner.removeListener(id);
+				pendingListenerRemovals.delete(id);
+				complete?.();
+			} catch {
+				// Preserve the ID for the next bounded retirement attempt.
+			}
+		}
+	};
+	const retireListener = (
+		owner: ShellTerminalNativeSource,
+		id: bigint,
+		complete?: () => void,
+	) => {
+		pendingListenerRemovals.set(id, complete);
+		owner.removeListener(id);
+		pendingListenerRemovals.delete(id);
+		complete?.();
+	};
 	const requireCurrent = () => {
 		if (getCurrentGeneration() !== generation || shell === undefined) {
 			throw new Error('Shell terminal source superseded.');
@@ -81,9 +103,14 @@ export function createShellTerminalSourcePort({
 		},
 		addListener: async (listener, options) => {
 			const owner = requireCurrent();
+			retryPendingListenerRemovals(owner);
 			const id = await owner.addListener(listener, options);
 			if (getCurrentGeneration() !== generation) {
-				owner.removeListener(id);
+				try {
+					retireListener(owner, id);
+				} catch {
+					retryPendingListenerRemovals(owner);
+				}
 				throw new Error('Shell terminal source superseded.');
 			}
 			const registration = Object.freeze({ id });
@@ -93,8 +120,11 @@ export function createShellTerminalSourcePort({
 		removeListener: (registration) => {
 			const owned = registrations.get(registration);
 			if (!owned || owned.removed || shell === undefined) return;
-			owned.removed = true;
-			shell.removeListener(owned.id);
+			retryPendingListenerRemovals(shell);
+			if (owned.removed) return;
+			retireListener(shell, owned.id, () => {
+				owned.removed = true;
+			});
 		},
 		sendData: async (bytes) => {
 			const owner = requireCurrent();

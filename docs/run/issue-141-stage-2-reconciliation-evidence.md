@@ -151,6 +151,28 @@ cannot self-reference its resulting SHA.
   duplication gate.
 - `git diff --check` exits 0.
 
+### Final CE1 repair closure
+
+- Listener-retirement RED: the focused terminal-source suite reported 5/7. Stale
+  post-registration cleanup exposed a native removal exception instead of the
+  canonical superseded result, and ordinary removal discarded retry authority
+  after the first native failure.
+- Retry-bookkeeping RED: the follow-up suite reported 7/8 because cleanup
+  retried during a later add but did not complete the original registration,
+  allowing a third native removal.
+- GREEN: pending native listener IDs retain an optional registration-completion
+  callback until cleanup succeeds. Stale cleanup retries within the boundary
+  while preserving the superseded result; ordinary cleanup remains retryable and
+  becomes idempotent after direct or deferred success.
+- Maintainability closure: the duplicated raw-source terminal publication guard
+  and redundant suite were removed; behavioral publication coverage remains in
+  the hook-runtime suite. Three partial double-asserted terminal source ports
+  were replaced by one complete fixture checked with
+  `satisfies ShellTerminalSourcePort`.
+- Focused terminal closure: 170/170. Complete mobile closure: formatting,
+  ESLint, TypeScript, 2,372 integration tests, and 9 component suites / 38 tests
+  passed. `git diff --check` exits 0.
+
 ## Thermo-Nuclear Review
 
 - Review artifact: `docs/run/issue-141-stage-2-thermo-nuclear-review.md`.

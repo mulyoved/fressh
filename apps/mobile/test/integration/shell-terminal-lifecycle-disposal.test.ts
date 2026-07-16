@@ -1,6 +1,4 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import test from 'node:test';
 import { createShellTransportKey } from '../../src/lib/shell-controllers/source-keys';
 import {
@@ -145,31 +143,4 @@ void test('dispose stales the real transport lease before removal warning can se
 	if (attemptedSend) await attemptedSend;
 	assert.deepEqual(order.slice(0, 2), ['transport:clear', 'listener:remove']);
 	assert.deepEqual(writes, []);
-});
-
-void test('terminal hook publishes the exact controller ports and guarded xterm commands', () => {
-	const source = readFileSync(
-		join(process.cwd(), 'src/lib/shell-controllers/terminal.tsx'),
-		'utf8',
-	);
-	for (const member of [
-		'xtermRef',
-		'ready',
-		'hasRendered',
-		'runtimeKey',
-		'getLastSize',
-		'runtimeInstanceId',
-		'transport',
-		'view',
-		'onLoadStart',
-		'onInitialized',
-		'onResize',
-		'waitForSizeAfterFit',
-		'retry',
-	]) {
-		assert.match(source, new RegExp(`\\b${member}\\b`));
-	}
-	assert.match(source, /createShellTerminalHookRuntime/);
-	assert.match(source, /view: runtime\.view/);
-	assert.match(source, /\[lifecycleState\.ready, runtime, source\]/);
 });

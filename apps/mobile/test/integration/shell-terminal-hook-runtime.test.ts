@@ -154,19 +154,36 @@ function createFixture(
 	};
 }
 
-function createShell(calls: string[]): ShellTerminalSourcePort {
+function createShell(
+	calls: string[],
+	options: {
+		generation?: number;
+		sendData?: ShellTerminalSourcePort['sendData'];
+		resizePty?: ShellTerminalSourcePort['resizePty'];
+	} = {},
+): ShellTerminalSourcePort {
 	const key = createShellTransportKey('connection-a', 7);
 	return {
 		key,
-		generation: 0,
+		generation: options.generation ?? 0,
 		connectionId: 'connection-a',
 		channelId: 7,
 		isAvailable: () => true,
-		sendData: async (buffer: Uint8Array) =>
-			calls.push(`send:${buffer.join(',')}`),
-		resizePty: async (cols: number, rows: number) =>
-			calls.push(`resize:${cols}x${rows}`),
-	} as unknown as ShellTerminalSourcePort;
+		getNativeOutputDiagnostics: () => null,
+		readBuffer: async () => ({ chunks: [], nextSeq: 0n }),
+		addListener: async () => Object.freeze({ id: 1n }),
+		removeListener: () => {},
+		sendData:
+			options.sendData ??
+			(async (buffer) => {
+				calls.push(`send:${buffer.join(',')}`);
+			}),
+		resizePty:
+			options.resizePty ??
+			(async (cols, rows) => {
+				calls.push(`resize:${cols}x${rows}`);
+			}),
+	} satisfies ShellTerminalSourcePort;
 }
 
 function createXterm(calls: string[]): XtermWebViewHandle {
@@ -184,7 +201,7 @@ function createXterm(calls: string[]): XtermWebViewHandle {
 	} as unknown as XtermWebViewHandle;
 }
 
-void test('hook runtime creates cores once and behaviorally delegates layout, attach, dependency, and view work', async () => {
+void test('hook runtime publishes controller ports and behaviorally delegates layout, attach, dependency, and view work', async () => {
 	const fixture = createFixture();
 	assert.deepEqual(fixture.counts, {
 		transport: 1,
@@ -297,30 +314,18 @@ void test('same-key shell replacement stales delayed transport work before redir
 	const shellAFirstSend = deferred<void>();
 	const shellACalls: number[][] = [];
 	const shellBCalls: number[][] = [];
-	const key = createShellTransportKey('connection-a', 7);
-	const shellA = {
-		key,
-		generation: 0,
-		connectionId: 'connection-a',
-		channelId: 7,
-		isAvailable: () => true,
-		sendData: async (buffer: Uint8Array) => {
+	const shellA = createShell([], {
+		sendData: async (buffer) => {
 			shellACalls.push(Array.from(buffer));
 			if (shellACalls.length === 1) await shellAFirstSend.promise;
 		},
-		resizePty: async () => {},
-	} as unknown as ShellTerminalSourcePort;
-	const shellB = {
-		key,
+	});
+	const shellB = createShell([], {
 		generation: 1,
-		connectionId: 'connection-a',
-		channelId: 7,
-		isAvailable: () => true,
-		sendData: async (buffer: Uint8Array) => {
+		sendData: async (buffer) => {
 			shellBCalls.push(Array.from(buffer));
 		},
-		resizePty: async () => {},
-	} as unknown as ShellTerminalSourcePort;
+	});
 	const runtime = createShellTerminalHookRuntime({
 		xtermRef: { current: null },
 		platformOS: 'android',
