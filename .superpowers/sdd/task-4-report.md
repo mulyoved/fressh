@@ -177,3 +177,34 @@ Self-review:
   fire-and-forget, authority poison is process-lifetime permanent, and the
   diagnostic-only exception branches listed by the wave-3 testing reviewer
   remain outside the blocking queue.
+
+## Stable review repair after CE1 wave 3
+
+The stable review's two Task-4-owned Important findings are repaired. Focus and
+screen-prime ownership moved into a dedicated protocol, reducing
+`wispr-start-protocol.ts` from 372 to 344 nonblank lines while leaving native
+authority acquisition, exact lease settlement, cleanup deadlines, and request
+generation together in the start protocol. The reconciliation ledger now records
+the exact CE1 wave-3 typecheck RED, 117-test/Jest/typecheck GREEN, and
+replacement commit `91ca65a0`. The separately adjudicated `ShellDetail` and
+`detail.tsx` caps remain Task 5 RED-to-GREEN work and were not changed here.
+
+Changed files:
+
+- `apps/mobile/src/lib/shell-controllers/wispr-focus-protocol.ts`
+- `apps/mobile/src/lib/shell-controllers/wispr-start-protocol.ts`
+- `docs/run/issue-141-stage-2-reconciliation-evidence.md`
+- `.superpowers/sdd/task-4-report.md`
+
+Commands and results:
+
+- Pre-refactor exact Task 4 Node lane: 117 passed, 0 failed.
+- Pre-refactor Jest component lane: 9 passed, 0 failed.
+- Post-extraction focused controller/lifecycle lane: 76 passed, 0 failed.
+- Post-extraction mobile typecheck: exit 0.
+- Final exact Task 4 Node lane: 117 passed, 0 failed.
+- Final Jest component lane: 9 passed, 0 failed.
+- Final mobile typecheck, touched-file Prettier, touched-file ESLint, and
+  `git diff --check`: exit 0.
+- Nonblank line verification: `wispr-start-protocol.ts` 344 and
+  `wispr-focus-protocol.ts` 90, both within the 350-line cap.

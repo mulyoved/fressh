@@ -2,7 +2,6 @@ import {
 	reduceWisprAutomationState,
 	resolveWisprAutoCloseOnTextEntryClose,
 	resolveWisprTapFailure,
-	withTimeout,
 	type WisprAutomationEvent,
 	type WisprAutomationFailure,
 	type WisprAutomationState,
@@ -11,6 +10,10 @@ import {
 } from '../wispr-automation';
 import { type WisprCloseCoordinator } from './wispr-close-coordinator';
 import {
+	createWisprFocusProtocol,
+	type WisprTextInputBounds,
+} from './wispr-focus-protocol';
+import {
 	type WisprNativeControlAcquisition,
 	type WisprNativeControlAuthority,
 	type WisprNativeControlLease,
@@ -18,20 +21,13 @@ import {
 } from './wispr-native-control-authority';
 import { type WisprTapRunner } from './wispr-tap-runner';
 
-const TAP_TIMEOUT_MS = 750;
-const OPENING_FALLBACK_MS = 750;
 const UNCERTAIN_START_CLEANUP_TIMEOUT_MS = 5_000;
 const BLOCKED_FAILURE: WisprAutomationFailure = {
 	reason: 'tap-failed',
 	message: 'Wispr unavailable because prior cleanup failed.',
 };
 
-export type WisprTextInputBounds = {
-	x: number;
-	y: number;
-	width: number;
-	height: number;
-};
+export type { WisprTextInputBounds } from './wispr-focus-protocol';
 
 export type WisprStartClose = {
 	decision: WisprAutoCloseDecision;
@@ -82,7 +78,6 @@ export function createWisprStartProtocol(
 	let autoStartedRequestId: number | null = null;
 	let tapStartedRequestId: number | null = null;
 	let timedOutRequestId: number | null = null;
-	let openingTimer: unknown;
 	let cleanupDeadline: { requestId: number; timer: unknown } | null = null;
 	let controlAcquisition: {
 		requestId: number;
@@ -96,15 +91,6 @@ export function createWisprStartProtocol(
 
 	const getAutomation = () => automation;
 	const publish = () => deps.publish(automation);
-	const clearOpeningTimer = () => {
-		if (openingTimer === undefined) return;
-		try {
-			deps.clearTimeout(openingTimer);
-		} catch {
-			// A failed cancellation must not keep the protocol active.
-		}
-		openingTimer = undefined;
-	};
 	const clearCleanupDeadline = (requestId: number) => {
 		if (cleanupDeadline?.requestId !== requestId) return;
 		const timer = cleanupDeadline.timer;
@@ -130,7 +116,9 @@ export function createWisprStartProtocol(
 	};
 	const apply = (event: WisprAutomationEvent) => {
 		automation = reduceWisprAutomationState(automation, event);
-		if (automation.phase !== 'openingTextEntry') clearOpeningTimer();
+		if (automation.phase !== 'openingTextEntry') {
+			focusProtocol.clearOpeningTimer();
+		}
 		publish();
 	};
 	const requestCurrent = (requestId: number, capture: number) =>
@@ -258,41 +246,28 @@ export function createWisprStartProtocol(
 			apply({ type: 'failed', reason: result.reason, message: result.message });
 		}
 	};
-	const focusRequest = (
-		value: string,
-		bounds: WisprTextInputBounds | undefined,
-		requestId: number,
-		capture: number,
-	) => {
-		if (
-			disposed ||
-			automation.phase !== 'openingTextEntry' ||
-			!requestCurrent(requestId, capture)
-		)
-			return;
-		clearOpeningTimer();
-		apply({ type: 'textEntryFocused', textBeforeStart: value });
-		void (async () => {
-			if (bounds && bounds.width > 0 && bounds.height > 0) {
-				try {
-					if (!requestCurrent(requestId, capture)) return;
-					const ratio = deps.pixelRatio();
-					const x = (bounds.x + bounds.width / 2) * ratio;
-					const y = (bounds.y + Math.min(bounds.height / 2, 48)) * ratio;
-					await withTimeout(deps.tapScreen(x, y), TAP_TIMEOUT_MS, deps);
-					if (!requestCurrent(requestId, capture)) return;
-				} catch (error) {
-					if (!requestCurrent(requestId, capture)) return;
-					deps.warn('Failed to prime Wispr text field', error);
-				}
-			}
-			if (!requestCurrent(requestId, capture)) return;
-			if (getAutomation().phase !== 'waitingForBubble') return;
-			await runStartTap(requestId, capture);
-		})();
-	};
+	const focusProtocol = createWisprFocusProtocol({
+		setTimeout: deps.setTimeout,
+		clearTimeout: deps.clearTimeout,
+		tapScreen: deps.tapScreen,
+		pixelRatio: deps.pixelRatio,
+		requestCurrent,
+		canFocus: () => !disposed && automation.phase === 'openingTextEntry',
+		canStartTap: () => automation.phase === 'waitingForBubble',
+		onFocused: (value) =>
+			apply({ type: 'textEntryFocused', textBeforeStart: value }),
+		startTap: runStartTap,
+		onScheduleFailure: (error) =>
+			apply({ type: 'failed', ...resolveWisprTapFailure(error) }),
+		warn: deps.warn,
+	});
 	const focus = (value: string, bounds?: WisprTextInputBounds) =>
-		focusRequest(value, bounds, requestGeneration, deps.captureLifecycle());
+		focusProtocol.focus(
+			value,
+			bounds,
+			requestGeneration,
+			deps.captureLifecycle(),
+		);
 	const start = (requestId: number) => {
 		const capture = deps.captureLifecycle();
 		if (
@@ -317,14 +292,11 @@ export function createWisprStartProtocol(
 			!deps.modalIsOpen()
 		)
 			return;
-		try {
-			openingTimer = deps.setTimeout(
-				() => focusRequest(currentText, undefined, requestId, capture),
-				OPENING_FALLBACK_MS,
-			);
-		} catch (error) {
-			apply({ type: 'failed', ...resolveWisprTapFailure(error) });
-		}
+		focusProtocol.scheduleFallback({
+			requestId,
+			capture,
+			currentText: () => currentText,
+		});
 	};
 
 	return {
@@ -359,7 +331,7 @@ export function createWisprStartProtocol(
 			requestGeneration += 1;
 			autoStartedRequestId = null;
 			clearMarkers(requestId ?? -1);
-			clearOpeningTimer();
+			focusProtocol.clearOpeningTimer();
 			automation = { phase: 'idle' };
 			publish();
 			return { decision, requestId };
@@ -374,7 +346,7 @@ export function createWisprStartProtocol(
 				controlAcquisition = null;
 			}
 			requestGeneration += 1;
-			clearOpeningTimer();
+			focusProtocol.clearOpeningTimer();
 		},
 	};
 }
