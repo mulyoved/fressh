@@ -17,6 +17,7 @@ import {
 	type WisprNativeControlAuthority,
 	type WisprNativeControlSettlement,
 } from './wispr-native-control-authority';
+import { createWisprSettingsLauncher } from './wispr-settings-launcher';
 import {
 	createWisprStartProtocol,
 	type WisprTextInputBounds,
@@ -82,8 +83,7 @@ export function createShellWisprControllerCore(
 ): ShellWisprControllerCore {
 	let autoStartEnabled = false;
 	let availability: WisprTextEditorAvailability = { type: 'ready' };
-	let sessionGeneration = 0,
-		settingsGeneration = 0;
+	let sessionGeneration = 0;
 	let statusRequestId: number | null = null;
 	let disposed = false;
 	let automation: WisprAutomationState = { phase: 'idle' };
@@ -137,6 +137,13 @@ export function createShellWisprControllerCore(
 		);
 	const lifecycleCurrent = (capture: number) =>
 		!disposed && sessionGeneration === capture;
+	const settingsLauncher = createWisprSettingsLauncher({
+		timers: deps,
+		openSettings: () => deps.native.openSettings(),
+		captureLifecycle: () => sessionGeneration,
+		lifecycleCurrent,
+		warn: (message, error) => safeLog('warn', message, error),
+	});
 	const timerOwner = createWisprTimerOwner(deps);
 
 	const tapRunner = createWisprTapRunner({
@@ -320,29 +327,11 @@ export function createShellWisprControllerCore(
 		onTextEntryFocused: startProtocol.focus,
 		onTextChanged: startProtocol.textChanged,
 		closeTextEntry,
-		openSettings: async () => {
+		openSettings: () => {
 			if (disposed || deps.platformOS !== 'android') {
-				return { status: 'unavailable' };
+				return Promise.resolve({ status: 'unavailable' });
 			}
-			const capture = sessionGeneration;
-			const requestId = ++settingsGeneration;
-			try {
-				await deps.native.openSettings();
-				if (!lifecycleCurrent(capture) || settingsGeneration !== requestId) {
-					return { status: 'superseded' };
-				}
-				return { status: 'completed' };
-			} catch (error) {
-				if (!lifecycleCurrent(capture) || settingsGeneration !== requestId) {
-					return { status: 'superseded' };
-				}
-				const failure: ShellWisprFailure = {
-					reason: 'service-disabled',
-					message: 'Failed to open accessibility settings.',
-				};
-				safeLog('warn', 'Failed to open accessibility settings', error);
-				return { status: 'failed', failure };
-			}
+			return settingsLauncher.open();
 		},
 		invalidate,
 		dispose: () => {

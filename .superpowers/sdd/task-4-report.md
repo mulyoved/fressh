@@ -266,3 +266,54 @@ Self-review:
   admission is intentionally fire-and-forget, authority poison requires process
   restart, and defensive modal/timer exception branches remain outside the
   blocking queue.
+
+## CE1 wave 5 fix
+
+Implemented `CE1-T4-015`. Native accessibility-settings launch now has a
+dedicated transaction owner with a raw 750 ms deadline and exact settings
+generation. A current timeout returns the existing typed settings failure; an
+independent later launch completes normally; lifecycle invalidation or disposal
+returns `superseded`; and late resolve/reject is inert.
+
+Changed files:
+
+- `apps/mobile/src/lib/shell-controllers/wispr-core.ts`
+- `apps/mobile/src/lib/shell-controllers/wispr-settings-launcher.ts`
+- `apps/mobile/src/lib/shell-controllers/wispr-status-request.ts`
+- `apps/mobile/test/integration/shell-wispr-controller.test.ts`
+- `docs/run/issue-141-stage-2-reconciliation-evidence.md`
+- `.superpowers/sdd/task-4-report.md`
+
+RED evidence:
+
+- Focused command:
+  `pnpm exec tsx --test test/integration/shell-wispr-controller.test.ts`.
+- Result: exit 1, 24 passed and 4 failed. Current launches had no typed outcome
+  after 750 ms, and disposed launches had neither a retained raw deadline nor a
+  bounded `superseded` outcome.
+
+GREEN evidence:
+
+- Focused command: 28 passed, 0 failed; mobile typecheck exited 0.
+- Exact Task 4 Node lane: 125 passed, 0 failed.
+- Jest component lane: 9 passed, 0 failed.
+- Final mobile typecheck, touched-file Prettier, touched-file ESLint, strict
+  nonblank line verification, and `git diff --check`: exit 0.
+
+Self-review:
+
+- The settings launcher owns only settings request generation and deadline;
+  platform/disposal admission and lifecycle generation remain in the core.
+- The deadline uses the raw injected timer boundary, so UI `cancelAll()` cannot
+  strand a discarded hook promise. Deadline cleanup is exception-safe.
+- A second launch increments settings identity and is independent of the first.
+  Late native resolve/reject is absorbed by the settled race and cannot warn,
+  publish, or change the newer outcome.
+- Existing completed, unavailable, active rejection, stale completion, and stale
+  rejection contracts remain covered and unchanged.
+- Public controller types and process-lifetime native-control poison behavior
+  are unchanged.
+- Existing residual risks and diagnostic-only gaps remain: hook text-editor
+  admission is intentionally fire-and-forget, authority poison requires process
+  restart, active never-settling screen-prime coverage remains diagnostic, and
+  defensive modal/timer exception branches remain outside the blocking queue.

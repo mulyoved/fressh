@@ -2,11 +2,12 @@ import { withTimeout, type WisprTimerPort } from '../wispr-automation';
 
 const STATUS_TIMEOUT_MS = 750;
 
-export function requestWisprStatus<T>(
-	getStatus: () => Promise<T>,
+export function withWisprTransactionDeadline<T>(
+	operation: Promise<T>,
+	timeoutMs: number,
 	timers: WisprTimerPort,
 ): Promise<T> {
-	return withTimeout(getStatus(), STATUS_TIMEOUT_MS, {
+	return withTimeout(operation, timeoutMs, {
 		setTimeout: (task, delayMs) => timers.setTimeout(task, delayMs),
 		clearTimeout: (timer) => {
 			try {
@@ -16,4 +17,11 @@ export function requestWisprStatus<T>(
 			}
 		},
 	});
+}
+
+export function requestWisprStatus<T>(
+	getStatus: () => Promise<T>,
+	timers: WisprTimerPort,
+): Promise<T> {
+	return withWisprTransactionDeadline(getStatus(), STATUS_TIMEOUT_MS, timers);
 }

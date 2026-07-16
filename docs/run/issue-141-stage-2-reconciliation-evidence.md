@@ -32,6 +32,23 @@
   cancellable UI work. Status completion still clears only its matching request,
   and repeated pending-start/recording closes settle one exact authority lease.
 
+### Task 4 CE1 wave 5
+
+- RED:
+  `cd apps/mobile && pnpm exec tsx --test test/integration/shell-wispr-controller.test.ts`
+  exited 1 with 24 passed and 4 failed. Both current settings launches remained
+  unsettled after 750 ms, and both disposed launches had no transaction-owned
+  timer or terminal outcome.
+- Focused GREEN: the same command reports 28 passed, 0 failed, and
+  `pnpm run typecheck` exits 0.
+- Complete GREEN: the exact Task 4 Node lane reports 125 passed, 0 failed; the
+  Jest component lane reports 9 passed, 0 failed; mobile typecheck, touched-file
+  Prettier/ESLint, strict nonblank line caps, and `git diff --check` exit 0.
+- Ownership result: a dedicated settings launcher owns its request generation
+  and raw 750 ms transaction deadline. Current timeout returns the existing
+  typed settings failure; disposal and replacement return `superseded`; late
+  native resolve/reject cannot affect a newer independent launch.
+
 ## Full Verification
 
 ## Thermo-Nuclear Review

@@ -375,6 +375,73 @@ void test('stale settings rejection returns superseded without warning', async (
 	assert.deepEqual(harness.core.getSnapshot().automation, { phase: 'idle' });
 });
 
+for (const lateSettlement of ['resolve', 'reject'] as const) {
+	void test(`settings timeout permits an independent launch and ignores late ${lateSettlement}`, async () => {
+		const harness = createHarness();
+		const first = deferred<unknown>();
+		const second = deferred<unknown>();
+		let launches = 0;
+		harness.native.openSettings = () => {
+			launches += 1;
+			return launches === 1 ? first.promise : second.promise;
+		};
+		const firstOpening = harness.core.openSettings();
+		let firstOutcome: Awaited<typeof firstOpening> | undefined;
+		void firstOpening.then((outcome) => {
+			firstOutcome = outcome;
+		});
+
+		await harness.clock.advance(749);
+		assert.equal(firstOutcome, undefined);
+		await harness.clock.advance(1);
+		assert.deepEqual(firstOutcome, {
+			status: 'failed',
+			failure: {
+				reason: 'service-disabled',
+				message: 'Failed to open accessibility settings.',
+			},
+		});
+		assert.equal(harness.warnings.length, 1);
+
+		const retry = harness.core.openSettings();
+		assert.equal(launches, 2);
+		second.resolve(undefined);
+		assert.deepEqual(await retry, { status: 'completed' });
+		if (lateSettlement === 'resolve') first.resolve(undefined);
+		else first.reject(new Error('late settings rejection'));
+		await settled();
+
+		assert.equal(harness.warnings.length, 1);
+		assert.deepEqual(harness.core.getSnapshot().automation, { phase: 'idle' });
+	});
+}
+
+for (const lateSettlement of ['resolve', 'reject'] as const) {
+	void test(`disposed settings launch settles as superseded and ignores late ${lateSettlement}`, async () => {
+		const harness = createHarness();
+		const settings = deferred<unknown>();
+		harness.native.openSettings = () => settings.promise;
+		const opening = harness.core.openSettings();
+		let outcome: Awaited<typeof opening> | undefined;
+		void opening.then((result) => {
+			outcome = result;
+		});
+
+		harness.core.dispose();
+		assert.equal(harness.clock.timers.size, 1);
+		await harness.clock.advance(750);
+		assert.deepEqual(outcome, { status: 'superseded' });
+		assert.equal(harness.clock.timers.size, 0);
+		assert.deepEqual(harness.warnings, []);
+		if (lateSettlement === 'resolve') settings.resolve(undefined);
+		else settings.reject(new Error('late disposed settings rejection'));
+		await settled();
+
+		assert.deepEqual(outcome, { status: 'superseded' });
+		assert.deepEqual(harness.warnings, []);
+	});
+}
+
 void test('throwing logger cannot break native failure publication', async () => {
 	const harness = createHarness();
 	const core = createShellWisprControllerCore({
