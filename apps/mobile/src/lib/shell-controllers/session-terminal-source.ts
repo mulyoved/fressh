@@ -45,15 +45,46 @@ export function createShellTerminalSourcePort({
 		ShellTerminalListenerRegistration,
 		{ id: bigint; removed: boolean }
 	>();
-	const pendingListenerRemovals = new Map<bigint, (() => void) | undefined>();
-	const retryPendingListenerRemovals = (owner: ShellTerminalNativeSource) => {
-		for (const [id, complete] of pendingListenerRemovals) {
+	type PendingListenerRemoval = {
+		owner: ShellTerminalNativeSource;
+		id: bigint;
+		attempts: number;
+		retryScheduled: boolean;
+		complete?: () => void;
+	};
+	const pendingListenerRemovals = new Map<bigint, PendingListenerRemoval>();
+	const completeListenerRemoval = (pending: PendingListenerRemoval) => {
+		if (pendingListenerRemovals.get(pending.id) !== pending) return;
+		pendingListenerRemovals.delete(pending.id);
+		pending.complete?.();
+	};
+	const scheduleFinalListenerRemoval = (pending: PendingListenerRemoval) => {
+		if (pending.retryScheduled) return;
+		pending.retryScheduled = true;
+		queueMicrotask(() => {
+			if (pendingListenerRemovals.get(pending.id) !== pending) return;
 			try {
-				owner.removeListener(id);
-				pendingListenerRemovals.delete(id);
-				complete?.();
+				pending.attempts += 1;
+				pending.owner.removeListener(pending.id);
 			} catch {
-				// Preserve the ID for the next bounded retirement attempt.
+				// Native retirement is best-effort after the bounded final attempt.
+			} finally {
+				completeListenerRemoval(pending);
+			}
+		});
+	};
+	const retryPendingListenerRemovals = () => {
+		for (const pending of pendingListenerRemovals.values()) {
+			if (pending.attempts >= 2) {
+				scheduleFinalListenerRemoval(pending);
+				continue;
+			}
+			try {
+				pending.attempts += 1;
+				pending.owner.removeListener(pending.id);
+				completeListenerRemoval(pending);
+			} catch {
+				scheduleFinalListenerRemoval(pending);
 			}
 		}
 	};
@@ -62,10 +93,16 @@ export function createShellTerminalSourcePort({
 		id: bigint,
 		complete?: () => void,
 	) => {
-		pendingListenerRemovals.set(id, complete);
+		const pending = {
+			owner,
+			id,
+			attempts: 1,
+			retryScheduled: false,
+			complete,
+		} satisfies PendingListenerRemoval;
+		pendingListenerRemovals.set(id, pending);
 		owner.removeListener(id);
-		pendingListenerRemovals.delete(id);
-		complete?.();
+		completeListenerRemoval(pending);
 	};
 	const requireCurrent = () => {
 		if (getCurrentGeneration() !== generation || shell === undefined) {
@@ -103,13 +140,13 @@ export function createShellTerminalSourcePort({
 		},
 		addListener: async (listener, options) => {
 			const owner = requireCurrent();
-			retryPendingListenerRemovals(owner);
+			retryPendingListenerRemovals();
 			const id = await owner.addListener(listener, options);
 			if (getCurrentGeneration() !== generation) {
 				try {
 					retireListener(owner, id);
 				} catch {
-					retryPendingListenerRemovals(owner);
+					retryPendingListenerRemovals();
 				}
 				throw new Error('Shell terminal source superseded.');
 			}
@@ -121,14 +158,14 @@ export function createShellTerminalSourcePort({
 			const owned = registrations.get(registration);
 			if (!owned || owned.removed || shell === undefined) return;
 			const wasPending = pendingListenerRemovals.has(owned.id);
-			retryPendingListenerRemovals(shell);
-			if (owned.removed) return;
+			retryPendingListenerRemovals();
+			if (owned.removed || wasPending) return;
 			try {
 				retireListener(shell, owned.id, () => {
 					owned.removed = true;
 				});
 			} catch (error) {
-				if (!wasPending) retryPendingListenerRemovals(shell);
+				retryPendingListenerRemovals();
 				if (!owned.removed) throw error;
 			}
 		},

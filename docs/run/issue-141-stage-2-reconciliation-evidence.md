@@ -177,6 +177,25 @@ cannot self-reference its resulting SHA.
   ESLint, TypeScript, 2,373 integration tests, and 9 component suites / 38 tests
   passed. `git diff --check` exits 0.
 
+### Final CE1 wave 2 closure
+
+- RED: the production hook-runtime replacement test reported 1/7 because two
+  native removal failures left retry state only in the obsolete port; it
+  observed two attempts instead of a lifecycle-independent third attempt.
+- GREEN: retirement is capped at three attempts—the initial call, one immediate
+  retry, and one queued microtask retry that captures the native owner and ID.
+  Final success or failure always clears the pending record and completes
+  registration bookkeeping, so no unreachable retry authority remains after
+  replacement.
+- The production replacement test proves deferred third-attempt success without
+  revisiting the old port. A terminal-failure test proves three failures are
+  capped and later removal is inert.
+- The last partial diagnostic native-source assertion was replaced by a shared
+  complete fixture checked with `satisfies ShellTerminalNativeSource`.
+- Focused terminal closure: 175/175. Complete mobile closure: formatting,
+  ESLint, TypeScript, 2,374 integration tests, and 9 component suites / 38 tests
+  passed. `git diff --check` exits 0.
+
 ## Thermo-Nuclear Review
 
 - Review artifact: `docs/run/issue-141-stage-2-thermo-nuclear-review.md`.

@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createShellTerminalSourcePort } from '../../src/lib/shell-controllers/session-terminal-source';
+import {
+	createShellTerminalSourcePort,
+	type ShellTerminalNativeSource,
+} from '../../src/lib/shell-controllers/session-terminal-source';
 import { createShellTransportKey } from '../../src/lib/shell-controllers/source-keys';
 
 function deferred<T>() {
@@ -9,6 +12,28 @@ function deferred<T>() {
 		resolve = resolvePromise;
 	});
 	return { promise, resolve };
+}
+
+function createNativeTerminalSource(
+	overrides: Partial<ShellTerminalNativeSource> = {},
+): ShellTerminalNativeSource {
+	return {
+		bufferStats: () => ({
+			ringBytesCount: 0n,
+			usedBytes: 0n,
+			headSeq: 0n,
+			tailSeq: 0n,
+			droppedBytesTotal: 0n,
+			chunksCount: 0n,
+		}),
+		currentSeq: () => 0n,
+		readBuffer: async () => ({ chunks: [], nextSeq: 0n }),
+		addListener: async () => 1n,
+		removeListener: () => {},
+		sendData: async () => {},
+		resizePty: async () => {},
+		...overrides,
+	} satisfies ShellTerminalNativeSource;
 }
 
 function createDeferredTerminalSourceHarness() {
@@ -24,7 +49,7 @@ function createDeferredTerminalSourceHarness() {
 	const removedListenerIds: bigint[] = [];
 	const sentPayloads: number[][] = [];
 	const resizeCalls: [number, number][] = [];
-	const shell = {
+	const shell = createNativeTerminalSource({
 		bufferStats: () => ({
 			ringBytesCount: 0n,
 			usedBytes: 0n,
@@ -47,9 +72,7 @@ function createDeferredTerminalSourceHarness() {
 			resizeCalls.push([cols, rows]);
 			return resize.promise;
 		},
-	} satisfies NonNullable<
-		Parameters<typeof createShellTerminalSourcePort>[0]['shell']
-	>;
+	});
 	const port = createShellTerminalSourcePort({
 		channelId: 7,
 		connectionId: 'connection-1',
@@ -85,7 +108,7 @@ void test('terminal source preserves native bigint diagnostics and hides stale g
 		droppedBytesTotal: 9_007_199_254_740_998n,
 		chunksCount: 9_007_199_254_740_999n,
 	};
-	const shell = {
+	const shell = createNativeTerminalSource({
 		bufferStats: () => ({
 			ringBytesCount: values.ringBytesCount,
 			usedBytes: values.usedBytes,
@@ -95,7 +118,7 @@ void test('terminal source preserves native bigint diagnostics and hides stale g
 			chunksCount: values.chunksCount,
 		}),
 		currentSeq: () => values.currentSeq,
-	} as Parameters<typeof createShellTerminalSourcePort>[0]['shell'];
+	});
 	const port = createShellTerminalSourcePort({
 		channelId: 7,
 		connectionId: 'connection-1',
@@ -174,6 +197,28 @@ void test('ordinary listener removal retries one native failure and completes id
 	assert.doesNotThrow(() => harness.port.removeListener(registration));
 	assert.doesNotThrow(() => harness.port.removeListener(registration));
 	assert.deepEqual(harness.removedListenerIds, [75n, 75n]);
+});
+
+void test('listener retirement stops after its bounded terminal native failure', async () => {
+	const harness = createDeferredTerminalSourceHarness();
+	harness.shell.addListener = async () => 76n;
+	harness.shell.removeListener = (id: bigint) => {
+		harness.removedListenerIds.push(id);
+		throw new Error('native removal failed');
+	};
+	const registration = await harness.port.addListener(() => {}, {
+		cursor: { mode: 'live' },
+	});
+
+	assert.throws(
+		() => harness.port.removeListener(registration),
+		/native removal failed/,
+	);
+	assert.deepEqual(harness.removedListenerIds, [76n, 76n]);
+	await Promise.resolve();
+	assert.deepEqual(harness.removedListenerIds, [76n, 76n, 76n]);
+	assert.doesNotThrow(() => harness.port.removeListener(registration));
+	assert.deepEqual(harness.removedListenerIds, [76n, 76n, 76n]);
 });
 
 void test('pending retry from a later add completes the original registration once', async () => {

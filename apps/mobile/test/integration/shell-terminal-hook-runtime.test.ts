@@ -376,7 +376,7 @@ void test('same-key shell replacement stales delayed transport work before redir
 	runtime.transport.dispose();
 });
 
-void test('source replacement retries one failed canonical listener retirement before discarding the port', async () => {
+void test('source replacement completes listener retirement after two immediate native failures without revisiting the old port', async () => {
 	let generation = 1;
 	let removalAttempts = 0;
 	const nativeSource = {
@@ -393,7 +393,7 @@ void test('source replacement retries one failed canonical listener retirement b
 		addListener: async () => 81n,
 		removeListener: () => {
 			removalAttempts += 1;
-			if (removalAttempts === 1) throw new Error('native removal failed');
+			if (removalAttempts <= 2) throw new Error('native removal failed');
 		},
 		sendData: async () => {},
 		resizePty: async () => {},
@@ -423,9 +423,14 @@ void test('source replacement retries one failed canonical listener retirement b
 	runtime.updateSource(createShell([], { generation }));
 
 	assert.equal(removalAttempts, 2);
+	await Promise.resolve();
+	assert.equal(removalAttempts, 3);
+	runtime.updateSource(createShell([], { generation: generation + 1 }));
 	runtime.lifecycle.dispose();
 	runtime.size.dispose();
 	runtime.transport.dispose();
+	await Promise.resolve();
+	assert.equal(removalAttempts, 3);
 });
 
 void test('hook runtime ordinary and Strict Mode cleanup attempts every disposer despite failure', () => {
