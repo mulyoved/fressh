@@ -193,6 +193,13 @@ export function createHerdrTerminalOwner(
 		generation.resizeReady = null;
 	}
 
+	function discardRawStderr(generation: Generation): void {
+		generation.stderr = createBoundedHerdrStderr();
+		input.logger.debug('Herdr terminal diagnostic buffer discarded.', {
+			generation: generation.id,
+		});
+	}
+
 	function logCleanupFailure(
 		generation: Generation,
 		operation: 'release' | 'close',
@@ -244,6 +251,7 @@ export function createHerdrTerminalOwner(
 		generation.retired = true;
 		clearFirstFrameTimer(generation);
 		cancelPendingResize(generation);
+		discardRawStderr(generation);
 		publish({
 			phase: 'error',
 			generation: generation.id,
@@ -498,6 +506,7 @@ export function createHerdrTerminalOwner(
 		generation.retired = true;
 		clearFirstFrameTimer(generation);
 		cancelPendingResize(generation);
+		discardRawStderr(generation);
 		if (isCurrent(generation)) {
 			publish({ phase: 'releasing', generation: generation.id });
 		}
@@ -566,12 +575,15 @@ export function createHerdrTerminalOwner(
 			if (generation.resizeTimer !== null) return true;
 
 			const ready = createResizeReady();
+			let expiredResize: { cols: number; rows: number } | null = null;
 			generation.resizeReady = ready;
 			generation.resizeTimer = clock.setTimeout(() => {
 				if (!isCurrentAndLive(generation)) {
 					ready.resolve();
 					return;
 				}
+				expiredResize = generation.pendingResize;
+				generation.pendingResize = null;
 				generation.resizeTimer = null;
 				generation.resizeReady = null;
 				ready.resolve();
@@ -579,8 +591,8 @@ export function createHerdrTerminalOwner(
 			enqueueWrite(generation, async (stream) => {
 				await ready.promise;
 				if (!isCurrentAndLive(generation) || !generation.admitting) return;
-				const latest = generation.pendingResize;
-				generation.pendingResize = null;
+				const latest = expiredResize;
+				expiredResize = null;
 				if (!latest) return;
 				await stream.sendData(
 					toArrayBuffer(encodeHerdrResize(latest.cols, latest.rows)),

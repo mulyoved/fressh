@@ -404,10 +404,18 @@ void test('malformed terminal output retires exactly once and ignores late event
 			assert.deepEqual(harness.replaced, []);
 			assert.deepEqual(harness.appended, []);
 			assert.equal(harness.owner.sendInput(Uint8Array.of(1)), false);
-			assert.equal(
-				harness.states.filter((state) => state.phase === 'error').length,
-				1,
+			const errorStates = harness.states.filter(
+				(state) => state.phase === 'error',
 			);
+			assert.deepEqual(errorStates, [
+				{
+					phase: 'error',
+					generation: 1,
+					kind: 'synchronization',
+					reason: 'Herdr terminal output lost synchronization.',
+				},
+			]);
+			assert.deepEqual(harness.owner.getState(), errorStates[0]);
 			assert.deepEqual(harness.connection.streams[0]?.sentRecords(), [
 				{ type: 'terminal.release' },
 			]);
@@ -513,6 +521,105 @@ void test('outbound input, coalesced resize, and scroll preserve admission order
 		},
 	]);
 	assert.equal(JSON.stringify(harness.logs).includes('YQ=='), false);
+});
+
+void test('expired resize windows retain their own queue slot and dimensions', async () => {
+	const harness = createHarness();
+	harness.owner.start({ cols: 80, rows: 24 });
+	await flushMicrotasks();
+	harness.connection.calls[0]?.onEvent(
+		frame({ seq: 1, full: true, bytes: [1] }),
+	);
+	const stream = harness.connection.streams[0];
+	assert.ok(stream);
+	stream.controlSends = true;
+
+	assert.equal(harness.owner.sendInput(Uint8Array.of(0x41)), true);
+	assert.equal(harness.owner.resize(90, 30), true);
+	await flushMicrotasks();
+	assert.equal(stream.sent.length, 1);
+
+	harness.clock.advanceBy(100);
+	assert.equal(harness.owner.sendInput(Uint8Array.of(0x42)), true);
+	assert.equal(harness.owner.resize(120, 50), true);
+	harness.clock.advanceBy(100);
+
+	stream.pendingSends[0]?.resolve();
+	await flushMicrotasks();
+	assert.equal(stream.sent.length, 2);
+	stream.pendingSends[1]?.resolve();
+	await flushMicrotasks();
+	assert.equal(stream.sent.length, 3);
+	stream.pendingSends[2]?.resolve();
+	await flushMicrotasks();
+	assert.equal(stream.sent.length, 4);
+	stream.pendingSends[3]?.resolve();
+	await flushMicrotasks();
+
+	assert.deepEqual(stream.sentRecords(), [
+		{ type: 'terminal.input', bytes: 'QQ==' },
+		{
+			type: 'terminal.resize',
+			cols: 90,
+			rows: 30,
+			cell_width_px: 0,
+			cell_height_px: 0,
+		},
+		{ type: 'terminal.input', bytes: 'Qg==' },
+		{
+			type: 'terminal.resize',
+			cols: 120,
+			rows: 50,
+			cell_width_px: 0,
+			cell_height_px: 0,
+		},
+	]);
+});
+
+void test('terminal failure preserves sanitized diagnostics and discards raw stderr', async () => {
+	const harness = createHarness();
+	harness.owner.start({ cols: 80, rows: 24 });
+	await flushMicrotasks();
+	const events = harness.connection.calls[0];
+	events?.onEvent({
+		type: 'stderr',
+		bytes: arrayBuffer(encoder.encode('private \u0000 diagnostic')),
+	});
+	events?.onEvent({ type: 'closed' });
+	await flushMicrotasks();
+
+	assert.deepEqual(harness.owner.getState(), {
+		phase: 'error',
+		generation: 1,
+		kind: 'closed',
+		reason: 'private diagnostic',
+	});
+	assert.match(
+		JSON.stringify(harness.logs),
+		/Herdr terminal diagnostic buffer discarded/,
+	);
+	assert.equal(JSON.stringify(harness.logs).includes('private'), false);
+});
+
+void test('explicit retirement discards raw stderr without logging it', async () => {
+	const harness = createHarness();
+	harness.owner.start({ cols: 80, rows: 24 });
+	await flushMicrotasks();
+	harness.connection.calls[0]?.onEvent({
+		type: 'stderr',
+		bytes: arrayBuffer(encoder.encode('retired-private-data')),
+	});
+
+	await harness.owner.retire('unmount');
+
+	assert.match(
+		JSON.stringify(harness.logs),
+		/Herdr terminal diagnostic buffer discarded/,
+	);
+	assert.equal(
+		JSON.stringify(harness.logs).includes('retired-private-data'),
+		false,
+	);
 });
 
 void test('writes are rejected as soon as retirement begins', async () => {
