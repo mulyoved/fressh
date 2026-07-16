@@ -116,6 +116,21 @@ covered by `command-menu.test.ts`, `keyboard-config.test.ts`, and
   the Worktree/config lane reports 66 passed, and the combined Task 5 plus
   session-lifecycle component lane reports 5 suites / 26 tests passed.
 
+### CE1 wave 1 test-contract repair
+
+- RED: mobile typecheck exited 2. The type-level assertion reported TS2344
+  because the modal test's ad-hoc `remoteTarget` did not extend
+  `ShellKeyboardRemoteTargetContext`; its temporary unused assertion also
+  reported TS6196.
+- GREEN: the captured keyboard input is derived from the exported
+  `UseShellKeyboardControllerInput`, and the Workmux/host fixtures implement
+  `ShellWorkmuxPort` and `ShellHostCommandPort`. Typecheck exits 0, the focused
+  modal component suite reports 2 passed, exact modal routing remains covered,
+  and the test contains no `workmuxControlChannel` remnant.
+- Complete CE1 rerun: the exact shell lane reports 86 passed, Worktree/config
+  reports 66 passed, and the exact component lane reports 4 suites / 13 tests
+  passed.
+
 ## Self-review
 
 Review target: the complete uncommitted Task 5 diff against `081920e1`.
@@ -152,9 +167,9 @@ metadata publication cannot expose a future target port, while the owner
 subscription remains the only key-changing publication path; stale tmux
 resolution remains generation-guarded. Required modal callbacks resolve from
 current ports for every action and have both adapter-level and ShellDetail
-destination coverage. No additional finding remained. Core review ran;
-external Codex, simplify, UI, React, and AI-slop adapters are absent; security
-and data review are not applicable; CI-equivalent focused checks pass.
+destination coverage. No additional finding remained. Core review ran; external
+Codex, simplify, UI, React, and AI-slop adapters are absent; security and data
+review are not applicable; CI-equivalent focused checks pass.
 
 ## Concerns
 

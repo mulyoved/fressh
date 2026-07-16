@@ -100,6 +100,17 @@
 - Complete final repair rerun: exact Task 5 shell composition reports 86 passed,
   Worktree/config reports 66 passed, and the combined component lane reports 5
   suites / 26 tests passed.
+- CE1-T5-001 RED: mobile typecheck exited 2 with TS2344 because the modal test's
+  ad-hoc `remoteTarget` did not extend `ShellKeyboardRemoteTargetContext`; the
+  temporary unused type assertion also produced TS6196.
+- CE1-T5-001 GREEN: the test capture derives from exported
+  `UseShellKeyboardControllerInput`, its Workmux and host fixtures implement the
+  canonical typed ports, focused modal components report 2 passed, typecheck
+  exits 0, exact modal routing remains covered, and no `workmuxControlChannel`
+  reference remains in the file.
+- Complete CE1-T5-001 rerun: exact shell composition reports 86 passed,
+  Worktree/config reports 66 passed, and exact components report 4 suites / 13
+  tests passed.
 
 ## Full Verification
 

@@ -2,28 +2,21 @@
 import { afterEach, beforeEach, expect, jest, test } from '@jest/globals';
 import { act, render } from '@testing-library/react-native';
 import React from 'react';
-
-type ModalCommands = {
-	toggleCommandMenu(): void;
-	openCommander(): void;
-	openNewWorktreeWorkspace(): void;
-	openCloseWorktreeWorkspace(): void;
-	openSkillSelector(): void;
-	openBrowserActions(): void;
-	openFeatureRequest(): void;
-	openWisprTextEditor(): void;
-	openConfigurator(): void;
-	closeCommandMenu(): void;
-};
+import { type UseShellKeyboardControllerInput } from '../../src/lib/shell-controllers/keyboard';
+import {
+	type ShellHostCommandPort,
+	type ShellWorkmuxPort,
+} from '../../src/lib/shell-controllers/session-contracts';
 
 const mockEvents: string[] = [];
-type KeyboardInput = {
-	modalCommands: ModalCommands;
-	activity: unknown;
-	scrollbackInput: unknown;
-	terminalView: unknown;
-	remoteTarget: { workmuxControlChannel: unknown };
-};
+type KeyboardInput = Pick<
+	UseShellKeyboardControllerInput,
+	| 'modalCommands'
+	| 'activity'
+	| 'scrollbackInput'
+	| 'terminalView'
+	| 'remoteTarget'
+>;
 const mockKeyboardInputs: KeyboardInput[] = [];
 const mockSessionInputs: Record<string, unknown>[] = [];
 const mockNotificationInputs: Record<string, unknown>[] = [];
@@ -50,8 +43,21 @@ const mockActivityPort = {
 	getSnapshot: () => mockActivitySnapshot,
 	subscribe: () => () => {},
 };
-const mockHostCommands = {};
-const mockWorkmux = {};
+const mockHostCommands: ShellHostCommandPort = {
+	key: 'target-v1' as ShellHostCommandPort['key'],
+	run: async () => ({ status: 'completed' }),
+};
+const mockWorkmux: ShellWorkmuxPort = {
+	key: 'target-v1' as ShellWorkmuxPort['key'],
+	command: async () => ({ status: 'completed' }),
+	operation: async () => ({ status: 'completed' }),
+	scroll: {
+		enter: async () => ({ status: 'completed' }),
+		move: async () => ({ status: 'completed' }),
+		exit: async () => ({ status: 'completed' }),
+	},
+	registerBeforeDispose: () => () => {},
+};
 const mockTerminalSource = {
 	isAvailable: () => true,
 	resizePty: jest.fn(),
