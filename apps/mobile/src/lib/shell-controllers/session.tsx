@@ -77,6 +77,14 @@ type TargetCommit = {
 	tmux: ShellTmuxResolution;
 };
 
+function pairShellSessionGenerations(
+	transportGeneration: number,
+	targetGeneration: number,
+): number {
+	const diagonal = transportGeneration + targetGeneration;
+	return (diagonal * (diagonal + 1)) / 2 + targetGeneration;
+}
+
 export function createShellSessionMountKey(request: ShellRouteRequest): string {
 	return JSON.stringify([
 		request.connectionId,
@@ -319,7 +327,10 @@ export function useShellSessionController({
 			identity: {
 				transportKey,
 				targetKey: target.publication.key,
-				generation: transport.generation + target.publication.generation,
+				generation: pairShellSessionGenerations(
+					transport.generation,
+					target.publication.generation,
+				),
 			},
 			tmux: target.tmux,
 			...(storedConnectionId ? { storedConnectionId } : {}),

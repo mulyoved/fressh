@@ -216,6 +216,7 @@ export function createShellTerminalHookRuntime(input: {
 	const createLifecycleSource = (
 		owner: ShellTerminalSourcePort,
 	): TerminalLifecycleShell => {
+		let nextRegistrationId = 0n;
 		const registrations = new Map<
 			bigint,
 			Awaited<ReturnType<ShellTerminalSourcePort['addListener']>>
@@ -227,8 +228,10 @@ export function createShellTerminalHookRuntime(input: {
 			readBuffer: (cursor) => owner.readBuffer(cursor),
 			addListener: async (listener, options) => {
 				const registration = await owner.addListener(listener, options);
-				registrations.set(registration.id, registration);
-				return registration.id;
+				const id = nextRegistrationId;
+				nextRegistrationId += 1n;
+				registrations.set(id, registration);
+				return id;
 			},
 			removeListener: (id) => {
 				const registration = registrations.get(id);

@@ -43,33 +43,42 @@ export function createShellTerminalSourcePort({
 }): ShellTerminalSourcePort {
 	const registrations = new WeakMap<
 		ShellTerminalListenerRegistration,
-		{ id: bigint; removed: boolean }
+		{
+			id: bigint;
+			owner: ShellTerminalNativeSource;
+			state: { active: boolean };
+			removed: boolean;
+		}
 	>();
 	type PendingListenerRemoval = {
 		owner: ShellTerminalNativeSource;
 		id: bigint;
+		registration?: ShellTerminalListenerRegistration;
 		attempts: number;
 		retryScheduled: boolean;
 		complete?: () => void;
 	};
-	const pendingListenerRemovals = new Map<bigint, PendingListenerRemoval>();
+	const pendingListenerRemovals = new Set<PendingListenerRemoval>();
 	const completeListenerRemoval = (pending: PendingListenerRemoval) => {
-		if (pendingListenerRemovals.get(pending.id) !== pending) return;
-		pendingListenerRemovals.delete(pending.id);
+		if (!pendingListenerRemovals.delete(pending)) return;
 		pending.complete?.();
+	};
+	const abandonListenerRemoval = (pending: PendingListenerRemoval) => {
+		pendingListenerRemovals.delete(pending);
 	};
 	const scheduleFinalListenerRemoval = (pending: PendingListenerRemoval) => {
 		if (pending.retryScheduled) return;
 		pending.retryScheduled = true;
 		queueMicrotask(() => {
-			if (pendingListenerRemovals.get(pending.id) !== pending) return;
+			if (!pendingListenerRemovals.has(pending)) return;
 			try {
 				pending.attempts += 1;
 				pending.owner.removeListener(pending.id);
-			} catch {
-				// Native retirement is best-effort after the bounded final attempt.
-			} finally {
 				completeListenerRemoval(pending);
+			} catch {
+				// Stop automatic work after the bounded final attempt. A public
+				// registration remains explicitly removable by its owner.
+				abandonListenerRemoval(pending);
 			}
 		});
 	};
@@ -92,15 +101,17 @@ export function createShellTerminalSourcePort({
 		owner: ShellTerminalNativeSource,
 		id: bigint,
 		complete?: () => void,
+		registration?: ShellTerminalListenerRegistration,
 	) => {
 		const pending = {
 			owner,
 			id,
+			...(registration ? { registration } : {}),
 			attempts: 1,
 			retryScheduled: false,
 			complete,
 		} satisfies PendingListenerRemoval;
-		pendingListenerRemovals.set(id, pending);
+		pendingListenerRemovals.add(pending);
 		owner.removeListener(id);
 		completeListenerRemoval(pending);
 	};
@@ -141,8 +152,17 @@ export function createShellTerminalSourcePort({
 		addListener: async (listener, options) => {
 			const owner = requireCurrent();
 			retryPendingListenerRemovals();
-			const id = await owner.addListener(listener, options);
+			const state = { active: true };
+			const id = await owner.addListener((event) => {
+				if (!state.active) return;
+				if (getCurrentGeneration() !== generation) {
+					state.active = false;
+					return;
+				}
+				listener(event);
+			}, options);
 			if (getCurrentGeneration() !== generation) {
+				state.active = false;
 				try {
 					retireListener(owner, id);
 				} catch {
@@ -150,20 +170,35 @@ export function createShellTerminalSourcePort({
 				}
 				throw new Error('Shell terminal source superseded.');
 			}
-			const registration = Object.freeze({ id });
-			registrations.set(registration, { id, removed: false });
+			const registration = Object.freeze(
+				{},
+			) as ShellTerminalListenerRegistration;
+			registrations.set(registration, {
+				id,
+				owner,
+				state,
+				removed: false,
+			});
 			return registration;
 		},
 		removeListener: (registration) => {
 			const owned = registrations.get(registration);
-			if (!owned || owned.removed || shell === undefined) return;
-			const wasPending = pendingListenerRemovals.has(owned.id);
+			if (!owned || owned.removed) return;
+			owned.state.active = false;
+			const wasPending = [...pendingListenerRemovals].some(
+				(pending) => pending.registration === registration,
+			);
 			retryPendingListenerRemovals();
 			if (owned.removed || wasPending) return;
 			try {
-				retireListener(shell, owned.id, () => {
-					owned.removed = true;
-				});
+				retireListener(
+					owned.owner,
+					owned.id,
+					() => {
+						owned.removed = true;
+					},
+					registration,
+				);
 			} catch (error) {
 				retryPendingListenerRemovals();
 				if (!owned.removed) throw error;

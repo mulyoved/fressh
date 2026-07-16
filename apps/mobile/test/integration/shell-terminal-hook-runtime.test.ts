@@ -3,7 +3,10 @@ import test from 'node:test';
 // eslint-disable-next-line import/consistent-type-specifier-style -- Avoid evaluating the React Native WebView package in Node tests.
 import type { XtermWebViewHandle } from '@fressh/react-native-xtermjs-webview';
 import { createReplaySafeDisposer } from '../../src/lib/shell-controllers/controller-core';
-import { type ShellTerminalSourcePort } from '../../src/lib/shell-controllers/session-contracts';
+import {
+	type ShellTerminalListenerRegistration,
+	type ShellTerminalSourcePort,
+} from '../../src/lib/shell-controllers/session-contracts';
 import {
 	createShellTerminalSourcePort,
 	type ShellTerminalNativeSource,
@@ -175,7 +178,8 @@ function createShell(
 		isAvailable: () => true,
 		getNativeOutputDiagnostics: () => null,
 		readBuffer: async () => ({ chunks: [], nextSeq: 0n }),
-		addListener: async () => Object.freeze({ id: 1n }),
+		addListener: async () =>
+			Object.freeze({}) as ShellTerminalListenerRegistration,
 		removeListener: () => {},
 		sendData:
 			options.sendData ??

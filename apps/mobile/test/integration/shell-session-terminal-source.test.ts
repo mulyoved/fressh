@@ -1,10 +1,19 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { type ShellTerminalListenerRegistration } from '../../src/lib/shell-controllers/session-contracts';
 import {
 	createShellTerminalSourcePort,
 	type ShellTerminalNativeSource,
 } from '../../src/lib/shell-controllers/session-terminal-source';
 import { createShellTransportKey } from '../../src/lib/shell-controllers/source-keys';
+
+type IsAssignable<From, To> = [From] extends [To] ? true : false;
+
+const listenerRegistrationRejectsStructuralForgery: IsAssignable<
+	Readonly<{ id: bigint }>,
+	ShellTerminalListenerRegistration
+> = false;
+void listenerRegistrationRejectsStructuralForgery;
 
 function deferred<T>() {
 	let resolve!: (value: T | PromiseLike<T>) => void;
@@ -47,6 +56,9 @@ function createDeferredTerminalSourceHarness() {
 	const send = deferred<void>();
 	const resize = deferred<void>();
 	const removedListenerIds: bigint[] = [];
+	const nativeListeners: Parameters<
+		ShellTerminalNativeSource['addListener']
+	>[0][] = [];
 	const sentPayloads: number[][] = [];
 	const resizeCalls: [number, number][] = [];
 	const shell = createNativeTerminalSource({
@@ -60,7 +72,10 @@ function createDeferredTerminalSourceHarness() {
 		}),
 		currentSeq: () => 0n,
 		readBuffer: () => read.promise,
-		addListener: () => listener.promise,
+		addListener: (nativeListener) => {
+			nativeListeners.push(nativeListener);
+			return listener.promise;
+		},
 		removeListener: (id: bigint) => {
 			removedListenerIds.push(id);
 		},
@@ -89,6 +104,7 @@ function createDeferredTerminalSourceHarness() {
 		send,
 		resize,
 		removedListenerIds,
+		nativeListeners,
 		sentPayloads,
 		resizeCalls,
 		rotate: () => {
@@ -162,6 +178,61 @@ void test('late listener registration is removed once and never becomes usable',
 	assert.deepEqual(harness.removedListenerIds, [73n]);
 });
 
+void test('generation rotation silences an already registered native callback', async () => {
+	const harness = createDeferredTerminalSourceHarness();
+	const events: string[] = [];
+	const registrationPromise = harness.port.addListener(
+		() => {
+			events.push('delivered');
+		},
+		{
+			cursor: { mode: 'live' },
+		},
+	);
+	harness.listener.resolve(72n);
+	await registrationPromise;
+
+	harness.nativeListeners[0]?.({
+		kind: 'dropped',
+		fromSeq: 1n,
+		toSeq: 2n,
+	});
+	assert.deepEqual(events, ['delivered']);
+	harness.rotate();
+	harness.nativeListeners[0]?.({
+		kind: 'dropped',
+		fromSeq: 2n,
+		toSeq: 3n,
+	});
+
+	assert.deepEqual(events, ['delivered']);
+});
+
+void test('generation rotation silences a native callback while registration is pending', async () => {
+	const harness = createDeferredTerminalSourceHarness();
+	const events: string[] = [];
+	const pending = harness.port.addListener(
+		() => {
+			events.push('delivered');
+		},
+		{
+			cursor: { mode: 'live' },
+		},
+	);
+	harness.rotate();
+
+	harness.nativeListeners[0]?.({
+		kind: 'dropped',
+		fromSeq: 1n,
+		toSeq: 2n,
+	});
+	harness.listener.resolve(73n);
+
+	await assert.rejects(pending, /Shell terminal source superseded/);
+	assert.deepEqual(events, []);
+	assert.deepEqual(harness.removedListenerIds, [73n]);
+});
+
 void test('late listener registration retries native retirement while preserving the superseded result', async () => {
 	const harness = createDeferredTerminalSourceHarness();
 	let removalAttempts = 0;
@@ -199,12 +270,81 @@ void test('ordinary listener removal retries one native failure and completes id
 	assert.deepEqual(harness.removedListenerIds, [75n, 75n]);
 });
 
-void test('listener retirement stops after its bounded terminal native failure', async () => {
+void test('listener retirement does not conflate reused native IDs', async () => {
 	const harness = createDeferredTerminalSourceHarness();
+	let removalAttempts = 0;
+	harness.shell.addListener = async () => 75n;
+	harness.shell.removeListener = () => {
+		removalAttempts += 1;
+		throw new Error('native removal failed');
+	};
+	const first = await harness.port.addListener(() => {}, {
+		cursor: { mode: 'live' },
+	});
+	const second = await harness.port.addListener(() => {}, {
+		cursor: { mode: 'live' },
+	});
+
+	assert.throws(
+		() => harness.port.removeListener(first),
+		/native removal failed/,
+	);
+	assert.equal(removalAttempts, 2);
+	assert.throws(
+		() => harness.port.removeListener(second),
+		/native removal failed/,
+	);
+	assert.equal(removalAttempts, 4);
+});
+
+void test('listener removal silences its callback while native retirement retries', async () => {
+	const harness = createDeferredTerminalSourceHarness();
+	let removalAttempts = 0;
+	harness.shell.removeListener = (id: bigint) => {
+		harness.removedListenerIds.push(id);
+		removalAttempts += 1;
+		if (removalAttempts <= 2) throw new Error('native removal failed');
+	};
+	const events: string[] = [];
+	const registrationPromise = harness.port.addListener(
+		() => {
+			events.push('delivered');
+		},
+		{
+			cursor: { mode: 'live' },
+		},
+	);
+	harness.listener.resolve(75n);
+	const registration = await registrationPromise;
+
+	assert.throws(
+		() => harness.port.removeListener(registration),
+		/native removal failed/,
+	);
+	harness.nativeListeners[0]?.({
+		kind: 'dropped',
+		fromSeq: 1n,
+		toSeq: 2n,
+	});
+	await Promise.resolve();
+	harness.nativeListeners[0]?.({
+		kind: 'dropped',
+		fromSeq: 2n,
+		toSeq: 3n,
+	});
+
+	assert.deepEqual(events, []);
+	assert.deepEqual(harness.removedListenerIds, [75n, 75n, 75n]);
+});
+
+void test('listener retirement stops automatically but permits a later explicit retry', async () => {
+	const harness = createDeferredTerminalSourceHarness();
+	let removalAttempts = 0;
 	harness.shell.addListener = async () => 76n;
 	harness.shell.removeListener = (id: bigint) => {
 		harness.removedListenerIds.push(id);
-		throw new Error('native removal failed');
+		removalAttempts += 1;
+		if (removalAttempts <= 3) throw new Error('native removal failed');
 	};
 	const registration = await harness.port.addListener(() => {}, {
 		cursor: { mode: 'live' },
@@ -218,7 +358,9 @@ void test('listener retirement stops after its bounded terminal native failure',
 	await Promise.resolve();
 	assert.deepEqual(harness.removedListenerIds, [76n, 76n, 76n]);
 	assert.doesNotThrow(() => harness.port.removeListener(registration));
-	assert.deepEqual(harness.removedListenerIds, [76n, 76n, 76n]);
+	assert.deepEqual(harness.removedListenerIds, [76n, 76n, 76n, 76n]);
+	assert.doesNotThrow(() => harness.port.removeListener(registration));
+	assert.deepEqual(harness.removedListenerIds, [76n, 76n, 76n, 76n]);
 });
 
 void test('pending retry from a later add completes the original registration once', async () => {

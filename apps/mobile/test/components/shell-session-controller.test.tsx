@@ -461,6 +461,57 @@ test('terminal source capabilities rotate safely while unrelated state keeps por
 	screen.unmount();
 });
 
+test('opposing transport and target advances publish distinct session generations', async () => {
+	const transportShell = createShell();
+	mockUseSshStore.setState({
+		connections: { 'connection-1': createConnection() },
+		shells: { 'connection-1-7': transportShell },
+	});
+	const onTransportHandle =
+		jest.fn<(handle: ShellSessionControllerHandle) => void>();
+	const transportScreen = render(
+		<SessionHarness
+			onHandle={onTransportHandle}
+			useController={getUseShellSessionController()}
+		/>,
+	);
+
+	act(() => {
+		mockUseSshStore.setState({
+			shells: { 'connection-1-7': createShell() },
+		});
+	});
+	const transportAdvance =
+		onTransportHandle.mock.calls.at(-1)?.[0].identity.generation;
+	transportScreen.unmount();
+
+	mockUseSshStore.setState({
+		connections: { 'connection-1': createConnection() },
+		shells: { 'connection-1-7': createShell() },
+	});
+	const onTargetHandle =
+		jest.fn<(handle: ShellSessionControllerHandle) => void>();
+	const targetScreen = render(
+		<SessionHarness
+			onHandle={onTargetHandle}
+			useController={getUseShellSessionController()}
+		/>,
+	);
+
+	await act(async () => {
+		mockUseSshStore.setState({
+			connections: { 'connection-1': createConnection() },
+		});
+		await Promise.resolve();
+		await Promise.resolve();
+	});
+	const targetAdvance =
+		onTargetHandle.mock.calls.at(-1)?.[0].identity.generation;
+
+	expect(transportAdvance).not.toBe(targetAdvance);
+	targetScreen.unmount();
+});
+
 test('stale tmux resolution is ignored and real connection or target changes replace Workmux', async () => {
 	const pending = new Map<
 		string,

@@ -82,7 +82,11 @@ export type ShellWorkmuxPort = {
 	): () => void;
 };
 
-export type ShellTerminalListenerRegistration = Readonly<{ id: bigint }>;
+declare const shellTerminalListenerRegistrationBrand: unique symbol;
+
+export type ShellTerminalListenerRegistration = Readonly<{
+	[shellTerminalListenerRegistrationBrand]: true;
+}>;
 
 export type ShellTerminalNativeOutputDiagnostics = {
 	currentSeq: string;

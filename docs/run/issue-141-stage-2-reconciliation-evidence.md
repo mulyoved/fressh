@@ -135,7 +135,8 @@ cannot self-reference its resulting SHA.
   render-time `.current =` searches both returned no matches.
 - Focused Stage 2 Node lane: 254 tests passed. Focused Stage 2 component lane: 8
   suites / 37 tests passed.
-- Complete mobile gate after all review repairs: `pnpm run fmt:check`,
+- Historical pre-final mobile gate (superseded by the authoritative Final CE1
+  wave 2 closure below): `pnpm run fmt:check`,
   `pnpm run lint:check`, and `pnpm run typecheck` exited 0;
   `pnpm run test:integration` passed 2,372 tests; and `pnpm run test:components`
   passed 9 suites / 38 tests.
@@ -195,6 +196,27 @@ cannot self-reference its resulting SHA.
 - Focused terminal closure: 175/175. Complete mobile closure: formatting,
   ESLint, TypeScript, 2,374 integration tests, and 9 component suites / 38 tests
   passed. `git diff --check` exits 0.
+
+### Final CE1 wave 3 repair closure
+
+- Retired terminal callbacks are guarded by their captured source generation,
+  so rotation silences both registered and still-pending native callbacks even
+  when native listener removal is delayed or fails.
+- Automatic native listener retirement remains capped at three attempts. A
+  failed terminal attempt deactivates delivery but no longer claims successful
+  removal; the exact opaque registration capability retains authority for a
+  later explicit cleanup retry.
+- Pending removals are tracked by opaque registration identity rather than only
+  by listener ID, so reuse of a native ID cannot conflate two registrations.
+  Public listener registration tokens are opaque, matching the implementation's
+  identity-capability contract.
+- Composite session generations use a collision-free pairing of the independent
+  transport and target generations. Behavioral coverage proves opposing owner
+  advances cannot publish the same session generation.
+- Focused terminal/runtime closure: 20/20. Focused session component closure:
+  14/14. Complete mobile closure: formatting, ESLint, TypeScript, 2,378
+  integration tests, and 9 component suites / 39 tests passed. `git diff
+  --check` exits 0.
 
 ## Thermo-Nuclear Review
 
