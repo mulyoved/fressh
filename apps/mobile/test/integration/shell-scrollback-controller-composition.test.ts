@@ -6,9 +6,18 @@ import ts from 'typescript';
 
 const detailPath = join(process.cwd(), 'src/app/shell/detail.tsx');
 const source = readFileSync(detailPath, 'utf8');
+const viewPath = join(process.cwd(), 'src/app/shell/ShellScreenView.tsx');
+const viewSource = readFileSync(viewPath, 'utf8');
 const sourceFile = ts.createSourceFile(
 	detailPath,
 	source,
+	ts.ScriptTarget.Latest,
+	true,
+	ts.ScriptKind.TSX,
+);
+const viewSourceFile = ts.createSourceFile(
+	viewPath,
+	viewSource,
 	ts.ScriptTarget.Latest,
 	true,
 	ts.ScriptKind.TSX,
@@ -37,16 +46,16 @@ function xtermElement(): string {
 	const visit = (node: ts.Node): void => {
 		if (
 			ts.isJsxSelfClosingElement(node) &&
-			node.tagName.getText(sourceFile) === 'XtermJsWebView'
+			node.tagName.getText(viewSourceFile) === 'XtermJsWebView'
 		) {
 			element = node;
 			return;
 		}
 		ts.forEachChild(node, visit);
 	};
-	visit(sourceFile);
+	visit(viewSourceFile);
 	assert.ok(element, 'XtermJsWebView element was not found');
-	return element.getText(sourceFile);
+	return element.getText(viewSourceFile);
 }
 
 void test('shell detail composes scrollback from semantic controller ports', () => {
@@ -58,13 +67,13 @@ void test('shell detail composes scrollback from semantic controller ports', () 
 		/^\s*targetKey,\s*$/m,
 		/targetName:\s*normalizedTmuxTarget/,
 		/connectionAvailable:\s*Boolean\(connection\)/,
-		/^\s*shellAvailable,\s*$/m,
+		/shellAvailable:\s*terminalSource\.isAvailable\(\)/,
 		/^\s*tmuxEnabled,\s*$/m,
 		/terminalTransport:\s*terminal\.transport/,
 		/runtimeInstanceId:\s*terminal\.runtimeInstanceId/,
 		/terminalView:\s*terminal\.view/,
-		/workmux:\s*workmuxControlChannel/,
-		/^\s*trace:\s*traceScroll,\s*$/m,
+		/workmux:\s*ports\.workmux/,
+		/^\s*trace:\s*terminalViewPolicy\.trace,\s*$/m,
 		/^\s*getErrorMessage,\s*$/m,
 		/^\s*logger,\s*$/m,
 	]) {
@@ -76,19 +85,19 @@ void test('terminal publication and WebView delegate raw scrollback events', () 
 	assert.doesNotMatch(source, /scrollbackRuntimeChangedRef|onRuntimeChanged/);
 	assert.doesNotMatch(source, /keyboardSelectionModeRef/);
 	const xterm = xtermElement();
-	assert.match(xterm, /\{\.\.\.scrollback\.xtermProps\}/);
+	assert.match(xterm, /\{\.\.\.terminal\.scrollback\.xtermProps\}/);
 	assert.doesNotMatch(
 		xterm,
 		/onScrollbackModeChange=|onScrollbackEnterRequested=|onScrollbackBatch=/,
 	);
-	assert.match(source, /\{scrollback\.visible && \(/);
-	assert.match(source, /onPress=\{scrollback\.jumpToLive\}/);
+	assert.match(viewSource, /terminal\.scrollback\.visible \? \(/);
+	assert.match(viewSource, /onPress=\{terminal\.scrollback\.jumpToLive\}/);
 });
 
 void test('all shell input adapters use the scrollback input port', () => {
-	const keyboardCall = variableInitializer('keyboardControllerInput');
-	assert.match(keyboardCall, /^\s*scrollback,\s*$/m);
-	assert.match(keyboardCall, /^\s*terminal,\s*$/m);
+	const keyboardCall = variableInitializer('keyboard');
+	assert.match(keyboardCall, /scrollbackInput:\s*scrollback\.input/);
+	assert.match(keyboardCall, /terminalView:\s*terminal\.view/);
 	const xterm = xtermElement();
 	assert.match(xterm, /onInput=\{keyboard\.onWebViewInput\}/);
 	assert.match(xterm, /onSelection=\{keyboard\.onSelectionChanged\}/);
@@ -97,7 +106,7 @@ void test('all shell input adapters use the scrollback input port', () => {
 		/onSelectionModeChange=\{keyboard\.onSelectionModeChange\}/,
 	);
 	assert.doesNotMatch(
-		source,
+		`${source}\n${viewSource}`,
 		/createShellTerminalLiveInputRequest|runWorkmuxScrollbackLiveInputSendPlan|terminal\.transport\.send|shell\.sendData|new OrderedWriter/,
 	);
 });

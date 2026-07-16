@@ -154,15 +154,7 @@ export function createShellSessionWorkmuxOwner(
 		input: ShellSessionWorkmuxInput,
 		activateImmediately = true,
 	): OwnedWorkmux {
-		const owned = {
-			channel: null,
-			input,
-			cleanups: new Map<string, CleanupRegistration>(),
-			port: null as unknown as ShellWorkmuxPort,
-			active: true,
-			cleanupOpen: false,
-			retirementScheduled: false,
-		} satisfies OwnedWorkmux;
+		let owned: OwnedWorkmux;
 
 		const runCommand = async (
 			invoke: (
@@ -188,7 +180,7 @@ export function createShellSessionWorkmuxOwner(
 			}
 		};
 
-		owned.port = {
+		const port: ShellWorkmuxPort = {
 			key: input.key,
 			command: (argv: string[], options?: { timeoutMs?: number }) =>
 				runCommand((channel) => channel.command(argv, options)),
@@ -214,6 +206,15 @@ export function createShellSessionWorkmuxOwner(
 					}
 				};
 			},
+		};
+		owned = {
+			channel: null,
+			input,
+			cleanups: new Map<string, CleanupRegistration>(),
+			port,
+			active: true,
+			cleanupOpen: false,
+			retirementScheduled: false,
 		};
 		if (activateImmediately) activateOwned(owned);
 		return owned;

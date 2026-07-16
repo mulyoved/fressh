@@ -114,8 +114,65 @@
 
 ## Full Verification
 
+- Boundary and architecture gate: 22 tests passed. `detail.tsx` is 498 nonblank
+  lines, `ShellDetail` is 299 physical lines, and `ShellScreenView.tsx` is 252
+  nonblank lines. The forbidden raw `WorkmuxControlChannel` ownership and
+  render-time `.current =` searches both returned no matches.
+- Focused Stage 2 Node lane: 254 tests passed. Focused Stage 2 component lane: 8
+  suites / 37 tests passed.
+- Complete mobile gate after all review repairs: `pnpm run fmt:check`,
+  `pnpm run lint:check`, and `pnpm run typecheck` exited 0;
+  `pnpm run test:integration` passed 2,372 tests; and `pnpm run test:components`
+  passed 9 suites / 38 tests.
+- The repository `pnpm exec turbo lint:check` cannot execute its root Nix
+  formatting task in this environment because `nix` is unavailable (exit 127).
+  The requested `nix develop` lanes are blocked by the same missing executable.
+  Direct non-Nix package checks passed: UniFFI Jest passed 2 suites / 6 tests
+  (with its existing force-exit/open-handle notice), and xterm passed 64 tests.
+- `pnpm exec jscpd .` completed its scan but exited 1 against the repository's
+  zero-duplication threshold: 35 existing clone groups / 1.22%. No reported pair
+  identifies the new shared scrollback fixture or new Stage 2 production
+  duplication. This is recorded as repository baseline debt, not a passing
+  duplication gate.
+- `git diff --check` exits 0.
+
 ## Thermo-Nuclear Review
+
+- Review artifact: `.superpowers/sdd/task-8-thermo-review.md`.
+- Final result: zero blocking maintainability findings after extracting the
+  duplicated typed scrollback fixture and removing the production Workmux type
+  hole. Focused repair lanes passed 66/66 and 37/37 respectively, followed by
+  the complete mobile gate above.
 
 ## Android Preview
 
+- Exact local `preview` EAS command completed and produced
+  `apps/mobile/build-1784186045137.apk` (164,954,281 bytes).
+- APK SHA-256:
+  `7d2527bd07e2caaefd1200314c3b57e3d3b968a39541a498794ed9efc05ac8ab`.
+- Manifest identity: `com.finalapp.vibe2`, version code 5, version name 0.0.5,
+  compile SDK 36. APK signer certificate SHA-256:
+  `f3ae9ba5f33128ddd74a416da68209a1ca1fba79e2e0c520443e5a6b080e0b41`.
+- EAS selected the configured default credential `Build Credentials F9ztIHqDIB`.
+  Expo Doctor reported the installed `expo` and `expo-updates` patch versions
+  behind its recommendations; the advisory check did not prevent the signed
+  Gradle release artifact.
+- `adb connect 100.113.210.6:5555` returned `Connection refused`, and
+  `adb devices -l` listed no device. Therefore the existing-installation smoke
+  matrix, saved connection/private-key preservation, and installed certificate
+  comparison are **not verified** in this run.
+- No APK was installed, no app was uninstalled, no app data was cleared, and no
+  Worktree close or other device mutation was attempted. Every manual smoke item
+  remains pending until the existing signed device is reachable and its current
+  backup/signing continuity can be checked safely.
+
 ## Rollback
+
+- Stage 2 changes no stored-data format and does not migrate saved connections,
+  private keys, or Worktree state.
+- Screen unmount no longer defines ownership of the live SSH resource; rolling
+  back the UI/controller slice does not require a data conversion.
+- The replacement branch can be abandoned without changing the immutable source
+  branch.
+- If Stage 2 is merged, revert it before beginning Stage 3 or any later shell
+  stage that depends on these typed ownership boundaries.

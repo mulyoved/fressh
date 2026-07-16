@@ -1,10 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createScrollbackOperationOwnerRegistry } from '../../src/lib/shell-controllers/scrollback-operation-owner';
-import {
-	type ShellWorkmuxOutcome,
-	type ShellWorkmuxScrollPort,
-} from '../../src/lib/shell-controllers/session-contracts';
+import { type ShellWorkmuxOutcome } from '../../src/lib/shell-controllers/session-contracts';
 import {
 	registerTmuxScrollbackRemoteCopyModeExitCleanup,
 	resetTmuxScrollbackRuntimeState,
@@ -15,6 +12,7 @@ import {
 } from '../../src/lib/workmux-scrollback-batch';
 import { createWorkmuxScrollbackCommandExecutor as createBaseWorkmuxScrollbackCommandExecutor } from '../../src/lib/workmux-scrollback-executor';
 import { createWorkmuxScrollbackLiveInputCleanupBarrier } from '../../src/lib/workmux-scrollback-live-input';
+import { createWorkmuxScrollbackCommandExecutor } from './helpers/workmux-scrollback-executor-fixtures';
 
 const remoteCopyModeSettlement = (state: { current: boolean }) => ({
 	isOwned: () => state.current,
@@ -51,32 +49,6 @@ const lineText = (
 ) => `move:main:${direction}:line:${count}`;
 const enterText = (sessionName = 'main') => `enter:${sessionName}`;
 const exitText = (sessionName = 'main') => `exit:${sessionName}`;
-
-function createRecordingScrollTransport(
-	executeCommand: (command: string) => Promise<ShellWorkmuxOutcome>,
-): ShellWorkmuxScrollPort {
-	return {
-		enter: ({ sessionName }) => executeCommand(enterText(sessionName)),
-		move: ({ sessionName, direction, unit, count }) =>
-			executeCommand(`move:${sessionName}:${direction}:${unit}:${count}`),
-		exit: ({ sessionName }) => executeCommand(exitText(sessionName)),
-	};
-}
-
-function createWorkmuxScrollbackCommandExecutor({
-	executeCommand,
-	...options
-}: Omit<
-	Parameters<typeof createBaseWorkmuxScrollbackCommandExecutor>[0],
-	'scrollTransport'
-> & {
-	executeCommand: (command: string) => Promise<ShellWorkmuxOutcome>;
-}) {
-	return createBaseWorkmuxScrollbackCommandExecutor({
-		...options,
-		scrollTransport: createRecordingScrollTransport(executeCommand),
-	});
-}
 
 const deferred = <T>() => {
 	let resolve: (value: T) => void = () => {};

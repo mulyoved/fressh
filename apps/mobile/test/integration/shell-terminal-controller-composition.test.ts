@@ -7,15 +7,18 @@ const readSource = (path: string) =>
 	readFileSync(join(process.cwd(), path), 'utf8');
 
 const detail = readSource('src/app/shell/detail.tsx');
+const view = readSource('src/app/shell/ShellScreenView.tsx');
 const terminal = readSource('src/lib/shell-controllers/terminal.tsx');
 
 void test('shell detail delegates terminal refs and lifecycle', () => {
 	assert.match(detail, /useShellTerminalController\(\{/);
-	assert.match(detail, /ref=\{terminal\.xtermRef\}/);
+	assert.match(detail, /xtermRef: terminal\.xtermRef/);
 	assert.match(detail, /onLoadStart: terminal\.onLoadStart/);
-	assert.match(detail, /onResize=\{terminal\.onResize\}/);
-	assert.match(detail, /onInitialized=\{terminal\.onInitialized\}/);
-	assert.match(detail, /onRetry=\{terminal\.retry\}/);
+	assert.match(view, /ref=\{terminal\.xtermRef\}/);
+	assert.match(view, /onLoadStart: terminal\.onLoadStart/);
+	assert.match(view, /onResize=\{terminal\.onResize\}/);
+	assert.match(view, /onInitialized=\{terminal\.onInitialized\}/);
+	assert.match(view, /onRetry=\{terminal\.retry\}/);
 	assert.doesNotMatch(
 		detail,
 		/listenerIdRef|listenerOwnerRef|attachedShellKeyRef|hasAttachedOnceRef|writerRef/,
@@ -40,13 +43,11 @@ void test('scrollback, keyboard, and manual fit consume terminal ports', () => {
 	);
 	assert.match(
 		detail,
-		/createShellDetailKeyboardControllerInput\(\{[\s\S]*?\s+scrollback,[\s\S]*?\s+terminal,/,
+		/useShellKeyboardController\(\{[\s\S]*?scrollbackInput: scrollback\.input,[\s\S]*?terminalView: terminal\.view,/,
 	);
-	assert.match(detail, /getTerminalSize: terminal\.getLastSize/);
-	assert.match(detail, /getXterm: \(\) => terminal\.view/);
 	assert.match(
 		detail,
-		/waitForTerminalSizeAfterFit: terminal\.waitForSizeAfterFit/,
+		/useManualTerminalFit\(\{[\s\S]*?terminalSource,[\s\S]*?terminal,/,
 	);
 	assert.doesNotMatch(detail, /new OrderedWriter|xtermRef\.current/);
 });
@@ -54,7 +55,11 @@ void test('scrollback, keyboard, and manual fit consume terminal ports', () => {
 void test('waiting rendering is retained through the terminal controller snapshot', () => {
 	assert.match(
 		detail,
-		/case 'waiting':\s*if \(!terminal\.hasRendered\) return <RouteSkeleton \/>/,
+		/buildShellSessionView\(\s*snapshot,\s*terminal\.hasRendered,/,
+	);
+	assert.match(
+		view,
+		/session\.status === 'waiting' && !session\.terminalHasRendered/,
 	);
 	assert.doesNotMatch(detail, /terminalReady|hasRenderedTerminal/);
 });

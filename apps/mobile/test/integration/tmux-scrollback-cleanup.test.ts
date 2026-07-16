@@ -1,10 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-	type ShellWorkmuxOutcome,
-	type ShellWorkmuxScrollPort,
-} from '../../src/lib/shell-controllers/session-contracts';
-import {
 	disposeTmuxScrollbackRuntimeStateForUiReset,
 	handleTmuxScrollbackEnterRequested,
 	resetTmuxScrollbackRuntimeState,
@@ -19,55 +15,23 @@ import {
 	TMUX_SCROLLBACK_LOCAL_EXIT_REQUEST_ID_LIMIT,
 } from '../../src/lib/tmux-scrollback-local-exit';
 import { createTmuxScrollbackLineAccumulator } from '../../src/lib/workmux-scrollback-batch';
-import { createWorkmuxScrollbackCommandExecutor as createBaseWorkmuxScrollbackCommandExecutor } from '../../src/lib/workmux-scrollback-executor';
 import {
 	buildWorkmuxScrollbackLiveInputSendPlan,
 	createWorkmuxScrollbackLiveInputCleanupBarrier,
 	registerWorkmuxScrollbackLiveInputCleanup,
 	resolveWorkmuxScrollbackLiveInputCleanup,
 } from '../../src/lib/workmux-scrollback-live-input';
+import {
+	createWorkmuxScrollbackCommandExecutor,
+	remoteCopyModeOwnership,
+} from './helpers/workmux-scrollback-executor-fixtures';
 
 const bytes = (values: number[]) => new Uint8Array(values);
-const remoteCopyModeOwnership = (
-	active: { current: boolean },
-	generation: { current: number },
-) => ({
-	acquire: () => {
-		generation.current += 1;
-		active.current = true;
-		return Object.freeze({ generation: generation.current });
-	},
-});
 const segmentValues = (segments: readonly Uint8Array<ArrayBuffer>[]) =>
 	segments.map((segment) => Array.from(segment));
 const enterText = (sessionName = 'main') => `enter:${sessionName}`;
 const exitText = (sessionName = 'main') => `exit:${sessionName}`;
 const workmuxScrollExitCommand = exitText();
-function createRecordingScrollTransport(
-	executeCommand: (command: string) => Promise<ShellWorkmuxOutcome>,
-): ShellWorkmuxScrollPort {
-	return {
-		enter: ({ sessionName }) => executeCommand(enterText(sessionName)),
-		move: ({ sessionName, direction, unit, count }) =>
-			executeCommand(`move:${sessionName}:${direction}:${unit}:${count}`),
-		exit: ({ sessionName }) => executeCommand(exitText(sessionName)),
-	};
-}
-
-function createWorkmuxScrollbackCommandExecutor({
-	executeCommand,
-	...options
-}: Omit<
-	Parameters<typeof createBaseWorkmuxScrollbackCommandExecutor>[0],
-	'scrollTransport'
-> & {
-	executeCommand: (command: string) => Promise<ShellWorkmuxOutcome>;
-}) {
-	return createBaseWorkmuxScrollbackCommandExecutor({
-		...options,
-		scrollTransport: createRecordingScrollTransport(executeCommand),
-	});
-}
 const deferred = <T>() => {
 	let resolve: (value: T) => void = () => {};
 	let reject: (reason?: unknown) => void = () => {};
