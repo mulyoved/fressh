@@ -36,8 +36,9 @@ Herdr, changing the Rust SSH implementation, or replacing xterm.js.
   agent-list order. Wrap from the last agent to the first.
 - Remap the Work key's long-press Previous and Next actions to the preceding and
   following agents. Other Workmux scope actions show **TBD for Herdr**.
-- Release Herdr terminal control while the app is backgrounded and automatically
-  reacquire the same agent when the app returns to the foreground.
+- Release Herdr terminal control while the app is backgrounded by immediately
+  starting native command-stream closure, then automatically reacquire the same
+  agent when the app returns to the foreground.
 
 ## External Protocol Baseline
 
@@ -49,6 +50,9 @@ and implemented by Herdr:
 - `herdr terminal session control <target>` emits newline-delimited
   `terminal.frame` records and accepts newline-delimited control commands on
   stdin.
+- The terminal command accepts the snapshot's stable `terminal_id` as its
+  target. Public pane IDs describe mutable layout placement and are not used as
+  Fressh route or controller identity.
 - Control commands include `terminal.input`, `terminal.resize`,
   `terminal.scroll`, and `terminal.release`.
 - Only one controller may own a terminal at a time. `--takeover` explicitly
@@ -85,7 +89,9 @@ never disconnects a store-owned SSH connection during ordinary route cleanup.
 
 The Herdr terminal owner owns exactly one command stream and its controller
 lease. It releases and closes that stream on back navigation, agent switching,
-backgrounding, retry, terminal failure, or unmount.
+retry, terminal failure, or unmount. On backgrounding it starts the existing
+native stream close immediately; controller release must not depend on a later
+JavaScript timer or promise continuation.
 
 The POC may reuse these existing pieces directly:
 
@@ -128,9 +134,11 @@ snapshot command and raw Herdr snapshot shape. It:
 - Parses JSON once and validates only the fields Fressh consumes.
 - Accepts additional unknown fields.
 - Maps unknown or missing status values to `unknown`.
-- Produces stable agent targets from public Herdr pane IDs.
-- Retains workspace, tab, pane, agent, status, optional pane label, optional
-  terminal label, and safe working-directory basename presentation data.
+- Requires each listed agent's `terminal_id` and uses it as the stable route,
+  row, navigation, and terminal-control target.
+- Retains public pane ID, workspace, tab, agent, status, optional pane label,
+  optional terminal label, and safe working-directory basename as presentation
+  and ordering data only.
 - Produces the ordered agent array used by both the list and Work-key cycling.
 
 Agents are grouped and ordered as follows:
@@ -143,6 +151,11 @@ Agents are grouped and ordered as follows:
 
 Within a status group, preserve the snapshot's stable workspace/tab/pane order.
 The flattened displayed order is the navigation order.
+
+Snapshot refresh reconciles rows and the selected route by `terminal_id`. If a
+pane moves, its row presentation and position may change while the selected
+terminal remains the same. A target has disappeared only when that terminal ID
+is no longer present in the refreshed agent set.
 
 The latest successful snapshot is kept only in memory for the active Herdr host.
 There is no durable agent or terminal cache.
@@ -175,7 +188,7 @@ The terminal owner is a provider-specific lifecycle object. It owns:
 - Resize coalescing.
 - Scroll command emission.
 - Controller-conflict classification and takeover restart.
-- Background release and foreground reacquisition.
+- Immediate native background close and foreground reacquisition.
 - Idempotent release and close.
 - Suppression of events and writes from retired generations.
 
@@ -206,10 +219,10 @@ The provider has two views:
 - **Terminal detail:** xterm, current agent identity, existing keyboard,
   reconnect overlay, takeover prompt, and terminal errors.
 
-Routes carry stable identifiers, not serialized snapshots or credentials. The
-latest in-memory provider snapshot supplies Work-key navigation. A direct or
-restored terminal route refreshes the snapshot if that navigation state is
-missing.
+Routes carry the stable Herdr `terminal_id`, not pane IDs, serialized snapshots,
+or credentials. The latest in-memory provider snapshot supplies current
+presentation and Work-key navigation. A direct or restored terminal route
+refreshes the snapshot if that navigation state is missing.
 
 ## User Flows
 
@@ -244,33 +257,38 @@ visible.
 ### Switch agents with Work
 
 1. Resolve the current target in the flattened displayed order.
-2. Select the next or previous target, wrapping at either end.
+2. Select the next or previous terminal ID, wrapping at either end.
 3. Retire the current generation and complete its release/close sequence.
 4. Navigate to or replace the terminal target with the selected agent.
 5. Start a fresh non-takeover controller for the new target.
 
-If the target set is stale or the selected agent disappeared, refresh the
-snapshot. If no replacement exists, return to the list's empty state.
+If the target set is stale, refresh the snapshot and reconcile by terminal ID.
+If the selected terminal is no longer in the agent set and no replacement
+exists, return to the list's empty state.
 
 ### Background and foreground
 
 1. On background, stop admitting input and retire the current stream.
-2. Send release once on the outbound queue, then close the stream even if
-   release fails or times out.
-3. Keep the route and selected target as local UI state only.
-4. On foreground, refresh the snapshot and reacquire the same agent
-   automatically.
-5. If the agent no longer exists, return to the refreshed list.
-6. If another controller acquired it, show the normal **Take Over** choice.
+2. In that same AppState callback, invoke the existing native
+   `SshCommandStream.close()` directly, without scheduling it in a timer or
+   promise continuation and without awaiting a release send. The native close
+   owns its own bounded teardown and may continue while JavaScript is suspended.
+3. A `terminal.release` send started in the same cleanup turn is best-effort
+   only; native stream closure is the ownership-release guarantee.
+4. Keep the route's selected terminal ID as local UI state only.
+5. On foreground, refresh the snapshot, reconcile that terminal ID to its
+   current pane metadata, and reacquire it automatically.
+6. If the terminal is no longer in the agent set, return to the refreshed list.
+7. If another controller acquired it, show the normal **Take Over** choice.
 
 ## Terminal Protocol and Data Flow
 
 ### Stream startup
 
-Normal control uses a shell-quoted public pane target:
+Normal control uses the shell-quoted stable terminal ID from the snapshot:
 
 ```text
-herdr terminal session control '<target>' --cols <cols> --rows <rows>
+herdr terminal session control '<terminal_id>' --cols <cols> --rows <rows>
 ```
 
 Takeover uses the same command with `--takeover`. Numeric dimensions are
@@ -365,14 +383,23 @@ displayed viewport; Fressh does not substitute local-only xterm scrolling.
 
 ### Release
 
-Expected cleanup enqueues exactly one record:
+Graceful cleanup may enqueue exactly one record:
 
 ```json
 { "type": "terminal.release" }
 ```
 
-The queue stops admitting new work first. Stream close follows release with a
-bounded best-effort wait. Close still runs if release cannot be delivered.
+The queue stops admitting new work first. For back, switch, retry, failure, and
+unmount cleanup, stream close follows the release attempt with a bounded
+best-effort wait. Close still runs if release cannot be delivered.
+
+Background cleanup is stricter: it invokes native stream close immediately and
+never gates that invocation on the release send or a JavaScript timeout. The
+release record is optional best-effort notification in this path; SSH channel
+closure is sufficient for Herdr to remove the controller. The owner does not
+await the returned close promise to advance lifecycle state; it records the
+eventual result when JavaScript can process it. JavaScript suspension therefore
+cannot postpone the already-started native close operation.
 
 ## State and Ownership Rules
 
@@ -391,6 +418,10 @@ Only the current generation may publish state, deliver a frame, or enqueue a
 command. Retired generations may finish required cleanup but cannot change the
 visible route. Takeover and foreground reacquisition always create a new
 generation.
+
+Terminal identity is the Herdr `terminal_id`. Pane ID, workspace, and tab are
+mutable placement metadata. They never decide whether a foreground refresh is
+reacquiring the same terminal.
 
 The SSH connection and Herdr controller have deliberately different lifetimes:
 
@@ -429,7 +460,8 @@ automatic terminal retry. All other retries are explicit user actions.
 POC diagnostics record:
 
 - Saved host ID and active SSH connection ID.
-- Herdr target ID and terminal generation.
+- Herdr terminal ID and terminal generation. Pane IDs may be recorded only as
+  non-identity presentation metadata.
 - Snapshot duration and agent count.
 - Command-stream start and stop.
 - Time to first frame.
@@ -439,6 +471,7 @@ POC diagnostics record:
 - Resize and scroll command counts.
 - Takeover requests.
 - Background, foreground, switch, back, error, and unmount cleanup reasons.
+- Background native-close requested and eventual completion/failure.
 - Exit status, exit signal, and sanitized stderr length/message.
 
 Diagnostics never record:
@@ -459,6 +492,9 @@ Stream buffers, one-shot output, stderr, and log fields remain bounded.
 #### Snapshot mapping
 
 - Multiple workspaces, tabs, panes, and agents.
+- Required stable terminal IDs and public pane IDs as presentation metadata.
+- The same terminal ID after a cross-workspace pane move updates presentation
+  without changing route or controller identity.
 - Stable order within status groups.
 - Missing labels and working directories.
 - Unknown or missing status.
@@ -488,7 +524,7 @@ Stream buffers, one-shot output, stderr, and log fields remain bounded.
 - Exact input, resize, scroll, and release JSON.
 - Exactly one trailing newline per command.
 - Positive dimension and line-count validation.
-- Normal and takeover command construction.
+- Normal and takeover command construction with a terminal-ID target.
 - Shell quoting for spaces, quotes, and metacharacters.
 
 #### Navigation
@@ -496,7 +532,8 @@ Stream buffers, one-shot output, stderr, and log fields remain bounded.
 - Status-group ordering.
 - Next and previous agent.
 - Wrap in both directions.
-- Current target missing after refresh.
+- Current terminal preserved after its pane ID and placement change.
+- Current terminal missing from the refreshed agent set.
 - One-agent list.
 
 ### Fake-stream integration tests
@@ -513,13 +550,17 @@ Verify:
 - Text and every required special key become exact input bytes.
 - Resize coalescing sends only the latest size.
 - Finger-drag batches become ordered Herdr scroll commands.
-- Back, switch, background, retry, and unmount release exactly once.
-- Close follows a failed release.
+- Back, switch, retry, failure, and unmount attempt release at most once.
+- Their close follows a failed or timed-out release.
+- Background retirement invokes native close immediately even when the release
+  send and its promise never settle and JavaScript timers do not advance.
+- The native close request occurs before the AppState callback returns.
+- Background release is best-effort and cannot delay or cancel native close.
 - No writes are accepted after retirement.
 - Late frames and failures from old generations are ignored.
 - Controller conflict exposes takeover without taking over automatically.
 - Explicit takeover starts a new `--takeover` generation.
-- Foreground reacquires the same target.
+- Foreground reacquires the same terminal ID after its pane placement changes.
 - Missing foreground target returns to the refreshed list.
 - First-frame timeout closes the stream.
 - Unknown well-formed records are ignored.
@@ -534,6 +575,7 @@ Verify:
 - Saved-host action and connection reuse/connect states.
 - Herdr availability errors.
 - Grouped agent-list rendering and Refresh.
+- Stable terminal-ID route selection across pane placement changes.
 - Empty and malformed-snapshot states.
 - Agent selection and Back to Agents.
 - Take Over and Retry actions.
@@ -567,6 +609,8 @@ Verify:
 9. Use Work, Previous, and Next to switch agents and wrap.
 10. Trigger an unsupported action and confirm **TBD for Herdr**.
 11. Background and foreground the app and confirm automatic reacquisition.
+    Confirm another client can control the terminal while Fressh remains
+    backgrounded without requiring takeover from a stale Fressh stream.
 12. Exercise controller conflict and explicit takeover.
 13. Disconnect SSH and use explicit reconnect.
 14. Return to the list and manually refresh.
@@ -582,7 +626,7 @@ Verify:
 - Existing xterm renderer and configured keyboard.
 - Terminal input, resize, Herdr scrolling, release, and explicit takeover.
 - Work-key agent cycling.
-- Background release and foreground reacquisition.
+- Native background close and terminal-ID foreground reacquisition.
 - Basic typed errors, diagnostics, automated tests, and real-device acceptance.
 
 ## Explicit Non-Goals
@@ -618,8 +662,10 @@ The POC is complete when, on a real Android device:
 - Work, Previous, and Next switch agents in list order with wraparound.
 - Unsupported shell-specific actions show **TBD for Herdr**.
 - Controller conflict requires explicit takeover.
-- Back, switching, backgrounding, failure, and unmount release the controller.
-- Foreground automatically reacquires the selected agent when it still exists.
+- Back, switching, backgrounding, failure, and unmount release the controller;
+  background closure does not depend on JavaScript timers.
+- Foreground automatically reacquires the selected terminal when it still
+  exists, even if its pane placement changed.
 - SSH disconnect, missing target, missing Herdr, malformed records, and stream
   failure are recoverable and do not crash the app.
 - Existing ordinary SSH behavior and tests remain unchanged.
