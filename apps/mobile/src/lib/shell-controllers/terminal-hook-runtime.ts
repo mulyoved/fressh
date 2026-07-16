@@ -37,8 +37,6 @@ export type ShellTerminalRuntimeDependencies = {
 	router: ShellTerminalRuntimeRouter;
 };
 
-export type ShellTerminalRuntimeView = ShellTerminalViewPort;
-
 export type TerminalHookRuntimeFactories = {
 	createTransport(
 		input: Parameters<typeof createShellTerminalTransport>[0],
@@ -88,7 +86,7 @@ export type ShellTerminalHookRuntime = {
 	transport: ShellTerminalTransportController;
 	size: TerminalSizeController;
 	lifecycle: TerminalLifecycleController;
-	view: ShellTerminalRuntimeView;
+	view: ShellTerminalViewPort;
 	getOutputDiagnostics(): TerminalOutputDiagnosticSnapshot | null;
 	getLastSize(): ReturnType<TerminalSizeController['getSnapshot']>['lastSize'];
 	updateDependencies(dependencies: ShellTerminalRuntimeDependencies): void;
@@ -169,7 +167,7 @@ export function createShellTerminalHookRuntime(input: {
 		if (!active || !source) return;
 		await source.sendData(bytes);
 	};
-	const view: ShellTerminalRuntimeView = {
+	const view: ShellTerminalViewPort = {
 		getRuntimeKey: () => (active ? lifecycle.getRuntimeKey() : null),
 		getRuntimeInstanceId: () =>
 			active ? lifecycle.getRuntimeInstanceId() : null,

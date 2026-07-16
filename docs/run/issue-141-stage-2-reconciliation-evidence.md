@@ -49,6 +49,32 @@
   typed settings failure; disposal and replacement return `superseded`; late
   native resolve/reject cannot affect a newer independent launch.
 
+### Task 5 ShellScreenView and Worktree port boundary
+
+- Source reconciliation: rendering and focused-owner behavior was rebuilt from
+  `8751a1d0`, `75aa4de1`, `cbbac86b`, `601d2230`, `8c8e2b13`, and
+  `73c7a20a`. The #139 Worktree Workspace adaptation preserves the typed
+  `ShellWorkmuxPort`/`ShellTargetKey` boundary already established by Task 2;
+  no raw connection or `WorkmuxControlChannel` dependency was reintroduced.
+- RED boundary command: `cd apps/mobile && pnpm exec tsx --test
+  test/integration/shell-detail-boundary.test.ts` exited 1 with 2 passed and 4
+  failed: `detail.tsx` had 955 nonblank lines, `ShellScreenView.tsx` and focused
+  owners were absent, and the terminal runtime still exported the duplicate
+  view alias.
+- RED Worktree command: the exact three-file Worktree lane exited 0 with 26
+  passed, confirming Task 2's typed port behavior was already canonical.
+- RED component command: the exact four-file Jest lane exited 1 with 3 failed
+  suites and 1 passed suite. Failures covered the old shell composition shape,
+  old connection-debug delivery shape, and absent target-lifetime owners.
+- GREEN shell composition command: the exact eight-file Node lane reports 83
+  passed and 0 failed. The boundary measures 498 nonblank `detail.tsx` lines and
+  299 physical `ShellDetail` lines.
+- GREEN Worktree/config command: the exact six-file Node lane reports 66 passed
+  and 0 failed, including unchanged direct Worktree actions and the final
+  Advanced submenu contract.
+- GREEN component command: the exact four-file Jest lane reports 4 suites and 8
+  tests passed. `pnpm run fmt:check` and `pnpm run typecheck` both exit 0.
+
 ## Full Verification
 
 ## Thermo-Nuclear Review
