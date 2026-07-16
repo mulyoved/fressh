@@ -132,14 +132,17 @@ void test('validates resize dimensions and clamps scroll lines to positive u16',
 		[1, Number.POSITIVE_INFINITY],
 	];
 	for (const [cols, rows] of invalidDimensions) {
-		assert.throws(
-			() => encodeHerdrResize(cols, rows),
-			HerdrProtocolError,
-		);
+		assert.throws(() => encodeHerdrResize(cols, rows), HerdrProtocolError);
 	}
-	assert.equal(JSON.parse(decoder.decode(encodeHerdrScroll('up', -10))).lines, 1);
+	assert.equal(
+		JSON.parse(decoder.decode(encodeHerdrScroll('up', -10))).lines,
+		1,
+	);
 	assert.equal(JSON.parse(decoder.decode(encodeHerdrScroll('up', 0))).lines, 1);
-	assert.equal(JSON.parse(decoder.decode(encodeHerdrScroll('up', 2.9))).lines, 2);
+	assert.equal(
+		JSON.parse(decoder.decode(encodeHerdrScroll('up', 2.9))).lines,
+		2,
+	);
 	assert.equal(
 		JSON.parse(decoder.decode(encodeHerdrScroll('up', 70_000))).lines,
 		65_535,
@@ -168,9 +171,7 @@ void test('frames split UTF-8, JSON tokens, CRLF, and multiple stdout records', 
 
 void test('finish returns one final unterminated record exactly once', () => {
 	const lineDecoder = createHerdrLineDecoder();
-	assert.deepEqual(lineDecoder.push(encoder.encode('{"type":')),
-		[],
-	);
+	assert.deepEqual(lineDecoder.push(encoder.encode('{"type":')), []);
 	assert.deepEqual(lineDecoder.push(encoder.encode('"future"}')), []);
 	assert.deepEqual(lineDecoder.finish(), ['{"type":"future"}']);
 	assert.deepEqual(lineDecoder.finish(), []);
@@ -359,6 +360,8 @@ void test('retains only the final 16 KiB of split stderr chunks', () => {
 
 void test('sanitizes stderr control characters and collapses display whitespace', () => {
 	const stderr = createBoundedHerdrStderr();
-	stderr.push(encoder.encode('  first\u0000\u001b[31m\t\n second\r\n\u007f third  '));
+	stderr.push(
+		encoder.encode('  first\u0000\u001b[31m\t\n second\r\n\u007f third  '),
+	);
 	assert.equal(stderr.getDisplayText(), 'first[31m second third');
 });

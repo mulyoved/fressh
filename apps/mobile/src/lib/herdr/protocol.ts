@@ -88,9 +88,7 @@ function asUint8Array(bytes: Uint8Array | ArrayBuffer): Uint8Array {
 	return bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
 }
 
-export function encodeHerdrInput(
-	bytes: Uint8Array | ArrayBuffer,
-): Uint8Array {
+export function encodeHerdrInput(bytes: Uint8Array | ArrayBuffer): Uint8Array {
 	return encodeRecord({
 		type: 'terminal.input',
 		bytes: fromByteArray(asUint8Array(bytes)),
@@ -154,10 +152,7 @@ export function createHerdrLineDecoder(): Readonly<{
 	let pendingByteLength = 0;
 
 	function assertBounded(additionalBytes: number): void {
-		if (
-			pendingByteLength + additionalBytes >
-			HERDR_MAX_INCOMPLETE_LINE_BYTES
-		) {
+		if (pendingByteLength + additionalBytes > HERDR_MAX_INCOMPLETE_LINE_BYTES) {
 			throw new HerdrProtocolError('oversized-record');
 		}
 	}
@@ -168,10 +163,7 @@ export function createHerdrLineDecoder(): Readonly<{
 		if (requiredByteLength > pending.byteLength) {
 			let capacity = Math.max(1024, pending.byteLength);
 			while (capacity < requiredByteLength) {
-				capacity = Math.min(
-					capacity * 2,
-					HERDR_MAX_INCOMPLETE_LINE_BYTES,
-				);
+				capacity = Math.min(capacity * 2, HERDR_MAX_INCOMPLETE_LINE_BYTES);
 			}
 			const grown = new Uint8Array(capacity);
 			grown.set(pending.subarray(0, pendingByteLength));
@@ -217,9 +209,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function decodeCanonicalBase64(value: unknown): Uint8Array {
 	if (
 		typeof value !== 'string' ||
-		!/^(?:[A-Za-z\d+/]{4})*(?:[A-Za-z\d+/]{2}==|[A-Za-z\d+/]{3}=)?$/.test(
-			value,
-		)
+		!/^(?:[A-Za-z\d+/]{4})*(?:[A-Za-z\d+/]{2}==|[A-Za-z\d+/]{3}=)?$/.test(value)
 	) {
 		throw new HerdrProtocolError('malformed-record');
 	}
@@ -297,9 +287,7 @@ export function sanitizeHerdrDiagnostic(value: string): string {
 			);
 		})
 		.join('');
-	return withoutControlCharacters
-		.replace(/\s+/g, ' ')
-		.trim();
+	return withoutControlCharacters.replace(/\s+/g, ' ').trim();
 }
 
 export function createBoundedHerdrStderr(): Readonly<{
