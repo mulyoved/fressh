@@ -28,6 +28,16 @@ import {
 } from '../../src/lib/workmux-scrollback-live-input';
 
 const bytes = (values: number[]) => new Uint8Array(values);
+const remoteCopyModeOwnership = (
+	active: { current: boolean },
+	generation: { current: number },
+) => ({
+	acquire: () => {
+		generation.current += 1;
+		active.current = true;
+		return Object.freeze({ generation: generation.current });
+	},
+});
 const segmentValues = (segments: readonly Uint8Array<ArrayBuffer>[]) =>
 	segments.map((segment) => Array.from(segment));
 const enterText = (sessionName = 'main') => `enter:${sessionName}`;
@@ -678,8 +688,10 @@ void test('scrollback enter request adapter acks only after Workmux enter succee
 		connectionAvailable: true,
 		targetName: 'main',
 		commandExecutor: executor,
-		remoteCopyModeActiveRef,
-		remoteCopyModeGenerationRef,
+		remoteCopyModeOwnership: remoteCopyModeOwnership(
+			remoteCopyModeActiveRef,
+			remoteCopyModeGenerationRef,
+		),
 		clearLocalScrollbackUiState: () => acks.push('clear'),
 		sendScrollbackEnterAck: (requestId, instanceId) =>
 			acks.push(`${requestId}:${instanceId}`),
@@ -715,8 +727,10 @@ void test('scrollback enter request adapter skips ack on failed Workmux enter', 
 		connectionAvailable: true,
 		targetName: 'main',
 		commandExecutor: executor,
-		remoteCopyModeActiveRef: { current: false },
-		remoteCopyModeGenerationRef: { current: 0 },
+		remoteCopyModeOwnership: remoteCopyModeOwnership(
+			{ current: false },
+			{ current: 0 },
+		),
 		clearLocalScrollbackUiState: () => acks.push('clear'),
 		sendScrollbackEnterAck: (requestId, instanceId) =>
 			acks.push(`${requestId}:${instanceId}`),
@@ -750,8 +764,10 @@ void test('scrollback enter request adapter clears local UI when enter is cancel
 		connectionAvailable: true,
 		targetName: 'main',
 		commandExecutor: executor,
-		remoteCopyModeActiveRef: { current: false },
-		remoteCopyModeGenerationRef: { current: 0 },
+		remoteCopyModeOwnership: remoteCopyModeOwnership(
+			{ current: false },
+			{ current: 0 },
+		),
 		clearLocalScrollbackUiState: () => events.push('clear'),
 		sendScrollbackEnterAck: () => events.push('ack'),
 	});
@@ -788,8 +804,10 @@ void test('scrollback enter request adapter clears inactive current instance and
 		connectionAvailable: true,
 		targetName: 'main',
 		commandExecutor: executor,
-		remoteCopyModeActiveRef: { current: false },
-		remoteCopyModeGenerationRef: { current: 0 },
+		remoteCopyModeOwnership: remoteCopyModeOwnership(
+			{ current: false },
+			{ current: 0 },
+		),
 		clearLocalScrollbackUiState: () => events.push('clear'),
 		sendScrollbackEnterAck: () => events.push('ack'),
 	});
@@ -803,8 +821,10 @@ void test('scrollback enter request adapter clears inactive current instance and
 		connectionAvailable: true,
 		targetName: 'main',
 		commandExecutor: executor,
-		remoteCopyModeActiveRef: { current: false },
-		remoteCopyModeGenerationRef: { current: 0 },
+		remoteCopyModeOwnership: remoteCopyModeOwnership(
+			{ current: false },
+			{ current: 0 },
+		),
 		clearLocalScrollbackUiState: () => events.push('stale-clear'),
 		sendScrollbackEnterAck: () => events.push('stale-ack'),
 	});
@@ -837,8 +857,10 @@ void test('scrollback enter request adapter clears current guarded events before
 			connectionAvailable: true,
 			targetName: 'main',
 			commandExecutor: executor,
-			remoteCopyModeActiveRef: { current: false },
-			remoteCopyModeGenerationRef: { current: 0 },
+			remoteCopyModeOwnership: remoteCopyModeOwnership(
+				{ current: false },
+				{ current: 0 },
+			),
 			clearLocalScrollbackUiState: () => acks.push('clear'),
 			sendScrollbackEnterAck: (requestId, instanceId) =>
 				acks.push(`${requestId}:${instanceId}`),
@@ -879,8 +901,10 @@ void test('scrollback enter request adapter ignores stale guarded events', async
 		connectionAvailable: true,
 		targetName: 'main',
 		commandExecutor: executor,
-		remoteCopyModeActiveRef: { current: false },
-		remoteCopyModeGenerationRef: { current: 0 },
+		remoteCopyModeOwnership: remoteCopyModeOwnership(
+			{ current: false },
+			{ current: 0 },
+		),
 		clearLocalScrollbackUiState: () => events.push('clear'),
 		sendScrollbackEnterAck: () => events.push('ack'),
 	});
@@ -915,8 +939,10 @@ void test('scrollback enter request adapter suppresses async completion after di
 		connectionAvailable: true,
 		targetName: 'main',
 		commandExecutor: executor,
-		remoteCopyModeActiveRef,
-		remoteCopyModeGenerationRef,
+		remoteCopyModeOwnership: remoteCopyModeOwnership(
+			remoteCopyModeActiveRef,
+			remoteCopyModeGenerationRef,
+		),
 		clearLocalScrollbackUiState: () => events.push('clear'),
 		sendScrollbackEnterAck: () => events.push('ack'),
 		isRequestCurrent: () => requestCurrent,
@@ -960,8 +986,10 @@ void test('scrollback enter request adapter exits copy mode after focus invalida
 		connectionAvailable: true,
 		targetName: 'main',
 		commandExecutor: executor,
-		remoteCopyModeActiveRef,
-		remoteCopyModeGenerationRef,
+		remoteCopyModeOwnership: remoteCopyModeOwnership(
+			remoteCopyModeActiveRef,
+			remoteCopyModeGenerationRef,
+		),
 		clearLocalScrollbackUiState: () => events.push('clear'),
 		sendScrollbackEnterAck: () => events.push('ack'),
 		isRequestCurrent: () => requestCurrent,

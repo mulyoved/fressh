@@ -8,17 +8,24 @@ const readSource = (path: string) =>
 
 const detail = readSource('src/app/shell/detail.tsx');
 const session = readSource('src/lib/shell-controllers/session.tsx');
+const sessionTarget = readSource(
+	'src/lib/shell-controllers/session-target-owner.ts',
+);
 const sessionWorkmux = readSource(
 	'src/lib/shell-controllers/session-workmux.ts',
 );
-const scrollbackRetirement = readSource(
-	'src/lib/shell-controllers/scrollback-retirement-registration.ts',
+const remoteCopyModeOwner = readSource(
+	'src/lib/shell-controllers/scrollback-remote-copy-mode-owner.ts',
 );
+const terminalViewPolicy = readSource(
+	'src/app/shell/use-shell-terminal-view-policy.ts',
+);
+const view = readSource('src/app/shell/ShellScreenView.tsx');
 
 void describe('shell detail typed Workmux ownership', () => {
-	void test('delegates raw Workmux creation, diagnostics, and disposal to the session owner', () => {
+	void test('delegates raw Workmux creation, diagnostics, and disposal to the session owners', () => {
 		assert.match(detail, /useShellSessionController\(\{/);
-		assert.match(detail, /const workmuxControlChannel = ports\.workmux/);
+		assert.match(detail, /const \{ snapshot, ports, identity, tmux,/);
 		assert.doesNotMatch(detail, /createWorkmuxControlChannel/);
 		assert.doesNotMatch(detail, /disposeWorkmuxControlChannelAfterCleanup/);
 		assert.doesNotMatch(detail, /useSshStore|useAutoConnectStore/);
@@ -33,23 +40,24 @@ void describe('shell detail typed Workmux ownership', () => {
 			/await owned\.channel\?\.dispose\(\{ reason \}\)/,
 		);
 		assert.match(session, /createShellDiagnosticPort\(\{/);
-		assert.match(session, /workmuxOwner\.replace\(/);
+		assert.match(session, /createShellTargetOwner\(\{/);
+		assert.match(sessionTarget, /workmuxOwner\.replace\(/);
 		assert.ok(
 			session.indexOf('useLayoutEffect(() => lifecycle.setup()') <
-				session.indexOf('workmuxOwner.activate()'),
+				session.indexOf('targetOwner.activate()'),
 			'lifecycle disposal authority must register before Workmux activation',
 		);
 		assert.doesNotMatch(session, /useEffect\(\(\) => lifecycle\.setup\(\)/);
 	});
 
-	void test('routes scrollback through the typed Workmux port and retirement registration', () => {
+	void test('routes scrollback through the typed Workmux port and remote copy owner', () => {
 		assert.match(
 			detail,
-			/useShellScrollbackController\(\{[\s\S]*?workmux: workmuxControlChannel,/,
+			/useShellScrollbackController\(\{[\s\S]*?workmux: ports\.workmux,/,
 		);
 		assert.match(
-			scrollbackRetirement,
-			/context\.workmux\.registerBeforeDispose\(/,
+			remoteCopyModeOwner,
+			/desiredContext\.workmux\.registerBeforeDispose\(/,
 		);
 		assert.doesNotMatch(detail, /executeWorkmuxScrollbackRemoteCommand/);
 		assert.doesNotMatch(
@@ -58,38 +66,34 @@ void describe('shell detail typed Workmux ownership', () => {
 		);
 	});
 
-	void test('shares the typed session ports with notifications, browser actions, keyboard, and Worktree', () => {
+	void test('shares typed session ports with notifications, browser actions, keyboard, and Worktree', () => {
 		assert.match(
 			detail,
-			/useShellNotificationsController\(\{[\s\S]*?workmux: workmuxControlChannel,/,
+			/useShellNotificationsController\(\{[\s\S]*?workmux: ports\.workmux,/,
 		);
 		assert.match(
 			detail,
-			/useBrowserActionsController\(\{[\s\S]*?workmux: workmuxControlChannel,/,
+			/useBrowserActionsController\(\{[\s\S]*?workmux: ports\.workmux,/,
 		);
 		assert.match(
 			detail,
-			/remote: \{[\s\S]*?workmux: workmuxControlChannel,[\s\S]*?hostCommands: connection,/,
+			/remoteTarget: \{[\s\S]*?workmux: ports\.workmux,[\s\S]*?hostCommands: connection,/,
 		);
 		assert.match(
 			detail,
-			/useWorktreeWorkspaceController\(\{[\s\S]*?workmux: workmuxControlChannel,/,
+			/useWorktreeWorkspaceController\(\{[\s\S]*?workmux: session\.ports\.workmux,/,
 		);
 	});
 
-	void test('retains touch-scroll policy, diagnostic UI actions, and Worktree modal composition', () => {
-		assert.match(detail, /resolveShellTouchScrollPolicy\(\{/);
+	void test('retains touch-scroll policy, diagnostic UI actions, and view-owned Worktree modal composition', () => {
+		assert.match(terminalViewPolicy, /resolveShellTouchScrollPolicy\(\{/);
 		assert.match(
-			detail,
-			/scrollback:\s*remoteTouchScrollPolicy\.xtermScrollback/,
-		);
-		assert.match(
-			detail,
-			/touchScrollConfig=\{remoteTouchScrollPolicy\.touchScrollConfig\}/,
+			view,
+			/touchScrollConfig=\{terminal\.policy\.touchScrollConfig\}/,
 		);
 		assert.match(detail, /useConnectionDebugCommand\(\{/);
-		assert.match(detail, /\{\.\.\.keyboard\.commandMenuProps\}/);
+		assert.match(detail, /props: keyboard\.commandMenuProps/);
 		assert.equal(detail.match(/useWorktreeWorkspaceController\(/g)?.length, 1);
-		assert.equal(detail.match(/<WorktreeWorkspaceModal\b/g)?.length, 1);
+		assert.equal(view.match(/<WorktreeWorkspaceModal\b/g)?.length, 1);
 	});
 });

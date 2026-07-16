@@ -15,6 +15,7 @@ import { type ShellTargetKey } from './source-keys';
 export type ShellTargetPublication = {
 	readonly generation: number;
 	readonly key: ShellTargetKey;
+	readonly diagnostics: ShellDiagnosticPort;
 	readonly hostCommands: ShellHostCommandPort;
 	readonly workmux: ShellWorkmuxPort;
 };
@@ -22,6 +23,7 @@ export type ShellTargetPublication = {
 export type ShellTargetOwner = {
 	activate(): void;
 	getPublication(): ShellTargetPublication;
+	subscribe(listener: () => void): () => void;
 	update(input: ShellTargetOwnerSource): ShellTargetPublication;
 	dispose(reason: 'reconnect' | 'unmount'): void;
 };
@@ -42,14 +44,16 @@ function createWorkmuxInput(
 	});
 }
 
-function createHostCommandPort({
+export function createShellHostCommandPort({
 	connection,
+	execute = executeSideChannelCommand,
 	generation,
 	getGeneration,
 	key,
 }: ShellTargetOwnerSource & {
 	generation: number;
 	getGeneration(): number;
+	execute?: typeof executeSideChannelCommand;
 }): ShellHostCommandPort {
 	const isCurrent = () => getGeneration() === generation;
 	return {
@@ -58,16 +62,16 @@ function createHostCommandPort({
 			if (!isCurrent()) return { status: 'superseded' };
 			if (!connection) return { status: 'unavailable' };
 			try {
-				const result = await executeSideChannelCommand(
-					connection,
-					command,
-					timeoutMs,
-				);
+				const result = await execute(connection, command, timeoutMs);
 				if (!isCurrent()) return { status: 'superseded' };
 				if (!result.success) {
+					const detailFree = !result.error && !result.output;
 					return {
 						status: 'failed',
-						failure: { message: result.error || 'Host command failed.' },
+						failure: {
+							message: result.error || result.output || 'Host command failed.',
+							...(detailFree ? { reason: 'no-detail' as const } : {}),
+						},
 						output: result.output,
 					};
 				}
@@ -91,15 +95,17 @@ function createHostCommandPort({
 }
 
 export function createShellTargetOwner({
-	diagnostics,
+	createDiagnostics,
 	source: initialSource,
 }: {
-	diagnostics: ShellDiagnosticPort;
+	createDiagnostics(generation: number): ShellDiagnosticPort;
 	source: ShellTargetOwnerSource;
 }): ShellTargetOwner {
 	let generation = 0;
 	let source = initialSource;
 	let disposed = false;
+	const listeners = new Set<() => void>();
+	let diagnostics = createDiagnostics(generation);
 	const workmuxOwner: ShellSessionWorkmuxOwner = createShellSessionWorkmuxOwner(
 		createWorkmuxInput(initialSource, diagnostics),
 		{ deferActivation: true },
@@ -110,7 +116,8 @@ export function createShellTargetOwner({
 		return {
 			generation,
 			key: source.key,
-			hostCommands: createHostCommandPort({
+			diagnostics,
+			hostCommands: createShellHostCommandPort({
 				...source,
 				generation,
 				getGeneration: () => generation,
@@ -122,6 +129,10 @@ export function createShellTargetOwner({
 	return {
 		activate: workmuxOwner.activate,
 		getPublication: () => publication,
+		subscribe: (listener) => {
+			listeners.add(listener);
+			return () => listeners.delete(listener);
+		},
 		update: (nextSource) => {
 			if (
 				disposed ||
@@ -132,14 +143,21 @@ export function createShellTargetOwner({
 			}
 			source = nextSource;
 			generation += 1;
+			diagnostics = createDiagnostics(generation);
 			workmuxOwner.replace(createWorkmuxInput(source, diagnostics));
-			publication = createPublication();
+			const ownedGeneration = generation;
+			void workmuxOwner.drain().then(() => {
+				if (disposed || generation !== ownedGeneration) return;
+				publication = createPublication();
+				for (const listener of [...listeners]) listener();
+			});
 			return publication;
 		},
 		dispose: (reason) => {
 			if (disposed) return;
 			disposed = true;
 			generation += 1;
+			listeners.clear();
 			workmuxOwner.dispose(reason);
 		},
 	};

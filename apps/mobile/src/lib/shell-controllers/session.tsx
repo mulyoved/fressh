@@ -11,10 +11,8 @@ import { useAutoConnectStore } from '../auto-connect-store';
 import { formatConnectionDiagnosticEventFields } from '../connection-diagnostics';
 import { getStoredConnectionId } from '../connection-utils';
 import { secretsManager } from '../secrets-manager';
-import { executeSideChannelCommand } from '../ssh-side-channel';
 import { useSshStore } from '../ssh-store';
 import { queryClient } from '../utils';
-import { type WorkmuxControlConnection } from '../workmux-control-channel';
 import { createReplaySafeDisposer } from './controller-core';
 import {
 	type ShellActivityPort,
@@ -23,11 +21,19 @@ import {
 } from './session-contracts';
 import { createShellSessionCore } from './session-core';
 import { createShellDiagnosticPort } from './session-diagnostics';
-import { createShellTerminalSourcePort } from './session-terminal-source';
+import { deriveShellSessionSource } from './session-source';
 import {
-	createShellSessionWorkmuxInput,
-	createShellSessionWorkmuxOwner,
-} from './session-workmux';
+	createShellTargetOwner,
+	type ShellTargetPublication,
+} from './session-target-owner';
+import {
+	createShellTmuxResolutionOwner,
+	type ShellTmuxResolution,
+} from './session-tmux-resolution';
+import {
+	createShellTransportOwner,
+	type ShellTransportPublication,
+} from './session-transport-owner';
 import {
 	createShellTargetKey,
 	createShellTransportKey,
@@ -54,7 +60,7 @@ export type ShellSessionControllerHandle = {
 		targetKey: ShellTargetKey;
 		generation: number;
 	};
-	tmux: { enabled: boolean; target: string };
+	tmux: ShellTmuxResolution;
 	storedConnectionId?: string;
 	invalidateShellTransport(): void;
 };
@@ -64,6 +70,11 @@ export type UseShellSessionControllerInput = {
 	activity: ShellActivityPort;
 	router: ShellSessionRouter;
 	logger: ShellSessionLogger;
+};
+
+type TargetCommit = {
+	publication: ShellTargetPublication;
+	tmux: ShellTmuxResolution;
 };
 
 export function createShellSessionMountKey(request: ShellRouteRequest): string {
@@ -82,22 +93,6 @@ export function createShellSessionMountKey(request: ShellRouteRequest): string {
 		request.agentRoute.eventId,
 		request.agentRoute.tapToken,
 	]);
-}
-
-function createWorkmuxInput({
-	key,
-	connection,
-	diagnostics,
-}: {
-	key: ShellTargetKey;
-	connection: WorkmuxControlConnection | null;
-	diagnostics: ReturnType<typeof createShellDiagnosticPort>;
-}) {
-	return createShellSessionWorkmuxInput({
-		key,
-		connection,
-		diagnostics,
-	});
 }
 
 export function useShellSessionController({
@@ -121,31 +116,31 @@ export function useShellSessionController({
 	const lastReconnectOutcome = useAutoConnectStore(
 		(state) => state.lastReconnectOutcome,
 	);
-	const initialTarget = request.tmuxAttach.sessionName?.trim() || 'main';
-	const [tmux, setTmux] = useState(() => ({
-		enabled: false,
-		target: initialTarget,
-	}));
-	const tmuxQueryGenerationRef = useRef(0);
 	const transportKey = useMemo(
 		() => createShellTransportKey(connectionId, channelId),
 		[channelId, connectionId],
-	);
-	const targetKey = useMemo(
-		() => createShellTargetKey(transportKey, tmux.target),
-		[tmux.target, transportKey],
 	);
 	const storedConnectionId =
 		request.storedConnectionId ??
 		(connection
 			? getStoredConnectionId(connection.connectionDetails)
 			: undefined);
+	const initialTmux = useMemo<ShellTmuxResolution>(
+		() => ({
+			enabled: false,
+			target: request.tmuxAttach.sessionName?.trim() || 'main',
+		}),
+		[request.tmuxAttach.sessionName],
+	);
+	const initialTargetKey = useMemo(
+		() => createShellTargetKey(transportKey, initialTmux.target),
+		[initialTmux.target, transportKey],
+	);
 	const activeDiagnosticTraceRef = useRef(activeDiagnosticTrace);
-	const [sourceGeneration, setSourceGeneration] = useState(0);
-	const sourceGenerationRef = useRef(0);
-	const [workmuxGeneration, setWorkmuxGeneration] = useState(0);
-	const workmuxGenerationRef = useRef(0);
+	const targetGenerationRef = useRef(0);
 	const routerRef = useRef(router);
+	const loggerRef = useRef(logger);
+	const reconnectingRef = useRef(false);
 	const [core] = useState(() =>
 		createShellSessionCore({
 			request,
@@ -159,157 +154,24 @@ export function useShellSessionController({
 			},
 		}),
 	);
-	const diagnostics = useMemo(
-		() =>
-			createShellDiagnosticPort({
-				generation: workmuxGeneration,
-				getCurrentGeneration: () => workmuxGenerationRef.current,
-				getActiveTrace: () => activeDiagnosticTraceRef.current,
-				getEventDetails: (event) => {
-					const state = useSshStore.getState();
-					const storeKey = `${connectionId}-${channelId}` as const;
-					return {
-						connectionId,
-						channelId,
-						kind: event.kind,
-						fields: formatConnectionDiagnosticEventFields(event),
-						message: (event as { message?: unknown }).message,
-						hasConnection: Boolean(state.connections[connectionId]),
-						hasShell: Boolean(state.shells[storeKey]),
-						connectionCount: Object.keys(state.connections).length,
-						shellCount: Object.keys(state.shells).length,
-					};
-				},
-				logger,
-			}),
-		[channelId, connectionId, logger, workmuxGeneration],
-	);
-	const [workmuxOwner] = useState(() =>
-		createShellSessionWorkmuxOwner(
-			createWorkmuxInput({
-				key: targetKey,
-				connection: (connection ?? null) as WorkmuxControlConnection | null,
-				diagnostics,
-			}),
-			{ deferActivation: true },
-		),
-	);
-	const reconnectingRef = useRef(false);
-	const [lifecycle] = useState(() =>
-		createReplaySafeDisposer(() => {
-			sourceGenerationRef.current += 1;
-			workmuxGenerationRef.current += 1;
-			core.invalidate('unmount');
-			core.dispose();
-			workmuxOwner.dispose(reconnectingRef.current ? 'reconnect' : 'unmount');
+	const [transportOwner] = useState(() =>
+		createShellTransportOwner({
+			channelId,
+			connectionId,
+			key: transportKey,
+			shell,
 		}),
 	);
-	const snapshot = useSyncExternalStore(
-		core.subscribe,
-		core.getSnapshot,
-		core.getSnapshot,
+	const [transport, setTransport] = useState<ShellTransportPublication>(() =>
+		transportOwner.getPublication(),
 	);
-	const sourceIdentityRef = useRef({ connection, shell, targetKey });
-	const terminalSource = useMemo(
-		() =>
-			createShellTerminalSourcePort({
-				channelId,
-				connectionId,
-				generation: sourceGeneration,
-				getCurrentGeneration: () => sourceGenerationRef.current,
-				key: transportKey,
-				shell,
-			}),
-		[channelId, connectionId, shell, sourceGeneration, transportKey],
-	);
-	const ports = useMemo<ShellSessionPorts>(
-		() => ({
-			terminalSource,
-			hostCommands: {
-				key: targetKey,
-				run: async (command, timeoutMs) => {
-					if (sourceGenerationRef.current !== sourceGeneration) {
-						return { status: 'superseded' };
-					}
-					if (!connection) return { status: 'unavailable' };
-					try {
-						const result = await executeSideChannelCommand(
-							connection,
-							command,
-							timeoutMs,
-						);
-						if (sourceGenerationRef.current !== sourceGeneration) {
-							return { status: 'superseded' };
-						}
-						if (!result.success) {
-							const detailFree = !result.error && !result.output;
-							return {
-								status: 'failed',
-								failure: {
-									message:
-										result.error || result.output || 'Host command failed.',
-									...(detailFree ? { reason: 'no-detail' as const } : {}),
-								},
-								output: result.output,
-							};
-						}
-						return {
-							status: 'completed',
-							output: result.output,
-							...(result.issueUrl ? { issueUrl: result.issueUrl } : {}),
-						};
-					} catch (error) {
-						if (sourceGenerationRef.current !== sourceGeneration) {
-							return { status: 'superseded' };
-						}
-						return {
-							status: 'failed',
-							failure: {
-								message: error instanceof Error ? error.message : String(error),
-							},
-						};
-					}
-				},
-			},
-			workmux: workmuxOwner.getPort(),
-			diagnostics,
-			activity,
-		}),
-		[
-			activity,
-			connection,
-			diagnostics,
-			sourceGeneration,
-			targetKey,
-			terminalSource,
-			workmuxOwner,
-		],
-	);
-
-	useLayoutEffect(() => lifecycle.setup(), [lifecycle]);
-
-	useLayoutEffect(() => {
-		routerRef.current = router;
-	}, [router]);
-
-	useLayoutEffect(() => {
-		workmuxOwner.activate();
-		activeDiagnosticTraceRef.current = activeDiagnosticTrace;
-		reconnectingRef.current = isReconnecting;
-		const previousIdentity = sourceIdentityRef.current;
-		const connectionChanged = previousIdentity.connection !== connection;
-		const targetChanged = previousIdentity.targetKey !== targetKey;
-		const sourceChanged =
-			connectionChanged || previousIdentity.shell !== shell || targetChanged;
-		if (sourceChanged) {
-			const nextGeneration = sourceGenerationRef.current + 1;
-			sourceGenerationRef.current = nextGeneration;
-			if (connectionChanged || targetChanged) {
-				const nextWorkmuxGeneration = workmuxGenerationRef.current + 1;
-				workmuxGenerationRef.current = nextWorkmuxGeneration;
-				const nextDiagnostics = createShellDiagnosticPort({
-					generation: nextWorkmuxGeneration,
-					getCurrentGeneration: () => workmuxGenerationRef.current,
+	const [targetOwner] = useState(() =>
+		createShellTargetOwner({
+			createDiagnostics: (generation) => {
+				targetGenerationRef.current = generation;
+				return createShellDiagnosticPort({
+					generation,
+					getCurrentGeneration: () => targetGenerationRef.current,
 					getActiveTrace: () => activeDiagnosticTraceRef.current,
 					getEventDetails: (event) => {
 						const state = useSshStore.getState();
@@ -328,89 +190,129 @@ export function useShellSessionController({
 					},
 					logger,
 				});
-				workmuxOwner.replace(
-					createWorkmuxInput({
-						key: targetKey,
-						connection: (connection ?? null) as WorkmuxControlConnection | null,
-						diagnostics: nextDiagnostics,
-					}),
+			},
+			source: { key: initialTargetKey, connection: connection ?? null },
+		}),
+	);
+	const [target, setTarget] = useState<TargetCommit>(() => ({
+		publication: targetOwner.getPublication(),
+		tmux: initialTmux,
+	}));
+	const resolvedTmuxRef = useRef(initialTmux);
+	const [tmuxOwner] = useState(() =>
+		createShellTmuxResolutionOwner({
+			initialTarget: initialTmux.target,
+			load: async (id) => {
+				const entry = await queryClient.fetchQuery(
+					secretsManager.connections.query.get(id),
 				);
-				void workmuxOwner.drain().then(() => {
-					if (sourceGenerationRef.current === nextGeneration) {
-						setSourceGeneration(nextGeneration);
-					}
-					if (workmuxGenerationRef.current === nextWorkmuxGeneration) {
-						setWorkmuxGeneration(nextWorkmuxGeneration);
-					}
+				return entry?.value ?? null;
+			},
+			warn: (message, error) => loggerRef.current.warn(message, error),
+		}),
+	);
+	const resolvedTmux = useSyncExternalStore(
+		tmuxOwner.subscribe,
+		tmuxOwner.getSnapshot,
+		tmuxOwner.getSnapshot,
+	);
+	const snapshot = useSyncExternalStore(
+		core.subscribe,
+		core.getSnapshot,
+		core.getSnapshot,
+	);
+	const [lifecycle] = useState(() =>
+		createReplaySafeDisposer(() => {
+			targetGenerationRef.current += 1;
+			core.invalidate('unmount');
+			core.dispose();
+			tmuxOwner.dispose();
+			transportOwner.dispose();
+			targetOwner.dispose(reconnectingRef.current ? 'reconnect' : 'unmount');
+		}),
+	);
+	useLayoutEffect(() => lifecycle.setup(), [lifecycle]);
+
+	useLayoutEffect(() => {
+		routerRef.current = router;
+		loggerRef.current = logger;
+		activeDiagnosticTraceRef.current = activeDiagnosticTrace;
+		reconnectingRef.current = isReconnecting;
+	}, [activeDiagnosticTrace, isReconnecting, logger, router]);
+
+	useLayoutEffect(
+		() =>
+			targetOwner.subscribe(() => {
+				setTarget({
+					publication: targetOwner.getPublication(),
+					tmux: resolvedTmuxRef.current,
 				});
-			} else {
-				setSourceGeneration(nextGeneration);
-			}
-			sourceIdentityRef.current = { connection, shell, targetKey };
-		}
-		core.reconcile({
-			connectionPresent: connection !== undefined,
-			shellPresent: shell !== undefined,
-			isAutoConnecting,
-			isReconnecting,
-			lastReconnectOutcome,
-			...(storedConnectionId ? { storedConnectionId } : {}),
+			}),
+		[targetOwner],
+	);
+
+	useLayoutEffect(() => {
+		const next = transportOwner.update(shell);
+		setTransport((current) => (current === next ? current : next));
+	}, [shell, transportOwner]);
+
+	useLayoutEffect(() => {
+		targetOwner.activate();
+		resolvedTmuxRef.current = resolvedTmux;
+		const nextKey = createShellTargetKey(transportKey, resolvedTmux.target);
+		targetOwner.update({
+			key: nextKey,
+			connection: connection ?? null,
 		});
+	}, [connection, resolvedTmux, targetOwner, transportKey]);
+
+	useLayoutEffect(() => {
+		core.reconcile(
+			deriveShellSessionSource({
+				connectionPresent: connection !== undefined,
+				shellPresent: shell !== undefined,
+				isAutoConnecting,
+				isReconnecting,
+				lastReconnectDestination: lastReconnectOutcome?.destination ?? null,
+				...(storedConnectionId ? { storedConnectionId } : {}),
+			}),
+		);
 	}, [
-		activeDiagnosticTrace,
-		channelId,
 		connection,
-		connectionId,
 		core,
-		diagnostics,
 		isAutoConnecting,
 		isReconnecting,
 		lastReconnectOutcome,
-		logger,
 		shell,
 		storedConnectionId,
-		targetKey,
-		workmuxOwner,
 	]);
 
 	useEffect(() => {
-		const generation = tmuxQueryGenerationRef.current + 1;
-		tmuxQueryGenerationRef.current = generation;
-		if (!storedConnectionId) return undefined;
-		void queryClient
-			.fetchQuery(secretsManager.connections.query.get(storedConnectionId))
-			.then((entry) => {
-				if (tmuxQueryGenerationRef.current !== generation) return;
-				const details = entry?.value;
-				if (!details) return;
-				const enabled = details.useTmux ?? true;
-				setTmux((current) => {
-					const target = enabled
-						? details.tmuxSessionName?.trim() || 'main'
-						: current.target;
-					return current.enabled === enabled && current.target === target
-						? current
-						: { enabled, target };
-				});
-			})
-			.catch((error) => {
-				if (tmuxQueryGenerationRef.current === generation) {
-					logger.warn('Failed to load tmux session info', error);
-				}
-			});
-		return () => {
-			if (tmuxQueryGenerationRef.current === generation) {
-				tmuxQueryGenerationRef.current += 1;
-			}
-		};
-	}, [logger, storedConnectionId]);
+		tmuxOwner.resolve(storedConnectionId);
+		return () => tmuxOwner.invalidate('source-change');
+	}, [storedConnectionId, tmuxOwner]);
+
+	const ports = useMemo<ShellSessionPorts>(
+		() => ({
+			terminalSource: transport.port,
+			hostCommands: target.publication.hostCommands,
+			workmux: target.publication.workmux,
+			diagnostics: target.publication.diagnostics,
+			activity,
+		}),
+		[activity, target.publication, transport.port],
+	);
 
 	return useMemo(
 		() => ({
 			snapshot,
 			ports,
-			identity: { transportKey, targetKey, generation: sourceGeneration },
-			tmux,
+			identity: {
+				transportKey,
+				targetKey: target.publication.key,
+				generation: transport.generation + target.publication.generation,
+			},
+			tmux: target.tmux,
 			...(storedConnectionId ? { storedConnectionId } : {}),
 			invalidateShellTransport: () => {
 				core.invalidate('source-change');
@@ -425,10 +327,9 @@ export function useShellSessionController({
 			core,
 			ports,
 			snapshot,
-			sourceGeneration,
 			storedConnectionId,
-			targetKey,
-			tmux,
+			target,
+			transport,
 			transportKey,
 		],
 	);

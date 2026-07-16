@@ -3,6 +3,7 @@ import {
 	createShellScrollbackControllerCore,
 	type ShellScrollbackContext,
 } from '../../src/lib/shell-controllers/scrollback-core';
+import { createScrollbackRemoteCopyModeOwner } from '../../src/lib/shell-controllers/scrollback-remote-copy-mode-owner';
 import {
 	type RetiringWorkmuxCleanupPort,
 	type ShellWorkmuxPort,
@@ -56,8 +57,30 @@ export function createScrollbackHarness(
 	} = {},
 ) {
 	const events: string[] = [];
-	const remoteCopyModeActive = { current: false };
-	const remoteCopyModeGeneration = { current: 0 };
+	const remoteCopyMode = createScrollbackRemoteCopyModeOwner({
+		warn: () => {},
+	});
+	const remoteCopyModeActive = {
+		get current() {
+			return remoteCopyMode.isOwned();
+		},
+		set current(owned: boolean) {
+			if (owned !== remoteCopyMode.isOwned()) {
+				if (owned) remoteCopyMode.acquire();
+				else remoteCopyMode.release();
+			}
+		},
+	};
+	const remoteCopyModeGeneration = {
+		get current() {
+			return remoteCopyMode.generation();
+		},
+		set current(generation: number) {
+			while (remoteCopyMode.generation() < generation) {
+				remoteCopyMode.transition();
+			}
+		},
+	};
 	const lineAccumulator = createTmuxScrollbackLineAccumulator();
 	const localExitRequestIds = new Set<number>();
 	const resetCalls: unknown[] = [];
@@ -198,8 +221,7 @@ export function createScrollbackHarness(
 			options.cleanupBarrier ??
 			createWorkmuxScrollbackLiveInputCleanupBarrier(),
 		localExitRequestIds,
-		remoteCopyModeActive,
-		remoteCopyModeGeneration,
+		remoteCopyMode,
 	});
 	core.setContext(context);
 
@@ -217,6 +239,7 @@ export function createScrollbackHarness(
 		localExitRequestIds,
 		remoteCopyModeActive,
 		remoteCopyModeGeneration,
+		remoteCopyMode,
 		resetCalls,
 		scroll,
 		setExecutorFactoryOverride: (override: typeof executorFactoryOverride) => {

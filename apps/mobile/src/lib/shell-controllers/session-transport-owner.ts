@@ -1,9 +1,8 @@
-// eslint-disable-next-line import/consistent-type-specifier-style -- Keep this owner React-free in Node tests.
-import type { SshShell } from '@fressh/react-native-uniffi-russh';
 import {
 	type ShellTerminalListenerRegistration,
 	type ShellTerminalSourcePort,
 } from './session-contracts';
+import { type ShellTerminalNativeSource } from './session-terminal-source';
 import { type ShellTransportKey } from './source-keys';
 
 export type ShellTransportPublication = {
@@ -13,7 +12,9 @@ export type ShellTransportPublication = {
 
 export type ShellTransportOwner = {
 	getPublication(): ShellTransportPublication;
-	update(shell: SshShell | undefined): ShellTransportPublication;
+	update(
+		shell: ShellTerminalNativeSource | undefined,
+	): ShellTransportPublication;
 	dispose(): void;
 };
 
@@ -26,7 +27,7 @@ export function createShellTransportOwner({
 	channelId: number;
 	connectionId: string;
 	key: ShellTransportKey;
-	shell: SshShell | undefined;
+	shell: ShellTerminalNativeSource | undefined;
 }): ShellTransportOwner {
 	let generation = 0;
 	let shell = initialShell;
@@ -40,7 +41,7 @@ export function createShellTransportOwner({
 			ShellTerminalListenerRegistration,
 			{ id: bigint; removed: boolean }
 		>();
-		const requireCurrent = (): SshShell => {
+		const requireCurrent = (): ShellTerminalNativeSource => {
 			if (
 				disposed ||
 				generation !== ownedGeneration ||
@@ -55,7 +56,25 @@ export function createShellTransportOwner({
 			generation: ownedGeneration,
 			connectionId,
 			channelId,
-			getNativeOutputDiagnostics: () => null,
+			getNativeOutputDiagnostics: () => {
+				if (
+					disposed ||
+					generation !== ownedGeneration ||
+					ownedShell === undefined
+				) {
+					return null;
+				}
+				const stats = ownedShell.bufferStats();
+				return {
+					currentSeq: ownedShell.currentSeq().toString(),
+					ringBytesCount: stats.ringBytesCount.toString(),
+					usedBytes: stats.usedBytes.toString(),
+					headSeq: stats.headSeq.toString(),
+					tailSeq: stats.tailSeq.toString(),
+					droppedBytesTotal: stats.droppedBytesTotal.toString(),
+					chunksCount: stats.chunksCount.toString(),
+				};
+			},
 			isAvailable: () =>
 				!disposed && generation === ownedGeneration && ownedShell !== undefined,
 			readBuffer: async (cursor) => {

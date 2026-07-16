@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createShellScrollbackControllerCore } from '../../src/lib/shell-controllers/scrollback-core';
+import { createScrollbackRemoteCopyModeOwner } from '../../src/lib/shell-controllers/scrollback-remote-copy-mode-owner';
 import { createShellTargetKey } from '../../src/lib/shell-controllers/source-keys';
 import {
 	createDeferred,
@@ -671,11 +672,11 @@ void test('older same-target cleanup failure remains blocking after newer acquis
 void test('real suppressed runtime reset failure logs exactly once', async () => {
 	const fixture = createScrollbackHarness();
 	const warnings: string[] = [];
-	const remoteCopyModeActive = { current: false };
-	const remoteCopyModeGeneration = { current: 0 };
+	const remoteCopyMode = createScrollbackRemoteCopyModeOwner({
+		warn: () => {},
+	});
 	const core = createShellScrollbackControllerCore({
-		remoteCopyModeActive,
-		remoteCopyModeGeneration,
+		remoteCopyMode,
 	});
 	core.setContext({
 		...fixture.context,
@@ -693,10 +694,10 @@ void test('real suppressed runtime reset failure logs exactly once', async () =>
 		logger: { warn: (message) => warnings.push(message) },
 	});
 	core.onTerminalRuntimeChanged('instance-1');
-	remoteCopyModeActive.current = true;
+	remoteCopyMode.acquire();
 	core.onTerminalRuntimeChanged('instance-2');
 	await flushPromises();
 	assert.deepEqual(warnings, ['suppressed exit failed']);
-	assert.equal(remoteCopyModeActive.current, true);
+	assert.equal(remoteCopyMode.isOwned(), true);
 	core.dispose();
 });

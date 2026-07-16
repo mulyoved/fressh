@@ -10,6 +10,10 @@ import {
 	type ShellScrollbackContext,
 	type ShellScrollbackLogger,
 } from './scrollback-contracts';
+import {
+	type ScrollbackRemoteCopyModeOwner,
+	type ScrollbackRemoteCopyModeToken,
+} from './scrollback-remote-copy-mode-owner';
 
 type ResetOperationKey = Readonly<{
 	failurePolicy: 'notify' | 'suppress';
@@ -29,8 +33,7 @@ export function createScrollbackCleanupCoordinator({
 	cleanupBarrier,
 	getCurrentState,
 	lineAccumulator,
-	remoteCopyModeActive,
-	remoteCopyModeGeneration,
+	remoteCopyMode,
 	warn,
 }: {
 	cleanupBarrier: WorkmuxScrollbackLiveInputCleanupBarrier;
@@ -41,8 +44,7 @@ export function createScrollbackCleanupCoordinator({
 		targetOwnershipRevision: number;
 	};
 	lineAccumulator: TmuxScrollbackLineAccumulator;
-	remoteCopyModeActive: { current: boolean };
-	remoteCopyModeGeneration: { current: number };
+	remoteCopyMode: ScrollbackRemoteCopyModeOwner;
 	warn(
 		logger: ShellScrollbackLogger | undefined,
 		message: string,
@@ -63,7 +65,7 @@ export function createScrollbackCleanupCoordinator({
 		const current = getCurrentState();
 		return {
 			targetOwnershipRevision: current.targetOwnershipRevision,
-			remoteCopyModeGeneration: remoteCopyModeGeneration.current,
+			remoteCopyModeGeneration: remoteCopyMode.generation(),
 			targetKey: context.targetKey,
 			targetName: context.targetName,
 		};
@@ -81,7 +83,7 @@ export function createScrollbackCleanupCoordinator({
 
 	const isSuccessCurrent = (ownership: ScrollbackCleanupOwnership): boolean =>
 		isFailureCurrent(ownership) &&
-		remoteCopyModeGeneration.current === ownership.remoteCopyModeGeneration;
+		remoteCopyMode.generation() === ownership.remoteCopyModeGeneration;
 
 	const register = ({
 		cleanup,
@@ -105,13 +107,23 @@ export function createScrollbackCleanupCoordinator({
 		reportResolvedFalse?: boolean;
 	}): Promise<boolean> | null => {
 		if (!cleanup) return null;
+		const token: ScrollbackRemoteCopyModeToken = Object.freeze({
+			generation:
+				ownership?.remoteCopyModeGeneration ?? remoteCopyMode.generation(),
+		});
 		const registerWithBarrier = (
 			barrier: WorkmuxScrollbackLiveInputCleanupBarrier,
 		) =>
 			registerTmuxScrollbackRemoteCopyModeExitCleanup({
 				barrier,
 				cleanup,
-				remoteCopyModeActiveRef: remoteCopyModeActive,
+				remoteCopyMode: {
+					isOwned: remoteCopyMode.isOwned,
+					settle: (owned) => {
+						if (owned && restoreRemoteOnFailure) remoteCopyMode.restore();
+						else remoteCopyMode.settle(token, owned);
+					},
+				},
 				remoteCopyModeWasActive: remoteWasActive,
 				freshness: currentAfterDispose
 					? { kind: 'always' }
@@ -148,7 +160,7 @@ export function createScrollbackCleanupCoordinator({
 				(currentAfterDispose ||
 					(ownership !== null && isFailureCurrent(ownership)))
 			) {
-				remoteCopyModeActive.current = true;
+				remoteCopyMode.restore();
 			}
 			return registerWithBarrier({
 				current: () => null,
@@ -171,13 +183,13 @@ export function createScrollbackCleanupCoordinator({
 		if (!executor)
 			return {
 				cleanup: null,
-				remoteCopyModeGeneration: remoteCopyModeGeneration.current,
+				remoteCopyModeGeneration: remoteCopyMode.generation(),
 				targetOwnershipRevision: current.targetOwnershipRevision,
 			};
 		const pending = pendingResetOperations.get(executor);
 		if (
 			pending?.targetOwnershipRevision === current.targetOwnershipRevision &&
-			pending.remoteCopyModeGeneration === remoteCopyModeGeneration.current &&
+			pending.remoteCopyModeGeneration === remoteCopyMode.generation() &&
 			pending.requiresDurableTargetExit === remoteWasActive &&
 			pending.failurePolicy === failurePolicy
 		) {
@@ -187,12 +199,12 @@ export function createScrollbackCleanupCoordinator({
 				targetOwnershipRevision: pending.targetOwnershipRevision,
 			};
 		}
-		remoteCopyModeGeneration.current += 1;
+		const remoteCopyModeToken = remoteCopyMode.transition();
 		const ownership = captureOwnership(ownerContext);
 		const operationKey: ResetOperationKey = {
 			failurePolicy,
 			invocationRevision: ++nextResetInvocationRevision,
-			remoteCopyModeGeneration: remoteCopyModeGeneration.current,
+			remoteCopyModeGeneration: remoteCopyModeToken.generation,
 			requiresDurableTargetExit: remoteWasActive,
 			targetOwnershipRevision: current.targetOwnershipRevision,
 		};
@@ -207,7 +219,7 @@ export function createScrollbackCleanupCoordinator({
 		} catch (error) {
 			warn(ownerContext.logger, 'Workmux scrollback reset failed', error);
 			if (remoteWasActive && isFailureCurrent(ownership)) {
-				remoteCopyModeActive.current = true;
+				remoteCopyMode.settle(remoteCopyModeToken, true);
 			}
 			return {
 				cleanup: null,
@@ -219,8 +231,7 @@ export function createScrollbackCleanupCoordinator({
 			cleanup &&
 			operationKey.targetOwnershipRevision ===
 				getCurrentState().targetOwnershipRevision &&
-			operationKey.remoteCopyModeGeneration ===
-				remoteCopyModeGeneration.current &&
+			operationKey.remoteCopyModeGeneration === remoteCopyMode.generation() &&
 			getCurrentState().executor === executor
 		) {
 			const existing = pendingResetOperations.get(executor);

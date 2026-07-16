@@ -14,22 +14,14 @@ function getErrorMessage(error: unknown): string {
 export async function deliverConnectionDiagnosticPrompt({
 	prompt,
 	delivery,
-	allowTerminalPaste,
-	pasteIntoTerminal,
 	copyToClipboard,
 	showAlert,
 }: {
 	prompt: string;
-	delivery?: DiagnosticDelivery;
-	allowTerminalPaste?: boolean;
-	pasteIntoTerminal?: (value: string) => void;
+	delivery: DiagnosticDelivery;
 	copyToClipboard: (value: string) => Promise<void>;
 	showAlert: (title: string, message: string) => void;
 }): Promise<ConnectionDiagnosticDeliveryResult> {
-	delivery ??=
-		allowTerminalPaste && pasteIntoTerminal
-			? { type: 'terminal', paste: pasteIntoTerminal }
-			: { type: 'clipboard-only' };
 	if (delivery.type === 'terminal') {
 		try {
 			delivery.paste(prompt);

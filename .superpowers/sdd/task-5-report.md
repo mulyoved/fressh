@@ -20,17 +20,17 @@ the existing Task 2 typed Worktree port boundary remains intact.
   copy-mode owners from the approved Stage 2 source slice.
 - Deleted the obsolete keyboard composition shim and its implementation-shaped
   integration test.
-- Preserved the Task 2 Worktree contract:
-  `connectionAvailable`, `tmuxEnabled`, `sessionName`, `ShellTargetKey`, and a
+- Preserved the Task 2 Worktree contract: `connectionAvailable`, `tmuxEnabled`,
+  `sessionName`, `ShellTargetKey`, and a
   `Pick<ShellWorkmuxPort, 'command' | 'operation'>`. Existing explicit
   completed/failed/superseded/unavailable mapping, timeout classification,
   stale-target suppression, invalid-response handling, and no-retry behavior
   remain covered by the Worktree integration lane.
-- Preserved Task 4 Wispr controller semantics; the composition root continues
-  to pass the activity and session generations and renders its existing modal
-  props without adding native authority to the view.
-- Updated connection diagnostic delivery to the typed delivery union while
-  retaining compatibility for existing direct callers during reconciliation.
+- Preserved Task 4 Wispr controller semantics; the composition root continues to
+  pass the activity and session generations and renders its existing modal props
+  without adding native authority to the view.
+- Updated connection diagnostic delivery to require the typed delivery union;
+  the legacy `allowTerminalPaste` and `pasteIntoTerminal` fields are removed.
 - Added direct Worktree action routing to the canonical keyboard controller
   adapter so the command-menu behavior remains unchanged after shim removal.
 
@@ -43,22 +43,22 @@ only the two obsolete keyboard composition files named in the brief.
 
 ## RED Evidence
 
-1. `pnpm exec tsx --test test/integration/shell-detail-boundary.test.ts`
-   exited 1: 2 passed, 4 failed. `detail.tsx` had 955 nonblank lines,
-   `ShellScreenView.tsx` was absent, focused owners were absent, and the
-   terminal runtime duplicated the canonical view type.
+1. `pnpm exec tsx --test test/integration/shell-detail-boundary.test.ts` exited
+   1: 2 passed, 4 failed. `detail.tsx` had 955 nonblank lines,
+   `ShellScreenView.tsx` was absent (including the Worktree view assertion), and
+   the terminal runtime duplicated the canonical view type.
 2. The exact three-file Worktree lane exited 0 with 26 passed. This established
-   that Task 2 had already completed the typed Worktree boundary and that Task
-   5 must preserve it.
+   that Task 2 had already completed the typed Worktree boundary and that Task 5
+   must preserve it.
 3. The exact four-file Jest lane exited 1: three suites failed and one passed.
    Failures covered the old shell composition shape, old debug-delivery shape,
    and missing lifetime owners.
 
 ## GREEN Evidence
 
-- Exact shell composition Node lane: 83 passed, 0 failed.
+- Exact shell composition Node lane: 85 passed, 0 failed.
 - Exact Worktree/config Node lane: 66 passed, 0 failed.
-- Exact component Jest lane: 4 suites, 8 tests passed.
+- Exact component Jest lane: 4 suites, 13 tests passed.
 - `pnpm run fmt:check`: exit 0.
 - `pnpm run typecheck`: exit 0.
 - Touched-file ESLint lane: exit 0.
@@ -73,6 +73,28 @@ Rebuilt from `8751a1d0`, `75aa4de1`, `cbbac86b`, `601d2230`, `8c8e2b13`, and
 Workspace feature. Direct Worktree actions and the final Advanced submenu are
 covered by `command-menu.test.ts`, `keyboard-config.test.ts`, and
 `shell-config-schema.test.ts` in the complete GREEN lane.
+
+## Stable-review repair
+
+- RED owner composition: the focused lifetime Jest lane reported 2 passed and 5
+  failed. Production did not compose the five extracted owners, the target host
+  adapter lacked the canonical error/output/no-detail mapping, and native
+  diagnostics were absent.
+- RED scrollback composition: the boundary assertion failed because scrollback
+  still used inline remote-copy-mode ownership. The focused owner lifecycle
+  cases themselves passed.
+- GREEN owner composition: the session lifetime/controller Jest lane reports 2
+  suites and 17 tests passed. Source, target, tmux-resolution, transport, and
+  remote-copy-mode owners are now the sole production paths; target successor
+  publication remains withheld until the retirement barrier drains.
+- GREEN scrollback ownership: the focused boundary, lifecycle, cleanup, event,
+  live-input, and executor lane reports 172 passed and 0 failed.
+- GREEN diagnostics: the strict delivery and debug-command Node lane reports 12
+  passed, and its hook Jest lane reports 2 passed. Transport diagnostic
+  snapshots are generation-checked for current and superseded publications.
+- GREEN modal composition: 2 passed. The regression guard now follows the
+  focused controller composition and typed `ports.workmux`/`remoteTarget`
+  contracts instead of the deleted keyboard shim.
 
 ## Self-review
 
@@ -95,7 +117,17 @@ Review target: the complete uncommitted Task 5 diff against `081920e1`.
   React-specific bundled adapters were absent in this worktree; security and
   data adapters were not applicable; CI-equivalent focused checks passed.
 
+The stable-review repair received a second complete diff review after all owner
+integrations. It found one dropped Task 2 static composition test whose module
+references had become obsolete; the test was restored against the canonical
+target/remote-copy owners, typed ports, terminal policy, and view-owned Worktree
+modal, and passes 4 cases. No actionable correctness, race, API-contract,
+maintainability, test-coverage, UI, security, or data finding remained. The
+final combined component rerun included the session controller and reports 5
+suites / 23 tests passed; the additional scrollback/diagnostic lane reports 166
+passed, complementing the exact Task 5 lanes above.
+
 ## Concerns
 
-None blocking. Task 2 had already migrated Worktree Workspace to typed ports,
-so Task 5 intentionally preserved rather than rewrote that implementation.
+None blocking. Task 2 had already migrated Worktree Workspace to typed ports, so
+Task 5 intentionally preserved rather than rewrote that implementation.

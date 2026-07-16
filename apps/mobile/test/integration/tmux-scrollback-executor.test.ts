@@ -16,6 +16,13 @@ import {
 import { createWorkmuxScrollbackCommandExecutor as createBaseWorkmuxScrollbackCommandExecutor } from '../../src/lib/workmux-scrollback-executor';
 import { createWorkmuxScrollbackLiveInputCleanupBarrier } from '../../src/lib/workmux-scrollback-live-input';
 
+const remoteCopyModeSettlement = (state: { current: boolean }) => ({
+	isOwned: () => state.current,
+	settle: (owned: boolean) => {
+		state.current = owned;
+	},
+});
+
 const page = (
 	count = 1,
 	direction: WorkmuxScrollbackPageCommand['direction'] = 'up',
@@ -874,7 +881,7 @@ void test('dispose rollback exit failure can mark remote copy mode active for ca
 	const cleanup = registerTmuxScrollbackRemoteCopyModeExitCleanup({
 		barrier: cleanupBarrier,
 		cleanup: executor.dispose(),
-		remoteCopyModeActiveRef,
+		remoteCopyMode: remoteCopyModeSettlement(remoteCopyModeActiveRef),
 		remoteCopyModeWasActive: remoteCopyModeActiveRef.current,
 		freshness: { kind: 'always' },
 		failureOwnership: {
@@ -901,7 +908,7 @@ void test('stale remote copy mode cleanup cannot clear a newer scrollback genera
 	const cleanup = registerTmuxScrollbackRemoteCopyModeExitCleanup({
 		barrier: cleanupBarrier,
 		cleanup: cleanupBlock.promise,
-		remoteCopyModeActiveRef,
+		remoteCopyMode: remoteCopyModeSettlement(remoteCopyModeActiveRef),
 		remoteCopyModeWasActive: remoteCopyModeActiveRef.current,
 		freshness: { kind: 'generation', generation: cleanupGeneration },
 		failureOwnership: {
@@ -928,7 +935,7 @@ void test('successful current remote copy mode cleanup clears active state', asy
 	const cleanup = registerTmuxScrollbackRemoteCopyModeExitCleanup({
 		barrier: cleanupBarrier,
 		cleanup: cleanupBlock.promise,
-		remoteCopyModeActiveRef,
+		remoteCopyMode: remoteCopyModeSettlement(remoteCopyModeActiveRef),
 		remoteCopyModeWasActive: remoteCopyModeActiveRef.current,
 		freshness: { kind: 'generation', generation: cleanupGeneration },
 		failureOwnership: {
@@ -957,7 +964,7 @@ void test('failed current remote copy mode cleanup preserves inactive state clea
 	const cleanup = registerTmuxScrollbackRemoteCopyModeExitCleanup({
 		barrier: cleanupBarrier,
 		cleanup: cleanupPromise,
-		remoteCopyModeActiveRef,
+		remoteCopyMode: remoteCopyModeSettlement(remoteCopyModeActiveRef),
 		remoteCopyModeWasActive: remoteCopyModeActiveRef.current,
 		freshness: { kind: 'generation', generation: cleanupGeneration },
 		failureOwnership: {
@@ -982,7 +989,7 @@ void test('stale failed remote copy mode cleanup cannot mark a newer generation 
 	const cleanup = registerTmuxScrollbackRemoteCopyModeExitCleanup({
 		barrier: cleanupBarrier,
 		cleanup: cleanupBlock.promise,
-		remoteCopyModeActiveRef,
+		remoteCopyMode: remoteCopyModeSettlement(remoteCopyModeActiveRef),
 		remoteCopyModeWasActive: true,
 		freshness: { kind: 'generation', generation: cleanupGeneration },
 		failureOwnership: {
@@ -1012,7 +1019,7 @@ for (const staleSettlement of ['false', 'reject'] as const) {
 		const aggregateA = registerTmuxScrollbackRemoteCopyModeExitCleanup({
 			barrier,
 			cleanup: cleanupA.promise,
-			remoteCopyModeActiveRef,
+			remoteCopyMode: remoteCopyModeSettlement(remoteCopyModeActiveRef),
 			remoteCopyModeWasActive: true,
 			freshness: {
 				kind: 'predicates',
@@ -1032,7 +1039,7 @@ for (const staleSettlement of ['false', 'reject'] as const) {
 		const aggregateB = registerTmuxScrollbackRemoteCopyModeExitCleanup({
 			barrier,
 			cleanup: cleanupB.promise,
-			remoteCopyModeActiveRef,
+			remoteCopyMode: remoteCopyModeSettlement(remoteCopyModeActiveRef),
 			remoteCopyModeWasActive: true,
 			freshness: {
 				kind: 'predicates',
@@ -1075,7 +1082,7 @@ for (const failedSettlement of ['false', 'reject'] as const) {
 		const aggregate = registerTmuxScrollbackRemoteCopyModeExitCleanup({
 			barrier,
 			cleanup: failedCleanup.promise,
-			remoteCopyModeActiveRef,
+			remoteCopyMode: remoteCopyModeSettlement(remoteCopyModeActiveRef),
 			remoteCopyModeWasActive: true,
 			freshness: {
 				kind: 'predicates',
@@ -1094,7 +1101,7 @@ for (const failedSettlement of ['false', 'reject'] as const) {
 			registerTmuxScrollbackRemoteCopyModeExitCleanup({
 				barrier,
 				cleanup: successfulCleanup.promise,
-				remoteCopyModeActiveRef,
+				remoteCopyMode: remoteCopyModeSettlement(remoteCopyModeActiveRef),
 				remoteCopyModeWasActive: true,
 				freshness: {
 					kind: 'predicates',

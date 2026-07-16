@@ -35,9 +35,7 @@ export type ConnectionDebugCommandArgs = {
 	runDiagnosticShellProbe: typeof runDiagnosticShellProbe;
 	connect: Parameters<typeof runDiagnosticShellProbe>[0]['connect'];
 	recovery: SavedEntryTailscaleRecovery;
-	delivery?: DiagnosticDelivery;
-	allowTerminalPaste?: boolean;
-	pasteIntoTerminal?: (value: string) => void;
+	delivery: DiagnosticDelivery;
 	copyToClipboard: (value: string) => Promise<void>;
 	showAlert: (title: string, message: string) => void;
 	logger: ConnectionDebugLogger;
@@ -137,11 +135,7 @@ export async function runConnectionDebugCommand(
 		: diagnostic.prompt;
 	const delivery = await deliverConnectionDiagnosticPrompt({
 		prompt,
-		delivery:
-			args.delivery ??
-			(args.allowTerminalPaste && args.pasteIntoTerminal
-				? { type: 'terminal', paste: args.pasteIntoTerminal }
-				: { type: 'clipboard-only' }),
+		delivery: args.delivery,
 		copyToClipboard: args.copyToClipboard,
 		showAlert: args.showAlert,
 	});

@@ -26,6 +26,10 @@ const terminalRuntimePath = join(
 	process.cwd(),
 	'src/lib/shell-controllers/terminal-hook-runtime.ts',
 );
+const scrollbackCorePath = join(
+	process.cwd(),
+	'src/lib/shell-controllers/scrollback-core.ts',
+);
 
 function parse(source: string, fileName: string): ts.SourceFile {
 	return ts.createSourceFile(
@@ -282,6 +286,14 @@ void test('React-free controller contracts do not import sibling React controlle
 		.filter(ts.isStringLiteral)
 		.map((specifier) => specifier.text);
 	assert.equal(imports.includes('./terminal'), false);
+});
+
+void test('scrollback composes the remote copy mode owner without inline ownership cells', () => {
+	const source = readFileSync(scrollbackCorePath, 'utf8');
+	assert.match(source, /createScrollbackRemoteCopyModeOwner/);
+	assert.doesNotMatch(source, /createRemoteCopyOwnershipRef/);
+	assert.doesNotMatch(source, /createScrollbackRetirementRegistration/);
+	assert.doesNotMatch(source, /remoteCopyModeActive\?: \{ current: boolean \}/);
 });
 
 void test('terminal contracts own the runtime view interface', () => {

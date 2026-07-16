@@ -10,6 +10,7 @@ import {
 	type ShellScrollbackLogger,
 } from './scrollback-contracts';
 import { createScrollbackOperationOwnerRegistry } from './scrollback-operation-owner';
+import { type ScrollbackRemoteCopyModeOwner } from './scrollback-remote-copy-mode-owner';
 
 export type ScrollbackEnterRequestToken = ScrollbackRequestAuthority<
 	WorkmuxScrollbackCommandExecutor,
@@ -36,8 +37,7 @@ export function createScrollbackEntryCoordinator({
 	clearLocalState,
 	isTerminalInstanceCurrent,
 	registerRollbackCleanup,
-	remoteCopyModeActive,
-	remoteCopyModeGeneration,
+	remoteCopyMode,
 	reserveRequestGeneration,
 	trace,
 	warn,
@@ -53,8 +53,7 @@ export function createScrollbackEntryCoordinator({
 		logger: ShellScrollbackLogger;
 		ownership: ScrollbackCleanupOwnership;
 	}): void;
-	remoteCopyModeActive: { current: boolean };
-	remoteCopyModeGeneration: { current: number };
+	remoteCopyMode: ScrollbackRemoteCopyModeOwner;
 	reserveRequestGeneration(): number;
 	trace(
 		context: ShellScrollbackContext,
@@ -122,16 +121,15 @@ export function createScrollbackEntryCoordinator({
 			current.context?.targetKey === token.context.targetKey &&
 			current.context.targetName === token.context.targetName;
 		const acquiredDuringRollback =
-			semanticTargetCurrent && !remoteCopyModeActive.current;
+			semanticTargetCurrent && !remoteCopyMode.isOwned();
 		if (acquiredDuringRollback) {
-			remoteCopyModeGeneration.current += 1;
-			remoteCopyModeActive.current = true;
+			remoteCopyMode.acquire();
 		}
 		const ownership: ScrollbackCleanupOwnership = {
 			targetOwnershipRevision: token.targetOwnershipRevision,
 			remoteCopyModeGeneration:
 				acquiredDuringRollback || isInternallyCurrent(token)
-					? remoteCopyModeGeneration.current
+					? remoteCopyMode.generation()
 					: token.remoteCopyModeGeneration,
 			targetKey: token.context.targetKey,
 			targetName: token.context.targetName,
@@ -210,7 +208,7 @@ export function createScrollbackEntryCoordinator({
 			context,
 			executor,
 			instanceId: event.instanceId,
-			remoteCopyModeGeneration: remoteCopyModeGeneration.current,
+			remoteCopyModeGeneration: remoteCopyMode.generation(),
 			requestGeneration,
 			targetOwnershipRevision: initial.targetOwnershipRevision,
 		});
@@ -239,8 +237,7 @@ export function createScrollbackEntryCoordinator({
 				connectionAvailable: context.connectionAvailable,
 				targetName: context.targetName,
 				commandExecutor: executor,
-				remoteCopyModeActiveRef: remoteCopyModeActive,
-				remoteCopyModeGenerationRef: remoteCopyModeGeneration,
+				remoteCopyModeOwnership: remoteCopyMode,
 				clearLocalScrollbackUiState: () => clearLocalState(context),
 				sendScrollbackEnterAck: (requestId, instanceId) =>
 					context.terminalView.sendScrollbackEnterAck(requestId, instanceId),
