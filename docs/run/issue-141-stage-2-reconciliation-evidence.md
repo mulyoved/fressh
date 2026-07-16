@@ -218,6 +218,19 @@ cannot self-reference its resulting SHA.
   integration tests, and 9 component suites / 39 tests passed. `git diff
   --check` exits 0.
 
+### Final CE1 wave 4 repair closure
+
+- RED: the production hook-runtime suite reported 7/8 because a throwing
+  source-port removal deleted the lifecycle adapter's bigint-to-opaque-token
+  mapping. A retry with the same lifecycle ID did not reach the owner, leaving
+  the removal-attempt count at one instead of two.
+- GREEN: lifecycle listener capabilities remain mapped until source-port
+  removal succeeds. The regression proves the same opaque capability is
+  retried after failure, then successful removal makes later calls inert.
+- Focused terminal/runtime closure: 21/21. Complete mobile closure: formatting,
+  ESLint, TypeScript, 2,379 integration tests, and 9 component suites / 39 tests
+  passed. `git diff --check` exits 0.
+
 ## Thermo-Nuclear Review
 
 - Review artifact: `docs/run/issue-141-stage-2-thermo-nuclear-review.md`.

@@ -236,8 +236,8 @@ export function createShellTerminalHookRuntime(input: {
 			removeListener: (id) => {
 				const registration = registrations.get(id);
 				if (!registration) return;
-				registrations.delete(id);
 				owner.removeListener(registration);
+				registrations.delete(id);
 			},
 		};
 	};

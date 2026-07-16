@@ -48,6 +48,9 @@ function createFixture(
 		| Parameters<TerminalHookRuntimeFactories['createTransport']>[0]
 		| undefined;
 	let sizeInput: CreateTerminalSizeControllerInput | undefined;
+	let lifecycleShell:
+		| Parameters<TerminalLifecycleController['setShell']>[1]
+		| undefined;
 	let lifecycleSnapshot = {
 		ready: false,
 		hasRendered: false,
@@ -86,8 +89,10 @@ function createFixture(
 			calls.push('lifecycle.dispose');
 			if (options.lifecycleDisposeError) throw options.lifecycleDisposeError;
 		},
-		setShell: (key, shell) =>
-			calls.push(`lifecycle.shell:${key}:${shell ? 'set' : 'clear'}`),
+		setShell: (key, shell) => {
+			lifecycleShell = shell;
+			calls.push(`lifecycle.shell:${key}:${shell ? 'set' : 'clear'}`);
+		},
 		setViewModes: ({ systemKeyboardEnabled, selectionModeEnabled }) =>
 			calls.push(`modes:${systemKeyboardEnabled}:${selectionModeEnabled}`),
 		handleInitialized: () => {},
@@ -155,6 +160,10 @@ function createFixture(
 			assert.ok(sizeInput);
 			return sizeInput;
 		},
+		getLifecycleShell: () => {
+			assert.ok(lifecycleShell);
+			return lifecycleShell;
+		},
 		setReady: (ready: boolean) => {
 			lifecycleSnapshot = { ...lifecycleSnapshot, ready };
 		},
@@ -193,6 +202,32 @@ function createShell(
 			}),
 	} satisfies ShellTerminalSourcePort;
 }
+
+void test('lifecycle adapter retains a listener capability until removal succeeds', async () => {
+	const fixture = createFixture();
+	const registration = Object.freeze({}) as ShellTerminalListenerRegistration;
+	let removalAttempts = 0;
+	const shell = {
+		...createShell(fixture.calls),
+		addListener: async () => registration,
+		removeListener: (candidate: ShellTerminalListenerRegistration) => {
+			assert.equal(candidate, registration);
+			removalAttempts += 1;
+			if (removalAttempts === 1) throw new Error('removal failed');
+		},
+	} satisfies ShellTerminalSourcePort;
+	fixture.runtime.updateSource(shell);
+	const lifecycleShell = fixture.getLifecycleShell();
+	const id = await lifecycleShell.addListener(() => {}, {
+		cursor: { mode: 'live' },
+	});
+
+	assert.throws(() => lifecycleShell.removeListener(id), /removal failed/);
+	assert.doesNotThrow(() => lifecycleShell.removeListener(id));
+	assert.equal(removalAttempts, 2);
+	assert.doesNotThrow(() => lifecycleShell.removeListener(id));
+	assert.equal(removalAttempts, 2);
+});
 
 function createXterm(calls: string[]): XtermWebViewHandle {
 	return {
