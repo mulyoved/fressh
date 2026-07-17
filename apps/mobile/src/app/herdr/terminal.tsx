@@ -6,7 +6,10 @@ import { Alert, AppState } from 'react-native';
 
 import { type HerdrAgent, type HerdrHostState } from '@/lib/herdr/contracts';
 import { prepareHerdrHost } from '@/lib/herdr/host-launcher';
-import { createHerdrKeyboardAdapter } from '@/lib/herdr/keyboard-adapter';
+import {
+	createHerdrKeyboardAdapter,
+	type HerdrKeyboardAdapter,
+} from '@/lib/herdr/keyboard-adapter';
 import { useHerdrProviderStore } from '@/lib/herdr/provider-store';
 import {
 	findHerdrAgent,
@@ -52,6 +55,7 @@ export default function HerdrTerminalRoute() {
 	const terminalId = routeParam(params.terminalId);
 	const xtermRef = React.useRef<XtermWebViewHandle | null>(null);
 	const ownerRef = React.useRef<HerdrTerminalOwner | null>(null);
+	const keyboardAdapterRef = React.useRef<HerdrKeyboardAdapter | null>(null);
 	const ownerUnsubscribeRef = React.useRef<(() => void) | null>(null);
 	const currentHostRef = React.useRef<HerdrHostState | null>(null);
 	const currentXtermInstanceIdRef = React.useRef<string | null>(null);
@@ -113,6 +117,7 @@ export default function HerdrTerminalRoute() {
 	React.useEffect(() => {
 		if (previousRouteIdentityRef.current === routeIdentity) return;
 		previousRouteIdentityRef.current = routeIdentity;
+		keyboardAdapterRef.current?.invalidatePending();
 		invalidateRouteOperations();
 	}, [invalidateRouteOperations, routeIdentity]);
 
@@ -190,6 +195,7 @@ export default function HerdrTerminalRoute() {
 				throw new Error('SSH connection unavailable.');
 			}
 
+			keyboardAdapterRef.current?.invalidatePending();
 			const previousOwner = ownerRef.current;
 			startAdmittedOwnerRef.current = null;
 			reloadOwnerRef.current = null;
@@ -399,7 +405,16 @@ export default function HerdrTerminalRoute() {
 		createHerdrKeyboardAdapter({
 			shellConfigState,
 			terminalInput: {
-				sendInput: (bytes) => ownerRef.current?.sendInput(bytes) ?? false,
+				captureSender: () => {
+					const owner = ownerRef.current;
+					if (!owner) return null;
+					return (bytes) =>
+						ownerRef.current === owner &&
+						mountedRef.current &&
+						visibleRef.current &&
+						!suspendedRef.current &&
+						owner.sendInput(bytes);
+				},
 			},
 			clipboard: {
 				readText: () => Clipboard.getStringAsync(),
@@ -421,6 +436,7 @@ export default function HerdrTerminalRoute() {
 			showFeedback: (message) => Alert.alert('Herdr', message),
 		}),
 	);
+	keyboardAdapterRef.current = keyboardAdapter;
 	React.useSyncExternalStore(
 		keyboardAdapter.subscribe,
 		keyboardAdapter.getSnapshot,
@@ -428,6 +444,7 @@ export default function HerdrTerminalRoute() {
 	);
 
 	const backgroundOwner = React.useCallback(() => {
+		keyboardAdapterRef.current?.invalidatePending();
 		suspendedRef.current = true;
 		reconcileGenerationRef.current += 1;
 		invalidateRouteOperations();
@@ -471,6 +488,7 @@ export default function HerdrTerminalRoute() {
 		mountedRef.current = true;
 		return () => {
 			mountedRef.current = false;
+			keyboardAdapterRef.current?.invalidatePending();
 			reconcileGenerationRef.current += 1;
 			invalidateRouteOperations();
 			startAdmittedOwnerRef.current = null;
@@ -481,6 +499,7 @@ export default function HerdrTerminalRoute() {
 	}, [invalidateRouteOperations]);
 
 	const handleLoadStart = React.useCallback(() => {
+		keyboardAdapterRef.current?.invalidatePending();
 		const owner = ownerRef.current;
 		const restarting = currentXtermInstanceIdRef.current !== null;
 		const wasAdmitted = startAdmittedOwnerRef.current === owner;
@@ -534,6 +553,7 @@ export default function HerdrTerminalRoute() {
 	);
 	const recoverTransport = React.useCallback(async () => {
 		if (recoveringTransportRef.current) return;
+		keyboardAdapterRef.current?.invalidatePending();
 		recoveringTransportRef.current = true;
 		reconcileGenerationRef.current += 1;
 		startAdmittedOwnerRef.current = null;
@@ -560,6 +580,7 @@ export default function HerdrTerminalRoute() {
 		}
 	}, [reconcile]);
 	const handleRetry = React.useCallback(() => {
+		keyboardAdapterRef.current?.invalidatePending();
 		const owner = ownerRef.current;
 		const size = sizeRef.current;
 		const host = currentHostRef.current;
@@ -582,6 +603,7 @@ export default function HerdrTerminalRoute() {
 		void recoverTransport();
 	}, [recoverTransport]);
 	const handleTakeOver = React.useCallback(() => {
+		keyboardAdapterRef.current?.invalidatePending();
 		const owner = ownerRef.current;
 		const size = sizeRef.current;
 		if (
@@ -596,6 +618,7 @@ export default function HerdrTerminalRoute() {
 		}
 	}, []);
 	const handleBack = React.useCallback(async () => {
+		keyboardAdapterRef.current?.invalidatePending();
 		const operation = beginRouteOperation();
 		const owner = ownerRef.current;
 		startAdmittedOwnerRef.current = null;
@@ -621,6 +644,7 @@ export default function HerdrTerminalRoute() {
 			onInitialized={handleInitialized}
 			onInput={({ str, instanceId }) => {
 				if (instanceId !== currentXtermInstanceIdRef.current) return;
+				keyboardAdapter.invalidatePending();
 				ownerRef.current?.sendInput(textEncoder.encode(str));
 			}}
 			onResize={handleResize}

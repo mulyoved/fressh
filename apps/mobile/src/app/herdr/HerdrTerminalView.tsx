@@ -178,7 +178,6 @@ export function HerdrTerminalView(props: HerdrTerminalViewProps) {
 							onLoadStart: props.onLoadStart,
 						}}
 						logger={{
-							log: logger.info,
 							warn: logger.warn,
 							error: logger.error,
 						}}

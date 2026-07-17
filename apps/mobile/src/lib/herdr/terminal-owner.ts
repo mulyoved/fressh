@@ -13,6 +13,12 @@ import {
 export const HERDR_FIRST_FRAME_TIMEOUT_MS = 10_000;
 export const HERDR_RESIZE_COALESCE_MS = 100;
 export const HERDR_RELEASE_GRACE_MS = 250;
+/**
+ * Only one native write is in flight. These ceilings bound payloads retained by
+ * not-yet-started ordered writes while that native operation is stalled.
+ */
+export const HERDR_MAX_QUEUED_WRITES = 256;
+export const HERDR_MAX_QUEUED_WRITE_BYTES = 1024 * 1024;
 
 export type HerdrTerminalState =
 	| Readonly<{ phase: 'starting'; generation: number }>
@@ -105,7 +111,10 @@ type Generation = {
 	decoder: ReturnType<typeof createHerdrLineDecoder>;
 	stderr: ReturnType<typeof createBoundedHerdrStderr>;
 	lastSeq: number | null;
-	queue: Promise<void>;
+	writeQueue: QueuedWrite[];
+	queuedWriteBytes: number;
+	writeInFlight: boolean;
+	writeIdleReady: ResizeReady | null;
 	firstFrameTimer: ReturnType<typeof setTimeout> | null;
 	resizeTimer: ReturnType<typeof setTimeout> | null;
 	pendingResize: { cols: number; rows: number } | null;
@@ -113,6 +122,12 @@ type Generation = {
 	cleanupPromise: Promise<void> | null;
 	startedAtMs: number;
 };
+
+type QueuedWrite = Readonly<{
+	retainedBytes: number;
+	run(stream: HerdrCommandStream): Promise<void>;
+	release(): void;
+}>;
 
 type CreateHerdrTerminalOwnerInput = Readonly<{
 	terminalId: string;
@@ -131,6 +146,8 @@ const defaultClock: HerdrTerminalClock = {
 const synchronizationReason = 'Herdr terminal output lost synchronization.';
 const timeoutReason =
 	'Herdr terminal did not provide an initial frame in time.';
+const queueOverflowReason =
+	'Herdr terminal input queue exceeded its safety limit.';
 const ownershipConflictPhrase =
 	'already has an attached client; retry with --takeover';
 
@@ -203,6 +220,31 @@ export function createHerdrTerminalOwner(
 		generation.pendingResize = null;
 		generation.resizeReady?.resolve();
 		generation.resizeReady = null;
+	}
+
+	function clearQueuedWrites(generation: Generation): void {
+		const discardedOperations = generation.writeQueue.length;
+		const discardedBytes = generation.queuedWriteBytes;
+		if (discardedOperations === 0) return;
+		for (const write of generation.writeQueue.splice(0)) write.release();
+		generation.queuedWriteBytes = 0;
+		input.logger.debug('Herdr terminal queued writes discarded.', {
+			generation: generation.id,
+			operationCount: discardedOperations,
+			byteCount: discardedBytes,
+		});
+	}
+
+	function waitForInFlightWrite(generation: Generation): Promise<void> {
+		if (!generation.writeInFlight) return Promise.resolve();
+		generation.writeIdleReady ??= createResizeReady();
+		return generation.writeIdleReady.promise;
+	}
+
+	function finishInFlightWrite(generation: Generation): void {
+		generation.writeInFlight = false;
+		generation.writeIdleReady?.resolve();
+		generation.writeIdleReady = null;
 	}
 
 	function discardRawStderr(generation: Generation): void {
@@ -281,7 +323,7 @@ export function createHerdrTerminalOwner(
 		};
 
 		const release = (
-			shouldQueueRelease ? generation.queue : Promise.resolve()
+			shouldQueueRelease ? waitForInFlightWrite(generation) : Promise.resolve()
 		).then(async () => {
 			if (!shouldQueueRelease) return;
 			if (generation.releaseWindowExpired || generation.closeInvoked) return;
@@ -347,6 +389,7 @@ export function createHerdrTerminalOwner(
 		generation.retired = true;
 		clearFirstFrameTimer(generation);
 		cancelPendingResize(generation);
+		clearQueuedWrites(generation);
 		discardRawStderr(generation);
 		publish({
 			phase: 'error',
@@ -369,6 +412,7 @@ export function createHerdrTerminalOwner(
 		generation.retired = true;
 		clearFirstFrameTimer(generation);
 		cancelPendingResize(generation);
+		clearQueuedWrites(generation);
 		discardRawStderr(generation);
 		publish({
 			phase: 'owned-elsewhere',
@@ -420,11 +464,6 @@ export function createHerdrTerminalOwner(
 		}
 		generation.lastSeq = record.seq;
 		input.renderer.append(record.bytes);
-		input.logger.debug('Herdr terminal delta accepted.', {
-			generation: generation.id,
-			sequence: record.seq,
-			byteCount: record.bytes.byteLength,
-		});
 	}
 
 	function dispatchLines(
@@ -514,23 +553,61 @@ export function createHerdrTerminalOwner(
 		fail(generation, 'transport', 'Herdr terminal input failed.');
 	}
 
-	function enqueueWrite(
-		generation: Generation,
-		write: (stream: HerdrCommandStream) => Promise<void>,
-	): void {
-		const operation = generation.queue.then(async () => {
-			if (!isCurrentAndLive(generation) || !generation.admitting) return;
-			const streamPromise = generation.streamPromise;
+	function pumpWriteQueue(generation: Generation): void {
+		if (
+			generation.writeInFlight ||
+			!isCurrentAndLive(generation) ||
+			!generation.admitting
+		) {
+			return;
+		}
+		const write = generation.writeQueue.shift();
+		if (!write) return;
+		generation.queuedWriteBytes -= write.retainedBytes;
+		generation.writeInFlight = true;
+
+		const operation = (async () => {
 			let stream = generation.stream;
 			if (!stream) {
+				const streamPromise = generation.streamPromise;
 				if (!streamPromise) return;
 				stream = await streamPromise;
 			}
 			if (!isCurrentAndLive(generation) || !generation.admitting) return;
-			await write(stream);
-		});
-		generation.queue = operation.catch(() => {});
-		void operation.catch((error) => handleWriteFailure(generation, error));
+			await write.run(stream);
+		})();
+		void operation.then(
+			() => {
+				write.release();
+				finishInFlightWrite(generation);
+				pumpWriteQueue(generation);
+			},
+			(error) => {
+				write.release();
+				finishInFlightWrite(generation);
+				handleWriteFailure(generation, error);
+			},
+		);
+	}
+
+	function enqueueWrite(generation: Generation, write: QueuedWrite): boolean {
+		if (!isCurrentAndLive(generation) || !generation.admitting) {
+			write.release();
+			return false;
+		}
+		if (
+			generation.writeQueue.length >= HERDR_MAX_QUEUED_WRITES ||
+			generation.queuedWriteBytes + write.retainedBytes >
+				HERDR_MAX_QUEUED_WRITE_BYTES
+		) {
+			write.release();
+			fail(generation, 'transport', queueOverflowReason);
+			return false;
+		}
+		generation.writeQueue.push(write);
+		generation.queuedWriteBytes += write.retainedBytes;
+		pumpWriteQueue(generation);
+		return true;
 	}
 
 	function startGeneration(startInput: {
@@ -552,7 +629,10 @@ export function createHerdrTerminalOwner(
 			decoder: createHerdrLineDecoder(),
 			stderr: createBoundedHerdrStderr(),
 			lastSeq: null,
-			queue: Promise.resolve(),
+			writeQueue: [],
+			queuedWriteBytes: 0,
+			writeInFlight: false,
+			writeIdleReady: null,
 			firstFrameTimer: null,
 			resizeTimer: null,
 			pendingResize: null,
@@ -661,6 +741,7 @@ export function createHerdrTerminalOwner(
 		generation.retired = true;
 		clearFirstFrameTimer(generation);
 		cancelPendingResize(generation);
+		clearQueuedWrites(generation);
 		discardRawStderr(generation);
 		if (isCurrent(generation)) {
 			publish({ phase: 'releasing', generation: generation.id });
@@ -706,14 +787,16 @@ export function createHerdrTerminalOwner(
 				return false;
 			}
 			let payload: Uint8Array | null = encodeHerdrInput(bytes);
-			enqueueWrite(generation, async (stream) => {
-				try {
+			const retainedBytes = payload.byteLength;
+			return enqueueWrite(generation, {
+				retainedBytes,
+				async run(stream) {
 					if (payload) await stream.sendData(toArrayBuffer(payload));
-				} finally {
+				},
+				release() {
 					payload = null;
-				}
+				},
 			});
-			return true;
 		},
 		resize(cols, rows) {
 			const generation = current;
@@ -743,17 +826,22 @@ export function createHerdrTerminalOwner(
 				generation.resizeReady = null;
 				ready.resolve();
 			}, HERDR_RESIZE_COALESCE_MS);
-			enqueueWrite(generation, async (stream) => {
-				await ready.promise;
-				if (!isCurrentAndLive(generation) || !generation.admitting) return;
-				const latest = expiredResize;
-				expiredResize = null;
-				if (!latest) return;
-				await stream.sendData(
-					toArrayBuffer(encodeHerdrResize(latest.cols, latest.rows)),
-				);
+			return enqueueWrite(generation, {
+				retainedBytes: 0,
+				async run(stream) {
+					await ready.promise;
+					if (!isCurrentAndLive(generation) || !generation.admitting) return;
+					const latest = expiredResize;
+					expiredResize = null;
+					if (!latest) return;
+					await stream.sendData(
+						toArrayBuffer(encodeHerdrResize(latest.cols, latest.rows)),
+					);
+				},
+				release() {
+					expiredResize = null;
+				},
 			});
-			return true;
 		},
 		scroll(direction, lines) {
 			const generation = current;
@@ -765,14 +853,16 @@ export function createHerdrTerminalOwner(
 				return false;
 			}
 			let payload: Uint8Array | null = encodeHerdrScroll(direction, lines);
-			enqueueWrite(generation, async (stream) => {
-				try {
+			const retainedBytes = payload.byteLength;
+			return enqueueWrite(generation, {
+				retainedBytes,
+				async run(stream) {
 					if (payload) await stream.sendData(toArrayBuffer(payload));
-				} finally {
+				},
+				release() {
 					payload = null;
-				}
+				},
 			});
-			return true;
 		},
 		retire(reason) {
 			invalidateSuccessorRequests();
@@ -786,6 +876,7 @@ export function createHerdrTerminalOwner(
 			generation.retired = true;
 			clearFirstFrameTimer(generation);
 			cancelPendingResize(generation);
+			clearQueuedWrites(generation);
 			discardRawStderr(generation);
 			publish({ phase: 'backgrounded', generation: generation.id });
 			input.logger.debug('Herdr terminal generation backgrounded.', {

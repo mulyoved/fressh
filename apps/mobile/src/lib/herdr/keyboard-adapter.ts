@@ -22,6 +22,8 @@ import { type ShellConfigState } from '@/lib/shell-config-store';
 export const HERDR_KEYBOARD_UNSUPPORTED_MESSAGE = 'TBD for Herdr' as const;
 export const HERDR_MISSING_MACRO_MESSAGE =
 	'Keyboard macro unavailable.' as const;
+export const HERDR_KEYBOARD_ACTION_FAILED_MESSAGE =
+	'Herdr keyboard action failed.' as const;
 
 export type HerdrKeyboardAction =
 	| { type: 'previous-agent' }
@@ -48,6 +50,7 @@ export type HerdrKeyboardAdapter = Readonly<{
 	subscribe(listener: () => void): () => void;
 	onSlotPress(item: KeyboardExecutableItem): Promise<void>;
 	onCopySelection(): Promise<void>;
+	invalidatePending(): void;
 	setSelectionModeEnabled(enabled: boolean): void;
 	getTerminalKeyboardProps(): TerminalKeyboardProps;
 }>;
@@ -55,7 +58,7 @@ export type HerdrKeyboardAdapter = Readonly<{
 export type HerdrKeyboardAdapterInput = Readonly<{
 	shellConfigState: ShellConfigState;
 	terminalInput: Readonly<{
-		sendInput(bytes: Uint8Array): boolean | void;
+		captureSender(): ((bytes: Uint8Array) => boolean | void) | null;
 	}>;
 	clipboard: Readonly<{
 		readText(): Promise<string>;
@@ -77,6 +80,11 @@ type HerdrKeyboardOperation =
 	| Readonly<{ type: 'bytes'; bytes: Uint8Array<ArrayBuffer> }>
 	| Readonly<{ type: 'steps'; steps: readonly CommandStep[] }>
 	| Readonly<{ type: 'action'; actionId: ActionId }>;
+
+type HerdrKeyboardOperationToken = Readonly<{
+	generation: number;
+	sendInput: ((bytes: Uint8Array) => boolean | void) | null;
+}>;
 
 const encoder = new TextEncoder();
 const defaultStepDelayMs = 50;
@@ -125,6 +133,28 @@ export function createHerdrKeyboardAdapter(
 	);
 	let modifierKeysActive: readonly ModifierKey[] = [];
 	let selectionModeEnabled = false;
+	let operationGeneration = 0;
+
+	const invalidatePending = () => {
+		operationGeneration += 1;
+	};
+
+	const beginOperation = (): HerdrKeyboardOperationToken => ({
+		generation: ++operationGeneration,
+		sendInput: input.terminalInput.captureSender(),
+	});
+
+	const isCurrent = (token: HerdrKeyboardOperationToken) =>
+		token.generation === operationGeneration;
+
+	const showCurrentFailure = (token: HerdrKeyboardOperationToken) => {
+		if (!isCurrent(token)) return;
+		try {
+			input.showFeedback(HERDR_KEYBOARD_ACTION_FAILED_MESSAGE);
+		} catch {
+			// Provider-local feedback cannot alter input ownership.
+		}
+	};
 
 	const buildSnapshot = (): HerdrKeyboardSnapshot => {
 		const keyboard = keyboardsById[selectedKeyboardId] ?? null;
@@ -162,8 +192,12 @@ export function createHerdrKeyboardAdapter(
 		if (selectionModeEnabled) setSelectionModeEnabled(false);
 	};
 
-	const sendBytes = (bytes: Uint8Array<ArrayBuffer>) => {
-		if (bytes.length > 0) input.terminalInput.sendInput(new Uint8Array(bytes));
+	const sendBytes = (
+		token: HerdrKeyboardOperationToken,
+		bytes: Uint8Array<ArrayBuffer>,
+	) => {
+		if (!isCurrent(token) || bytes.length === 0 || !token.sendInput) return;
+		token.sendInput(new Uint8Array(bytes));
 	};
 
 	const rotateKeyboard = () => {
@@ -191,14 +225,18 @@ export function createHerdrKeyboardAdapter(
 		}
 	};
 
-	const onCopySelection = async () => {
+	const copySelection = async (token: HerdrKeyboardOperationToken) => {
 		const text = await input.terminalView.getSelection();
-		if (!text) return;
+		if (!isCurrent(token) || !text) return;
 		await input.clipboard.writeText(text);
+		if (!isCurrent(token)) return;
 		exitSelectionMode();
 	};
 
-	const runAction = async (actionId: ActionId) => {
+	const runAction = async (
+		token: HerdrKeyboardOperationToken,
+		actionId: ActionId,
+	) => {
 		const action = classifyHerdrKeyboardAction(actionId);
 		switch (action.type) {
 			case 'previous-agent':
@@ -211,11 +249,11 @@ export function createHerdrKeyboardAdapter(
 				await input.terminalView.fit();
 				return;
 			case 'copy-selection':
-				await onCopySelection();
+				await copySelection(token);
 				return;
 			case 'paste-clipboard': {
 				const text = await input.clipboard.readText();
-				sendBytes(encoder.encode(text));
+				sendBytes(token, encoder.encode(text));
 				return;
 			}
 			case 'keyboard':
@@ -228,18 +266,25 @@ export function createHerdrKeyboardAdapter(
 		}
 	};
 
-	const runSteps = async (steps: readonly CommandStep[]) => {
+	const runSteps = async (
+		token: HerdrKeyboardOperationToken,
+		steps: readonly CommandStep[],
+	) => {
 		for (let index = 0; index < steps.length; index += 1) {
 			const step = steps[index];
 			if (!step) continue;
 			await wait(step.delayMs ?? (index === 0 ? 0 : defaultStepDelayMs));
+			if (!isCurrent(token)) return;
 			for (const segment of buildKeyboardStepSegments(step, encoder)) {
-				sendBytes(segment);
+				sendBytes(token, segment);
 			}
 		}
 	};
 
-	const onSlotPress = async (item: KeyboardExecutableItem) => {
+	const runSlotPress = async (
+		token: HerdrKeyboardOperationToken,
+		item: KeyboardExecutableItem,
+	) => {
 		if (item.type === 'modifier') {
 			modifierKeysActive = modifierKeysActive.includes(item.modifier)
 				? modifierKeysActive.filter((entry) => entry !== item.modifier)
@@ -262,12 +307,14 @@ export function createHerdrKeyboardAdapter(
 
 		if (item.type === 'text') {
 			sendBytes(
+				token,
 				applyKeyboardModifiers(encoder.encode(item.text), modifierKeysActive),
 			);
 			return;
 		}
 		if (item.type === 'bytes') {
 			sendBytes(
+				token,
 				applyKeyboardModifiers(new Uint8Array(item.bytes), modifierKeysActive),
 			);
 			return;
@@ -285,9 +332,29 @@ export function createHerdrKeyboardAdapter(
 		});
 
 		for (const operation of operations) {
-			if (operation.type === 'bytes') sendBytes(operation.bytes);
-			else if (operation.type === 'steps') await runSteps(operation.steps);
-			else await runAction(operation.actionId);
+			if (!isCurrent(token)) return;
+			if (operation.type === 'bytes') sendBytes(token, operation.bytes);
+			else if (operation.type === 'steps') {
+				await runSteps(token, operation.steps);
+			} else await runAction(token, operation.actionId);
+		}
+	};
+
+	const onSlotPress = async (item: KeyboardExecutableItem) => {
+		const token = beginOperation();
+		try {
+			await runSlotPress(token, item);
+		} catch {
+			showCurrentFailure(token);
+		}
+	};
+
+	const onCopySelection = async () => {
+		const token = beginOperation();
+		try {
+			await copySelection(token);
+		} catch {
+			showCurrentFailure(token);
 		}
 	};
 
@@ -299,6 +366,7 @@ export function createHerdrKeyboardAdapter(
 		},
 		onSlotPress,
 		onCopySelection,
+		invalidatePending,
 		setSelectionModeEnabled,
 		getTerminalKeyboardProps: () => ({
 			keyboard: snapshot.keyboard,

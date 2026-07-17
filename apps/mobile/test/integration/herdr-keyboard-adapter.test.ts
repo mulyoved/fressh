@@ -207,26 +207,35 @@ function createHarness(macros: MacroDef[] = []) {
 	let fitCalls = 0;
 	let previousCalls = 0;
 	let nextCalls = 0;
+	let clipboardRead: () => Promise<string> = async () => clipboardText;
+	let clipboardWrite: (text: string) => Promise<void> = async (text) => {
+		clipboardWrites.push(text);
+	};
+	let getSelection: () => Promise<string> = async () => selectionText;
+	let fit: () => void | Promise<void> = () => {
+		fitCalls += 1;
+	};
+	let activeTerminalInput = terminalInput;
 
 	const adapter = createHerdrKeyboardAdapter({
 		shellConfigState,
 		terminalInput: {
-			sendInput: (bytes) => {
-				terminalInput.push([...bytes]);
-				return true;
+			captureSender: () => {
+				const target = activeTerminalInput;
+				return (bytes) => {
+					if (target !== activeTerminalInput) return false;
+					target.push([...bytes]);
+					return true;
+				};
 			},
 		},
 		clipboard: {
-			readText: async () => clipboardText,
-			writeText: async (text) => {
-				clipboardWrites.push(text);
-			},
+			readText: () => clipboardRead(),
+			writeText: (text) => clipboardWrite(text),
 		},
 		terminalView: {
-			getSelection: async () => selectionText,
-			fit: () => {
-				fitCalls += 1;
-			},
+			getSelection: () => getSelection(),
+			fit: () => fit(),
 			setSelectionModeEnabled: (enabled) => {
 				selectionModes.push(enabled);
 			},
@@ -256,10 +265,36 @@ function createHarness(macros: MacroDef[] = []) {
 		setSelectionText: (value: string) => {
 			selectionText = value;
 		},
+		setClipboardRead: (read: () => Promise<string>) => {
+			clipboardRead = read;
+		},
+		setClipboardWrite: (write: (text: string) => Promise<void>) => {
+			clipboardWrite = write;
+		},
+		setGetSelection: (read: () => Promise<string>) => {
+			getSelection = read;
+		},
+		setFit: (nextFit: () => void | Promise<void>) => {
+			fit = nextFit;
+		},
+		replaceTerminalInput: () => {
+			activeTerminalInput = [];
+			return activeTerminalInput;
+		},
 		getFitCalls: () => fitCalls,
 		getPreviousCalls: () => previousCalls,
 		getNextCalls: () => nextCalls,
 	};
+}
+
+function deferred<T>() {
+	let resolve!: (value: T) => void;
+	let reject!: (error: unknown) => void;
+	const promise = new Promise<T>((onResolve, onReject) => {
+		resolve = onResolve;
+		reject = onReject;
+	});
+	return { promise, resolve, reject };
 }
 
 void test('text uses UTF-8 and byte slots preserve every byte', async () => {
@@ -479,6 +514,152 @@ void test('paste, copy, fit, and selection presentation stay local', async () =>
 	assert.equal('resize' in harness.adapter, false);
 	assert.equal('shellSession' in harness.adapter, false);
 	assert.equal('runWorkmuxCommand' in harness.adapter, false);
+});
+
+void test('pending paste is invalidated before an owner replacement', async () => {
+	const harness = createHarness();
+	const clipboard = deferred<string>();
+	harness.setClipboardRead(() => clipboard.promise);
+
+	const paste = harness.adapter.onSlotPress({
+		type: 'action',
+		actionId: 'PASTE_CLIPBOARD',
+		label: 'Paste',
+		icon: null,
+	});
+	harness.adapter.invalidatePending();
+	const replacementInput = harness.replaceTerminalInput();
+	clipboard.resolve('must not cross owners');
+	await paste;
+
+	assert.deepEqual(harness.terminalInput, []);
+	assert.deepEqual(replacementInput, []);
+	assert.deepEqual(harness.feedback, []);
+});
+
+void test('a new slot operation cancels remaining delayed macro steps', async () => {
+	const macros: MacroDef[] = [
+		{
+			id: 'delayed',
+			name: 'delayed',
+			label: 'delayed',
+			category: 'test',
+			script: JSON.stringify({
+				type: 'steps',
+				steps: [
+					{ type: 'text', data: 'first' },
+					{ type: 'text', data: 'late', delayMs: 20 },
+				],
+			}),
+		},
+	];
+	const harness = createHarness(macros);
+	const macro = harness.adapter.onSlotPress({
+		type: 'macro',
+		macroId: 'delayed',
+		label: 'delayed',
+		icon: null,
+	});
+	await Promise.resolve();
+
+	await harness.adapter.onSlotPress({
+		type: 'text',
+		text: 'new',
+		label: 'new',
+		icon: null,
+	});
+	await macro;
+
+	assert.deepEqual(
+		harness.terminalInput.map((bytes) =>
+			new TextDecoder().decode(Uint8Array.from(bytes)),
+		),
+		['first', 'new'],
+	);
+});
+
+void test('current clipboard and terminal-view failures show bounded local feedback', async (t) => {
+	const scenarios: readonly Readonly<{
+		name: string;
+		configure(harness: ReturnType<typeof createHarness>): void;
+		run(harness: ReturnType<typeof createHarness>): Promise<void>;
+	}>[] = [
+		{
+			name: 'clipboard read',
+			configure: (harness) =>
+				harness.setClipboardRead(async () => {
+					throw new Error('private clipboard read details');
+				}),
+			run: (harness) =>
+				harness.adapter.onSlotPress({
+					type: 'action',
+					actionId: 'PASTE_CLIPBOARD',
+					label: 'Paste',
+					icon: null,
+				}),
+		},
+		{
+			name: 'selection read',
+			configure: (harness) =>
+				harness.setGetSelection(async () => {
+					throw new Error('private selection details');
+				}),
+			run: (harness) => harness.adapter.onCopySelection(),
+		},
+		{
+			name: 'clipboard write',
+			configure: (harness) => {
+				harness.setSelectionText('selected');
+				harness.setClipboardWrite(async () => {
+					throw new Error('private clipboard write details');
+				});
+			},
+			run: (harness) => harness.adapter.onCopySelection(),
+		},
+		{
+			name: 'fit',
+			configure: (harness) =>
+				harness.setFit(async () => {
+					throw new Error('private fit details');
+				}),
+			run: (harness) =>
+				harness.adapter.onSlotPress({
+					type: 'action',
+					actionId: 'FIT_TERMINAL_TO_DEVICE',
+					label: 'Fit',
+					icon: null,
+				}),
+		},
+	];
+
+	for (const scenario of scenarios) {
+		await t.test(scenario.name, async () => {
+			const harness = createHarness();
+			scenario.configure(harness);
+			await scenario.run(harness);
+
+			assert.deepEqual(harness.feedback, ['Herdr keyboard action failed.']);
+			assert.equal(JSON.stringify(harness.feedback).includes('private'), false);
+		});
+	}
+});
+
+void test('a stale rejected action produces no feedback or rejection', async () => {
+	const harness = createHarness();
+	const clipboard = deferred<string>();
+	harness.setClipboardRead(() => clipboard.promise);
+	const paste = harness.adapter.onSlotPress({
+		type: 'action',
+		actionId: 'PASTE_CLIPBOARD',
+		label: 'Paste',
+		icon: null,
+	});
+
+	harness.adapter.invalidatePending();
+	clipboard.reject(new Error('private stale details'));
+	await paste;
+
+	assert.deepEqual(harness.feedback, []);
 });
 
 void test('terminal keyboard props use configured Work options', () => {

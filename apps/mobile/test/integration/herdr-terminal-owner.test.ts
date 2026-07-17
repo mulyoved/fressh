@@ -6,6 +6,8 @@ import { fromByteArray } from 'base64-js';
 import { HERDR_MAX_INCOMPLETE_LINE_BYTES } from '../../src/lib/herdr/protocol';
 import {
 	createHerdrTerminalOwner,
+	HERDR_MAX_QUEUED_WRITE_BYTES,
+	HERDR_MAX_QUEUED_WRITES,
 	type HerdrCommandStream,
 	type HerdrCommandStreamEvent,
 	type HerdrTerminalConnection,
@@ -173,10 +175,12 @@ class FakeConnection implements HerdrTerminalConnection {
 	readonly streams: FakeStream[] = [];
 	readonly pendingStarts: Deferred<HerdrCommandStream>[] = [];
 	controlStarts = false;
+	startError: unknown = null;
 	disconnectCalls = 0;
 
 	startCommandStream(input: StartCall): Promise<HerdrCommandStream> {
 		this.calls.push(input);
+		if (this.startError) throw this.startError;
 		const stream = new FakeStream();
 		this.streams.push(stream);
 		if (this.controlStarts) {
@@ -275,6 +279,99 @@ void test('start opens one stable-ID stream and accepts only a full baseline', a
 			fromByteArray(Uint8Array.of(27, 91, 72)),
 		),
 		false,
+	);
+});
+
+void test('synchronous stream-start rejection fails cleanly and permits explicit retry', async () => {
+	const harness = createHarness();
+	harness.connection.startError = new Error(
+		'private synchronous start details',
+	);
+
+	harness.owner.start({ cols: 80, rows: 24 });
+	await flushMicrotasks();
+
+	assert.deepEqual(harness.owner.getState(), {
+		phase: 'error',
+		generation: 1,
+		kind: 'transport',
+		reason: 'Herdr terminal stream failed to start.',
+	});
+	assert.equal(harness.owner.sendInput(Uint8Array.of(1)), false);
+	assert.equal(
+		JSON.stringify(harness.logs).includes('private synchronous'),
+		false,
+	);
+	assert.equal(
+		harness.states.filter((state) => state.phase === 'error').length,
+		1,
+	);
+
+	harness.connection.startError = null;
+	harness.owner.retry({ cols: 90, rows: 30 });
+	await flushMicrotasks();
+	assert.equal(harness.connection.calls.length, 2);
+	assert.deepEqual(harness.owner.getState(), {
+		phase: 'starting',
+		generation: 2,
+	});
+});
+
+void test('asynchronous stream-start rejection fails cleanly and permits explicit retry', async () => {
+	const harness = createHarness();
+	harness.connection.controlStarts = true;
+	harness.owner.start({ cols: 80, rows: 24 });
+
+	harness.connection.pendingStarts[0]?.reject(
+		new Error('private asynchronous start details'),
+	);
+	await flushMicrotasks();
+
+	assert.deepEqual(harness.owner.getState(), {
+		phase: 'error',
+		generation: 1,
+		kind: 'transport',
+		reason: 'Herdr terminal stream failed to start.',
+	});
+	assert.equal(harness.owner.sendInput(Uint8Array.of(1)), false);
+	assert.equal(
+		JSON.stringify(harness.logs).includes('private asynchronous'),
+		false,
+	);
+	assert.equal(
+		harness.states.filter((state) => state.phase === 'error').length,
+		1,
+	);
+
+	harness.connection.controlStarts = false;
+	harness.owner.retry({ cols: 90, rows: 30 });
+	await flushMicrotasks();
+	assert.equal(harness.connection.calls.length, 2);
+	assert.deepEqual(harness.owner.getState(), {
+		phase: 'starting',
+		generation: 2,
+	});
+});
+
+void test('accepted frame bursts do not emit per-delta diagnostics', () => {
+	const harness = createHarness();
+	harness.owner.start({ cols: 80, rows: 24 });
+	const events = harness.connection.calls[0];
+	events?.onEvent(frame({ seq: 1, full: true, bytes: [1] }));
+	for (let seq = 2; seq <= 100; seq += 1) {
+		events?.onEvent(frame({ seq, full: false, bytes: [seq] }));
+	}
+
+	assert.equal(harness.appended.length, 99);
+	assert.equal(
+		harness.logs.filter(
+			(entry) =>
+				typeof entry === 'object' &&
+				entry !== null &&
+				'message' in entry &&
+				entry.message === 'Herdr terminal delta accepted.',
+		).length,
+		0,
 	);
 });
 
@@ -629,6 +726,143 @@ void test('outbound input, coalesced resize, and scroll preserve admission order
 		},
 	]);
 	assert.equal(JSON.stringify(harness.logs).includes('YQ=='), false);
+});
+
+void test('a rejected admitted write fails once and discards later ordered writes', async () => {
+	const harness = createHarness();
+	harness.owner.start({ cols: 80, rows: 24 });
+	await flushMicrotasks();
+	harness.connection.calls[0]?.onEvent(
+		frame({ seq: 1, full: true, bytes: [1] }),
+	);
+	const stream = harness.connection.streams[0];
+	assert.ok(stream);
+	stream.rejectSends = true;
+
+	assert.equal(harness.owner.sendInput(encoder.encode('first-private')), true);
+	assert.equal(harness.owner.sendInput(encoder.encode('later-private')), true);
+	await flushMicrotasks();
+
+	assert.deepEqual(harness.owner.getState(), {
+		phase: 'error',
+		generation: 1,
+		kind: 'transport',
+		reason: 'Herdr terminal input failed.',
+	});
+	assert.equal(harness.owner.sendInput(Uint8Array.of(1)), false);
+	assert.equal(harness.owner.resize(100, 40), false);
+	assert.equal(harness.owner.scroll('down', 1), false);
+	assert.equal(
+		harness.states.filter((state) => state.phase === 'error').length,
+		1,
+	);
+	assert.deepEqual(stream.sentRecords(), [
+		{
+			type: 'terminal.input',
+			bytes: fromByteArray(encoder.encode('first-private')),
+		},
+		{ type: 'terminal.release' },
+	]);
+	assert.equal(JSON.stringify(harness.logs).includes('first-private'), false);
+	assert.equal(JSON.stringify(harness.logs).includes('later-private'), false);
+	assert.equal(stream.closeCalls, 1);
+});
+
+void test('stalled outbound writes have finite queue limits and overflow fails closed', async () => {
+	assert.ok(HERDR_MAX_QUEUED_WRITES > 0);
+	assert.ok(HERDR_MAX_QUEUED_WRITE_BYTES > 0);
+	assert.ok(Number.isSafeInteger(HERDR_MAX_QUEUED_WRITES));
+	assert.ok(Number.isSafeInteger(HERDR_MAX_QUEUED_WRITE_BYTES));
+
+	const harness = createHarness();
+	harness.owner.start({ cols: 80, rows: 24 });
+	await flushMicrotasks();
+	const stream = harness.connection.streams[0];
+	assert.ok(stream);
+	stream.controlSends = true;
+
+	assert.equal(harness.owner.sendInput(Uint8Array.of(0)), true);
+	await flushMicrotasks();
+	assert.equal(stream.sent.length, 1);
+	for (let index = 0; index < HERDR_MAX_QUEUED_WRITES; index += 1) {
+		assert.equal(harness.owner.sendInput(Uint8Array.of(index & 0xff)), true);
+	}
+	assert.equal(harness.owner.sendInput(Uint8Array.of(0xff)), false);
+	assert.deepEqual(harness.owner.getState(), {
+		phase: 'error',
+		generation: 1,
+		kind: 'transport',
+		reason: 'Herdr terminal input queue exceeded its safety limit.',
+	});
+	assert.match(
+		JSON.stringify(harness.logs),
+		/Herdr terminal queued writes discarded/,
+	);
+
+	stream.pendingSends[0]?.resolve();
+	await flushMicrotasks();
+	assert.equal(stream.sent.length, 2);
+	assert.deepEqual(stream.sentRecords()[1], { type: 'terminal.release' });
+	assert.equal(
+		JSON.stringify(harness.logs).includes(fromByteArray(Uint8Array.of(0xff))),
+		false,
+	);
+});
+
+void test('a single write larger than the queued-byte ceiling fails before native send', async () => {
+	const harness = createHarness();
+	harness.owner.start({ cols: 80, rows: 24 });
+	await flushMicrotasks();
+	const stream = harness.connection.streams[0];
+	assert.ok(stream);
+
+	assert.equal(
+		harness.owner.sendInput(
+			new Uint8Array(HERDR_MAX_QUEUED_WRITE_BYTES).fill(0x61),
+		),
+		false,
+	);
+	await flushMicrotasks();
+	assert.deepEqual(harness.owner.getState(), {
+		phase: 'error',
+		generation: 1,
+		kind: 'transport',
+		reason: 'Herdr terminal input queue exceeded its safety limit.',
+	});
+	assert.deepEqual(stream.sentRecords(), [{ type: 'terminal.release' }]);
+	assert.equal(stream.closeCalls, 1);
+});
+
+void test('retirement discards queued payloads behind the one in-flight write', async () => {
+	const harness = createHarness();
+	harness.owner.start({ cols: 80, rows: 24 });
+	await flushMicrotasks();
+	const stream = harness.connection.streams[0];
+	assert.ok(stream);
+	stream.controlSends = true;
+
+	harness.owner.sendInput(encoder.encode('in-flight-private'));
+	harness.owner.sendInput(encoder.encode('queued-private-a'));
+	harness.owner.sendInput(encoder.encode('queued-private-b'));
+	await flushMicrotasks();
+	const retirement = harness.owner.retire('unmount');
+
+	assert.match(
+		JSON.stringify(harness.logs),
+		/Herdr terminal queued writes discarded/,
+	);
+	assert.equal(JSON.stringify(harness.logs).includes('queued-private'), false);
+	stream.pendingSends[0]?.resolve();
+	await flushMicrotasks();
+	assert.deepEqual(stream.sentRecords(), [
+		{
+			type: 'terminal.input',
+			bytes: fromByteArray(encoder.encode('in-flight-private')),
+		},
+		{ type: 'terminal.release' },
+	]);
+	stream.pendingSends[1]?.resolve();
+	await retirement;
 });
 
 void test('expired resize windows retain their own queue slot and dimensions', async () => {

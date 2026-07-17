@@ -466,6 +466,56 @@ test('background before first xterm readiness never starts the suspended owner',
 	expect(owner.retry).not.toHaveBeenCalled();
 });
 
+test('background invalidates a pending clipboard paste before it can reach an owner', async () => {
+	const clipboard = deferred<string>();
+	jest.mocked(Clipboard.getStringAsync).mockReturnValueOnce(clipboard.promise);
+	const { owner } = await renderReady();
+	owner.sendInput.mockClear();
+	let paste: Promise<void> | undefined;
+
+	act(() => {
+		paste = mockKeyboardProps?.onSlotPress({
+			type: 'action',
+			actionId: 'PASTE_CLIPBOARD',
+		});
+	});
+	act(() => mockAppStateListener?.('background'));
+	await act(async () => clipboard.resolve('must not be sent'));
+	await act(async () => paste);
+
+	expect(owner.sendInput).not.toHaveBeenCalled();
+});
+
+test('a newer Work operation invalidates a pending paste before switching agents', async () => {
+	const clipboard = deferred<string>();
+	jest.mocked(Clipboard.getStringAsync).mockReturnValueOnce(clipboard.promise);
+	const { owner } = await renderReady();
+	owner.sendInput.mockClear();
+	let paste: Promise<void> | undefined;
+
+	act(() => {
+		paste = mockKeyboardProps?.onSlotPress({
+			type: 'action',
+			actionId: 'PASTE_CLIPBOARD',
+		});
+	});
+	await act(async () => {
+		await mockKeyboardProps?.onSlotPress({
+			type: 'action',
+			actionId: 'WORKMUX_NAV_NEXT',
+		});
+	});
+	await act(async () => clipboard.resolve('must not cross the switch'));
+	await act(async () => paste);
+
+	expect(owner.sendInput).not.toHaveBeenCalled();
+	expect(mockReplace).toHaveBeenCalledWith(
+		expect.objectContaining({
+			params: expect.objectContaining({ terminalId: 'terminal-b' }),
+		}),
+	);
+});
+
 test('reload followed by background rejects replacement-document readiness', async () => {
 	const { owner } = await renderReady();
 	act(() => mockXtermProps?.onInitialized('xterm-1'));

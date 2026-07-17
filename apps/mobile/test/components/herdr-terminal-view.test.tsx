@@ -9,11 +9,24 @@ import {
 import { type HerdrAgent } from '@/lib/herdr/contracts';
 import { type HerdrTerminalState } from '@/lib/herdr/terminal-owner';
 
+let mockXtermProps: {
+	logger?: {
+		log?: (...args: unknown[]) => void;
+		warn?: (...args: unknown[]) => void;
+		error?: (...args: unknown[]) => void;
+	};
+} | null = null;
+
 jest.mock('@fressh/react-native-xtermjs-webview', () => {
 	const { View } = jest.requireActual(
 		'react-native',
 	) as typeof import('react-native');
-	return { XtermJsWebView: () => <View testID="herdr-xterm" /> };
+	return {
+		XtermJsWebView: (props: typeof mockXtermProps) => {
+			mockXtermProps = props;
+			return <View testID="herdr-xterm" />;
+		},
+	};
 });
 
 jest.mock('expo-router', () => ({
@@ -127,6 +140,14 @@ test('only owned elsewhere exposes explicit takeover and routes it separately', 
 	expect(onRetry).not.toHaveBeenCalled();
 	expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeOnTheScreen();
 	expect(screen.getByTestId('herdr-keyboard')).toBeOnTheScreen();
+});
+
+test('does not provide the raw general xterm bridge logger', () => {
+	renderState({ phase: 'active', generation: 1 });
+
+	expect(mockXtermProps?.logger?.log).toBeUndefined();
+	expect(mockXtermProps?.logger?.warn).toBeDefined();
+	expect(mockXtermProps?.logger?.error).toBeDefined();
 });
 
 test.each<HerdrTerminalState & { phase: 'error' }>([
