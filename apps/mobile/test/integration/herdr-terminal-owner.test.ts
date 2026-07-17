@@ -37,6 +37,10 @@ function stdoutLine(value: unknown): HerdrCommandStreamEvent {
 	return stdout(encoder.encode(`${JSON.stringify(value)}\n`));
 }
 
+function stdoutFinal(value: unknown): HerdrCommandStreamEvent {
+	return stdout(encoder.encode(JSON.stringify(value)));
+}
+
 function frame(input: {
 	seq: number;
 	full: boolean;
@@ -453,6 +457,81 @@ void test('malformed terminal output retires exactly once and ignores late event
 	}
 });
 
+void test('the first terminal event finalizes an unterminated ownership conflict', async () => {
+	const harness = createHarness();
+	harness.owner.start({ cols: 80, rows: 24 });
+	await flushMicrotasks();
+	const reason =
+		'controller already has an attached client; retry with --takeover';
+	const events = harness.connection.calls[0];
+
+	events?.onEvent(stdoutFinal({ type: 'terminal.closed', reason }));
+	events?.onEvent({ type: 'closed' });
+	await flushMicrotasks();
+
+	assert.deepEqual(harness.owner.getState(), {
+		phase: 'owned-elsewhere',
+		generation: 1,
+		reason,
+	});
+});
+
+void test('the first terminal event delivers an unterminated full frame before failure', async () => {
+	const harness = createHarness();
+	harness.owner.start({ cols: 80, rows: 24 });
+	await flushMicrotasks();
+	const events = harness.connection.calls[0];
+
+	events?.onEvent(
+		stdoutFinal({
+			type: 'terminal.frame',
+			seq: 1,
+			encoding: 'ansi',
+			width: 80,
+			height: 24,
+			full: true,
+			bytes: fromByteArray(Uint8Array.of(1, 2, 3)),
+		}),
+	);
+	events?.onEvent({ type: 'exitStatus', exitStatus: 1 });
+	await flushMicrotasks();
+
+	assert.deepEqual(harness.replaced, [[1, 2, 3]]);
+	assert.deepEqual(harness.owner.getState(), {
+		phase: 'error',
+		generation: 1,
+		kind: 'transport',
+		reason: 'Herdr terminal exited with status 1.',
+	});
+});
+
+void test('a truncated final record fails synchronization exactly once', async () => {
+	const harness = createHarness();
+	harness.owner.start({ cols: 80, rows: 24 });
+	await flushMicrotasks();
+	const events = harness.connection.calls[0];
+
+	events?.onEvent(stdout(encoder.encode('{"type":"terminal.frame"')));
+	events?.onEvent({ type: 'closed' });
+	events?.onEvent(frame({ seq: 1, full: true, bytes: [9] }));
+	events?.onEvent({ type: 'exitSignal', signalName: 'TERM' });
+	await flushMicrotasks();
+
+	assert.deepEqual(harness.replaced, []);
+	assert.deepEqual(harness.appended, []);
+	assert.deepEqual(
+		harness.states.filter((nextState) => nextState.phase === 'error'),
+		[
+			{
+				phase: 'error',
+				generation: 1,
+				kind: 'synchronization',
+				reason: 'Herdr terminal output lost synchronization.',
+			},
+		],
+	);
+});
+
 void test('unknown valid records are ignored before the baseline', () => {
 	const harness = createHarness();
 	harness.owner.start({ cols: 80, rows: 24 });
@@ -818,6 +897,40 @@ void test('retry and takeover wait until prior native close is invoked', async (
 					/takeover/,
 				);
 			}
+		});
+	}
+});
+
+void test('background cancels a queued retry or takeover before prior close', async (t) => {
+	for (const action of ['retry', 'takeover'] as const) {
+		await t.test(action, async () => {
+			const harness = createHarness();
+			harness.owner.start({ cols: 80, rows: 24 });
+			await flushMicrotasks();
+			const stream = harness.connection.streams[0];
+			assert.ok(stream);
+			stream.controlSends = true;
+
+			if (action === 'retry') {
+				harness.owner.retry({ cols: 90, rows: 30 });
+			} else {
+				harness.owner.takeOver({ cols: 90, rows: 30 });
+			}
+			await flushMicrotasks();
+			assert.equal(harness.connection.calls.length, 1);
+			assert.equal(stream.closeCalls, 0);
+
+			harness.owner.background();
+			assert.equal(stream.closeCalls, 1);
+			harness.clock.advanceBy(250);
+			await flushMicrotasks();
+
+			assert.equal(harness.connection.calls.length, 1);
+			assert.equal(stream.closeCalls, 1);
+			assert.deepEqual(harness.owner.getState(), {
+				phase: 'backgrounded',
+				generation: 1,
+			});
 		});
 	}
 });

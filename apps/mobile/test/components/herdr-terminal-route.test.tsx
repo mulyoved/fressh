@@ -299,6 +299,16 @@ async function renderReady() {
 	};
 }
 
+function deferred<T>() {
+	let resolve!: (value?: T) => void;
+	let reject!: (error: Error) => void;
+	const promise = new Promise<T>((onResolve, onReject) => {
+		resolve = (value) => onResolve(value as T);
+		reject = onReject;
+	});
+	return { promise, resolve, reject };
+}
+
 test('fits initialized xterm before normal start and adapts renderer, input, resize, scroll, and local copy', async () => {
 	const { owner, renderer } = await renderReady();
 	expect(mockXtermProps?.xtermOptions.scrollback).toBe(0);
@@ -643,6 +653,123 @@ test('waits for bounded switch retirement before replacing with next and previou
 	expect(JSON.stringify(mockReplace.mock.calls)).not.toMatch(
 		/(snapshot|paneId|credential|privateKey)/i,
 	);
+});
+
+test('focus loss invalidates a pending Work refresh without late store, state, or navigation', async () => {
+	useHerdrProviderStore.getState().clearHost();
+	const initialReload = deferred<HerdrHostState>();
+	const workRefresh = deferred<HerdrHostState>();
+	mockPrepareHerdrHost
+		.mockReturnValueOnce(initialReload.promise)
+		.mockReturnValueOnce(workRefresh.promise);
+	render(<HerdrTerminalRoute />);
+	await waitFor(() => expect(mockPrepareHerdrHost).toHaveBeenCalledTimes(1));
+	const setHost = jest.spyOn(useHerdrProviderStore.getState(), 'setHost');
+	setHost.mockClear();
+
+	let navigation: Promise<void> | undefined;
+	act(() => {
+		navigation = mockKeyboardProps?.onSlotPress({
+			type: 'action',
+			actionId: 'WORKMUX_NAV_NEXT',
+		});
+	});
+	await waitFor(() => expect(mockPrepareHerdrHost).toHaveBeenCalledTimes(2));
+	act(() => mockFocusCleanup?.());
+	await act(async () => workRefresh.resolve(HOST));
+	await act(async () => navigation);
+
+	expect(setHost).not.toHaveBeenCalled();
+	expect(useHerdrProviderStore.getState().host).toBeNull();
+	expect(mockReplace).not.toHaveBeenCalled();
+	expect(
+		screen.queryByText('Unable to refresh Herdr agents.'),
+	).not.toBeOnTheScreen();
+});
+
+test('unmount invalidates a resolved pending Work refresh without late publication', async () => {
+	useHerdrProviderStore.getState().clearHost();
+	const initialReload = deferred<HerdrHostState>();
+	const workRefresh = deferred<HerdrHostState>();
+	mockPrepareHerdrHost
+		.mockReturnValueOnce(initialReload.promise)
+		.mockReturnValueOnce(workRefresh.promise);
+	const { unmount } = render(<HerdrTerminalRoute />);
+	await waitFor(() => expect(mockPrepareHerdrHost).toHaveBeenCalledTimes(1));
+
+	let navigation: Promise<void> | undefined;
+	act(() => {
+		navigation = mockKeyboardProps?.onSlotPress({
+			type: 'action',
+			actionId: 'WORKMUX_NAV_NEXT',
+		});
+	});
+	await waitFor(() => expect(mockPrepareHerdrHost).toHaveBeenCalledTimes(2));
+	unmount();
+	await act(async () => workRefresh.resolve(HOST));
+	await act(async () => navigation);
+
+	expect(useHerdrProviderStore.getState().host).toBeNull();
+	expect(mockReplace).not.toHaveBeenCalled();
+});
+
+test('background invalidates a pending Work retirement before route replacement', async () => {
+	const retirement = deferred<void>();
+	const { owner } = await renderReady();
+	owner.retire.mockReturnValueOnce(retirement.promise);
+
+	let navigation: Promise<void> | undefined;
+	act(() => {
+		navigation = mockKeyboardProps?.onSlotPress({
+			type: 'action',
+			actionId: 'WORKMUX_NAV_NEXT',
+		});
+	});
+	await waitFor(() => expect(owner.retire).toHaveBeenCalledWith('switch'));
+	act(() => mockAppStateListener?.('background'));
+	await act(async () => retirement.resolve());
+	await act(async () => navigation);
+
+	expect(mockReplace).not.toHaveBeenCalled();
+});
+
+test('a newer Back action supersedes a pending Work retirement', async () => {
+	const retirement = deferred<void>();
+	const { owner } = await renderReady();
+	owner.retire
+		.mockReturnValueOnce(retirement.promise)
+		.mockReturnValueOnce(Promise.resolve());
+
+	let workNavigation: Promise<void> | undefined;
+	act(() => {
+		workNavigation = mockKeyboardProps?.onSlotPress({
+			type: 'action',
+			actionId: 'WORKMUX_NAV_NEXT',
+		});
+	});
+	await waitFor(() => expect(owner.retire).toHaveBeenCalledWith('switch'));
+	act(() =>
+		owner.publish({
+			phase: 'error',
+			generation: 1,
+			kind: 'closed',
+			reason: 'Terminal closed.',
+		}),
+	);
+	fireEvent.press(screen.getByRole('button', { name: 'Back' }));
+	await waitFor(() => expect(owner.retire).toHaveBeenCalledWith('back'));
+	await waitFor(() => expect(mockReplace).toHaveBeenCalledTimes(1));
+	expect(mockReplace).toHaveBeenLastCalledWith({
+		pathname: '/herdr',
+		params: {
+			storedConnectionId: 'saved-host',
+			connectionId: 'connection-a',
+		},
+	});
+
+	await act(async () => retirement.resolve());
+	await act(async () => workNavigation);
+	expect(mockReplace).toHaveBeenCalledTimes(1);
 });
 
 test('backgrounds synchronously and foreground refresh creates a fresh normal owner for the stable target', async () => {

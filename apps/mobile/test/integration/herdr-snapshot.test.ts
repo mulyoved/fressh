@@ -14,6 +14,16 @@ import {
 	parseHerdrSnapshot,
 } from '../../src/lib/herdr/snapshot';
 
+function resolvePosixShell(): string {
+	return execFileSync('sh', ['-c', 'command -v sh'], {
+		encoding: 'utf8',
+	}).trim();
+}
+
+function quoteShell(value: string): string {
+	return `'${value.replaceAll("'", `'\\''`)}'`;
+}
+
 function baseResponse() {
 	return {
 		id: 'request-1',
@@ -202,27 +212,28 @@ void test('loadHerdrSnapshot runs the compound capability probe and sanitizes av
 });
 
 void test('snapshot probe uses executable user-local Herdr when command lookup fails', (t) => {
+	const shell = resolvePosixShell();
 	const home = mkdtempSync(join(tmpdir(), 'herdr snapshot '));
 	t.after(() => rmSync(home, { recursive: true, force: true }));
 	const userBin = join(home, '.local', 'bin');
 	mkdirSync(userBin, { recursive: true });
-	writeFileSync(join(home, 'snapshot.json'), JSON.stringify(baseResponse()));
+	const snapshotFixture = JSON.stringify(baseResponse());
 	writeFileSync(
 		join(userBin, 'herdr'),
-		'#!/bin/sh\n' +
+		`#!${shell}\n` +
 			'case "$*" in\n' +
 			'  "terminal session control --help") exit 0 ;;\n' +
-			'  "api snapshot") exec /bin/cat "$HOME/snapshot.json" ;;\n' +
+			`  "api snapshot") printf '%s\\n' ${quoteShell(snapshotFixture)} ;;\n` +
 			'  *) exit 64 ;;\n' +
 			'esac\n',
 		{ mode: 0o755 },
 	);
-	const env = { ...process.env, HOME: home, PATH: '/usr/bin:/bin' };
+	const emptyPath = join(home, 'empty-path');
+	mkdirSync(emptyPath);
+	const env = { ...process.env, HOME: home, PATH: emptyPath };
 
-	assert.throws(() =>
-		execFileSync('/bin/sh', ['-c', 'command -v herdr'], { env }),
-	);
-	const output = execFileSync('/bin/sh', ['-c', HERDR_SNAPSHOT_COMMAND], {
+	assert.throws(() => execFileSync(shell, ['-c', 'command -v herdr'], { env }));
+	const output = execFileSync(shell, ['-c', HERDR_SNAPSHOT_COMMAND], {
 		env,
 		encoding: 'utf8',
 	});

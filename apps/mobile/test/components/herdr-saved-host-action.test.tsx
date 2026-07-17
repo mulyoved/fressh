@@ -187,9 +187,11 @@ test('opens Herdr before the existing actions and publishes only after launch su
 		visibleText.indexOf('Delete'),
 	);
 
-	fireEvent.press(screen.getByText('Open Herdr'));
+	fireEvent.press(screen.getByRole('button', { name: 'Open Herdr' }));
 	expect(screen.queryByText('Connection Actions')).not.toBeOnTheScreen();
-	expect(screen.getByText('Opening Herdr…')).toBeOnTheScreen();
+	const openingStatus = screen.getByText('Opening Herdr…');
+	expect(openingStatus).toHaveProp('accessibilityLabel', 'Opening Herdr');
+	expect(openingStatus).toHaveProp('accessibilityLiveRegion', 'polite');
 	expect(useHerdrProviderStore.getState().host).toBeNull();
 	expect(mockPrepareHerdrHost).toHaveBeenCalledTimes(1);
 	const launchInput = mockPrepareHerdrHost.mock.calls[0]?.[0];
@@ -227,15 +229,20 @@ test('keeps launch failures on the host screen and offers an explicit retry', as
 	renderRow();
 
 	openActions();
-	fireEvent.press(screen.getByText('Open Herdr'));
+	fireEvent.press(screen.getByRole('button', { name: 'Open Herdr' }));
 	await waitFor(() => {
 		expect(screen.getByText('Herdr is unavailable.')).toBeOnTheScreen();
 	});
-	expect(screen.getByText('Retry Open Herdr')).toBeOnTheScreen();
+	expect(
+		screen.getByRole('button', { name: 'Retry Open Herdr' }),
+	).toBeOnTheScreen();
+	expect(
+		screen.getByRole('alert', { name: 'Unable to open Herdr.' }),
+	).toHaveProp('accessibilityLiveRegion', 'assertive');
 	expect(useHerdrProviderStore.getState().host).toEqual(previousHost);
 	expect(mockPush).not.toHaveBeenCalled();
 
-	fireEvent.press(screen.getByText('Retry Open Herdr'));
+	fireEvent.press(screen.getByRole('button', { name: 'Retry Open Herdr' }));
 	await waitFor(() => expect(mockPush).toHaveBeenCalledTimes(1));
 	expect(useHerdrProviderStore.getState().host).toEqual(HOST);
 });

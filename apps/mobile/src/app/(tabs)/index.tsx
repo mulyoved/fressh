@@ -632,6 +632,8 @@ export function ConnectionRow(props: {
 						</Text>
 						<View style={{ gap: 8 }}>
 							<Pressable
+								accessibilityLabel="Open Herdr"
+								accessibilityRole="button"
 								onPress={() => void openHerdr()}
 								style={{
 									backgroundColor: theme.colors.primary,
@@ -720,6 +722,8 @@ export function ConnectionRow(props: {
 			</Modal>
 			{herdrPhase === 'loading' ? (
 				<Text
+					accessibilityLabel="Opening Herdr"
+					accessibilityLiveRegion="polite"
 					style={{
 						color: theme.colors.muted,
 						flexBasis: '100%',
@@ -731,8 +735,19 @@ export function ConnectionRow(props: {
 			) : null}
 			{herdrPhase === 'error' && herdrError ? (
 				<View style={{ flexBasis: '100%', marginTop: 8 }}>
-					<Text style={{ color: theme.colors.danger }}>{herdrError}</Text>
-					<Pressable onPress={() => void openHerdr()}>
+					<Text
+						accessibilityLabel="Unable to open Herdr."
+						accessibilityLiveRegion="assertive"
+						accessibilityRole="alert"
+						style={{ color: theme.colors.danger }}
+					>
+						{herdrError}
+					</Text>
+					<Pressable
+						accessibilityLabel="Retry Open Herdr"
+						accessibilityRole="button"
+						onPress={() => void openHerdr()}
+					>
 						<Text style={{ color: theme.colors.primary }}>
 							Retry Open Herdr
 						</Text>

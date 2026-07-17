@@ -161,6 +161,11 @@ export function createHerdrTerminalOwner(
 	let state: HerdrTerminalState = { phase: 'starting', generation: 0 };
 	let generationCounter = 0;
 	let current: Generation | null = null;
+	let successorRequestEpoch = 0;
+
+	function invalidateSuccessorRequests(): void {
+		successorRequestEpoch += 1;
+	}
 
 	function isCurrent(generation: Generation): boolean {
 		return current === generation;
@@ -337,6 +342,7 @@ export function createHerdrTerminalOwner(
 		reason: string,
 	): void {
 		if (!isCurrentAndLive(generation)) return;
+		invalidateSuccessorRequests();
 		generation.admitting = false;
 		generation.retired = true;
 		clearFirstFrameTimer(generation);
@@ -358,6 +364,7 @@ export function createHerdrTerminalOwner(
 
 	function failOwnershipConflict(generation: Generation, reason: string): void {
 		if (!isCurrentAndLive(generation)) return;
+		invalidateSuccessorRequests();
 		generation.admitting = false;
 		generation.retired = true;
 		clearFirstFrameTimer(generation);
@@ -420,26 +427,40 @@ export function createHerdrTerminalOwner(
 		});
 	}
 
+	function dispatchLines(
+		generation: Generation,
+		lines: readonly string[],
+	): void {
+		for (const line of lines) {
+			if (!isCurrentAndLive(generation)) return;
+			const record = parseHerdrRecord(line);
+			if (record.type === 'terminal.frame') {
+				handleFrame(generation, record);
+				continue;
+			}
+			if (record.type === 'terminal.closed') {
+				const reason = sanitizeHerdrDiagnostic(record.reason ?? '');
+				if (reason.includes(ownershipConflictPhrase)) {
+					failOwnershipConflict(generation, reason);
+					continue;
+				}
+				fail(generation, 'closed', reason || 'Herdr terminal stream closed.');
+			}
+		}
+	}
+
 	function handleStdout(generation: Generation, bytes: ArrayBuffer): void {
 		if (!isCurrentAndLive(generation)) return;
 		try {
-			const lines = generation.decoder.push(bytes);
-			for (const line of lines) {
-				if (!isCurrentAndLive(generation)) return;
-				const record = parseHerdrRecord(line);
-				if (record.type === 'terminal.frame') {
-					handleFrame(generation, record);
-					continue;
-				}
-				if (record.type === 'terminal.closed') {
-					const reason = sanitizeHerdrDiagnostic(record.reason ?? '');
-					if (reason.includes(ownershipConflictPhrase)) {
-						failOwnershipConflict(generation, reason);
-						continue;
-					}
-					fail(generation, 'closed', reason || 'Herdr terminal stream closed.');
-				}
-			}
+			dispatchLines(generation, generation.decoder.push(bytes));
+		} catch {
+			failSynchronization(generation);
+		}
+	}
+
+	function finalizeStdout(generation: Generation): void {
+		try {
+			dispatchLines(generation, generation.decoder.finish());
 		} catch {
 			failSynchronization(generation);
 		}
@@ -458,6 +479,8 @@ export function createHerdrTerminalOwner(
 			generation.stderr.push(event.bytes);
 			return;
 		}
+		finalizeStdout(generation);
+		if (!isCurrentAndLive(generation)) return;
 		if (event.type === 'exitStatus') {
 			fail(
 				generation,
@@ -605,6 +628,7 @@ export function createHerdrTerminalOwner(
 		startInput: { cols: number; rows: number },
 		takeover: boolean,
 	): void {
+		const requestEpoch = ++successorRequestEpoch;
 		const previous = current;
 		if (!previous) {
 			startGeneration({ ...startInput, takeover });
@@ -616,7 +640,14 @@ export function createHerdrTerminalOwner(
 			void retireGeneration(previous, 'retry');
 		}
 		void previous.closeInvokedReady.promise.then(() => {
-			if (current !== previous) return;
+			if (
+				requestEpoch !== successorRequestEpoch ||
+				current !== previous ||
+				!previous.retired ||
+				!previous.closeInvoked
+			) {
+				return;
+			}
 			startGeneration({ ...startInput, takeover });
 		});
 	}
@@ -744,9 +775,11 @@ export function createHerdrTerminalOwner(
 			return true;
 		},
 		retire(reason) {
+			invalidateSuccessorRequests();
 			return current ? retireGeneration(current, reason) : Promise.resolve();
 		},
 		background() {
+			invalidateSuccessorRequests();
 			if (!current) return;
 			const generation = current;
 			generation.admitting = false;

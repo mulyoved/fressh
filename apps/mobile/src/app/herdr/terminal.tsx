@@ -38,6 +38,7 @@ function routeParam(value: string | string[] | undefined): string | null {
 type TerminalSize = Readonly<{ cols: number; rows: number }>;
 type RendererPhase = 'blocked' | 'awaiting-baseline' | 'active';
 type RetryRecovery = 'owner' | 'transport';
+type RouteOperation = Readonly<{ generation: number; routeIdentity: string }>;
 
 export default function HerdrTerminalRoute() {
 	const router = useRouter();
@@ -66,6 +67,7 @@ export default function HerdrTerminalRoute() {
 	const suspendedRef = React.useRef(false);
 	const mountedRef = React.useRef(true);
 	const reconcileGenerationRef = React.useRef(0);
+	const routeOperationGenerationRef = React.useRef(0);
 	const navigateAgentRef = React.useRef<
 		(direction: 'next' | 'previous') => Promise<void>
 	>(async () => {});
@@ -81,6 +83,38 @@ export default function HerdrTerminalRoute() {
 	const [state, setState] = React.useState<HerdrTerminalViewState>({
 		phase: 'reconnecting',
 	});
+	const routeIdentity = JSON.stringify([
+		storedConnectionId,
+		routeConnectionId,
+		terminalId,
+	]);
+	const routeIdentityRef = React.useRef(routeIdentity);
+	routeIdentityRef.current = routeIdentity;
+	const previousRouteIdentityRef = React.useRef(routeIdentity);
+	const invalidateRouteOperations = React.useCallback(() => {
+		routeOperationGenerationRef.current += 1;
+	}, []);
+	const beginRouteOperation = React.useCallback((): RouteOperation => {
+		return {
+			generation: ++routeOperationGenerationRef.current,
+			routeIdentity: routeIdentityRef.current,
+		};
+	}, []);
+	const isRouteOperationCurrent = React.useCallback(
+		(operation: RouteOperation): boolean =>
+			mountedRef.current &&
+			visibleRef.current &&
+			!suspendedRef.current &&
+			operation.generation === routeOperationGenerationRef.current &&
+			operation.routeIdentity === routeIdentityRef.current,
+		[],
+	);
+
+	React.useEffect(() => {
+		if (previousRouteIdentityRef.current === routeIdentity) return;
+		previousRouteIdentityRef.current = routeIdentity;
+		invalidateRouteOperations();
+	}, [invalidateRouteOperations, routeIdentity]);
 
 	const maybeStartOwner = React.useCallback(
 		(owner: HerdrTerminalOwner | null) => {
@@ -112,6 +146,7 @@ export default function HerdrTerminalRoute() {
 
 	const goToList = React.useCallback(
 		(host: HerdrHostState | null) => {
+			invalidateRouteOperations();
 			if (!storedConnectionId) {
 				router.replace('/herdr');
 				return;
@@ -124,7 +159,7 @@ export default function HerdrTerminalRoute() {
 				},
 			});
 		},
-		[routeConnectionId, router, storedConnectionId],
+		[invalidateRouteOperations, routeConnectionId, router, storedConnectionId],
 	);
 
 	const prepareHost = React.useCallback(async () => {
@@ -294,6 +329,7 @@ export default function HerdrTerminalRoute() {
 
 	const navigateAgent = React.useCallback(
 		async (direction: 'next' | 'previous') => {
+			const operation = beginRouteOperation();
 			if (!terminalId) return;
 			let host =
 				currentHostRef.current ?? useHerdrProviderStore.getState().host;
@@ -303,6 +339,7 @@ export default function HerdrTerminalRoute() {
 			if (!target) {
 				try {
 					const refreshed = await prepareHost();
+					if (!isRouteOperationCurrent(operation)) return;
 					useHerdrProviderStore.getState().setHost(refreshed);
 					currentHostRef.current = refreshed;
 					host = refreshed;
@@ -312,6 +349,7 @@ export default function HerdrTerminalRoute() {
 						direction,
 					);
 				} catch {
+					if (!isRouteOperationCurrent(operation)) return;
 					setState({
 						phase: 'error',
 						generation: 0,
@@ -321,6 +359,7 @@ export default function HerdrTerminalRoute() {
 					return;
 				}
 			}
+			if (!isRouteOperationCurrent(operation)) return;
 			if (!host || !target) {
 				goToList(host);
 				return;
@@ -331,7 +370,11 @@ export default function HerdrTerminalRoute() {
 				reloadOwnerRef.current = null;
 				rendererPhaseRef.current = 'blocked';
 				await owner.retire('switch');
+				if (!isRouteOperationCurrent(operation) || ownerRef.current !== owner) {
+					return;
+				}
 			}
+			if (!isRouteOperationCurrent(operation)) return;
 			router.replace({
 				pathname: '/herdr/terminal',
 				params: {
@@ -341,7 +384,14 @@ export default function HerdrTerminalRoute() {
 				},
 			});
 		},
-		[goToList, prepareHost, router, terminalId],
+		[
+			beginRouteOperation,
+			goToList,
+			isRouteOperationCurrent,
+			prepareHost,
+			router,
+			terminalId,
+		],
 	);
 	navigateAgentRef.current = navigateAgent;
 
@@ -380,12 +430,13 @@ export default function HerdrTerminalRoute() {
 	const backgroundOwner = React.useCallback(() => {
 		suspendedRef.current = true;
 		reconcileGenerationRef.current += 1;
+		invalidateRouteOperations();
 		startAdmittedOwnerRef.current = null;
 		rendererPhaseRef.current = 'blocked';
 		const owner = ownerRef.current;
 		if (!owner) return;
 		owner.background();
-	}, []);
+	}, [invalidateRouteOperations]);
 
 	useFocusEffect(
 		React.useCallback(() => {
@@ -421,12 +472,13 @@ export default function HerdrTerminalRoute() {
 		return () => {
 			mountedRef.current = false;
 			reconcileGenerationRef.current += 1;
+			invalidateRouteOperations();
 			startAdmittedOwnerRef.current = null;
 			reloadOwnerRef.current = null;
 			ownerUnsubscribeRef.current?.();
 			void ownerRef.current?.retire('unmount');
 		};
-	}, []);
+	}, [invalidateRouteOperations]);
 
 	const handleLoadStart = React.useCallback(() => {
 		const owner = ownerRef.current;
@@ -544,13 +596,20 @@ export default function HerdrTerminalRoute() {
 		}
 	}, []);
 	const handleBack = React.useCallback(async () => {
+		const operation = beginRouteOperation();
 		const owner = ownerRef.current;
 		startAdmittedOwnerRef.current = null;
 		reloadOwnerRef.current = null;
 		rendererPhaseRef.current = 'blocked';
-		if (owner) await owner.retire('back');
+		if (owner) {
+			await owner.retire('back');
+			if (!isRouteOperationCurrent(operation) || ownerRef.current !== owner) {
+				return;
+			}
+		}
+		if (!isRouteOperationCurrent(operation)) return;
 		goToList(currentHostRef.current);
-	}, [goToList]);
+	}, [beginRouteOperation, goToList, isRouteOperationCurrent]);
 
 	return (
 		<HerdrTerminalView

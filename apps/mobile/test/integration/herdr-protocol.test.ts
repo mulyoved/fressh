@@ -35,6 +35,12 @@ const resolvedHerdrCommand =
 	'[ -n "$herdr_bin" ] && ' +
 	'"$herdr_bin"';
 
+function resolvePosixShell(): string {
+	return execFileSync('sh', ['-c', 'command -v sh'], {
+		encoding: 'utf8',
+	}).trim();
+}
+
 function encodedJson(value: unknown): Uint8Array {
 	return encoder.encode(`${JSON.stringify(value)}\n`);
 }
@@ -60,23 +66,24 @@ void test('builds normal and takeover commands with shell-safe terminal IDs', ()
 });
 
 void test('terminal command uses executable user-local Herdr when command lookup fails', (t) => {
+	const shell = resolvePosixShell();
 	const home = mkdtempSync(join(tmpdir(), 'herdr control '));
 	t.after(() => rmSync(home, { recursive: true, force: true }));
 	const userBin = join(home, '.local', 'bin');
 	mkdirSync(userBin, { recursive: true });
 	writeFileSync(
 		join(userBin, 'herdr'),
-		'#!/bin/sh\n' + 'printf "%s\\n" "$@" > "$HOME/arguments"\n',
+		`#!${shell}\n` + 'printf "%s\\n" "$@" > "$HOME/arguments"\n',
 		{ mode: 0o755 },
 	);
-	const env = { ...process.env, HOME: home, PATH: '/usr/bin:/bin' };
+	const emptyPath = join(home, 'empty-path');
+	mkdirSync(emptyPath);
+	const env = { ...process.env, HOME: home, PATH: emptyPath };
 	const terminalId = `agent with spaces ' and $(touch "$HOME/should-not-run")`;
 
-	assert.throws(() =>
-		execFileSync('/bin/sh', ['-c', 'command -v herdr'], { env }),
-	);
+	assert.throws(() => execFileSync(shell, ['-c', 'command -v herdr'], { env }));
 	execFileSync(
-		'/bin/sh',
+		shell,
 		[
 			'-c',
 			buildHerdrTerminalControlCommand({
