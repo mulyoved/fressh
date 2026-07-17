@@ -1,3 +1,4 @@
+import { applyKeyboardModifiers } from '@/lib/keyboard-modifiers';
 import {
 	getActiveKeyboardIds,
 	getKeyboardsById,
@@ -19,12 +20,6 @@ import {
 import { createControllerPublisher } from './controller-core';
 
 export type { ModifierKey } from '@/lib/shell-config';
-
-export type ModifierContract = {
-	canApplyModifierToBytes(bytes: Uint8Array<ArrayBuffer>): boolean;
-	applyModifierToBytes(bytes: Uint8Array<ArrayBuffer>): Uint8Array<ArrayBuffer>;
-	orderPreference: number;
-};
 
 export type ShellKeyboardHistoryStore = {
 	load(): TextEntryHistoryState | PromiseLike<TextEntryHistoryState>;
@@ -103,71 +98,6 @@ const supportedModifiers = new Set<ModifierKey>([
 	'SHIFT',
 	'CMD',
 ]);
-
-const escapeByte = 27;
-
-const shiftModifier: ModifierContract = {
-	orderPreference: 5,
-	canApplyModifierToBytes: (bytes) =>
-		bytes.some((byte) => byte >= 97 && byte <= 122),
-	applyModifierToBytes: (bytes) => {
-		const next = new Uint8Array(bytes.length);
-		for (let index = 0; index < bytes.length; index += 1) {
-			const byte = bytes[index];
-			if (byte === undefined) continue;
-			next[index] = byte >= 97 && byte <= 122 ? byte - 32 : byte;
-		}
-		return next;
-	},
-};
-
-function mapByteToCtrl(byte: number): number | null {
-	if (byte === 32) return 0;
-	const uppercase = byte & 0b1101_1111;
-	if (uppercase >= 64 && uppercase <= 95) return uppercase & 0x1f;
-	if (byte === 63) return 127;
-	return null;
-}
-
-const ctrlModifier: ModifierContract = {
-	orderPreference: 10,
-	canApplyModifierToBytes: (bytes) => {
-		const firstByte = bytes[0];
-		return firstByte !== undefined && mapByteToCtrl(firstByte) !== null;
-	},
-	applyModifierToBytes: (bytes) => {
-		const firstByte = bytes[0];
-		if (firstByte === undefined) return bytes;
-		const ctrlByte = mapByteToCtrl(firstByte);
-		return ctrlByte === null ? bytes : new Uint8Array([ctrlByte]);
-	},
-};
-
-const altModifier: ModifierContract = {
-	orderPreference: 20,
-	canApplyModifierToBytes: (bytes) =>
-		bytes.length > 0 && bytes[0] !== escapeByte,
-	applyModifierToBytes: (bytes) => {
-		const result = new Uint8Array(bytes.length + 1);
-		result[0] = escapeByte;
-		result.set(bytes, 1);
-		return result;
-	},
-};
-
-const cmdModifier: ModifierContract = {
-	orderPreference: 30,
-	canApplyModifierToBytes: () => false,
-	applyModifierToBytes: (bytes) => bytes,
-};
-
-export const MODIFIER_DEFS: Readonly<Record<ModifierKey, ModifierContract>> =
-	Object.freeze({
-		SHIFT: Object.freeze(shiftModifier),
-		CTRL: Object.freeze(ctrlModifier),
-		ALT: Object.freeze(altModifier),
-		CMD: Object.freeze(cmdModifier),
-	});
 
 function cloneAndFreeze<Value>(value: Value): Value {
 	if (Array.isArray(value)) {
@@ -509,16 +439,10 @@ export function createShellKeyboardStateCore({
 			updateSnapshot({ modifierKeysActive: Object.freeze(next) });
 		},
 		applyModifiers: (bytes) => {
-			let next = new Uint8Array(bytes);
-			for (const modifier of publisher
-				.getSnapshot()
-				.modifierKeysActive.map((key) => MODIFIER_DEFS[key])
-				.sort((left, right) => left.orderPreference - right.orderPreference)) {
-				if (modifier.canApplyModifierToBytes(next)) {
-					next = modifier.applyModifierToBytes(next);
-				}
-			}
-			return next;
+			return applyKeyboardModifiers(
+				bytes,
+				publisher.getSnapshot().modifierKeysActive,
+			);
 		},
 		setSystemKeyboardEnabled: (enabled) => {
 			if (

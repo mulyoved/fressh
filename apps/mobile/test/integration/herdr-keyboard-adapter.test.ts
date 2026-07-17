@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
+import { readdirSync, readFileSync } from 'node:fs';
+import path from 'node:path';
 import test from 'node:test';
+import ts from 'typescript';
 import {
 	classifyHerdrKeyboardAction,
 	createHerdrKeyboardAdapter,
@@ -11,6 +14,111 @@ import {
 	type MacroDef,
 } from '../../src/lib/shell-config';
 import { type ShellConfigState } from '../../src/lib/shell-config-store';
+
+const herdrSourceRoot = path.resolve(
+	import.meta.dirname,
+	'../../src/lib/herdr',
+);
+const shellControllerRoot = path.resolve(
+	import.meta.dirname,
+	'../../src/lib/shell-controllers',
+);
+
+function isShellControllerModule(
+	specifier: string,
+	sourcePath: string,
+): boolean {
+	if (specifier.startsWith('@/lib/shell-controllers')) return true;
+	if (!specifier.startsWith('.')) return false;
+	const resolved = path.resolve(path.dirname(sourcePath), specifier);
+	return (
+		resolved === shellControllerRoot ||
+		resolved.startsWith(`${shellControllerRoot}${path.sep}`)
+	);
+}
+
+function importDeclarationHasRuntimeValue(
+	declaration: ts.ImportDeclaration,
+): boolean {
+	const clause = declaration.importClause;
+	if (!clause) return true;
+	if (clause.isTypeOnly) return false;
+	if (clause.name) return true;
+	const bindings = clause.namedBindings;
+	if (!bindings || ts.isNamespaceImport(bindings)) return true;
+	return bindings.elements.some((element) => !element.isTypeOnly);
+}
+
+function exportDeclarationHasRuntimeValue(
+	declaration: ts.ExportDeclaration,
+): boolean {
+	if (declaration.isTypeOnly) return false;
+	const clause = declaration.exportClause;
+	if (!clause || ts.isNamespaceExport(clause)) return true;
+	return clause.elements.some((element) => !element.isTypeOnly);
+}
+
+function findRuntimeShellControllerImports(sourcePath: string): string[] {
+	const source = readFileSync(sourcePath, 'utf8');
+	const file = ts.createSourceFile(
+		sourcePath,
+		source,
+		ts.ScriptTarget.Latest,
+		true,
+		sourcePath.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
+	);
+	const violations: string[] = [];
+	const note = (specifier: string, node: ts.Node) => {
+		if (!isShellControllerModule(specifier, sourcePath)) return;
+		const line =
+			file.getLineAndCharacterOfPosition(node.getStart(file)).line + 1;
+		violations.push(`${path.basename(sourcePath)}:${line} -> ${specifier}`);
+	};
+	const visit = (node: ts.Node): void => {
+		if (
+			ts.isImportDeclaration(node) &&
+			ts.isStringLiteral(node.moduleSpecifier) &&
+			importDeclarationHasRuntimeValue(node)
+		) {
+			note(node.moduleSpecifier.text, node);
+		} else if (
+			ts.isExportDeclaration(node) &&
+			node.moduleSpecifier &&
+			ts.isStringLiteral(node.moduleSpecifier) &&
+			exportDeclarationHasRuntimeValue(node)
+		) {
+			note(node.moduleSpecifier.text, node);
+		} else if (
+			ts.isCallExpression(node) &&
+			node.arguments.length > 0 &&
+			ts.isStringLiteral(node.arguments[0]!) &&
+			(node.expression.kind === ts.SyntaxKind.ImportKeyword ||
+				(ts.isIdentifier(node.expression) &&
+					node.expression.text === 'require'))
+		) {
+			note(node.arguments[0].text, node);
+		}
+		ts.forEachChild(node, visit);
+	};
+	visit(file);
+	return violations;
+}
+
+function listHerdrSourceFiles(root: string): string[] {
+	return readdirSync(root, { withFileTypes: true }).flatMap((entry) => {
+		const entryPath = path.join(root, entry.name);
+		if (entry.isDirectory()) return listHerdrSourceFiles(entryPath);
+		return /\.(ts|tsx)$/.test(entry.name) ? [entryPath] : [];
+	});
+}
+
+void test('Herdr runtime modules do not load ordinary shell controllers', () => {
+	const violations = listHerdrSourceFiles(herdrSourceRoot).flatMap(
+		findRuntimeShellControllerImports,
+	);
+
+	assert.deepEqual(violations, []);
+});
 
 function createHarness(macros: MacroDef[] = []) {
 	const config = getBundledShellConfig();

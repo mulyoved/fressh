@@ -4,6 +4,7 @@ import {
 	type ActionId,
 	type KeyboardTargetActionId,
 } from '@/lib/keyboard-actions';
+import { applyKeyboardModifiers } from '@/lib/keyboard-modifiers';
 import { buildKeyboardStepSegments, runSlotItem } from '@/lib/keyboard-runtime';
 import {
 	getActiveKeyboardIds,
@@ -17,7 +18,6 @@ import {
 	type ModifierKey,
 } from '@/lib/shell-config';
 import { type ShellConfigState } from '@/lib/shell-config-store';
-import { MODIFIER_DEFS } from '@/lib/shell-controllers/keyboard-state-core';
 
 export const HERDR_KEYBOARD_UNSUPPORTED_MESSAGE = 'TBD for Herdr' as const;
 export const HERDR_MISSING_MACRO_MESSAGE =
@@ -100,21 +100,6 @@ export function classifyHerdrKeyboardAction(
 		};
 	}
 	return { type: 'unsupported', message: HERDR_KEYBOARD_UNSUPPORTED_MESSAGE };
-}
-
-function applyKeyboardModifiers(
-	bytes: Uint8Array<ArrayBuffer>,
-	modifierKeysActive: readonly ModifierKey[],
-): Uint8Array<ArrayBuffer> {
-	let next = new Uint8Array(bytes);
-	for (const modifier of modifierKeysActive
-		.map((key) => MODIFIER_DEFS[key])
-		.sort((left, right) => left.orderPreference - right.orderPreference)) {
-		if (modifier.canApplyModifierToBytes(next)) {
-			next = modifier.applyModifierToBytes(next);
-		}
-	}
-	return next;
 }
 
 function wait(delayMs: number): Promise<void> {
