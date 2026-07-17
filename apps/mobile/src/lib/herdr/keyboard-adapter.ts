@@ -3,7 +3,7 @@ import {
 	KEYBOARD_TARGET_ACTION_IDS,
 	type ActionId,
 	type KeyboardTargetActionId,
-} from '@/lib/keyboard-actions';
+} from '@/lib/keyboard-action-contract';
 import { applyKeyboardModifiers } from '@/lib/keyboard-modifiers';
 import { buildKeyboardStepSegments, runSlotItem } from '@/lib/keyboard-runtime';
 import {

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 import ts from 'typescript';
@@ -19,23 +19,11 @@ const herdrSourceRoot = path.resolve(
 	import.meta.dirname,
 	'../../src/lib/herdr',
 );
+const mobileSourceRoot = path.resolve(import.meta.dirname, '../../src');
 const shellControllerRoot = path.resolve(
 	import.meta.dirname,
 	'../../src/lib/shell-controllers',
 );
-
-function isShellControllerModule(
-	specifier: string,
-	sourcePath: string,
-): boolean {
-	if (specifier.startsWith('@/lib/shell-controllers')) return true;
-	if (!specifier.startsWith('.')) return false;
-	const resolved = path.resolve(path.dirname(sourcePath), specifier);
-	return (
-		resolved === shellControllerRoot ||
-		resolved.startsWith(`${shellControllerRoot}${path.sep}`)
-	);
-}
 
 function importDeclarationHasRuntimeValue(
 	declaration: ts.ImportDeclaration,
@@ -58,7 +46,12 @@ function exportDeclarationHasRuntimeValue(
 	return clause.elements.some((element) => !element.isTypeOnly);
 }
 
-function findRuntimeShellControllerImports(sourcePath: string): string[] {
+type RuntimeModuleImport = {
+	specifier: string;
+	line: number;
+};
+
+function findRuntimeModuleImports(sourcePath: string): RuntimeModuleImport[] {
 	const source = readFileSync(sourcePath, 'utf8');
 	const file = ts.createSourceFile(
 		sourcePath,
@@ -67,12 +60,11 @@ function findRuntimeShellControllerImports(sourcePath: string): string[] {
 		true,
 		sourcePath.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
 	);
-	const violations: string[] = [];
+	const imports: RuntimeModuleImport[] = [];
 	const note = (specifier: string, node: ts.Node) => {
-		if (!isShellControllerModule(specifier, sourcePath)) return;
 		const line =
 			file.getLineAndCharacterOfPosition(node.getStart(file)).line + 1;
-		violations.push(`${path.basename(sourcePath)}:${line} -> ${specifier}`);
+		imports.push({ specifier, line });
 	};
 	const visit = (node: ts.Node): void => {
 		if (
@@ -101,7 +93,78 @@ function findRuntimeShellControllerImports(sourcePath: string): string[] {
 		ts.forEachChild(node, visit);
 	};
 	visit(file);
-	return violations;
+	return imports;
+}
+
+function resolveRuntimeSourceModule(
+	specifier: string,
+	sourcePath: string,
+): string | null {
+	const unresolvedPath = specifier.startsWith('@/')
+		? path.resolve(mobileSourceRoot, specifier.slice(2))
+		: specifier.startsWith('.')
+			? path.resolve(path.dirname(sourcePath), specifier)
+			: null;
+	if (!unresolvedPath) return null;
+
+	const candidates = path.extname(unresolvedPath)
+		? [unresolvedPath]
+		: [
+				`${unresolvedPath}.ts`,
+				`${unresolvedPath}.tsx`,
+				path.join(unresolvedPath, 'index.ts'),
+				path.join(unresolvedPath, 'index.tsx'),
+			];
+	return (
+		candidates.find(
+			(candidate) => /\.(ts|tsx)$/.test(candidate) && existsSync(candidate),
+		) ?? null
+	);
+}
+
+function isShellControllerSource(sourcePath: string): boolean {
+	return (
+		sourcePath === shellControllerRoot ||
+		sourcePath.startsWith(`${shellControllerRoot}${path.sep}`)
+	);
+}
+
+function relativeSourcePath(sourcePath: string): string {
+	return path.relative(mobileSourceRoot, sourcePath);
+}
+
+function findReachableRuntimeShellControllers(entryPaths: string[]): string[] {
+	const queue = entryPaths.map((sourcePath) => ({
+		sourcePath,
+		chain: [relativeSourcePath(sourcePath)],
+	}));
+	const visited = new Set<string>();
+	const violations: string[] = [];
+
+	while (queue.length > 0) {
+		const current = queue.shift();
+		if (!current || visited.has(current.sourcePath)) continue;
+		visited.add(current.sourcePath);
+
+		for (const runtimeImport of findRuntimeModuleImports(current.sourcePath)) {
+			const dependencyPath = resolveRuntimeSourceModule(
+				runtimeImport.specifier,
+				current.sourcePath,
+			);
+			if (!dependencyPath) continue;
+			const dependencyLabel = relativeSourcePath(dependencyPath);
+			const nextChain = [...current.chain, dependencyLabel];
+			if (isShellControllerSource(dependencyPath)) {
+				violations.push(
+					`${current.chain.join(' -> ')}:${runtimeImport.line} -> ${dependencyLabel}`,
+				);
+				continue;
+			}
+			queue.push({ sourcePath: dependencyPath, chain: nextChain });
+		}
+	}
+
+	return violations.sort();
 }
 
 function listHerdrSourceFiles(root: string): string[] {
@@ -113,8 +176,8 @@ function listHerdrSourceFiles(root: string): string[] {
 }
 
 void test('Herdr runtime modules do not load ordinary shell controllers', () => {
-	const violations = listHerdrSourceFiles(herdrSourceRoot).flatMap(
-		findRuntimeShellControllerImports,
+	const violations = findReachableRuntimeShellControllers(
+		listHerdrSourceFiles(herdrSourceRoot),
 	);
 
 	assert.deepEqual(violations, []);
