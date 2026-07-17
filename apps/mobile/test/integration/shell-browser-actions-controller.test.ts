@@ -12,6 +12,27 @@ import {
 	createShellTransportKey,
 } from '../../src/lib/shell-controllers/source-keys';
 
+function typedAdapterDependencies(
+	arbiter: ReturnType<typeof createShellModalArbiter>,
+	sourceKey: ReturnType<typeof createShellTargetKey>,
+) {
+	return {
+		hostCommands: {
+			key: sourceKey,
+			run: async () => ({ status: 'completed' as const, output: '' }),
+		},
+		workmux: {
+			key: sourceKey,
+			command: async () => ({ status: 'completed' as const, output: '' }),
+		},
+		tmuxEnabled: true,
+		tmuxTarget: 'main',
+		sourceKey,
+		getErrorMessage: String,
+		arbiter,
+	};
+}
+
 type Deferred<T> = {
 	promise: Promise<T>;
 	resolve(value: T): void;
@@ -167,19 +188,8 @@ void test('browser adapter preserves modal conflict order', () => {
 		});
 	}
 	const adapter = createBrowserActionsControllerAdapter({
-		getCommittedDependencies: () => ({
-			connection: {},
-			tmuxEnabled: true,
-			tmuxTarget: 'main',
-			sourceKey,
-			executeSideChannelCommand: async () => ({
-				success: true,
-				output: '',
-			}),
-			runWorkmuxCommand: async () => '',
-			getErrorMessage: String,
-			arbiter,
-		}),
+		getCommittedDependencies: () =>
+			typedAdapterDependencies(arbiter, sourceKey),
 		openAndroidUrl: async () => {},
 		showError: () => {},
 	});
@@ -207,19 +217,8 @@ void test('browser adapter invalidates URL reads for matching modal transitions'
 		'main',
 	);
 	const adapter = createBrowserActionsControllerAdapter({
-		getCommittedDependencies: () => ({
-			connection: {},
-			tmuxEnabled: true,
-			tmuxTarget: 'main',
-			sourceKey,
-			executeSideChannelCommand: async () => ({
-				success: true,
-				output: '',
-			}),
-			runWorkmuxCommand: async () => '',
-			getErrorMessage: String,
-			arbiter,
-		}),
+		getCommittedDependencies: () =>
+			typedAdapterDependencies(arbiter, sourceKey),
 		openAndroidUrl: async () => {},
 		showError: () => {},
 	});
@@ -262,19 +261,8 @@ void test('browser adapter vetoes modal arbitration while host URL submit is act
 		'main',
 	);
 	const adapter = createBrowserActionsControllerAdapter({
-		getCommittedDependencies: () => ({
-			connection: {},
-			tmuxEnabled: true,
-			tmuxTarget: 'main',
-			sourceKey,
-			executeSideChannelCommand: async () => ({
-				success: true,
-				output: '',
-			}),
-			runWorkmuxCommand: async () => '',
-			getErrorMessage: String,
-			arbiter,
-		}),
+		getCommittedDependencies: () =>
+			typedAdapterDependencies(arbiter, sourceKey),
 		openAndroidUrl: async () => {},
 		showError: () => {},
 	});
@@ -306,16 +294,8 @@ void test('browser adapter closes child and parent state after an accepted arbit
 		'main',
 	);
 	const adapter = createBrowserActionsControllerAdapter({
-		getCommittedDependencies: () => ({
-			connection: {},
-			tmuxEnabled: true,
-			tmuxTarget: 'main',
-			sourceKey,
-			executeSideChannelCommand: async () => ({ success: true, output: '' }),
-			runWorkmuxCommand: async () => '',
-			getErrorMessage: String,
-			arbiter,
-		}),
+		getCommittedDependencies: () =>
+			typedAdapterDependencies(arbiter, sourceKey),
 		openAndroidUrl: async () => {},
 		showError: () => {},
 	});

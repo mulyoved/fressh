@@ -1,24 +1,20 @@
 import { HOST_BROWSER_NO_CONNECTION_MESSAGE } from '../host-browser-actions';
 import { runHostCommandWithBoundary } from '../host-command-router';
 import { type BrowserActionErrorInput } from '../shell-browser-action-error-inputs';
+import { unwrapControllerOutput } from './controller-outcome';
 import { type ShellModalArbiter } from './modal-arbiter';
+import {
+	type ShellHostCommandPort,
+	type ShellWorkmuxPort,
+} from './session-contracts';
 import { type ShellTargetKey } from './source-keys';
 
-export type BrowserActionsControllerDependencies<TConnection> = {
-	connection: TConnection | null;
+export type BrowserActionsControllerDependencies = {
+	hostCommands: ShellHostCommandPort | null;
+	workmux: Pick<ShellWorkmuxPort, 'key' | 'command'>;
 	tmuxEnabled: boolean;
 	tmuxTarget: string;
 	sourceKey: ShellTargetKey;
-	executeSideChannelCommand(
-		connection: TConnection,
-		command: string,
-		timeoutMs: number,
-	): Promise<{ success: boolean; output: string; error?: string }>;
-	runWorkmuxCommand(
-		connection: TConnection,
-		argv: string[],
-		timeoutMs: number,
-	): Promise<string>;
 	getErrorMessage(error: unknown): string;
 	arbiter: ShellModalArbiter;
 };
@@ -55,8 +51,8 @@ const HOST_URL_READ_INVALIDATION_TARGETS = new Set([
 	'text-entry',
 ]);
 
-export function createBrowserActionsControllerAdapter<TConnection>(input: {
-	getCommittedDependencies(): BrowserActionsControllerDependencies<TConnection>;
+export function createBrowserActionsControllerAdapter(input: {
+	getCommittedDependencies(): BrowserActionsControllerDependencies;
 	openAndroidUrl(url: string): Promise<void>;
 	showError(
 		error: BrowserActionErrorInput,
@@ -73,25 +69,29 @@ export function createBrowserActionsControllerAdapter<TConnection>(input: {
 		runHostBrowserCommand: (command, timeoutMs) => {
 			const current = input.getCommittedDependencies();
 			return runHostCommandWithBoundary({
-				connection: current.connection,
+				hostCommands: current.hostCommands,
 				command,
 				timeoutMs,
-				executeSideChannelCommand: current.executeSideChannelCommand,
-				runWorkmuxCommand: current.runWorkmuxCommand,
+				workmux: current.workmux,
 			});
 		},
 		runWorkmuxCommand: (argv, timeoutMs) => {
 			const current = input.getCommittedDependencies();
-			if (!current.connection) {
+			if (!current.hostCommands) {
 				throw new Error(HOST_BROWSER_NO_CONNECTION_MESSAGE);
 			}
-			return current.runWorkmuxCommand(current.connection, argv, timeoutMs);
+			return current.workmux.command(argv, { timeoutMs }).then((result) =>
+				unwrapControllerOutput(result, {
+					superseded: 'Workmux command superseded.',
+					unavailable: 'Workmux command unavailable.',
+				}),
+			);
 		},
 		openAndroidUrl: input.openAndroidUrl,
 		showError: (error) => {
 			const current = input.getCommittedDependencies();
 			input.showError(error, {
-				connectionPresent: current.connection !== null,
+				connectionPresent: current.hostCommands !== null,
 				tmuxEnabled: current.tmuxEnabled,
 				tmuxTarget: current.tmuxTarget,
 			});

@@ -21,8 +21,8 @@ void test('bundled runtime shell config parses with keyboards and command menus'
 	assert.ok(config.updatedAt);
 	assert.ok(config.keyboards.length > 0);
 	assert.ok(config.commandMenus.length > 0);
-	assert.equal(config.version, '2026-07-14.2');
-	assert.equal(config.updatedAt, '2026-07-14T15:00:00.000Z');
+	assert.equal(config.version, '2026-07-15.1');
+	assert.equal(config.updatedAt, '2026-07-15T08:02:09.000Z');
 	assert.ok(rawConfig.keyboardRouting);
 	assert.deepEqual(
 		(

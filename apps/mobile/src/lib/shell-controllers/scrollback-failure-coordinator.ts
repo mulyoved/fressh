@@ -8,13 +8,13 @@ import {
 	handleShellWorkmuxScrollbackCommandFailureActions,
 	shouldTreatShellWorkmuxScrollbackFailureAsAlreadyInactive,
 } from './scrollback-policy';
+import { type ScrollbackRemoteCopyModeOwner } from './scrollback-remote-copy-mode-owner';
 
 export function createScrollbackFailureCoordinator({
 	clearLocalState,
 	clearState,
 	isCurrentContext,
-	remoteCopyModeActive,
-	remoteCopyModeGeneration,
+	remoteCopyMode,
 	trace,
 	warn,
 }: {
@@ -24,8 +24,7 @@ export function createScrollbackFailureCoordinator({
 		failurePolicy?: 'notify' | 'suppress',
 	): void;
 	isCurrentContext(context: ShellScrollbackContext): boolean;
-	remoteCopyModeActive: { current: boolean };
-	remoteCopyModeGeneration: { current: number };
+	remoteCopyMode: ScrollbackRemoteCopyModeOwner;
 	trace(
 		context: ShellScrollbackContext,
 		event: Parameters<ScrollTraceSink>[0],
@@ -53,14 +52,13 @@ export function createScrollbackFailureCoordinator({
 			if (!isCurrentContext(context)) return;
 			warn(context.logger, message);
 			if (!isCurrentContext(context)) return;
-			remoteCopyModeGeneration.current += 1;
-			remoteCopyModeActive.current = false;
+			remoteCopyMode.release();
 			clearLocalState(context);
 			return;
 		}
 		let interactive = false;
 		try {
-			interactive = context.getActivitySnapshot().interactive;
+			interactive = context.activity.getSnapshot().interactive;
 		} catch (error) {
 			warn(context.logger, 'Scrollback activity check failed', error);
 		}

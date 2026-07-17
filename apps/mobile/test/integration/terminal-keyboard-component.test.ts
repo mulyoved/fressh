@@ -77,6 +77,27 @@ void test('Work long-press popup builder uses latest nav scope callback value', 
 	);
 });
 
+void test('Work long-press popup builder preserves configured options when requested', () => {
+	const popup = buildTerminalKeyboardLongPressPopup({
+		slot: workSlot,
+		getNavScope: () => 'visible',
+		workKeyLongPressMode: 'configured',
+		keyboardWidth: 525,
+		keyboardBounds: { left: 0, top: 0, width: 525, height: 180 },
+		anchorX: 200,
+		anchorY: 120,
+		anchorWidth: 80,
+		pointerLocalX: 240,
+		pointerLocalY: 130,
+	});
+
+	assert.ok(popup);
+	assert.deepEqual(
+		popup.options.map((option) => option.label),
+		['Prev', 'Next', 'Active', '+Busy', 'All'],
+	);
+});
+
 void test('long-press popup builder preserves configured non-Work options', () => {
 	const popup = buildTerminalKeyboardLongPressPopup({
 		slot: {

@@ -1,4 +1,5 @@
 import { type SshConnectionProgress } from '@fressh/react-native-uniffi-russh';
+import { useIsFocused } from '@react-navigation/native';
 import { useStore } from '@tanstack/react-form';
 import { useQuery } from '@tanstack/react-query';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -15,6 +16,9 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAppForm, useFieldContext } from '@/components/form-components';
 import { KeyPickerSheet } from '@/components/key-manager/KeyPickerSheet';
 import { pickLatestConnection } from '@/lib/connection-utils';
+import { prepareHerdrHost } from '@/lib/herdr/host-launcher';
+import { useHerdrProviderStore } from '@/lib/herdr/provider-store';
+import { loadHerdrSnapshot } from '@/lib/herdr/snapshot';
 import {
 	getEmptyKeyPickerMessage,
 	getInitialSelectedKeyId,
@@ -22,6 +26,7 @@ import {
 } from '@/lib/key-picker-state';
 import { rootLogger } from '@/lib/logger';
 import { useSshConnMutation } from '@/lib/query-fns';
+import { runRemoteTextCommand } from '@/lib/remote-command-runner';
 import {
 	connectionDetailsSchema,
 	secretsManager,
@@ -29,10 +34,12 @@ import {
 	type StoredConnectionDetails,
 } from '@/lib/secrets-manager';
 import { formatSshErrorMessage } from '@/lib/ssh-error-details';
+import { useSshStore } from '@/lib/ssh-store';
 import { useTailscaleRecoveryUiStore } from '@/lib/tailscale-recovery-ui-store';
 import { TailscaleRecoveryPanel } from '@/lib/TailscaleRecoveryPanel';
 import { useTheme } from '@/lib/theme';
 import { useBottomTabSpacing } from '@/lib/useBottomTabSpacing';
+import { queryClient } from '@/lib/utils';
 
 const logger = rootLogger.extend('TabsIndex');
 
@@ -55,6 +62,7 @@ const defaultValues: InputConnectionDetails = {
 
 function Host() {
 	const theme = useTheme();
+	const routeFocused = useIsFocused();
 	const tailscaleRecoveryUiState = useTailscaleRecoveryUiStore(
 		(state) => state.recoveryState,
 	);
@@ -311,7 +319,10 @@ function Host() {
 							) : null}
 						</connectionForm.AppForm>
 					</View>
-					<PreviousConnectionsSection onFillForm={applyConnectionToForm} />
+					<PreviousConnectionsSection
+						onFillForm={applyConnectionToForm}
+						routeFocused={routeFocused}
+					/>
 				</View>
 			</ScrollView>
 		</SafeAreaView>
@@ -429,6 +440,7 @@ function KeyIdPickerField() {
 
 function PreviousConnectionsSection(props: {
 	onFillForm: (connection: StoredConnectionDetails) => void;
+	routeFocused: boolean;
 }) {
 	const theme = useTheme();
 	const listConnectionsQuery = useQuery(secretsManager.connections.query.list);
@@ -462,6 +474,7 @@ function PreviousConnectionsSection(props: {
 							key={conn.id}
 							id={conn.id}
 							onFillForm={props.onFillForm}
+							routeFocused={props.routeFocused}
 						/>
 					))}
 				</View>
@@ -474,22 +487,113 @@ function PreviousConnectionsSection(props: {
 	);
 }
 
-function ConnectionRow(props: {
+export function ConnectionRow(props: {
 	id: string;
 	onFillForm: (connection: StoredConnectionDetails) => void;
+	routeFocused: boolean;
 }) {
+	const router = useRouter();
 	const theme = useTheme();
 	const detailsQuery = useQuery(secretsManager.connections.query.get(props.id));
 	const details = detailsQuery.data?.value ?? null;
 	const [open, setOpen] = React.useState(false);
 	const [renameOpen, setRenameOpen] = React.useState(false);
 	const [newId, setNewId] = React.useState(props.id);
+	const [herdrPhase, setHerdrPhase] = React.useState<
+		'idle' | 'loading' | 'error'
+	>('idle');
+	const [herdrError, setHerdrError] = React.useState<string | null>(null);
+	const herdrAbortController = React.useRef<AbortController | null>(null);
+	const herdrLaunchGeneration = React.useRef(0);
+	const routeFocused = React.useRef(props.routeFocused);
 	const listQuery = useQuery(secretsManager.connections.query.list);
+
+	React.useEffect(
+		() => () => {
+			routeFocused.current = false;
+			herdrLaunchGeneration.current += 1;
+			herdrAbortController.current?.abort(new Error('Saved host row closed.'));
+			herdrAbortController.current = null;
+		},
+		[],
+	);
+
+	React.useLayoutEffect(() => {
+		routeFocused.current = props.routeFocused;
+		herdrLaunchGeneration.current += 1;
+		if (props.routeFocused) return;
+		herdrAbortController.current?.abort(
+			new Error('Saved host route lost focus.'),
+		);
+		herdrAbortController.current = null;
+		setHerdrError(null);
+		setHerdrPhase('idle');
+	}, [props.routeFocused]);
+
+	const openHerdr = React.useCallback(async () => {
+		if (
+			!routeFocused.current ||
+			herdrPhase === 'loading' ||
+			herdrAbortController.current
+		)
+			return;
+		setOpen(false);
+		setHerdrError(null);
+		setHerdrPhase('loading');
+		const abortController = new AbortController();
+		herdrAbortController.current = abortController;
+		const launchGeneration = ++herdrLaunchGeneration.current;
+		const launchIsCurrent = () =>
+			routeFocused.current &&
+			herdrLaunchGeneration.current === launchGeneration &&
+			herdrAbortController.current === abortController &&
+			!abortController.signal.aborted;
+
+		try {
+			const host = await prepareHerdrHost({
+				storedConnectionId: props.id,
+				ports: {
+					getSavedConnection: (storedConnectionId) =>
+						queryClient.fetchQuery(
+							secretsManager.connections.query.get(storedConnectionId),
+						),
+					getPrivateKey: async (keyId) =>
+						(await secretsManager.keys.utils.getPrivateKey(keyId)).value,
+					getConnections: () => useSshStore.getState().connections,
+					connect: useSshStore.getState().connect,
+					loadSnapshot: (connection) =>
+						loadHerdrSnapshot({
+							run: (command) => runRemoteTextCommand({ connection, command }),
+						}),
+				},
+				abortSignal: abortController.signal,
+			});
+			if (!launchIsCurrent()) return;
+			herdrAbortController.current = null;
+			useHerdrProviderStore.getState().setHost(host);
+			setHerdrPhase('idle');
+			router.push({
+				pathname: '/herdr',
+				params: {
+					storedConnectionId: host.storedConnectionId,
+					connectionId: host.connectionId,
+				},
+			});
+		} catch (error) {
+			if (!launchIsCurrent()) return;
+			herdrAbortController.current = null;
+			setHerdrError(
+				error instanceof Error ? error.message : 'Unable to open Herdr.',
+			);
+			setHerdrPhase('error');
+		}
+	}, [herdrPhase, props.id, router]);
 
 	return (
 		<Pressable
 			style={{
 				flexDirection: 'row',
+				flexWrap: 'wrap',
 				alignItems: 'center',
 				justifyContent: 'space-between',
 				backgroundColor: theme.colors.inputBackground,
@@ -564,7 +668,26 @@ function ConnectionRow(props: {
 							Connection Actions
 						</Text>
 						<View style={{ gap: 8 }}>
-							{/* Keep only rename/delete/cancel. Tap row fills the form */}
+							<Pressable
+								accessibilityLabel="Open Herdr"
+								accessibilityRole="button"
+								onPress={() => void openHerdr()}
+								style={{
+									backgroundColor: theme.colors.primary,
+									borderRadius: 10,
+									paddingVertical: 12,
+									alignItems: 'center',
+								}}
+							>
+								<Text
+									style={{
+										color: theme.colors.buttonTextOnPrimary,
+										fontWeight: '700',
+									}}
+								>
+									Open Herdr
+								</Text>
+							</Pressable>
 							<Pressable
 								onPress={() => {
 									setOpen(false);
@@ -634,6 +757,40 @@ function ConnectionRow(props: {
 					</View>
 				</Pressable>
 			</Modal>
+			{herdrPhase === 'loading' ? (
+				<Text
+					accessibilityLabel="Opening Herdr"
+					accessibilityLiveRegion="polite"
+					style={{
+						color: theme.colors.muted,
+						flexBasis: '100%',
+						marginTop: 8,
+					}}
+				>
+					Opening Herdr…
+				</Text>
+			) : null}
+			{herdrPhase === 'error' && herdrError ? (
+				<View style={{ flexBasis: '100%', marginTop: 8 }}>
+					<Text
+						accessibilityLabel="Unable to open Herdr."
+						accessibilityLiveRegion="assertive"
+						accessibilityRole="alert"
+						style={{ color: theme.colors.danger }}
+					>
+						{herdrError}
+					</Text>
+					<Pressable
+						accessibilityLabel="Retry Open Herdr"
+						accessibilityRole="button"
+						onPress={() => void openHerdr()}
+					>
+						<Text style={{ color: theme.colors.primary }}>
+							Retry Open Herdr
+						</Text>
+					</Pressable>
+				</View>
+			) : null}
 
 			{/* Rename Modal */}
 			<Modal

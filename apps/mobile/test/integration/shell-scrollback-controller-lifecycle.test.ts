@@ -29,7 +29,7 @@ void test('scrollback executor replacement cannot overwrite a reentrant newer co
 	const reentrantScroll = { ...harness.scroll };
 	const reentrantContext = {
 		...harness.context,
-		workmuxScroll: reentrantScroll,
+		workmux: { ...harness.context.workmux, scroll: reentrantScroll },
 	};
 	const firstExecutor = harness.executors[0];
 	assert.ok(firstExecutor);
@@ -39,7 +39,7 @@ void test('scrollback executor replacement cannot overwrite a reentrant newer co
 	};
 	harness.core.setContext({
 		...harness.context,
-		workmuxScroll: outerScroll,
+		workmux: { ...harness.context.workmux, scroll: outerScroll },
 	});
 	assert.equal(harness.executors.length, 2);
 	harness.core.setContext(reentrantContext);
@@ -132,7 +132,7 @@ void test('scrollback factory return after reentrant context is disposed without
 	const reentrantScroll = { ...harness.scroll };
 	const reentrantContext = {
 		...harness.context,
-		workmuxScroll: reentrantScroll,
+		workmux: { ...harness.context.workmux, scroll: reentrantScroll },
 	};
 	const staleEvents: string[] = [];
 	harness.setExecutorFactoryOverride((_input, createDefault) => {
@@ -147,7 +147,10 @@ void test('scrollback factory return after reentrant context is disposed without
 	});
 	harness.core.setContext({
 		...harness.context,
-		workmuxScroll: { ...harness.scroll },
+		workmux: {
+			...harness.context.workmux,
+			scroll: { ...harness.scroll },
+		},
 	});
 	assert.deepEqual(staleEvents, ['disposed']);
 	const executorCount = harness.executors.length;
@@ -160,7 +163,7 @@ void test('scrollback factory throw after reentrant context does not null newer 
 	const reentrantScroll = { ...harness.scroll };
 	const reentrantContext = {
 		...harness.context,
-		workmuxScroll: reentrantScroll,
+		workmux: { ...harness.context.workmux, scroll: reentrantScroll },
 	};
 	harness.setExecutorFactoryOverride(() => {
 		harness.setExecutorFactoryOverride(null);
@@ -170,7 +173,10 @@ void test('scrollback factory throw after reentrant context does not null newer 
 	assert.doesNotThrow(() =>
 		harness.core.setContext({
 			...harness.context,
-			workmuxScroll: { ...harness.scroll },
+			workmux: {
+				...harness.context.workmux,
+				scroll: { ...harness.scroll },
+			},
 		}),
 	);
 	const executorCount = harness.executors.length;
@@ -197,14 +203,20 @@ for (const completion of ['return', 'throw'] as const) {
 		assert.doesNotThrow(() =>
 			harness.core.setContext({
 				...harness.context,
-				workmuxScroll: { ...harness.scroll },
+				workmux: {
+					...harness.context.workmux,
+					scroll: { ...harness.scroll },
+				},
 			}),
 		);
 		if (completion === 'return') assert.deepEqual(staleEvents, ['disposed']);
 		const executorCount = harness.executors.length;
 		harness.core.setContext({
 			...harness.context,
-			workmuxScroll: { ...harness.scroll },
+			workmux: {
+				...harness.context.workmux,
+				scroll: { ...harness.scroll },
+			},
 		});
 		assert.equal(harness.executors.length, executorCount);
 	});
@@ -217,7 +229,10 @@ void test('scrollback current executor factory failure stays contained and retry
 	});
 	const replacementContext = {
 		...harness.context,
-		workmuxScroll: { ...harness.scroll },
+		workmux: {
+			...harness.context.workmux,
+			scroll: { ...harness.scroll },
+		},
 	};
 	assert.doesNotThrow(() => harness.core.setContext(replacementContext));
 	assert.deepEqual(harness.warnings, [

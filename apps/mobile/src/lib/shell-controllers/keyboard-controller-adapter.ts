@@ -12,7 +12,6 @@ import {
 	type KeyboardExecutableItem,
 } from '@/lib/shell-config';
 import { type WorkmuxNavScope } from '../workmux-app-commands';
-import { type ShellActivitySnapshot } from './activity-core';
 import { type ControllerInvalidationReason } from './controller-core';
 import {
 	applyKeyboardSelectionMode,
@@ -25,7 +24,8 @@ import {
 import { type ShellKeyboardInputCore } from './keyboard-input-contracts';
 import { type ShellKeyboardRemoteCore } from './keyboard-remote-contracts';
 import { type ShellKeyboardStateCore } from './keyboard-state-core';
-import { type ShellTerminalRuntimeView } from './terminal-hook-runtime';
+import { type ShellActivityPort } from './session-contracts';
+import { type ShellTerminalViewPort } from './terminal-contracts';
 
 export type ShellKeyboardModalCommands = {
 	toggleCommandMenu(): void;
@@ -48,12 +48,10 @@ export type ShellKeyboardBrowserCommands = {
 };
 
 export type ShellKeyboardControllerAdapterPorts = {
-	activity: {
-		getSnapshot(): ShellActivitySnapshot;
-	};
+	activity: ShellActivityPort;
 	sourceKey: unknown;
 	terminalView: Pick<
-		ShellTerminalRuntimeView,
+		ShellTerminalViewPort,
 		| 'getRuntimeKey'
 		| 'getRuntimeInstanceId'
 		| 'isCurrentInstance'
@@ -248,6 +246,8 @@ export function createShellKeyboardControllerAdapter(input: {
 				isCurrent: () => input.admission.isCurrent(generation),
 				setSelectionMode: (value) =>
 					input.stateCore.setSelectionModeEnabled(value),
+				setTerminalSelectionMode: (value) =>
+					input.getPorts().terminalView.setSelectionModeEnabled(value),
 				setTerminalSystemKeyboard: (value) =>
 					input.getPorts().terminalView.setSystemKeyboardEnabled(value),
 				dismissKeyboard: () => input.getPorts().dismissKeyboard(),

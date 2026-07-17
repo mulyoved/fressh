@@ -46,7 +46,10 @@ export function createLiveInputFixture() {
 	const context = {
 		targetKey,
 		targetName: 'main',
-		getActivitySnapshot: () => activity,
+		activity: {
+			getSnapshot: () => activity,
+			subscribe: () => () => {},
+		},
 		terminalTransport: {
 			captureLease: () => lease,
 			isLeaseCurrent: () => leaseCurrent,

@@ -16,6 +16,12 @@ type LoadedProject = {
 	skills: DiscoveredSkill[];
 };
 
+type InputOutcome =
+	| { status: 'completed' }
+	| { status: 'superseded' }
+	| { status: 'unavailable' }
+	| { status: 'failed'; failure: { message: string } };
+
 function createDeferred<T>(): Deferred<T> {
 	let resolve!: (value: T) => void;
 	let reject!: (error: unknown) => void;
@@ -26,7 +32,10 @@ function createDeferred<T>(): Deferred<T> {
 	return { promise, resolve, reject };
 }
 
-function createSkillSelectorHarness(options?: { requestOpen?: boolean }) {
+function createSkillSelectorHarness(options?: {
+	requestOpen?: boolean;
+	sendInput?: (value: string) => Promise<InputOutcome>;
+}) {
 	const loads: Deferred<LoadedProject>[] = [];
 	const forceRefreshes: boolean[] = [];
 	const sentText: string[] = [];
@@ -38,7 +47,12 @@ function createSkillSelectorHarness(options?: { requestOpen?: boolean }) {
 			loads.push(load);
 			return load.promise;
 		},
-		sendText: (value) => sentText.push(value),
+		sendInput: async (value) => {
+			sentText.push(value);
+			return options?.sendInput
+				? options.sendInput(value)
+				: { status: 'completed' };
+		},
 		requestOpen: (onOpen) => {
 			if (options?.requestOpen === false) return false;
 			onOpen();
@@ -82,6 +96,7 @@ void test('skill selector publishes loaded project for the current source', asyn
 		updatedAt: '2026-07-10T00:00:00Z',
 		isLoading: false,
 		isRefreshing: false,
+		isSelecting: false,
 		error: null,
 		refreshError: null,
 	});
@@ -119,6 +134,7 @@ void test('skill selector suppresses rejection after source invalidation', async
 		updatedAt: null,
 		isLoading: false,
 		isRefreshing: false,
+		isSelecting: false,
 		error: null,
 		refreshError: null,
 	});
@@ -231,9 +247,155 @@ void test('skill selector selects only from the current source and then closes',
 	await harness.settled();
 
 	harness.core.select(brainstorming);
+	await harness.settled();
 
 	assert.deepEqual(harness.sentText, ['$brainstorming ']);
 	assert.equal(harness.core.getSnapshot().open, false);
+});
+
+void test('skill selector accepts only one terminal input while a selection is pending', async () => {
+	const input = createDeferred<InputOutcome>();
+	const harness = createSkillSelectorHarness({
+		sendInput: () => input.promise,
+	});
+	harness.core.open();
+	harness.loads[0]?.resolve({
+		projectName: 'fressh',
+		projectRoot: '/repo/fressh',
+		updatedAt: null,
+		skills: [brainstorming],
+	});
+	await harness.settled();
+
+	harness.core.select(brainstorming);
+	harness.core.select(brainstorming);
+
+	assert.deepEqual(harness.sentText, ['$brainstorming ']);
+	assert.equal(harness.core.getSnapshot().open, true);
+	assert.equal(harness.core.getSnapshot().isSelecting, true);
+	input.resolve({ status: 'completed' });
+	await harness.settled();
+
+	assert.equal(harness.core.getSnapshot().open, false);
+	assert.equal(harness.core.getSnapshot().isSelecting, false);
+});
+
+void test('skill selector silently keeps a current selection open when guarded input is superseded', async () => {
+	const harness = createSkillSelectorHarness({
+		sendInput: async () => ({ status: 'superseded' }),
+	});
+	harness.core.open();
+	harness.loads[0]?.resolve({
+		projectName: 'fressh',
+		projectRoot: '/repo/fressh',
+		updatedAt: null,
+		skills: [brainstorming],
+	});
+	await harness.settled();
+
+	harness.core.select(brainstorming);
+	assert.equal(harness.core.getSnapshot().isSelecting, true);
+	await harness.settled();
+
+	assert.equal(harness.core.getSnapshot().open, true);
+	assert.equal(harness.core.getSnapshot().isSelecting, false);
+	assert.equal(harness.core.getSnapshot().error, null);
+});
+
+void test('skill selector ends selection and reports a current input failure', async () => {
+	const harness = createSkillSelectorHarness({
+		sendInput: async () => ({
+			status: 'failed',
+			failure: { message: 'terminal write failed' },
+		}),
+	});
+	harness.core.open();
+	harness.loads[0]?.resolve({
+		projectName: 'fressh',
+		projectRoot: '/repo/fressh',
+		updatedAt: null,
+		skills: [brainstorming],
+	});
+	await harness.settled();
+
+	harness.core.select(brainstorming);
+	await harness.settled();
+
+	assert.equal(harness.core.getSnapshot().open, true);
+	assert.equal(harness.core.getSnapshot().isSelecting, false);
+	assert.equal(harness.core.getSnapshot().error, 'terminal write failed');
+});
+
+void test('skill selector ends selection and reports unavailable terminal input', async () => {
+	const harness = createSkillSelectorHarness({
+		sendInput: async () => ({ status: 'unavailable' }),
+	});
+	harness.core.open();
+	harness.loads[0]?.resolve({
+		projectName: 'fressh',
+		projectRoot: '/repo/fressh',
+		updatedAt: null,
+		skills: [brainstorming],
+	});
+	await harness.settled();
+
+	harness.core.select(brainstorming);
+	await harness.settled();
+
+	assert.equal(harness.core.getSnapshot().open, true);
+	assert.equal(harness.core.getSnapshot().isSelecting, false);
+	assert.equal(
+		harness.core.getSnapshot().error,
+		'Terminal input is unavailable.',
+	);
+});
+
+void test('skill selector invalidation prevents a pending selection from closing or publishing', async () => {
+	const input = createDeferred<InputOutcome>();
+	const harness = createSkillSelectorHarness({
+		sendInput: () => input.promise,
+	});
+	harness.core.open();
+	harness.loads[0]?.resolve({
+		projectName: 'fressh',
+		projectRoot: '/repo/fressh',
+		updatedAt: null,
+		skills: [brainstorming],
+	});
+	await harness.settled();
+	harness.core.select(brainstorming);
+	assert.equal(harness.core.getSnapshot().isSelecting, true);
+
+	harness.core.invalidate('source-change');
+	input.resolve({ status: 'completed' });
+	await harness.settled();
+
+	assert.equal(harness.core.getSnapshot().open, false);
+	assert.equal(harness.core.getSnapshot().isSelecting, false);
+});
+
+void test('skill selector disposal prevents a pending selection from closing or publishing', async () => {
+	const input = createDeferred<InputOutcome>();
+	const harness = createSkillSelectorHarness({
+		sendInput: () => input.promise,
+	});
+	harness.core.open();
+	harness.loads[0]?.resolve({
+		projectName: 'fressh',
+		projectRoot: '/repo/fressh',
+		updatedAt: null,
+		skills: [brainstorming],
+	});
+	await harness.settled();
+	harness.core.select(brainstorming);
+	assert.equal(harness.core.getSnapshot().isSelecting, true);
+
+	harness.core.dispose();
+	input.resolve({ status: 'completed' });
+	await harness.settled();
+
+	assert.equal(harness.core.getSnapshot().open, false);
+	assert.equal(harness.core.getSnapshot().isSelecting, false);
 });
 
 void test('skill selector respects an open veto without loading', () => {

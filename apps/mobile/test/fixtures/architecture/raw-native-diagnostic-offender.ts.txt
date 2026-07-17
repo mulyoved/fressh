@@ -1,0 +1,21 @@
+type RawShellDiagnostics = {
+	bufferStats(): { usedBytes: bigint };
+	currentSeq(): bigint;
+};
+
+class RawShellDiagnosticsImplementation {
+	bufferStats(): { usedBytes: bigint } {
+		return { usedBytes: 0n };
+	}
+
+	currentSeq(): bigint {
+		return 0n;
+	}
+}
+
+export function escapeRawDiagnostics(shell: RawShellDiagnostics) {
+	return {
+		stats: shell.bufferStats(),
+		sequence: shell.currentSeq(),
+	};
+}

@@ -7,9 +7,11 @@ void test('delivery pastes into terminal when explicitly allowed', async () => {
 
 	const result = await deliverConnectionDiagnosticPrompt({
 		prompt: 'debug prompt',
-		allowTerminalPaste: true,
-		pasteIntoTerminal: (value) => {
-			calls.push(`paste:${value}`);
+		delivery: {
+			type: 'terminal',
+			paste: (value) => {
+				calls.push(`paste:${value}`);
+			},
 		},
 		copyToClipboard: async () => {
 			calls.push('copy');
@@ -28,10 +30,7 @@ void test('delivery copies and alerts when terminal paste is not allowed', async
 
 	const result = await deliverConnectionDiagnosticPrompt({
 		prompt: 'debug prompt',
-		allowTerminalPaste: false,
-		pasteIntoTerminal: () => {
-			throw new Error('paste should not run');
-		},
+		delivery: { type: 'clipboard-only' },
 		copyToClipboard: async (value) => {
 			calls.push(`copy:${value}`);
 		},
@@ -50,9 +49,11 @@ void test('delivery falls back to clipboard when paste throws', async () => {
 
 	const result = await deliverConnectionDiagnosticPrompt({
 		prompt: 'debug prompt',
-		allowTerminalPaste: true,
-		pasteIntoTerminal: () => {
-			throw new Error('paste failed');
+		delivery: {
+			type: 'terminal',
+			paste: () => {
+				throw new Error('paste failed');
+			},
 		},
 		copyToClipboard: async (value) => {
 			calls.push(`copy:${value}`);
@@ -72,10 +73,7 @@ void test('delivery reports copy failure when no shell exists', async () => {
 
 	const result = await deliverConnectionDiagnosticPrompt({
 		prompt: 'debug prompt',
-		allowTerminalPaste: false,
-		pasteIntoTerminal: () => {
-			throw new Error('paste should not run');
-		},
+		delivery: { type: 'clipboard-only' },
 		copyToClipboard: async () => {
 			throw new Error('copy failed');
 		},
@@ -94,9 +92,11 @@ void test('delivery reports copy failure after paste failure', async () => {
 
 	const result = await deliverConnectionDiagnosticPrompt({
 		prompt: 'debug prompt',
-		allowTerminalPaste: true,
-		pasteIntoTerminal: () => {
-			throw new Error('paste failed');
+		delivery: {
+			type: 'terminal',
+			paste: () => {
+				throw new Error('paste failed');
+			},
 		},
 		copyToClipboard: async () => {
 			throw new Error('copy failed');

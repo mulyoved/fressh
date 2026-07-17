@@ -4,6 +4,7 @@ import { useCallback } from 'react';
 import { Alert, Platform } from 'react-native';
 import { useAutoConnectStore } from './auto-connect';
 import { runConnectionDebugCommand } from './connection-debug-command';
+import { type DiagnosticDelivery } from './connection-diagnostic-delivery';
 import { connectionDiagnosticRecorder } from './connection-diagnostic-recorder';
 import { pickLatestConnection } from './connection-utils';
 import { runDiagnosticShellProbe } from './diagnostic-shell-probe';
@@ -14,18 +15,18 @@ import { queryClient } from './utils';
 
 const logger = rootLogger.extend('ConnectionDebugCommand');
 
+export type { DiagnosticDelivery } from './connection-diagnostic-delivery';
+
 export type UseConnectionDebugCommandArgs = {
 	appActive: boolean;
-	closeMenu: () => void;
-	allowTerminalPaste: boolean;
-	pasteIntoTerminal: (value: string) => void;
+	closeMenu(): void;
+	delivery: DiagnosticDelivery;
 };
 
 export function useConnectionDebugCommand({
 	appActive,
 	closeMenu,
-	allowTerminalPaste,
-	pasteIntoTerminal,
+	delivery,
 }: UseConnectionDebugCommandArgs) {
 	return useCallback(async () => {
 		const autoState = useAutoConnectStore.getState();
@@ -54,8 +55,7 @@ export function useConnectionDebugCommand({
 			runDiagnosticShellProbe,
 			connect: RnRussh.connect,
 			recovery: tailscaleRecovery,
-			allowTerminalPaste,
-			pasteIntoTerminal,
+			delivery,
 			copyToClipboard: async (value) => {
 				await Clipboard.setStringAsync(value);
 			},
@@ -64,5 +64,5 @@ export function useConnectionDebugCommand({
 			},
 			logger,
 		});
-	}, [allowTerminalPaste, appActive, closeMenu, pasteIntoTerminal]);
+	}, [appActive, closeMenu, delivery]);
 }

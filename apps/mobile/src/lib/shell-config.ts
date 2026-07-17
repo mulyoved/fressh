@@ -4,7 +4,7 @@ import {
 	KEYBOARD_TARGET_ACTION_IDS,
 	type ActionId,
 	type KeyboardTargetActionId,
-} from '@/lib/keyboard-actions';
+} from '@/lib/keyboard-action-contract';
 import { parseMacroScript, type MacroStep } from '@/lib/macro-scripts';
 import bundledShellConfigData from '../../config/shell-config.json';
 

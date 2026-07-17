@@ -3,6 +3,8 @@ import {
 	createControllerPublisher,
 	type ControllerCore,
 } from './controller-core';
+import { matchControllerOutcome } from './controller-outcome';
+import { type ShellHostCommandPort } from './session-contracts';
 
 export type FeatureRequestState = {
 	open: boolean;
@@ -12,12 +14,9 @@ export type FeatureRequestState = {
 	error: string | undefined;
 };
 
-export type FeatureRequestSubmissionResult = {
-	success: boolean;
-	output: string;
-	error?: string;
-	issueUrl?: string | null;
-};
+export type FeatureRequestSubmissionResult = Awaited<
+	ReturnType<ShellHostCommandPort['run']>
+>;
 
 export type FeatureRequestControllerCore =
 	ControllerCore<FeatureRequestState> & {
@@ -50,9 +49,6 @@ const CLOSED_STATE: FeatureRequestState = {
 	isResolvingTarget: false,
 	error: undefined,
 };
-
-const SUBMISSION_FAILURE_MESSAGE =
-	'Failed to create issue. Make sure gh and claude CLIs are installed and authenticated on the remote host.';
 
 export function createFeatureRequestControllerCore(
 	deps: FeatureRequestControllerCoreDependencies,
@@ -185,16 +181,40 @@ export function createFeatureRequestControllerCore(
 					sourceStale = false;
 					return;
 				}
-				if (result.success) {
+				const submission = matchControllerOutcome(result, {
+					completed: (completed) => ({
+						kind: 'completed' as const,
+						output: completed.output,
+						issueUrl: completed.issueUrl,
+					}),
+					failed: ({ failure }) => ({
+						kind: 'failed' as const,
+						message:
+							failure.reason === 'no-detail'
+								? 'Failed to create issue. Make sure gh and claude CLIs are installed and authenticated on the remote host.'
+								: failure.message,
+					}),
+					superseded: () => ({ kind: 'superseded' as const }),
+					unavailable: () => ({
+						kind: 'failed' as const,
+						message: 'No SSH connection available',
+					}),
+				});
+				if (submission.kind === 'superseded') {
+					reset();
+					sourceStale = false;
+					return;
+				}
+				if (submission.kind === 'completed') {
 					deps.logger.info('Feature request submitted successfully', {
-						output: result.output,
-						issueUrl: result.issueUrl,
+						output: submission.output,
+						issueUrl: submission.issueUrl,
 					});
 					reset();
 					sourceStale = false;
-					deps.showSubmittedAlert(result.issueUrl ?? null);
+					deps.showSubmittedAlert(submission.issueUrl ?? null);
 				} else {
-					const errorMessage = result.error || SUBMISSION_FAILURE_MESSAGE;
+					const errorMessage = submission.message;
 					deps.logger.error('Feature request failed', {
 						error: errorMessage,
 					});

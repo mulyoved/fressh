@@ -1,4 +1,3 @@
-import { type BrowserActionsWorkspace } from '../browser-actions-controller-actions';
 import { type TmuxPaneContext } from '../host-browser-actions';
 import { type BrowserActionsControllerCore } from './browser-actions-core';
 import {
@@ -16,12 +15,7 @@ export type BrowserActionsControllerHandle = {
 	close: () => void;
 	resolveHostBrowserPaneContext: () => Promise<TmuxPaneContext>;
 	resolveHostBrowserPanePath: () => Promise<string>;
-	resolveHostBrowserWorkspace: () => Promise<BrowserActionsWorkspace>;
 	resolveCurrentGitHubRepository: () => Promise<string>;
-	runHostBrowserCommand: (
-		command: string,
-		timeoutMs?: number,
-	) => Promise<string>;
 	invalidateHostUrlReads: () => void;
 	invalidateAll: () => void;
 };
@@ -41,9 +35,7 @@ type BrowserActionsFacadeCore = Pick<
 	| 'selectDetected'
 	| 'resolvePaneContext'
 	| 'resolvePanePath'
-	| 'resolveWorkspace'
 	| 'resolveCurrentGitHubRepository'
-	| 'runHostBrowserCommand'
 	| 'invalidateHostUrlReads'
 	| 'invalidate'
 >;
@@ -82,11 +74,8 @@ export function createBrowserActionsControllerFacade(
 			close,
 			resolveHostBrowserPaneContext: () => core.resolvePaneContext(),
 			resolveHostBrowserPanePath: () => core.resolvePanePath(),
-			resolveHostBrowserWorkspace: () => core.resolveWorkspace(),
 			resolveCurrentGitHubRepository: () =>
 				core.resolveCurrentGitHubRepository(),
-			runHostBrowserCommand: (command, timeoutMs) =>
-				core.runHostBrowserCommand(command, timeoutMs),
 			invalidateHostUrlReads: () => core.invalidateHostUrlReads(),
 			invalidateAll: () => core.invalidate('runtime-reset'),
 		}),

@@ -45,17 +45,17 @@ export type WorktreeWorkspaceControllerHandle = Readonly<{
 	close(): boolean;
 }>;
 
-export type WorktreeWorkspaceControllerDeps<TConnection> =
-	WorktreeWorkspaceControllerDependencies<TConnection>;
+export type WorktreeWorkspaceControllerDeps =
+	WorktreeWorkspaceControllerDependencies;
 
-export function useWorktreeWorkspaceController<TConnection>(
-	deps: WorktreeWorkspaceControllerDeps<TConnection>,
+export function useWorktreeWorkspaceController(
+	deps: WorktreeWorkspaceControllerDeps,
 ): WorktreeWorkspaceControllerHandle {
 	const committedDepsRef = useRef(deps);
 	const trackedSourceRef = useRef({
 		sourceKey: deps.sourceKey,
 		tmuxEnabled: deps.tmuxEnabled,
-		connection: deps.connection,
+		authority: deps.workmux,
 	});
 	const [adapter] = useState(() =>
 		createWorktreeWorkspaceControllerAdapter({
@@ -99,6 +99,7 @@ export function useWorktreeWorkspaceController<TConnection>(
 			committedDependencies: committedDepsRef,
 			trackedSource: trackedSourceRef,
 			dependencies: deps,
+			getAuthority: (dependencies) => dependencies.workmux,
 			core,
 		});
 	}, [core, deps]);

@@ -1,8 +1,19 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import test from 'node:test';
 import { HOST_BROWSER_NO_CONNECTION_MESSAGE } from '../../src/lib/host-browser-actions';
 import { WORKMUX_KEYBOARD_COMMAND_DISABLED_MESSAGE } from '../../src/lib/keyboard-actions';
 import { MDEV_BRIDGE_UPDATE_MESSAGE } from '../../src/lib/mdev-bridge-client';
+import { createShellModalArbiter } from '../../src/lib/shell-controllers/modal-arbiter';
+import {
+	type ShellWorkmuxOutcome,
+	type ShellWorkmuxPort,
+} from '../../src/lib/shell-controllers/session-contracts';
+import {
+	createShellTargetKey,
+	createShellTransportKey,
+} from '../../src/lib/shell-controllers/source-keys';
 import {
 	createWorktreeWorkspaceControllerAdapter,
 	classifyWorktreeWorkspaceFailure,
@@ -16,10 +27,6 @@ import {
 	buildWorkmuxAppContextArgv,
 	type WorkmuxAppContext,
 } from '../../src/lib/workmux-app-commands';
-import {
-	type WorkmuxControlCommandResult,
-	type WorkmuxControlChannel,
-} from '../../src/lib/workmux-control-channel';
 import {
 	WORKTREE_WORKSPACE_CLOSE_OPERATION_ID,
 	WORKTREE_WORKSPACE_CREATE_OPERATION_ID,
@@ -52,6 +59,10 @@ const NEW_PREPARATION: NewWorktreeWorkspacePreparation = {
 	projectRoot: '/home/muly/code/fressh',
 	suggestedBranch: 'issue-131-native-worktree-workspace',
 };
+const SOURCE_KEY = createShellTargetKey(
+	createShellTransportKey('connection-1', 7),
+	'main',
+);
 
 const CLOSE_PREPARATION: CloseWorktreeWorkspacePreparation = {
 	session: 'main',
@@ -70,9 +81,114 @@ const REMOTE_FAILURE: WorktreeWorkspaceFailure = {
 	message: 'Worktrunk failed safely.',
 };
 
+function createWorktreeAdapter(
+	arbiter: ReturnType<typeof createShellModalArbiter>,
+) {
+	return createWorktreeWorkspaceControllerAdapter({
+		getCommittedDependencies: () => ({
+			connectionAvailable: true,
+			tmuxEnabled: true,
+			sessionName: 'main',
+			sourceKey: SOURCE_KEY,
+			workmux: {
+				command: async () => ({ status: 'unavailable' as const }),
+				operation: async () => ({ status: 'unavailable' as const }),
+			},
+			arbiter,
+		}),
+		reportPrecondition: () => {},
+		logger: { error: () => {} },
+	});
+}
+
 function tick(): Promise<void> {
 	return new Promise((resolve) => setImmediate(resolve));
 }
+
+void test('worktree admission closes every conflicting modal in order before opening', () => {
+	const events: string[] = [];
+	const arbiter = createShellModalArbiter();
+	const conflicts = [
+		'command-menu',
+		'commander',
+		'text-entry',
+		'configure',
+		'browser-actions',
+		'feature-request',
+		'skill-selector',
+	] as const;
+	for (const conflict of conflicts) {
+		arbiter.register(conflict, ({ opening }) => {
+			assert.equal(opening, 'worktree-workspace');
+			events.push(`close:${conflict}`);
+		});
+	}
+
+	const adapter = createWorktreeAdapter(arbiter);
+	assert.equal(
+		adapter.requestOpen(() => events.push('open:worktree-workspace')),
+		true,
+	);
+	assert.deepEqual(events, [
+		...conflicts.map((conflict) => `close:${conflict}`),
+		'open:worktree-workspace',
+	]);
+});
+
+void test('worktree admission stops when a conflicting modal blocks close', () => {
+	const events: string[] = [];
+	const arbiter = createShellModalArbiter();
+	arbiter.register('command-menu', () => {
+		events.push('close:command-menu');
+	});
+	arbiter.register('commander', () => {
+		events.push('block:commander');
+		return false;
+	});
+	arbiter.register('text-entry', () => {
+		events.push('close:text-entry');
+	});
+
+	const adapter = createWorktreeAdapter(arbiter);
+	assert.equal(
+		adapter.requestOpen(() => events.push('opened')),
+		false,
+	);
+	assert.deepEqual(events, ['close:command-menu', 'block:commander']);
+});
+
+void test('worktree hook owns committed typed source lifecycle without a terminal-input escape hatch', () => {
+	const hookSource = readFileSync(
+		join(process.cwd(), 'src/lib/shell-controllers/worktree-workspace.tsx'),
+		'utf8',
+	);
+	const adapterSource = readFileSync(
+		join(
+			process.cwd(),
+			'src/lib/shell-controllers/worktree-workspace-adapter.ts',
+		),
+		'utf8',
+	);
+
+	assert.match(
+		hookSource,
+		/getCommittedDependencies: \(\) => committedDepsRef\.current/,
+	);
+	assert.match(
+		hookSource,
+		/syncControllerSource\(\{[\s\S]*?dependencies: deps,[\s\S]*?core,[\s\S]*?\}\)/,
+	);
+	assert.match(hookSource, /createReplaySafeControllerLifecycle\(core\)/);
+	assert.match(hookSource, /adapter\.registerClose\(core\.close\)/);
+	assert.match(
+		hookSource,
+		/Alert\.alert\('Worktree Workspace', failure\.message/,
+	);
+	assert.doesNotMatch(
+		`${hookSource}\n${adapterSource}`,
+		/sendTextRaw|sendBytes|sendData|runCommandSteps|terminal-transport|onTerminalInput/,
+	);
+});
 
 function createCoreHarness(input?: {
 	connected?: boolean;
@@ -571,29 +687,32 @@ void test('worktree workspace adapter sends exact typed bridge calls and parses 
 		request: unknown;
 		options: unknown;
 	}[] = [];
-	const operationResults: WorkmuxControlCommandResult[] = [
-		{ success: true, output: JSON.stringify(NEW_PREPARATION) },
-		{ success: true, output: JSON.stringify({ status: 'created' }) },
-		{ success: true, output: JSON.stringify(CLOSE_PREPARATION) },
-		{ success: true, output: JSON.stringify({ status: 'closed' }) },
+	const operationResults: ShellWorkmuxOutcome[] = [
+		{ status: 'completed', output: JSON.stringify(NEW_PREPARATION) },
+		{ status: 'completed', output: JSON.stringify({ status: 'created' }) },
+		{ status: 'completed', output: JSON.stringify(CLOSE_PREPARATION) },
+		{ status: 'completed', output: JSON.stringify({ status: 'closed' }) },
 	];
-	const channel: Pick<WorkmuxControlChannel, 'command' | 'operation'> = {
+	const workmux: Pick<ShellWorkmuxPort, 'command' | 'operation'> = {
 		command: async (argv, options) => {
 			calls.push({ kind: 'command', request: argv, options });
-			return { success: true, output: JSON.stringify(APP_CONTEXT) };
+			return {
+				status: 'completed' as const,
+				output: JSON.stringify(APP_CONTEXT),
+			};
 		},
 		operation: async (request, options) => {
 			calls.push({ kind: 'operation', request, options });
-			return operationResults.shift() ?? { success: false, output: '' };
+			return operationResults.shift() ?? { status: 'unavailable' as const };
 		},
 	};
 	const adapter = createWorktreeWorkspaceControllerAdapter({
 		getCommittedDependencies: () => ({
-			connection: {},
+			connectionAvailable: true,
 			tmuxEnabled: true,
 			sessionName: 'main',
-			sourceKey: 'source-a',
-			workmuxControlChannel: channel,
+			sourceKey: SOURCE_KEY,
+			workmux,
 			arbiter: {
 				register: () => () => {},
 				requestOpen: ({ onOpen }) => {
@@ -688,34 +807,39 @@ void test('worktree workspace adapter sends exact typed bridge calls and parses 
 });
 
 void test('worktree workspace adapter turns failed results and malformed output into classified failures', async () => {
-	const results: WorkmuxControlCommandResult[] = [
+	const results: ShellWorkmuxOutcome[] = [
 		{
-			success: false,
-			output: '',
-			error: `Unsupported operation ${WORKTREE_WORKSPACE_PREPARE_NEW_OPERATION_ID}`,
+			status: 'failed',
+			failure: {
+				message: `Unsupported operation ${WORKTREE_WORKSPACE_PREPARE_NEW_OPERATION_ID}`,
+			},
 		},
-		{ success: true, output: '{}' },
+		{ status: 'completed', output: '{}' },
 		{
-			success: false,
-			output: '',
-			error: 'Timed out after 60000ms',
-			failureClass: 'timeout',
+			status: 'failed',
+			failure: {
+				message: 'Timed out after 60000ms',
+				failureClass: 'timeout',
+			},
 		},
+		{ status: 'superseded' },
+		{ status: 'unavailable' },
 	];
-	const channel: Pick<WorkmuxControlChannel, 'command' | 'operation'> = {
+	const workmux: Pick<ShellWorkmuxPort, 'command' | 'operation'> = {
 		command: async () => ({
-			success: true,
+			status: 'completed' as const,
 			output: JSON.stringify(APP_CONTEXT),
 		}),
-		operation: async () => results.shift() ?? { success: false, output: '' },
+		operation: async () =>
+			results.shift() ?? { status: 'unavailable' as const },
 	};
 	const adapter = createWorktreeWorkspaceControllerAdapter({
 		getCommittedDependencies: () => ({
-			connection: {},
+			connectionAvailable: true,
 			tmuxEnabled: true,
 			sessionName: 'main',
-			sourceKey: 'source-a',
-			workmuxControlChannel: channel,
+			sourceKey: SOURCE_KEY,
+			workmux,
 			arbiter: {
 				register: () => () => {},
 				requestOpen: () => false,
@@ -759,5 +883,23 @@ void test('worktree workspace adapter turns failed results and malformed output 
 			});
 			return true;
 		},
+	);
+	await assert.rejects(
+		adapter.closeWorktreeWorkspace({
+			session: CLOSE_PREPARATION.session,
+			workspaceId: CLOSE_PREPARATION.workspaceId,
+			expectedWorktreePath: CLOSE_PREPARATION.worktreePath,
+			expectedCloseFingerprint: CLOSE_PREPARATION.closeFingerprint,
+		}),
+		/Worktree workspace request was superseded\./,
+	);
+	await assert.rejects(
+		adapter.closeWorktreeWorkspace({
+			session: CLOSE_PREPARATION.session,
+			workspaceId: CLOSE_PREPARATION.workspaceId,
+			expectedWorktreePath: CLOSE_PREPARATION.worktreePath,
+			expectedCloseFingerprint: CLOSE_PREPARATION.closeFingerprint,
+		}),
+		/Worktree workspace request is unavailable\./,
 	);
 });

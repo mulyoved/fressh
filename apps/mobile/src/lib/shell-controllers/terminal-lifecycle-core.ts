@@ -3,7 +3,6 @@ import type {
 	BufferReadResult,
 	Cursor,
 	ListenerEvent,
-	SshShell,
 } from '@fressh/react-native-uniffi-russh';
 // eslint-disable-next-line import/consistent-type-specifier-style -- Avoid loading the React Native WebView package in Node core tests.
 import type { XtermWebViewHandle } from '@fressh/react-native-xtermjs-webview';
@@ -24,8 +23,9 @@ type MaybePromise<T> = T | Promise<T>;
 export type TerminalLifecycleShell = ShellListenerOwner & {
 	readonly connectionId: string;
 	readonly channelId: number;
-	bufferStats(): ReturnType<SshShell['bufferStats']>;
-	currentSeq(): ReturnType<SshShell['currentSeq']>;
+	getNativeOutputDiagnostics?():
+		| TerminalOutputDiagnosticSnapshot['native']
+		| null;
 	readBuffer(cursor: Cursor): MaybePromise<BufferReadResult>;
 	addListener(
 		listener: (event: ListenerEvent) => void,
@@ -37,6 +37,7 @@ export type TerminalLifecycleState = {
 	ready: boolean;
 	hasRendered: boolean;
 	runtimeKey: TerminalRuntimeKey | null;
+	runtimeInstanceId: string | null;
 };
 
 export type TerminalLifecycleController =
@@ -80,11 +81,11 @@ type LifecycleXterm = Pick<
 	| 'write'
 	| 'writeMany'
 	| 'flush'
-	| 'getOutputDiagnostics'
 	| 'focus'
 	| 'setSystemKeyboardEnabled'
 	| 'setSelectionModeEnabled'
->;
+> &
+	Partial<Pick<XtermWebViewHandle, 'getOutputDiagnostics'>>;
 
 export type CreateTerminalLifecycleControllerInput = {
 	getXterm(): LifecycleXterm | null;
@@ -92,10 +93,6 @@ export type CreateTerminalLifecycleControllerInput = {
 	size: LifecycleSize;
 	platformOS: string;
 	logger: TerminalLifecycleLogger;
-	onRuntimeChanged(
-		runtimeKey: TerminalRuntimeKey | null,
-		instanceId: string | null,
-	): void;
 };
 
 type Attachment = {
@@ -117,12 +114,12 @@ export function createTerminalLifecycleController({
 	size,
 	platformOS,
 	logger,
-	onRuntimeChanged,
 }: CreateTerminalLifecycleControllerInput): TerminalLifecycleController {
 	const publisher = createControllerPublisher<TerminalLifecycleState>({
 		ready: false,
 		hasRendered: false,
 		runtimeKey: null,
+		runtimeInstanceId: null,
 	});
 	let shell: TerminalLifecycleShell | null = null;
 	let transportKey: ShellTransportKey | null = null;
@@ -144,16 +141,12 @@ export function createTerminalLifecycleController({
 	let runtimeRevision = 0;
 	let generation = 0;
 	let disposed = false;
-	let hasNotifiedRuntime = false;
-	let lastNotifiedRuntimeKey: TerminalRuntimeKey | null = null;
-	let lastNotifiedInstanceId: string | null = null;
 	let listenerProgress = {
 		events: 0,
 		bytes: 0,
 		lastSeq: null as string | null,
 		droppedEvents: 0,
 	};
-
 	const advanceRuntimeRevision = (): void => {
 		runtimeRevision += 1;
 		listenerProgress = {
@@ -213,6 +206,21 @@ export function createTerminalLifecycleController({
 		}
 	};
 
+	const isAttemptCurrent = (
+		attemptGeneration: number,
+		attemptShell: TerminalLifecycleShell,
+		attemptRuntimeRevision: number,
+		attemptXterm: LifecycleXterm,
+	): boolean => {
+		return (
+			!disposed &&
+			generation === attemptGeneration &&
+			shell === attemptShell &&
+			runtimeRevision === attemptRuntimeRevision &&
+			isCurrentXterm(attemptXterm) &&
+			publisher.getSnapshot().ready
+		);
+	};
 	const isRuntimeCurrent = (
 		attemptGeneration: number,
 		attemptShell: TerminalLifecycleShell,
@@ -223,15 +231,6 @@ export function createTerminalLifecycleController({
 		shell === attemptShell &&
 		runtimeRevision === attemptRuntimeRevision &&
 		publisher.getSnapshot().ready;
-
-	const isAttemptCurrent = (
-		attemptGeneration: number,
-		attemptShell: TerminalLifecycleShell,
-		attemptRuntimeRevision: number,
-		attemptXterm: LifecycleXterm,
-	): boolean =>
-		isRuntimeCurrent(attemptGeneration, attemptShell, attemptRuntimeRevision) &&
-		isCurrentXterm(attemptXterm);
 
 	const attach = (): Promise<void> => {
 		if (disposed || !publisher.getSnapshot().ready) return Promise.resolve();
@@ -280,13 +279,8 @@ export function createTerminalLifecycleController({
 				if (!isCurrent()) return;
 				safeInfo('readBuffer(head)', {
 					chunks: result.chunks.length,
-					nextSeq: result.nextSeq.toString(),
-					dropped: result.dropped
-						? {
-								fromSeq: result.dropped.fromSeq.toString(),
-								toSeq: result.dropped.toSeq.toString(),
-							}
-						: undefined,
+					nextSeq: result.nextSeq,
+					dropped: result.dropped,
 				});
 				if (!isCurrent()) return;
 				if (result.chunks.length > 0) {
@@ -324,11 +318,7 @@ export function createTerminalLifecycleController({
 				if (!currentXterm) return;
 				if ('kind' in event) {
 					listenerProgress.droppedEvents += 1;
-					safeWarn('listener.dropped', {
-						kind: event.kind,
-						fromSeq: event.fromSeq.toString(),
-						toSeq: event.toSeq.toString(),
-					});
+					safeWarn('listener.dropped', event);
 					return;
 				}
 				listenerProgress.events += 1;
@@ -405,24 +395,6 @@ export function createTerminalLifecycleController({
 		}
 	};
 
-	const notifyRuntime = (captured: CapturedError, force: boolean): void => {
-		if (
-			!force &&
-			hasNotifiedRuntime &&
-			lastNotifiedRuntimeKey === runtimeKey &&
-			lastNotifiedInstanceId === runtimeInstanceId
-		)
-			return;
-		const notifiedRuntimeKey = runtimeKey;
-		const notifiedInstanceId = runtimeInstanceId;
-		hasNotifiedRuntime = true;
-		lastNotifiedRuntimeKey = notifiedRuntimeKey;
-		lastNotifiedInstanceId = notifiedInstanceId;
-		capture(captured, () =>
-			onRuntimeChanged(notifiedRuntimeKey, notifiedInstanceId),
-		);
-	};
-
 	const invalidateRuntime = (reason: ControllerInvalidationReason): void => {
 		const operationGeneration = ++generation;
 		advanceRuntimeRevision();
@@ -440,10 +412,10 @@ export function createTerminalLifecycleController({
 					ready: false,
 					hasRendered: publisher.getSnapshot().hasRendered,
 					runtimeKey: null,
+					runtimeInstanceId: null,
 				}),
 			);
 		}
-		if (generation === operationGeneration) notifyRuntime(captured, false);
 		if (generation === operationGeneration) {
 			capture(captured, () => size.invalidate(reason));
 		}
@@ -472,10 +444,9 @@ export function createTerminalLifecycleController({
 			if (generation !== operationGeneration) return;
 			const snapshot = publisher.getSnapshot();
 			const captured: CapturedError = { present: false, value: undefined };
-			capture(captured, () => publish({ ...snapshot, runtimeKey }));
-			if (generation === operationGeneration && runtimeInstanceId !== null) {
-				notifyRuntime(captured, false);
-			}
+			capture(captured, () =>
+				publish({ ...snapshot, runtimeKey, runtimeInstanceId }),
+			);
 			if (captured.present) throw captured.value;
 		},
 		setViewModes: (nextViewModes) => {
@@ -498,10 +469,14 @@ export function createTerminalLifecycleController({
 			}
 			if (generation === operationGeneration) {
 				capture(captured, () =>
-					publish({ ready: true, hasRendered: true, runtimeKey }),
+					publish({
+						ready: true,
+						hasRendered: true,
+						runtimeKey,
+						runtimeInstanceId,
+					}),
 				);
 			}
-			if (generation === operationGeneration) notifyRuntime(captured, true);
 			if (captured.present) throw captured.value;
 		},
 		handleLoadStart: () => {
@@ -515,21 +490,14 @@ export function createTerminalLifecycleController({
 		getOutputDiagnostics: () => {
 			const currentShell = shell;
 			if (!currentShell) return null;
-			const native = currentShell.bufferStats();
-			const xterm = getXterm()?.getOutputDiagnostics() ?? null;
+			const native = currentShell.getNativeOutputDiagnostics?.();
+			if (!native) return null;
+			const xterm = getXterm()?.getOutputDiagnostics?.() ?? null;
 			return {
 				connectionId: currentShell.connectionId,
 				channelId: currentShell.channelId,
 				runtimeInstanceId,
-				native: {
-					currentSeq: currentShell.currentSeq().toString(),
-					ringBytesCount: native.ringBytesCount.toString(),
-					usedBytes: native.usedBytes.toString(),
-					headSeq: native.headSeq.toString(),
-					tailSeq: native.tailSeq.toString(),
-					droppedBytesTotal: native.droppedBytesTotal.toString(),
-					chunksCount: native.chunksCount.toString(),
-				},
+				native: { ...native },
 				listener: { ...listenerProgress },
 				xterm: xterm === null ? null : { ...xterm },
 			};
@@ -556,9 +524,9 @@ export function createTerminalLifecycleController({
 					ready: false,
 					hasRendered: publisher.getSnapshot().hasRendered,
 					runtimeKey: null,
+					runtimeInstanceId: null,
 				}),
 			);
-			notifyRuntime(captured, false);
 			capture(captured, () => size.invalidate('unmount'));
 			capture(captured, publisher.disposePublisher);
 			if (captured.present) throw captured.value;

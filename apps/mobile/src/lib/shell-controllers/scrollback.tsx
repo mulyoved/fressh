@@ -5,8 +5,6 @@ import {
 	useState,
 	useSyncExternalStore,
 } from 'react';
-// eslint-disable-next-line import/consistent-type-specifier-style -- Keep the Node-testable hook runtime free of React Native evaluation.
-import type { ShellActivityControllerHandle } from './activity';
 import {
 	createReplaySafeDisposer,
 	type ControllerInvalidationReason,
@@ -33,7 +31,6 @@ export type ShellScrollbackControllerHandle = {
 		failurePolicy?: 'notify' | 'suppress';
 	}): Promise<boolean> | null;
 	jumpToLive(): void;
-	onTerminalRuntimeChanged(instanceId: string | null): void;
 	xtermProps: {
 		onScrollbackModeChange(event: ScrollbackModeChangeEvent): void;
 		onScrollbackEnterRequested(
@@ -45,12 +42,8 @@ export type ShellScrollbackControllerHandle = {
 };
 
 export type UseShellScrollbackControllerInput = {
-	activity: ShellActivityControllerHandle;
+	runtimeInstanceId: string | null;
 	context: ShellScrollbackContext;
-	onTeardownCleanup?(
-		cleanup: Promise<boolean> | null,
-		reason: 'channel-replaced' | 'unmount',
-	): void;
 };
 
 export type ShellScrollbackHookRuntimeFactories = {
@@ -73,7 +66,6 @@ export type ShellScrollbackHookRuntime = {
 	commit(input: UseShellScrollbackControllerInput): void;
 	getInput(): UseShellScrollbackControllerInput;
 	onActivityChanged(): void;
-	onTerminalRuntimeChanged(instanceId: string | null): void;
 	jumpToLive(): void;
 	setupDisposal(): () => void;
 };
@@ -89,38 +81,6 @@ export function createShellScrollbackHookRuntime({
 }): ShellScrollbackHookRuntime {
 	let committedInput = input;
 	const core = factories.createCore();
-	const safelyHandOffCleanup = (
-		ownerInput: UseShellScrollbackControllerInput,
-		reason: 'channel-replaced' | 'unmount',
-	): unknown => {
-		let cleanup: Promise<boolean> | null = null;
-		let firstError: unknown;
-		try {
-			cleanup = core.getCurrentCleanup();
-		} catch (error) {
-			firstError = error;
-		}
-		try {
-			ownerInput.onTeardownCleanup?.(cleanup, reason);
-		} catch (error) {
-			firstError ??= error;
-		}
-		return firstError;
-	};
-	const reportHandoffError = (
-		ownerInput: UseShellScrollbackControllerInput,
-		error: unknown,
-	): void => {
-		if (error === undefined) return;
-		try {
-			ownerInput.context.logger.warn(
-				'Failed to hand off scrollback channel cleanup',
-				error,
-			);
-		} catch {
-			// Teardown recovery must not depend on diagnostics.
-		}
-	};
 	const disposeCore = (): void => {
 		const ownerInput = committedInput;
 		let firstError: unknown;
@@ -134,8 +94,6 @@ export function createShellScrollbackHookRuntime({
 				firstError ??= error;
 			}
 		}
-		const handoffError = safelyHandOffCleanup(ownerInput, 'unmount');
-		reportHandoffError(ownerInput, handoffError);
 		if (firstError === undefined) return;
 		try {
 			ownerInput.context.logger.warn(
@@ -178,28 +136,12 @@ export function createShellScrollbackHookRuntime({
 		input: inputPort,
 		xtermProps,
 		commit: (nextInput) => {
-			const previousInput = committedInput;
-			const channelReplaced =
-				previousInput.context.workmuxScroll !== nextInput.context.workmuxScroll;
 			committedInput = nextInput;
-			let firstError: unknown;
-			try {
-				core.setContext(nextInput.context);
-			} catch (error) {
-				firstError = error;
-			}
-			if (channelReplaced) {
-				const handoffError = safelyHandOffCleanup(
-					previousInput,
-					'channel-replaced',
-				);
-				reportHandoffError(previousInput, handoffError);
-			}
-			if (firstError !== undefined) throw firstError;
+			core.setContext(nextInput.context);
+			core.onTerminalRuntimeChanged(nextInput.runtimeInstanceId);
 		},
 		getInput: () => committedInput,
 		onActivityChanged: core.onActivityChanged,
-		onTerminalRuntimeChanged: core.onTerminalRuntimeChanged,
 		jumpToLive,
 		setupDisposal: disposer.setup,
 	};
@@ -214,10 +156,15 @@ export function useShellScrollbackController(
 		runtime.core.getSnapshot,
 		runtime.core.getSnapshot,
 	);
+	const activityGeneration = useSyncExternalStore(
+		input.context.activity.subscribe,
+		() => input.context.activity.getSnapshot().generation,
+		() => input.context.activity.getSnapshot().generation,
+	);
 	useLayoutEffect(() => runtime.commit(input), [input, runtime]);
 	useLayoutEffect(
 		() => runtime.onActivityChanged(),
-		[input.activity.snapshot.generation, runtime],
+		[activityGeneration, runtime],
 	);
 	useEffect(() => runtime.setupDisposal(), [runtime]);
 
@@ -228,7 +175,6 @@ export function useShellScrollbackController(
 			input: runtime.input,
 			clear: runtime.core.clear,
 			jumpToLive: runtime.jumpToLive,
-			onTerminalRuntimeChanged: runtime.onTerminalRuntimeChanged,
 			xtermProps: runtime.xtermProps,
 			invalidate: runtime.core.invalidate,
 		}),

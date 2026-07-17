@@ -3,26 +3,28 @@ export type ConnectionDiagnosticDeliveryResult =
 	| { status: 'copied' }
 	| { status: 'copy-failed'; error: string };
 
+export type DiagnosticDelivery =
+	| { type: 'clipboard-only' }
+	| { type: 'terminal'; paste(value: string): void };
+
 function getErrorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
 
 export async function deliverConnectionDiagnosticPrompt({
 	prompt,
-	allowTerminalPaste,
-	pasteIntoTerminal,
+	delivery,
 	copyToClipboard,
 	showAlert,
 }: {
 	prompt: string;
-	allowTerminalPaste: boolean;
-	pasteIntoTerminal: (value: string) => void;
+	delivery: DiagnosticDelivery;
 	copyToClipboard: (value: string) => Promise<void>;
 	showAlert: (title: string, message: string) => void;
 }): Promise<ConnectionDiagnosticDeliveryResult> {
-	if (allowTerminalPaste) {
+	if (delivery.type === 'terminal') {
 		try {
-			pasteIntoTerminal(prompt);
+			delivery.paste(prompt);
 			return { status: 'pasted' };
 		} catch (error) {
 			const message = getErrorMessage(error);

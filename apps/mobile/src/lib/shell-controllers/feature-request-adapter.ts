@@ -1,17 +1,10 @@
-import {
-	type FeatureRequestControllerCoreDependencies,
-	type FeatureRequestSubmissionResult,
-} from './feature-request-core';
+import { type FeatureRequestControllerCoreDependencies } from './feature-request-core';
 import { type ShellModalArbiter } from './modal-arbiter';
+import { type ShellHostCommandPort } from './session-contracts';
 
-export type FeatureRequestControllerDependencies<TConnection> = {
-	connection: TConnection | null;
+export type FeatureRequestControllerDependencies = {
+	hostCommands: ShellHostCommandPort | null;
 	resolveCurrentGitHubRepository(): Promise<string>;
-	executeSideChannelCommand(
-		connection: TConnection,
-		command: string,
-		timeoutMs: number,
-	): Promise<FeatureRequestSubmissionResult>;
 	getErrorMessage(error: unknown): string;
 	logger: {
 		info(message: string, payload?: unknown): void;
@@ -31,25 +24,20 @@ const FEATURE_REQUEST_CONFLICTS = [
 	'configure',
 ] as const;
 
-export function createFeatureRequestControllerAdapter<TConnection>(input: {
-	getCommittedDependencies(): FeatureRequestControllerDependencies<TConnection>;
+export function createFeatureRequestControllerAdapter(input: {
+	getCommittedDependencies(): FeatureRequestControllerDependencies;
 	showSubmittedAlert(issueUrl: string | null): void;
 }): FeatureRequestControllerAdapter {
 	return {
 		resolveCurrentGitHubRepository: () =>
 			input.getCommittedDependencies().resolveCurrentGitHubRepository(),
 		isSubmissionAvailable: () =>
-			input.getCommittedDependencies().connection !== null,
+			input.getCommittedDependencies().hostCommands !== null,
 		executeSubmission: (command, timeoutMs) => {
 			const current = input.getCommittedDependencies();
-			if (!current.connection) {
-				throw new Error('No SSH connection available');
-			}
-			return current.executeSideChannelCommand(
-				current.connection,
-				command,
-				timeoutMs,
-			);
+			if (!current.hostCommands)
+				return Promise.resolve({ status: 'unavailable' });
+			return current.hostCommands.run(command, timeoutMs);
 		},
 		requestOpen: (onOpen) =>
 			input.getCommittedDependencies().arbiter.requestOpen({

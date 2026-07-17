@@ -2,11 +2,24 @@ import {
 	HOST_BROWSER_NO_CONNECTION_MESSAGE,
 	type HostBrowserUrlSlot,
 } from '@/lib/host-browser-actions';
+import {
+	CONFIG_SUPPORTED_ACTION_IDS,
+	KEYBOARD_TARGET_ACTION_IDS,
+	KNOWN_ACTION_IDS,
+	WORKMUX_KEYBOARD_ACTION_IDS,
+	WORKMUX_KEYBOARD_COMPATIBILITY_ACTION_IDS,
+	type ActionId,
+	type KeyboardTargetActionId,
+	type KnownActionId,
+	type WorkmuxKeyboardActionId,
+} from '@/lib/keyboard-action-contract';
 import { rootLogger } from '@/lib/logger';
 import {
 	isMdevBridgeFailureClass,
 	type MdevBridgeFailureClass,
 } from '@/lib/mdev-bridge-client';
+import { type ControllerOutcome } from '@/lib/shell-controllers/controller-core';
+import { matchControllerOutcome } from '@/lib/shell-controllers/controller-outcome';
 import {
 	WORKMUX_APP_COMMAND_UPDATE_MESSAGE,
 	buildWorkmuxAppFocusArgv,
@@ -20,13 +33,21 @@ import {
 
 // Action IDs emitted by runtime config are handled here at runtime.
 
-export const HANDLE_DEV_SERVER_URL = 'http://100.122.2.100:5173/';
+export {
+	CONFIG_SUPPORTED_ACTION_IDS,
+	KEYBOARD_TARGET_ACTION_IDS,
+	KNOWN_ACTION_IDS,
+	WORKMUX_KEYBOARD_ACTION_IDS,
+	WORKMUX_KEYBOARD_COMPATIBILITY_ACTION_IDS,
+};
+export type {
+	ActionId,
+	KeyboardTargetActionId,
+	KnownActionId,
+	WorkmuxKeyboardActionId,
+};
 
-export const KEYBOARD_TARGET_ACTION_IDS = [
-	'OPEN_MAIN_MENU',
-	'OPEN_ADVANCED_KEYBOARD',
-	'OPEN_BROWSER_KEYBOARD',
-] as const;
+export const HANDLE_DEV_SERVER_URL = 'http://100.122.2.100:5173/';
 
 export type WorkmuxKeyboardCommand =
 	| { type: 'focus'; target: WorkmuxFocusTarget }
@@ -51,66 +72,26 @@ const WORKMUX_KEYBOARD_PRIMARY_ACTION_ENTRIES = [
 	['WORKMUX_NAV_NEXT', { type: 'nav', action: 'next' }],
 	['WORKMUX_NAV_PREV_ALL', { type: 'nav', action: 'prev-all' }],
 	['WORKMUX_NAV_NEXT_ALL', { type: 'nav', action: 'next-all' }],
-] as const satisfies readonly (readonly [string, WorkmuxKeyboardCommand])[];
+] as const satisfies readonly (readonly [
+	WorkmuxKeyboardActionId,
+	WorkmuxKeyboardCommand,
+])[];
 const WORKMUX_KEYBOARD_COMPATIBILITY_ACTION_ENTRIES = [
 	['CYCLE_WORKMUX_STATUS', { type: 'status-cycle' }],
-] as const satisfies readonly (readonly [string, WorkmuxKeyboardCommand])[];
+] as const satisfies readonly (readonly [
+	WorkmuxKeyboardActionId,
+	WorkmuxKeyboardCommand,
+])[];
 const WORKMUX_KEYBOARD_ACTION_ENTRIES = [
 	...WORKMUX_KEYBOARD_PRIMARY_ACTION_ENTRIES,
 	...WORKMUX_KEYBOARD_COMPATIBILITY_ACTION_ENTRIES,
-] as const satisfies readonly (readonly [string, WorkmuxKeyboardCommand])[];
-export type WorkmuxKeyboardActionId =
-	(typeof WORKMUX_KEYBOARD_ACTION_ENTRIES)[number][0];
-export const WORKMUX_KEYBOARD_ACTION_IDS =
-	WORKMUX_KEYBOARD_PRIMARY_ACTION_ENTRIES.map(([actionId]) => actionId);
-export const WORKMUX_KEYBOARD_COMPATIBILITY_ACTION_IDS =
-	WORKMUX_KEYBOARD_COMPATIBILITY_ACTION_ENTRIES.map(([actionId]) => actionId);
+] as const satisfies readonly (readonly [
+	WorkmuxKeyboardActionId,
+	WorkmuxKeyboardCommand,
+])[];
 export const WORKMUX_KEYBOARD_ACTION_COMMANDS = Object.fromEntries(
 	WORKMUX_KEYBOARD_ACTION_ENTRIES,
 ) as Record<WorkmuxKeyboardActionId, WorkmuxKeyboardCommand>;
-
-export const KNOWN_ACTION_IDS = [
-	'ROTATE_KEYBOARD',
-	'OPEN_KEYBOARD_SETTINGS',
-	...KEYBOARD_TARGET_ACTION_IDS,
-	'TOGGLE_COMMAND_MENU',
-	'WORKMUX_NAV_SCOPE_ACTIVE',
-	'WORKMUX_NAV_SCOPE_VISIBLE',
-	'WORKMUX_NAV_SCOPE_ALL',
-	'FIT_TERMINAL_TO_DEVICE',
-	'RESTART_CODEX',
-	'DEBUG_CONNECTION_IN_CODEX',
-	'REFLOW_TERMINAL',
-	'OPEN_COMMANDER',
-	'OPEN_NEW_WORKTREE_WORKSPACE',
-	'OPEN_CLOSE_WORKTREE_WORKSPACE',
-	'OPEN_SKILL_SELECTOR',
-	'OPEN_BROWSER_ACTIONS',
-	'OPEN_REPO_FEATURE_REQUEST',
-	'OPEN_WISPR_TEXT_EDITOR',
-	'PASTE_CLIPBOARD',
-	'COPY_SELECTION',
-	'OPEN_HOST_DIFFITY',
-	'OPEN_HOST_URL_WINDOW',
-	'OPEN_HOST_URL_DEV_SERVER',
-	'OPEN_HOST_URL_STORYBOOK',
-	'OPEN_HOST_URL_APP',
-	'OPEN_HOST_DETECTED_AUTO',
-	'OPEN_HOST_DETECTED_PICK',
-	'EDIT_HOST_URL_WINDOW',
-	'EDIT_HOST_URL_DEV_SERVER',
-	'EDIT_HOST_URL_STORYBOOK',
-	'EDIT_HOST_URL_APP',
-	...WORKMUX_KEYBOARD_ACTION_IDS,
-	...WORKMUX_KEYBOARD_COMPATIBILITY_ACTION_IDS,
-] as const;
-
-export const CONFIG_SUPPORTED_ACTION_IDS = KNOWN_ACTION_IDS;
-
-export type KnownActionId = (typeof KNOWN_ACTION_IDS)[number];
-export type KeyboardTargetActionId =
-	(typeof KEYBOARD_TARGET_ACTION_IDS)[number];
-export type ActionId = KnownActionId | (string & {});
 export type WorkmuxKeyboardCommandRunResult =
 	| { status: 'handled' }
 	| { status: 'superseded' };
@@ -118,6 +99,10 @@ export type ShowWorkmuxKeyboardFailure = (failure: {
 	message: string;
 	failureClass?: MdevBridgeFailureClass;
 }) => void;
+export type WorkmuxKeyboardCommandExecutionOutcome = ControllerOutcome<{
+	message: string;
+	failureClass?: MdevBridgeFailureClass;
+}> & { output?: string };
 export const WORKMUX_KEYBOARD_COMMAND_DISABLED_MESSAGE =
 	'Workmux actions require a Workmux-enabled connection.';
 
@@ -155,7 +140,10 @@ export function createWorkmuxKeyboardCommandRunner({
 	isTmuxEnabled: () => boolean;
 	getSessionName: () => string;
 	getNavScope?: () => WorkmuxNavScope;
-	runWorkmuxCommand: (argv: string[], timeoutMs: number) => Promise<unknown>;
+	runWorkmuxCommand: (
+		argv: string[],
+		timeoutMs: number,
+	) => Promise<WorkmuxKeyboardCommandExecutionOutcome>;
 	showFailure: ShowWorkmuxKeyboardFailure;
 	getErrorMessage: (error: unknown) => string;
 }): WorkmuxKeyboardCommandRunner {
@@ -200,10 +188,34 @@ export function createWorkmuxKeyboardCommandRunner({
 								navScope,
 							)
 						: buildWorkmuxStatusCycleArgv(sessionName);
-			await runWorkmuxCommand(argv, 10_000);
-			return commandGeneration === generation
-				? { status: 'handled' }
-				: { status: 'superseded' };
+			const outcome = await runWorkmuxCommand(argv, 10_000);
+			return matchControllerOutcome(outcome, {
+				superseded: () => ({ status: 'superseded' as const }),
+				completed: () =>
+					commandGeneration === generation
+						? { status: 'handled' as const }
+						: { status: 'superseded' as const },
+				failed: (failed) => {
+					if (commandGeneration !== generation) {
+						return { status: 'superseded' as const };
+					}
+					showFailure({
+						message:
+							formatWorkmuxKeyboardCommandFailureMessage({
+								errorMessage: failed.failure.message,
+							}) || WORKMUX_APP_COMMAND_UPDATE_MESSAGE,
+						failureClass: failed.failure.failureClass,
+					});
+					return { status: 'handled' as const };
+				},
+				unavailable: () => {
+					if (commandGeneration !== generation) {
+						return { status: 'superseded' as const };
+					}
+					showFailure({ message: WORKMUX_APP_COMMAND_UPDATE_MESSAGE });
+					return { status: 'handled' as const };
+				},
+			});
 		} catch (error) {
 			if (commandGeneration === generation) {
 				const failureClass = getWorkmuxCommandFailureClass(error);

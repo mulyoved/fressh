@@ -240,6 +240,7 @@ export function TerminalKeyboard({
 	selectionModeEnabled,
 	onCopySelection,
 	navScope = 'active',
+	workKeyLongPressMode = 'workmux-scoped',
 }: TerminalKeyboardProps) {
 	const theme = useTheme();
 	// Fixed key height keeps all rows visually consistent even when some keys
@@ -411,6 +412,7 @@ export function TerminalKeyboard({
 					keyboardBoundsRef,
 					keyboardWidthRef,
 					navScopeRef,
+					workKeyLongPressMode,
 					setLongPressPopup: (nextPopup) => {
 						longPressPopupRef.current = nextPopup;
 						setLongPressPopup(nextPopup);
@@ -418,7 +420,7 @@ export function TerminalKeyboard({
 				}),
 			);
 		},
-		[clearRepeat, updateKeyboardRootMetrics],
+		[clearRepeat, updateKeyboardRootMetrics, workKeyLongPressMode],
 	);
 
 	const startLongPressGesture = useCallback(

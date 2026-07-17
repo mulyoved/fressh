@@ -9,6 +9,8 @@ import {
 } from '@/lib/shell-config';
 import { type WorkmuxNavScope } from '@/lib/workmux-app-commands';
 
+export type WorkKeyLongPressMode = 'workmux-scoped' | 'configured';
+
 export type TerminalKeyboardProps = {
 	keyboard: KeyboardDefinition | null;
 	modifierKeysActive: ModifierKey[];
@@ -16,6 +18,7 @@ export type TerminalKeyboardProps = {
 	selectionModeEnabled: boolean;
 	onCopySelection: () => void;
 	navScope?: WorkmuxNavScope;
+	workKeyLongPressMode?: WorkKeyLongPressMode;
 };
 export type CommandMenuModalProps = {
 	open: boolean;
