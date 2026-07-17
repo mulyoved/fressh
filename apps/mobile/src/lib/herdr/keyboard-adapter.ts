@@ -86,6 +86,11 @@ type HerdrKeyboardOperationToken = Readonly<{
 	sendInput: ((bytes: Uint8Array) => boolean | void) | null;
 }>;
 
+type PendingMacroDelay = Readonly<{
+	handle: ReturnType<typeof setTimeout>;
+	resolve(): void;
+}>;
+
 const encoder = new TextEncoder();
 const defaultStepDelayMs = 50;
 const keyboardTargetActionIds = new Set<string>(KEYBOARD_TARGET_ACTION_IDS);
@@ -110,12 +115,6 @@ export function classifyHerdrKeyboardAction(
 	return { type: 'unsupported', message: HERDR_KEYBOARD_UNSUPPORTED_MESSAGE };
 }
 
-function wait(delayMs: number): Promise<void> {
-	return delayMs > 0
-		? new Promise((resolve) => setTimeout(resolve, delayMs))
-		: Promise.resolve();
-}
-
 export function createHerdrKeyboardAdapter(
 	input: HerdrKeyboardAdapterInput,
 ): HerdrKeyboardAdapter {
@@ -134,15 +133,28 @@ export function createHerdrKeyboardAdapter(
 	let modifierKeysActive: readonly ModifierKey[] = [];
 	let selectionModeEnabled = false;
 	let operationGeneration = 0;
+	let pendingMacroDelay: PendingMacroDelay | null = null;
+
+	const cancelPendingMacroDelay = () => {
+		const pending = pendingMacroDelay;
+		if (!pending) return;
+		pendingMacroDelay = null;
+		clearTimeout(pending.handle);
+		pending.resolve();
+	};
 
 	const invalidatePending = () => {
+		cancelPendingMacroDelay();
 		operationGeneration += 1;
 	};
 
-	const beginOperation = (): HerdrKeyboardOperationToken => ({
-		generation: ++operationGeneration,
-		sendInput: input.terminalInput.captureSender(),
-	});
+	const beginOperation = (): HerdrKeyboardOperationToken => {
+		cancelPendingMacroDelay();
+		return {
+			generation: ++operationGeneration,
+			sendInput: input.terminalInput.captureSender(),
+		};
+	};
 
 	const isCurrent = (token: HerdrKeyboardOperationToken) =>
 		token.generation === operationGeneration;
@@ -270,10 +282,26 @@ export function createHerdrKeyboardAdapter(
 		token: HerdrKeyboardOperationToken,
 		steps: readonly CommandStep[],
 	) => {
+		const waitForStep = (delayMs: number): Promise<void> => {
+			if (delayMs <= 0) return Promise.resolve();
+			return new Promise<void>((resolve) => {
+				let pending!: PendingMacroDelay;
+				const settle = () => {
+					if (pendingMacroDelay === pending) pendingMacroDelay = null;
+					resolve();
+				};
+				pending = {
+					handle: setTimeout(settle, delayMs),
+					resolve: settle,
+				};
+				pendingMacroDelay = pending;
+			});
+		};
+
 		for (let index = 0; index < steps.length; index += 1) {
 			const step = steps[index];
 			if (!step) continue;
-			await wait(step.delayMs ?? (index === 0 ? 0 : defaultStepDelayMs));
+			await waitForStep(step.delayMs ?? (index === 0 ? 0 : defaultStepDelayMs));
 			if (!isCurrent(token)) return;
 			for (const segment of buildKeyboardStepSegments(step, encoder)) {
 				sendBytes(token, segment);

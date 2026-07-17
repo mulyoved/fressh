@@ -297,6 +297,25 @@ function deferred<T>() {
 	return { promise, resolve, reject };
 }
 
+class FakeDelayClock {
+	private nextTimerId = 1;
+	private readonly timers = new Map<number, () => void>();
+
+	readonly setTimeout = ((callback: () => void) => {
+		const id = this.nextTimerId++;
+		this.timers.set(id, callback);
+		return id;
+	}) as unknown as typeof setTimeout;
+
+	readonly clearTimeout = ((handle: ReturnType<typeof setTimeout>) => {
+		this.timers.delete(handle as unknown as number);
+	}) as typeof clearTimeout;
+
+	pendingCount(): number {
+		return this.timers.size;
+	}
+}
+
 void test('text uses UTF-8 and byte slots preserve every byte', async () => {
 	const harness = createHarness();
 
@@ -576,6 +595,91 @@ void test('a new slot operation cancels remaining delayed macro steps', async ()
 		),
 		['first', 'new'],
 	);
+});
+
+void test('a new operation clears and settles the active macro delay immediately', async (t) => {
+	const clock = new FakeDelayClock();
+	const originalSetTimeout = globalThis.setTimeout;
+	const originalClearTimeout = globalThis.clearTimeout;
+	globalThis.setTimeout = clock.setTimeout;
+	globalThis.clearTimeout = clock.clearTimeout;
+	t.after(() => {
+		globalThis.setTimeout = originalSetTimeout;
+		globalThis.clearTimeout = originalClearTimeout;
+	});
+	const harness = createHarness([
+		{
+			id: 'delayed',
+			name: 'delayed',
+			label: 'delayed',
+			category: 'test',
+			script: JSON.stringify({
+				type: 'steps',
+				steps: [{ type: 'text', data: 'stale', delayMs: 10_000 }],
+			}),
+		},
+	]);
+
+	const macro = harness.adapter.onSlotPress({
+		type: 'macro',
+		macroId: 'delayed',
+		label: 'delayed',
+		icon: null,
+	});
+	assert.equal(clock.pendingCount(), 1);
+
+	await harness.adapter.onSlotPress({
+		type: 'text',
+		text: 'current',
+		label: 'current',
+		icon: null,
+	});
+	assert.equal(clock.pendingCount(), 0);
+	await macro;
+	assert.deepEqual(
+		harness.terminalInput.map((bytes) =>
+			new TextDecoder().decode(Uint8Array.from(bytes)),
+		),
+		['current'],
+	);
+});
+
+void test('explicit invalidation clears and settles the active macro delay immediately', async (t) => {
+	const clock = new FakeDelayClock();
+	const originalSetTimeout = globalThis.setTimeout;
+	const originalClearTimeout = globalThis.clearTimeout;
+	globalThis.setTimeout = clock.setTimeout;
+	globalThis.clearTimeout = clock.clearTimeout;
+	t.after(() => {
+		globalThis.setTimeout = originalSetTimeout;
+		globalThis.clearTimeout = originalClearTimeout;
+	});
+	const harness = createHarness([
+		{
+			id: 'delayed',
+			name: 'delayed',
+			label: 'delayed',
+			category: 'test',
+			script: JSON.stringify({
+				type: 'steps',
+				steps: [{ type: 'text', data: 'stale', delayMs: 10_000 }],
+			}),
+		},
+	]);
+
+	const macro = harness.adapter.onSlotPress({
+		type: 'macro',
+		macroId: 'delayed',
+		label: 'delayed',
+		icon: null,
+	});
+	assert.equal(clock.pendingCount(), 1);
+
+	harness.adapter.invalidatePending();
+	assert.equal(clock.pendingCount(), 0);
+	await macro;
+	assert.deepEqual(harness.terminalInput, []);
+	assert.deepEqual(harness.feedback, []);
 });
 
 void test('current clipboard and terminal-view failures show bounded local feedback', async (t) => {

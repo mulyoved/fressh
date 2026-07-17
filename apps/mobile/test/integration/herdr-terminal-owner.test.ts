@@ -8,6 +8,7 @@ import {
 	createHerdrTerminalOwner,
 	HERDR_MAX_QUEUED_WRITE_BYTES,
 	HERDR_MAX_QUEUED_WRITES,
+	HERDR_RELEASE_GRACE_MS,
 	type HerdrCommandStream,
 	type HerdrCommandStreamEvent,
 	type HerdrTerminalConnection,
@@ -863,6 +864,71 @@ void test('retirement discards queued payloads behind the one in-flight write', 
 	]);
 	stream.pendingSends[1]?.resolve();
 	await retirement;
+});
+
+void test('retry closes and starts its successor at the grace deadline while an admitted input write remains pending', async () => {
+	const harness = createHarness();
+	harness.owner.start({ cols: 80, rows: 24 });
+	await flushMicrotasks();
+	const firstEvents = harness.connection.calls[0];
+	const firstStream = harness.connection.streams[0];
+	assert.ok(firstStream);
+	firstStream.controlSends = true;
+
+	assert.equal(
+		harness.owner.sendInput(encoder.encode('in-flight-private')),
+		true,
+	);
+	await flushMicrotasks();
+	assert.equal(firstStream.pendingSends.length, 1);
+
+	harness.owner.retry({ cols: 90, rows: 30 });
+	await flushMicrotasks();
+	assert.deepEqual(harness.owner.getState(), {
+		phase: 'releasing',
+		generation: 1,
+	});
+	assert.equal(firstStream.closeCalls, 0);
+	assert.equal(harness.connection.calls.length, 1);
+
+	harness.clock.advanceBy(HERDR_RELEASE_GRACE_MS - 1);
+	await flushMicrotasks();
+	assert.equal(firstStream.closeCalls, 0);
+	assert.equal(harness.connection.calls.length, 1);
+
+	harness.clock.advanceBy(1);
+	await flushMicrotasks();
+	assert.equal(firstStream.closeCalls, 1);
+	assert.equal(harness.connection.calls.length, 2);
+	assert.deepEqual(harness.owner.getState(), {
+		phase: 'starting',
+		generation: 2,
+	});
+
+	firstStream.pendingSends[0]?.resolve();
+	await flushMicrotasks();
+	assert.deepEqual(firstStream.sentRecords(), [
+		{
+			type: 'terminal.input',
+			bytes: fromByteArray(encoder.encode('in-flight-private')),
+		},
+	]);
+	const statesAfterSuccessorStart = [...harness.states];
+	firstEvents?.onEvent(frame({ seq: 1, full: true, bytes: [99] }));
+	firstEvents?.onEvent({ type: 'closed' });
+	await flushMicrotasks();
+
+	assert.deepEqual(harness.owner.getState(), {
+		phase: 'starting',
+		generation: 2,
+	});
+	assert.deepEqual(harness.states, statesAfterSuccessorStart);
+	assert.deepEqual(harness.replaced, []);
+	assert.deepEqual(harness.appended, []);
+	assert.equal(
+		JSON.stringify(harness.logs).includes('in-flight-private'),
+		false,
+	);
 });
 
 void test('expired resize windows retain their own queue slot and dimensions', async () => {
