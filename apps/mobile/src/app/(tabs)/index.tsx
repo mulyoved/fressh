@@ -15,6 +15,9 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAppForm, useFieldContext } from '@/components/form-components';
 import { KeyPickerSheet } from '@/components/key-manager/KeyPickerSheet';
 import { pickLatestConnection } from '@/lib/connection-utils';
+import { prepareHerdrHost } from '@/lib/herdr/host-launcher';
+import { useHerdrProviderStore } from '@/lib/herdr/provider-store';
+import { loadHerdrSnapshot } from '@/lib/herdr/snapshot';
 import {
 	getEmptyKeyPickerMessage,
 	getInitialSelectedKeyId,
@@ -22,6 +25,7 @@ import {
 } from '@/lib/key-picker-state';
 import { rootLogger } from '@/lib/logger';
 import { useSshConnMutation } from '@/lib/query-fns';
+import { runRemoteTextCommand } from '@/lib/remote-command-runner';
 import {
 	connectionDetailsSchema,
 	secretsManager,
@@ -29,10 +33,12 @@ import {
 	type StoredConnectionDetails,
 } from '@/lib/secrets-manager';
 import { formatSshErrorMessage } from '@/lib/ssh-error-details';
+import { useSshStore } from '@/lib/ssh-store';
 import { useTailscaleRecoveryUiStore } from '@/lib/tailscale-recovery-ui-store';
 import { TailscaleRecoveryPanel } from '@/lib/TailscaleRecoveryPanel';
 import { useTheme } from '@/lib/theme';
 import { useBottomTabSpacing } from '@/lib/useBottomTabSpacing';
+import { queryClient } from '@/lib/utils';
 
 const logger = rootLogger.extend('TabsIndex');
 
@@ -474,22 +480,83 @@ function PreviousConnectionsSection(props: {
 	);
 }
 
-function ConnectionRow(props: {
+export function ConnectionRow(props: {
 	id: string;
 	onFillForm: (connection: StoredConnectionDetails) => void;
 }) {
+	const router = useRouter();
 	const theme = useTheme();
 	const detailsQuery = useQuery(secretsManager.connections.query.get(props.id));
 	const details = detailsQuery.data?.value ?? null;
 	const [open, setOpen] = React.useState(false);
 	const [renameOpen, setRenameOpen] = React.useState(false);
 	const [newId, setNewId] = React.useState(props.id);
+	const [herdrPhase, setHerdrPhase] = React.useState<
+		'idle' | 'loading' | 'error'
+	>('idle');
+	const [herdrError, setHerdrError] = React.useState<string | null>(null);
+	const herdrAbortController = React.useRef<AbortController | null>(null);
 	const listQuery = useQuery(secretsManager.connections.query.list);
+
+	React.useEffect(
+		() => () => {
+			herdrAbortController.current?.abort(new Error('Saved host row closed.'));
+		},
+		[],
+	);
+
+	const openHerdr = React.useCallback(async () => {
+		if (herdrPhase === 'loading') return;
+		setOpen(false);
+		setHerdrError(null);
+		setHerdrPhase('loading');
+		herdrAbortController.current?.abort(new Error('Herdr launch replaced.'));
+		const abortController = new AbortController();
+		herdrAbortController.current = abortController;
+
+		try {
+			const host = await prepareHerdrHost({
+				storedConnectionId: props.id,
+				ports: {
+					getSavedConnection: (storedConnectionId) =>
+						queryClient.fetchQuery(
+							secretsManager.connections.query.get(storedConnectionId),
+						),
+					getPrivateKey: async (keyId) =>
+						(await secretsManager.keys.utils.getPrivateKey(keyId)).value,
+					getConnections: () => useSshStore.getState().connections,
+					connect: useSshStore.getState().connect,
+					loadSnapshot: (connection) =>
+						loadHerdrSnapshot({
+							run: (command) => runRemoteTextCommand({ connection, command }),
+						}),
+				},
+				abortSignal: abortController.signal,
+			});
+			if (abortController.signal.aborted) return;
+			useHerdrProviderStore.getState().setHost(host);
+			setHerdrPhase('idle');
+			router.push({
+				pathname: '/herdr',
+				params: {
+					storedConnectionId: host.storedConnectionId,
+					connectionId: host.connectionId,
+				},
+			});
+		} catch (error) {
+			if (abortController.signal.aborted) return;
+			setHerdrError(
+				error instanceof Error ? error.message : 'Unable to open Herdr.',
+			);
+			setHerdrPhase('error');
+		}
+	}, [herdrPhase, props.id, router]);
 
 	return (
 		<Pressable
 			style={{
 				flexDirection: 'row',
+				flexWrap: 'wrap',
 				alignItems: 'center',
 				justifyContent: 'space-between',
 				backgroundColor: theme.colors.inputBackground,
@@ -564,7 +631,24 @@ function ConnectionRow(props: {
 							Connection Actions
 						</Text>
 						<View style={{ gap: 8 }}>
-							{/* Keep only rename/delete/cancel. Tap row fills the form */}
+							<Pressable
+								onPress={() => void openHerdr()}
+								style={{
+									backgroundColor: theme.colors.primary,
+									borderRadius: 10,
+									paddingVertical: 12,
+									alignItems: 'center',
+								}}
+							>
+								<Text
+									style={{
+										color: theme.colors.buttonTextOnPrimary,
+										fontWeight: '700',
+									}}
+								>
+									Open Herdr
+								</Text>
+							</Pressable>
 							<Pressable
 								onPress={() => {
 									setOpen(false);
@@ -634,6 +718,27 @@ function ConnectionRow(props: {
 					</View>
 				</Pressable>
 			</Modal>
+			{herdrPhase === 'loading' ? (
+				<Text
+					style={{
+						color: theme.colors.muted,
+						flexBasis: '100%',
+						marginTop: 8,
+					}}
+				>
+					Opening Herdr…
+				</Text>
+			) : null}
+			{herdrPhase === 'error' && herdrError ? (
+				<View style={{ flexBasis: '100%', marginTop: 8 }}>
+					<Text style={{ color: theme.colors.danger }}>{herdrError}</Text>
+					<Pressable onPress={() => void openHerdr()}>
+						<Text style={{ color: theme.colors.primary }}>
+							Retry Open Herdr
+						</Text>
+					</Pressable>
+				</View>
+			) : null}
 
 			{/* Rename Modal */}
 			<Modal
