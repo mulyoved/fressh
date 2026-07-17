@@ -10,6 +10,7 @@ import {
 	type ResolvedKeyboardLongPressOption,
 } from '@/lib/work-key-long-press-options';
 import { type WorkmuxNavScope } from '@/lib/workmux-app-commands';
+import { type WorkKeyLongPressMode } from './keyboard-component-props';
 
 export type TerminalKeyboardLongPressPopupState = {
 	options: readonly ResolvedKeyboardLongPressOption[];
@@ -58,6 +59,7 @@ export function deactivateTerminalKeyboardLongPressMount({
 export function buildTerminalKeyboardLongPressPopup({
 	slot,
 	getNavScope,
+	workKeyLongPressMode = 'workmux-scoped',
 	keyboardWidth,
 	keyboardBounds,
 	anchorX,
@@ -68,6 +70,7 @@ export function buildTerminalKeyboardLongPressPopup({
 }: {
 	slot: KeyboardSlot;
 	getNavScope: () => WorkmuxNavScope;
+	workKeyLongPressMode?: WorkKeyLongPressMode;
 	keyboardWidth: number;
 	keyboardBounds?: LongPressKeyboardBounds | null;
 	anchorX: number;
@@ -77,7 +80,10 @@ export function buildTerminalKeyboardLongPressPopup({
 	pointerLocalY: number;
 }): TerminalKeyboardLongPressPopupState | null {
 	const options =
-		getWorkKeyLongPressOptions(slot, getNavScope()) ?? slot.longPress?.options;
+		workKeyLongPressMode === 'configured'
+			? slot.longPress?.options
+			: (getWorkKeyLongPressOptions(slot, getNavScope()) ??
+				slot.longPress?.options);
 	if (!options?.length) return null;
 
 	const layout = getLongPressPopupLayout({
@@ -112,6 +118,7 @@ export function createTerminalKeyboardLongPressMeasureCallback({
 	keyboardBoundsRef,
 	keyboardWidthRef,
 	navScopeRef,
+	workKeyLongPressMode = 'workmux-scoped',
 	setLongPressPopup,
 }: {
 	slot: KeyboardSlot;
@@ -124,6 +131,7 @@ export function createTerminalKeyboardLongPressMeasureCallback({
 	keyboardBoundsRef: CurrentRef<LongPressKeyboardBounds | null>;
 	keyboardWidthRef: CurrentRef<number>;
 	navScopeRef: CurrentRef<WorkmuxNavScope>;
+	workKeyLongPressMode?: WorkKeyLongPressMode;
 	setLongPressPopup: (popup: TerminalKeyboardLongPressPopupState) => void;
 }) {
 	return (x: number, y: number, width: number) => {
@@ -147,6 +155,7 @@ export function createTerminalKeyboardLongPressMeasureCallback({
 		const nextPopup = buildTerminalKeyboardLongPressPopup({
 			slot,
 			getNavScope: () => navScopeRef.current,
+			workKeyLongPressMode,
 			keyboardWidth: keyboardWidthRef.current,
 			keyboardBounds: keyboardBoundsRef.current,
 			anchorX: x - root.x,

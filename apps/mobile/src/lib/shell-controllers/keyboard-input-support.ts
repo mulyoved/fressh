@@ -142,26 +142,7 @@ export function isCompletedKeyboardInput(outcome: InputOutcome): boolean {
 	return outcome.status === 'completed';
 }
 
-export function buildKeyboardStepSegments(
-	step: CommandStep,
-	encoder: TextEncoder,
-): Uint8Array<ArrayBuffer>[] {
-	const value =
-		step.type === 'text'
-			? step.data
-			: step.type === 'enter'
-				? '\r'
-				: step.type === 'arrowDown'
-					? '\x1b[B'
-					: step.type === 'arrowUp'
-						? '\x1b[A'
-						: step.type === 'esc'
-							? '\x1b'
-							: step.type === 'space'
-								? ' '
-								: '\t';
-	return Array.from({ length: step.repeat ?? 1 }, () => encoder.encode(value));
-}
+export { buildKeyboardStepSegments } from '@/lib/keyboard-runtime';
 
 export function collectKeyboardMacroOperations(
 	macro: MacroDef,

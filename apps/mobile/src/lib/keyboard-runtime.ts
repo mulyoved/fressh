@@ -1,6 +1,10 @@
 import { type ActionId } from '@/lib/keyboard-actions';
 import { parseMacroScript, type MacroStep } from '@/lib/macro-scripts';
-import { type KeyboardExecutableItem, type MacroDef } from '@/lib/shell-config';
+import {
+	type CommandStep,
+	type KeyboardExecutableItem,
+	type MacroDef,
+} from '@/lib/shell-config';
 
 export { parseMacroScript } from '@/lib/macro-scripts';
 
@@ -8,6 +12,27 @@ const textEncoder = new TextEncoder();
 
 function encodeText(value: string): Uint8Array<ArrayBuffer> {
 	return textEncoder.encode(value);
+}
+
+export function buildKeyboardStepSegments(
+	step: CommandStep,
+	encoder: TextEncoder,
+): Uint8Array<ArrayBuffer>[] {
+	const value =
+		step.type === 'text'
+			? step.data
+			: step.type === 'enter'
+				? '\r'
+				: step.type === 'arrowDown'
+					? '\x1b[B'
+					: step.type === 'arrowUp'
+						? '\x1b[A'
+						: step.type === 'esc'
+							? '\x1b'
+							: step.type === 'space'
+								? ' '
+								: '\t';
+	return Array.from({ length: step.repeat ?? 1 }, () => encoder.encode(value));
 }
 
 export function runMacro(
