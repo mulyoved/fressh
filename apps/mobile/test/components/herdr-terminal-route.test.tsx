@@ -443,6 +443,35 @@ test('reload starts a fresh baseline generation and rejects stale xterm events',
 	expect(owner.scroll).toHaveBeenCalledWith('down', 3);
 });
 
+test('background before first xterm readiness never starts the suspended owner', async () => {
+	const { owner } = await renderReady();
+	expect(owner.start).not.toHaveBeenCalled();
+
+	act(() => mockAppStateListener?.('background'));
+	expect(owner.background).toHaveBeenCalledTimes(1);
+	act(() => mockXtermProps?.onInitialized('xterm-late'));
+	act(() => mockXtermProps?.onResize(120, 40));
+
+	expect(owner.start).not.toHaveBeenCalled();
+	expect(owner.retry).not.toHaveBeenCalled();
+});
+
+test('reload followed by background rejects replacement-document readiness', async () => {
+	const { owner } = await renderReady();
+	act(() => mockXtermProps?.onInitialized('xterm-1'));
+	act(() => mockXtermProps?.onResize(120, 40));
+	owner.start.mockClear();
+	owner.retry.mockClear();
+
+	act(() => mockXtermProps?.webViewOptions.onLoadStart());
+	act(() => mockAppStateListener?.('background'));
+	act(() => mockXtermProps?.onInitialized('xterm-2'));
+	act(() => mockXtermProps?.onResize(90, 28));
+
+	expect(owner.start).not.toHaveBeenCalled();
+	expect(owner.retry).not.toHaveBeenCalled();
+});
+
 test('Take Over and owner-local Retry invoke only their exact normal owner actions', async () => {
 	const { owner } = await renderReady();
 	act(() => mockXtermProps?.onInitialized('xterm-1'));
@@ -494,6 +523,37 @@ test('transport Retry retires the dead owner and reconnects without takeover', a
 	expect(owner.takeOver).not.toHaveBeenCalled();
 	const freshOwner = mockCreateOwner.mock.results[1]!.value as OwnerHarness;
 	expect(freshOwner.takeOver).not.toHaveBeenCalled();
+});
+
+test('resize cannot restart the old owner during bounded transport retirement', async () => {
+	let finishRetirement!: () => void;
+	const retirement = new Promise<void>((resolve) => {
+		finishRetirement = resolve;
+	});
+	const { owner } = await renderReady();
+	act(() => mockXtermProps?.onInitialized('xterm-1'));
+	act(() => mockXtermProps?.onResize(120, 40));
+	owner.start.mockClear();
+	owner.retry.mockClear();
+	owner.retire.mockReturnValueOnce(retirement);
+	act(() =>
+		owner.publish({
+			phase: 'error',
+			generation: 1,
+			kind: 'transport',
+			reason: 'SSH transport failed.',
+		}),
+	);
+
+	fireEvent.press(screen.getByRole('button', { name: 'Retry' }));
+	await waitFor(() => expect(owner.retire).toHaveBeenCalledWith('failure'));
+	act(() => mockXtermProps?.onResize(100, 32));
+	expect(owner.start).not.toHaveBeenCalled();
+	expect(owner.retry).not.toHaveBeenCalled();
+
+	finishRetirement();
+	await act(async () => retirement);
+	await waitFor(() => expect(mockCreateOwner).toHaveBeenCalledTimes(2));
 });
 
 test('reconciliation Retry reconnects through prepareHerdrHost instead of retrying the old owner', async () => {
@@ -626,6 +686,36 @@ test('backgrounds synchronously and foreground refresh creates a fresh normal ow
 		}),
 	);
 	expect(screen.getByRole('button', { name: 'Take Over' })).toBeOnTheScreen();
+});
+
+test('foreground readiness cannot restart the old owner before refreshed owner installation', async () => {
+	let finishRefresh!: (host: HerdrHostState) => void;
+	const refresh = new Promise<HerdrHostState>((resolve) => {
+		finishRefresh = resolve;
+	});
+	const { owner } = await renderReady();
+	act(() => mockXtermProps?.onInitialized('xterm-1'));
+	act(() => mockXtermProps?.onResize(120, 40));
+	owner.start.mockClear();
+	owner.retry.mockClear();
+
+	act(() => mockXtermProps?.webViewOptions.onLoadStart());
+	mockPrepareHerdrHost.mockReturnValueOnce(refresh);
+	act(() => mockAppStateListener?.('background'));
+	act(() => mockAppStateListener?.('active'));
+	await waitFor(() => expect(mockPrepareHerdrHost).toHaveBeenCalledTimes(1));
+	act(() => mockXtermProps?.onInitialized('xterm-2'));
+	act(() => mockXtermProps?.onResize(88, 26));
+
+	expect(owner.start).not.toHaveBeenCalled();
+	expect(owner.retry).not.toHaveBeenCalled();
+	await act(async () => finishRefresh(HOST));
+	await waitFor(() => expect(mockCreateOwner).toHaveBeenCalledTimes(2));
+	const freshOwner = mockCreateOwner.mock.results[1]!.value as OwnerHarness;
+	await waitFor(() =>
+		expect(freshOwner.start).toHaveBeenCalledWith({ cols: 88, rows: 26 }),
+	);
+	expect(freshOwner.retry).not.toHaveBeenCalled();
 });
 
 test('focus loss uses synchronous background retirement', async () => {

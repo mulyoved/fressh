@@ -57,8 +57,9 @@ export default function HerdrTerminalRoute() {
 	const initializedRef = React.useRef(false);
 	const sizeRef = React.useRef<TerminalSize | null>(null);
 	const startedOwnerRef = React.useRef<HerdrTerminalOwner | null>(null);
+	const startAdmittedOwnerRef = React.useRef<HerdrTerminalOwner | null>(null);
 	const rendererPhaseRef = React.useRef<RendererPhase>('blocked');
-	const reloadPendingRef = React.useRef(false);
+	const reloadOwnerRef = React.useRef<HerdrTerminalOwner | null>(null);
 	const retryRecoveryRef = React.useRef<RetryRecovery>('transport');
 	const recoveringTransportRef = React.useRef(false);
 	const visibleRef = React.useRef(false);
@@ -86,6 +87,11 @@ export default function HerdrTerminalRoute() {
 			const size = sizeRef.current;
 			if (
 				!owner ||
+				ownerRef.current !== owner ||
+				startAdmittedOwnerRef.current !== owner ||
+				!mountedRef.current ||
+				!visibleRef.current ||
+				suspendedRef.current ||
 				!initializedRef.current ||
 				!size ||
 				startedOwnerRef.current === owner
@@ -94,8 +100,8 @@ export default function HerdrTerminalRoute() {
 			}
 			startedOwnerRef.current = owner;
 			rendererPhaseRef.current = 'awaiting-baseline';
-			if (reloadPendingRef.current) {
-				reloadPendingRef.current = false;
+			if (reloadOwnerRef.current === owner) {
+				reloadOwnerRef.current = null;
 				owner.retry(size);
 			} else {
 				owner.start(size);
@@ -149,7 +155,11 @@ export default function HerdrTerminalRoute() {
 				throw new Error('SSH connection unavailable.');
 			}
 
+			const previousOwner = ownerRef.current;
+			startAdmittedOwnerRef.current = null;
+			reloadOwnerRef.current = null;
 			ownerUnsubscribeRef.current?.();
+			if (previousOwner) void previousOwner.retire('failure');
 			let owner: HerdrTerminalOwner;
 			owner = createHerdrTerminalOwner({
 				terminalId: nextAgent.terminalId,
@@ -187,6 +197,9 @@ export default function HerdrTerminalRoute() {
 			});
 			ownerRef.current = owner;
 			startedOwnerRef.current = null;
+			if (mountedRef.current && visibleRef.current && !suspendedRef.current) {
+				startAdmittedOwnerRef.current = owner;
+			}
 			rendererPhaseRef.current = 'blocked';
 			retryRecoveryRef.current = 'owner';
 			ownerUnsubscribeRef.current = owner.subscribe((nextState) => {
@@ -313,7 +326,12 @@ export default function HerdrTerminalRoute() {
 				return;
 			}
 			const owner = ownerRef.current;
-			if (owner) await owner.retire('switch');
+			if (owner) {
+				startAdmittedOwnerRef.current = null;
+				reloadOwnerRef.current = null;
+				rendererPhaseRef.current = 'blocked';
+				await owner.retire('switch');
+			}
 			router.replace({
 				pathname: '/herdr/terminal',
 				params: {
@@ -362,6 +380,7 @@ export default function HerdrTerminalRoute() {
 	const backgroundOwner = React.useCallback(() => {
 		suspendedRef.current = true;
 		reconcileGenerationRef.current += 1;
+		startAdmittedOwnerRef.current = null;
 		rendererPhaseRef.current = 'blocked';
 		const owner = ownerRef.current;
 		if (!owner) return;
@@ -402,20 +421,37 @@ export default function HerdrTerminalRoute() {
 		return () => {
 			mountedRef.current = false;
 			reconcileGenerationRef.current += 1;
+			startAdmittedOwnerRef.current = null;
+			reloadOwnerRef.current = null;
 			ownerUnsubscribeRef.current?.();
 			void ownerRef.current?.retire('unmount');
 		};
 	}, []);
 
 	const handleLoadStart = React.useCallback(() => {
+		const owner = ownerRef.current;
 		const restarting = currentXtermInstanceIdRef.current !== null;
+		const wasAdmitted = startAdmittedOwnerRef.current === owner;
 		currentXtermInstanceIdRef.current = null;
 		initializedRef.current = false;
 		sizeRef.current = null;
 		startedOwnerRef.current = null;
 		rendererPhaseRef.current = 'blocked';
-		reloadPendingRef.current = reloadPendingRef.current || restarting;
-		if (restarting) void ownerRef.current?.retire('retry');
+		if (restarting) {
+			startAdmittedOwnerRef.current = null;
+			reloadOwnerRef.current = owner;
+			if (
+				owner &&
+				wasAdmitted &&
+				mountedRef.current &&
+				visibleRef.current &&
+				!suspendedRef.current &&
+				!recoveringTransportRef.current
+			) {
+				startAdmittedOwnerRef.current = owner;
+			}
+			if (owner) void owner.retire('retry');
+		}
 	}, []);
 	const handleInitialized = React.useCallback(
 		(instanceId: string) => {
@@ -432,8 +468,15 @@ export default function HerdrTerminalRoute() {
 			if (!Number.isSafeInteger(rows) || rows <= 0) return;
 			sizeRef.current = { cols, rows };
 			const owner = ownerRef.current;
-			if (startedOwnerRef.current === owner && owner) owner.resize(cols, rows);
-			else maybeStartOwner(owner);
+			if (
+				owner &&
+				startAdmittedOwnerRef.current === owner &&
+				visibleRef.current &&
+				!suspendedRef.current
+			) {
+				if (startedOwnerRef.current === owner) owner.resize(cols, rows);
+				else maybeStartOwner(owner);
+			}
 		},
 		[maybeStartOwner],
 	);
@@ -441,6 +484,8 @@ export default function HerdrTerminalRoute() {
 		if (recoveringTransportRef.current) return;
 		recoveringTransportRef.current = true;
 		reconcileGenerationRef.current += 1;
+		startAdmittedOwnerRef.current = null;
+		reloadOwnerRef.current = null;
 		rendererPhaseRef.current = 'blocked';
 		setState({ phase: 'reconnecting' });
 		const owner = ownerRef.current;
@@ -469,7 +514,15 @@ export default function HerdrTerminalRoute() {
 		const registered = host
 			? useSshStore.getState().connections[host.connectionId]
 			: null;
-		if (owner && size && registered && retryRecoveryRef.current === 'owner') {
+		if (
+			owner &&
+			startAdmittedOwnerRef.current === owner &&
+			visibleRef.current &&
+			!suspendedRef.current &&
+			size &&
+			registered &&
+			retryRecoveryRef.current === 'owner'
+		) {
 			rendererPhaseRef.current = 'awaiting-baseline';
 			owner.retry(size);
 			return;
@@ -479,13 +532,22 @@ export default function HerdrTerminalRoute() {
 	const handleTakeOver = React.useCallback(() => {
 		const owner = ownerRef.current;
 		const size = sizeRef.current;
-		if (owner && size) {
+		if (
+			owner &&
+			startAdmittedOwnerRef.current === owner &&
+			visibleRef.current &&
+			!suspendedRef.current &&
+			size
+		) {
 			rendererPhaseRef.current = 'awaiting-baseline';
 			owner.takeOver(size);
 		}
 	}, []);
 	const handleBack = React.useCallback(async () => {
 		const owner = ownerRef.current;
+		startAdmittedOwnerRef.current = null;
+		reloadOwnerRef.current = null;
+		rendererPhaseRef.current = 'blocked';
 		if (owner) await owner.retire('back');
 		goToList(currentHostRef.current);
 	}, [goToList]);
