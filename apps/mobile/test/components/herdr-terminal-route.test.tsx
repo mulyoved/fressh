@@ -573,6 +573,81 @@ test('renderer Retry remounts, reconciles after retirement, and gates the fresh 
 	);
 });
 
+test('replacement renderer failure supersedes pending recovery without bypassing retirement or baseline gating', async () => {
+	const retirement = deferred<void>();
+	const { owner, renderer } = await renderReady();
+	act(() => mockXtermProps?.onInitialized('xterm-1'));
+	act(() => mockXtermProps?.onResize(120, 40));
+	renderer.replace(new Uint8Array([1]));
+	owner.sendInput.mockClear();
+	mockXtermHandle.clear.mockClear();
+	mockXtermHandle.write.mockClear();
+	owner.retire.mockReturnValueOnce(retirement.promise);
+	const originalRenderer = mockXtermProps!;
+
+	act(() => originalRenderer.webViewOptions.onRenderProcessGone());
+	fireEvent.press(screen.getByRole('button', { name: 'Retry' }));
+	await waitFor(() => expect(mockXtermMountCount).toBe(2));
+	const failedReplacementRenderer = mockXtermProps!;
+
+	act(() => failedReplacementRenderer.webViewOptions.onError());
+	expect(owner.retire).toHaveBeenCalledTimes(1);
+	fireEvent.press(screen.getByRole('button', { name: 'Retry' }));
+	await waitFor(() => expect(mockXtermMountCount).toBe(3));
+	const currentRenderer = mockXtermProps!;
+
+	act(() => originalRenderer.onInitialized('stale-original'));
+	act(() => originalRenderer.onResize(200, 60));
+	act(() => failedReplacementRenderer.onInitialized('stale-replacement'));
+	act(() => failedReplacementRenderer.onResize(180, 50));
+	renderer.append(new Uint8Array([2]));
+	expect(owner.start).toHaveBeenCalledTimes(1);
+	expect(mockXtermHandle.write).not.toHaveBeenCalled();
+	expect(mockPrepareHerdrHost).not.toHaveBeenCalled();
+	expect(mockCreateOwner).toHaveBeenCalledTimes(1);
+
+	await act(async () => retirement.resolve());
+	await waitFor(() => expect(mockPrepareHerdrHost).toHaveBeenCalledTimes(1));
+	await waitFor(() => expect(mockCreateOwner).toHaveBeenCalledTimes(2));
+	expect(owner.retire).toHaveBeenCalledTimes(1);
+	expect(mockXtermMountCount).toBe(3);
+
+	const freshOwner = mockCreateOwner.mock.results[1]!.value as OwnerHarness;
+	const freshRenderer = mockCreateOwner.mock.calls[1]![0]
+		.renderer as HerdrRendererPort;
+	act(() => currentRenderer.onInitialized('xterm-3'));
+	act(() => currentRenderer.onResize(90, 28));
+	expect(freshOwner.start).toHaveBeenCalledWith({ cols: 90, rows: 28 });
+
+	act(() =>
+		currentRenderer.onInput({
+			str: 'too-early',
+			kind: 'typing',
+			instanceId: 'xterm-3',
+		}),
+	);
+	freshRenderer.append(new Uint8Array([3]));
+	expect(freshOwner.sendInput).not.toHaveBeenCalled();
+	expect(mockXtermHandle.write).not.toHaveBeenCalled();
+
+	freshRenderer.replace(new Uint8Array([4]));
+	freshRenderer.append(new Uint8Array([5]));
+	act(() =>
+		currentRenderer.onInput({
+			str: 'current',
+			kind: 'typing',
+			instanceId: 'xterm-3',
+		}),
+	);
+	expect(mockXtermHandle.write.mock.calls).toEqual([
+		[new Uint8Array([4])],
+		[new Uint8Array([5])],
+	]);
+	expect(freshOwner.sendInput).toHaveBeenCalledWith(
+		new TextEncoder().encode('current'),
+	);
+});
+
 test('renderer Retry owns foreground reconciliation until pending retirement settles', async () => {
 	const retirement = deferred<void>();
 	const { owner } = await renderReady();

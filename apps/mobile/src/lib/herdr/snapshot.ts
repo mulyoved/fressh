@@ -32,6 +32,7 @@ const agentSchema = z.object({
 	terminal_id: nonEmptyIdSchema,
 	pane_id: nonEmptyIdSchema,
 	display_agent: z.string().nullable().optional(),
+	agent: z.string().nullable().optional(),
 	agent_status: z.unknown().optional(),
 	foreground_cwd: z.string().nullable().optional(),
 });
@@ -120,11 +121,14 @@ function safeCwdBasename(cwd: string | null | undefined): string | null {
 
 function preferredAgentLabel(input: {
 	displayAgent: string | null | undefined;
+	agent: string | null | undefined;
 	paneLabel: string | null;
 	terminalId: string;
 }): string {
 	const displayAgent = input.displayAgent?.trim();
 	if (displayAgent) return displayAgent;
+	const agent = input.agent?.trim();
+	if (agent) return agent;
 	const paneLabel = input.paneLabel?.trim();
 	return paneLabel || input.terminalId;
 }
@@ -203,6 +207,7 @@ function normalizeSnapshot(
 			tabLabel: pane.tabLabel,
 			label: preferredAgentLabel({
 				displayAgent: agent.display_agent,
+				agent: agent.agent,
 				paneLabel: pane.label,
 				terminalId: agent.terminal_id,
 			}),

@@ -95,6 +95,23 @@ void test('parseHerdrSnapshot preserves stable terminal identity when pane ident
 	assert.equal(findHerdrAgent(moved, 'pane-new'), null);
 });
 
+void test('parseHerdrSnapshot uses the authoritative agent when presentation labels are absent', () => {
+	const response = baseResponse();
+	const rawAgent = response.result.snapshot.agents[0]!;
+	Object.assign(rawAgent, { agent: '  Claude Code  ' });
+	Object.assign(response.result.snapshot.panes[0]!, { label: null });
+	assert.equal(
+		parseHerdrSnapshot(JSON.stringify(response)).agents[0]?.label,
+		'Codex',
+	);
+	delete (rawAgent as { display_agent?: string }).display_agent;
+
+	const snapshot = parseHerdrSnapshot(JSON.stringify(response));
+
+	assert.equal(snapshot.agents[0]?.label, 'Claude Code');
+	assert.notEqual(snapshot.agents[0]?.label, 'terminal-stable');
+});
+
 void test('parseHerdrSnapshot accepts future fields and normalizes unknown or missing statuses', () => {
 	const response = baseResponse();
 	Object.assign(response, { future_envelope_field: true });
