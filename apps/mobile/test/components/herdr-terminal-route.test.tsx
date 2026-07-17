@@ -573,6 +573,85 @@ test('renderer Retry remounts, reconciles after retirement, and gates the fresh 
 	);
 });
 
+test('renderer Retry owns foreground reconciliation until pending retirement settles', async () => {
+	const retirement = deferred<void>();
+	const { owner } = await renderReady();
+	owner.retire.mockReturnValueOnce(retirement.promise);
+	const failedRenderer = mockXtermProps!;
+
+	act(() => failedRenderer.webViewOptions.onError());
+	const retry = screen.getByRole('button', { name: 'Retry' });
+	fireEvent.press(retry);
+	fireEvent.press(retry);
+	await waitFor(() => expect(mockXtermMountCount).toBe(2));
+
+	act(() => mockAppStateListener?.('background'));
+	act(() => mockAppStateListener?.('active'));
+	act(() => mockAppStateListener?.('active'));
+	expect(mockPrepareHerdrHost).not.toHaveBeenCalled();
+	expect(mockCreateOwner).toHaveBeenCalledTimes(1);
+	expect(owner.retire).toHaveBeenCalledTimes(1);
+
+	await act(async () => retirement.resolve());
+	await waitFor(() => expect(mockPrepareHerdrHost).toHaveBeenCalledTimes(1));
+	await waitFor(() => expect(mockCreateOwner).toHaveBeenCalledTimes(2));
+	expect(mockXtermMountCount).toBe(2);
+	expect(owner.retire).toHaveBeenCalledTimes(1);
+});
+
+test('foreground clears renderer-failure suspension without bypassing Retry recovery', async () => {
+	const retirement = deferred<void>();
+	const { owner } = await renderReady();
+	owner.retire.mockReturnValueOnce(retirement.promise);
+	const failedRenderer = mockXtermProps!;
+
+	act(() => failedRenderer.webViewOptions.onError());
+	act(() => mockAppStateListener?.('background'));
+	act(() => mockAppStateListener?.('active'));
+	act(() => mockAppStateListener?.('active'));
+	expect(mockPrepareHerdrHost).not.toHaveBeenCalled();
+	expect(
+		screen.getByText('Terminal renderer stopped. Retry to reconnect.'),
+	).toBeOnTheScreen();
+
+	fireEvent.press(screen.getByRole('button', { name: 'Retry' }));
+	await waitFor(() => expect(mockXtermMountCount).toBe(2));
+	expect(mockPrepareHerdrHost).not.toHaveBeenCalled();
+
+	await act(async () => retirement.resolve());
+	await waitFor(() => expect(mockPrepareHerdrHost).toHaveBeenCalledTimes(1));
+	await waitFor(() => expect(mockCreateOwner).toHaveBeenCalledTimes(2));
+	const freshOwner = mockCreateOwner.mock.results[1]!.value as OwnerHarness;
+	const replacementRenderer = mockXtermProps!;
+	act(() => replacementRenderer.onInitialized('xterm-2'));
+	act(() => replacementRenderer.onResize(90, 28));
+	expect(freshOwner.start).toHaveBeenCalledWith({ cols: 90, rows: 28 });
+});
+
+test('foreground resumes the same renderer recovery when background cancels its reconciliation', async () => {
+	const refresh = deferred<HerdrHostState>();
+	const { owner } = await renderReady();
+	owner.retire.mockReturnValueOnce(Promise.resolve());
+	mockPrepareHerdrHost
+		.mockReturnValueOnce(refresh.promise)
+		.mockResolvedValueOnce(HOST);
+	const failedRenderer = mockXtermProps!;
+
+	act(() => failedRenderer.webViewOptions.onError());
+	fireEvent.press(screen.getByRole('button', { name: 'Retry' }));
+	await waitFor(() => expect(mockPrepareHerdrHost).toHaveBeenCalledTimes(1));
+
+	act(() => mockAppStateListener?.('background'));
+	act(() => mockAppStateListener?.('active'));
+	act(() => mockAppStateListener?.('active'));
+	await act(async () => refresh.resolve(HOST));
+
+	await waitFor(() => expect(mockPrepareHerdrHost).toHaveBeenCalledTimes(2));
+	await waitFor(() => expect(mockCreateOwner).toHaveBeenCalledTimes(2));
+	expect(owner.retire).toHaveBeenCalledTimes(1);
+	expect(mockXtermMountCount).toBe(2);
+});
+
 test('background before first xterm readiness never starts the suspended owner', async () => {
 	const { owner } = await renderReady();
 	expect(owner.start).not.toHaveBeenCalled();

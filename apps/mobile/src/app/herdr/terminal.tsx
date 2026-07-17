@@ -42,9 +42,12 @@ type TerminalSize = Readonly<{ cols: number; rows: number }>;
 type RendererPhase = 'blocked' | 'awaiting-baseline' | 'active';
 type RetryRecovery = 'owner' | 'renderer' | 'transport';
 type RouteOperation = Readonly<{ generation: number; routeIdentity: string }>;
-type RendererRecovery = Readonly<{
+type RendererRecovery = {
 	retirement: Promise<void>;
-}>;
+	retryRequested: boolean;
+	rendererRemounted: boolean;
+	transition: Promise<void> | null;
+};
 
 export default function HerdrTerminalRoute() {
 	const router = useRouter();
@@ -70,10 +73,12 @@ export default function HerdrTerminalRoute() {
 	const reloadOwnerRef = React.useRef<HerdrTerminalOwner | null>(null);
 	const retryRecoveryRef = React.useRef<RetryRecovery>('transport');
 	const recoveringTransportRef = React.useRef(false);
-	const recoveringRendererRef = React.useRef(false);
 	const rendererGenerationRef = React.useRef(0);
 	const failedRendererGenerationRef = React.useRef<number | null>(null);
 	const rendererRecoveryRef = React.useRef<RendererRecovery | null>(null);
+	const driveRendererRecoveryRef = React.useRef<
+		(recovery: RendererRecovery) => void
+	>(() => {});
 	const visibleRef = React.useRef(false);
 	const suspendedRef = React.useRef(false);
 	const mountedRef = React.useRef(true);
@@ -269,7 +274,7 @@ export default function HerdrTerminalRoute() {
 	);
 
 	const reconcile = React.useCallback(
-		async (forceRefresh: boolean) => {
+		async (forceRefresh: boolean): Promise<boolean> => {
 			const generation = reconcileGenerationRef.current + 1;
 			reconcileGenerationRef.current = generation;
 			setState({ phase: 'reconnecting' });
@@ -281,7 +286,7 @@ export default function HerdrTerminalRoute() {
 					kind: 'transport',
 					reason: 'This Herdr terminal link is incomplete.',
 				});
-				return;
+				return true;
 			}
 
 			try {
@@ -307,16 +312,17 @@ export default function HerdrTerminalRoute() {
 					suspendedRef.current ||
 					generation !== reconcileGenerationRef.current
 				) {
-					return;
+					return false;
 				}
 				useHerdrProviderStore.getState().setHost(host);
 				currentHostRef.current = host;
 				const nextAgent = findHerdrAgent(host.snapshot, terminalId);
 				if (!nextAgent) {
 					goToList(host);
-					return;
+					return true;
 				}
 				installOwner(host, nextAgent);
+				return true;
 			} catch (error) {
 				if (
 					!mountedRef.current ||
@@ -324,7 +330,7 @@ export default function HerdrTerminalRoute() {
 					suspendedRef.current ||
 					generation !== reconcileGenerationRef.current
 				) {
-					return;
+					return false;
 				}
 				retryRecoveryRef.current = 'transport';
 				setState({
@@ -336,10 +342,56 @@ export default function HerdrTerminalRoute() {
 							? error.message
 							: 'Unable to open the Herdr terminal.',
 				});
+				return true;
 			}
 		},
 		[goToList, installOwner, prepareHost, storedConnectionId, terminalId],
 	);
+	const driveRendererRecovery = React.useCallback(
+		(recovery: RendererRecovery) => {
+			if (
+				rendererRecoveryRef.current !== recovery ||
+				!recovery.retryRequested ||
+				recovery.transition
+			) {
+				return;
+			}
+
+			const transition = (async () => {
+				await recovery.retirement;
+				if (
+					rendererRecoveryRef.current !== recovery ||
+					!mountedRef.current ||
+					!visibleRef.current ||
+					suspendedRef.current
+				) {
+					return;
+				}
+				failedRendererGenerationRef.current = null;
+				const completed = await reconcile(true);
+				if (completed && rendererRecoveryRef.current === recovery) {
+					rendererRecoveryRef.current = null;
+				}
+			})();
+			recovery.transition = transition;
+			void transition.finally(() => {
+				if (recovery.transition === transition) {
+					recovery.transition = null;
+				}
+				if (
+					rendererRecoveryRef.current === recovery &&
+					recovery.retryRequested &&
+					mountedRef.current &&
+					visibleRef.current &&
+					!suspendedRef.current
+				) {
+					driveRendererRecoveryRef.current(recovery);
+				}
+			});
+		},
+		[reconcile],
+	);
+	driveRendererRecoveryRef.current = driveRendererRecovery;
 
 	const navigateAgent = React.useCallback(
 		async (direction: 'next' | 'previous') => {
@@ -469,18 +521,17 @@ export default function HerdrTerminalRoute() {
 			visibleRef.current = true;
 			const reacquiring = suspendedRef.current;
 			suspendedRef.current = false;
-			if (
-				!reacquiring ||
-				retryRecoveryRef.current !== 'renderer' ||
-				failedRendererGenerationRef.current === null
-			) {
+			const rendererRecovery = rendererRecoveryRef.current;
+			if (rendererRecovery) {
+				driveRendererRecovery(rendererRecovery);
+			} else {
 				void reconcile(reacquiring);
 			}
 			return () => {
 				visibleRef.current = false;
 				backgroundOwner();
 			};
-		}, [backgroundOwner, reconcile]),
+		}, [backgroundOwner, driveRendererRecovery, reconcile]),
 	);
 
 	React.useEffect(() => {
@@ -491,18 +542,18 @@ export default function HerdrTerminalRoute() {
 				backgroundOwner();
 				return;
 			}
-			if (
-				suspendedRef.current &&
-				visibleRef.current &&
-				(retryRecoveryRef.current !== 'renderer' ||
-					failedRendererGenerationRef.current === null)
-			) {
+			if (suspendedRef.current && visibleRef.current) {
 				suspendedRef.current = false;
-				void reconcile(true);
+				const rendererRecovery = rendererRecoveryRef.current;
+				if (rendererRecovery) {
+					driveRendererRecovery(rendererRecovery);
+				} else {
+					void reconcile(true);
+				}
 			}
 		});
 		return () => subscription.remove();
-	}, [backgroundOwner, reconcile]);
+	}, [backgroundOwner, driveRendererRecovery, reconcile]);
 
 	React.useEffect(() => {
 		mountedRef.current = true;
@@ -605,6 +656,9 @@ export default function HerdrTerminalRoute() {
 				retirement: Promise.all([priorRetirement, currentRetirement]).then(
 					() => undefined,
 				),
+				retryRequested: false,
+				rendererRemounted: false,
+				transition: null,
 			};
 			retryRecoveryRef.current = 'renderer';
 			setState({
@@ -616,32 +670,20 @@ export default function HerdrTerminalRoute() {
 		},
 		[invalidateRouteOperations],
 	);
-	const recoverRenderer = React.useCallback(async () => {
+	const recoverRenderer = React.useCallback(() => {
 		const recovery = rendererRecoveryRef.current;
-		if (!recovery || recoveringRendererRef.current) return;
-		recoveringRendererRef.current = true;
+		if (!recovery) return;
 		keyboardAdapterRef.current?.invalidatePending();
-		const nextGeneration = rendererGenerationRef.current + 1;
-		rendererGenerationRef.current = nextGeneration;
-		failedRendererGenerationRef.current = null;
-		setRendererGeneration(nextGeneration);
-		setState({ phase: 'reconnecting' });
-		try {
-			await recovery.retirement;
-			if (
-				rendererRecoveryRef.current !== recovery ||
-				!mountedRef.current ||
-				!visibleRef.current ||
-				suspendedRef.current
-			) {
-				return;
-			}
-			rendererRecoveryRef.current = null;
-			await reconcile(true);
-		} finally {
-			recoveringRendererRef.current = false;
+		recovery.retryRequested = true;
+		if (!recovery.rendererRemounted) {
+			recovery.rendererRemounted = true;
+			const nextGeneration = rendererGenerationRef.current + 1;
+			rendererGenerationRef.current = nextGeneration;
+			setRendererGeneration(nextGeneration);
+			setState({ phase: 'reconnecting' });
 		}
-	}, [reconcile]);
+		driveRendererRecovery(recovery);
+	}, [driveRendererRecovery]);
 	const recoverTransport = React.useCallback(async () => {
 		if (recoveringTransportRef.current) return;
 		keyboardAdapterRef.current?.invalidatePending();
