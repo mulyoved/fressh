@@ -1,4 +1,14 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import {
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test, { mock } from 'node:test';
 
 import {
@@ -17,6 +27,13 @@ import {
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
+const resolvedHerdrCommand =
+	'herdr_bin="$(command -v herdr 2>/dev/null || true)"; ' +
+	'if [ -z "$herdr_bin" ] && [ -x "$HOME/.local/bin/herdr" ]; then ' +
+	'herdr_bin="$HOME/.local/bin/herdr"; ' +
+	'fi; ' +
+	'[ -n "$herdr_bin" ] && ' +
+	'"$herdr_bin"';
 
 function encodedJson(value: unknown): Uint8Array {
 	return encoder.encode(`${JSON.stringify(value)}\n`);
@@ -29,7 +46,7 @@ void test('builds normal and takeover commands with shell-safe terminal IDs', ()
 			cols: 120,
 			rows: 40,
 		}),
-		"herdr terminal session control 'terminal-1' --cols 120 --rows 40",
+		`${resolvedHerdrCommand} terminal session control 'terminal-1' --cols 120 --rows 40`,
 	);
 	assert.equal(
 		buildHerdrTerminalControlCommand({
@@ -38,8 +55,53 @@ void test('builds normal and takeover commands with shell-safe terminal IDs', ()
 			rows: 40,
 			takeover: true,
 		}),
-		"herdr terminal session control 'agent'\\'' $(touch /tmp/herdr); `id`' --cols 120 --rows 40 --takeover",
+		`${resolvedHerdrCommand} terminal session control 'agent'\\'' $(touch /tmp/herdr); \`id\`' --cols 120 --rows 40 --takeover`,
 	);
+});
+
+void test('terminal command uses executable user-local Herdr when command lookup fails', (t) => {
+	const home = mkdtempSync(join(tmpdir(), 'herdr control '));
+	t.after(() => rmSync(home, { recursive: true, force: true }));
+	const userBin = join(home, '.local', 'bin');
+	mkdirSync(userBin, { recursive: true });
+	writeFileSync(
+		join(userBin, 'herdr'),
+		'#!/bin/sh\n' + 'printf "%s\\n" "$@" > "$HOME/arguments"\n',
+		{ mode: 0o755 },
+	);
+	const env = { ...process.env, HOME: home, PATH: '/usr/bin:/bin' };
+	const terminalId = `agent with spaces ' and $(touch "$HOME/should-not-run")`;
+
+	assert.throws(() =>
+		execFileSync('/bin/sh', ['-c', 'command -v herdr'], { env }),
+	);
+	execFileSync(
+		'/bin/sh',
+		[
+			'-c',
+			buildHerdrTerminalControlCommand({
+				terminalId,
+				cols: 120,
+				rows: 40,
+				takeover: true,
+			}),
+		],
+		{ env },
+	);
+
+	assert.deepEqual(readFileSync(join(home, 'arguments'), 'utf8').split('\n'), [
+		'terminal',
+		'session',
+		'control',
+		terminalId,
+		'--cols',
+		'120',
+		'--rows',
+		'40',
+		'--takeover',
+		'',
+	]);
+	assert.throws(() => readFileSync(join(home, 'should-not-run')));
 });
 
 void test('rejects invalid terminal dimensions without retaining their values', () => {

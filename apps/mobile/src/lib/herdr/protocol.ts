@@ -70,7 +70,12 @@ export function buildHerdrTerminalControlCommand(input: {
 }): string {
 	requireDimensions(input.cols, input.rows);
 	return [
-		'herdr terminal session control',
+		'herdr_bin="$(command -v herdr 2>/dev/null || true)"; ' +
+			'if [ -z "$herdr_bin" ] && [ -x "$HOME/.local/bin/herdr" ]; then ' +
+			'herdr_bin="$HOME/.local/bin/herdr"; ' +
+			'fi; ' +
+			'[ -n "$herdr_bin" ] && ' +
+			'"$herdr_bin" terminal session control',
 		quoteShell(input.terminalId),
 		`--cols ${input.cols}`,
 		`--rows ${input.rows}`,

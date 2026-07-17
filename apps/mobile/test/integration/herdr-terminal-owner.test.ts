@@ -14,6 +14,13 @@ import {
 } from '../../src/lib/herdr/terminal-owner';
 
 const encoder = new TextEncoder();
+const resolvedHerdrCommand =
+	'herdr_bin="$(command -v herdr 2>/dev/null || true)"; ' +
+	'if [ -z "$herdr_bin" ] && [ -x "$HOME/.local/bin/herdr" ]; then ' +
+	'herdr_bin="$HOME/.local/bin/herdr"; ' +
+	'fi; ' +
+	'[ -n "$herdr_bin" ] && ' +
+	'"$herdr_bin"';
 
 function arrayBuffer(bytes: Uint8Array): ArrayBuffer {
 	return bytes.buffer.slice(
@@ -243,7 +250,7 @@ void test('start opens one stable-ID stream and accepts only a full baseline', a
 	assert.equal(harness.connection.calls.length, 1);
 	assert.equal(
 		harness.connection.calls[0]?.command,
-		"herdr terminal session control 'terminal-'\\''stable' --cols 100 --rows 30",
+		`${resolvedHerdrCommand} terminal session control 'terminal-'\\''stable' --cols 100 --rows 30`,
 	);
 	assert.deepEqual(harness.states, [{ phase: 'starting', generation: 1 }]);
 	assert.deepEqual(harness.clock.pendingDelays(), [10_000]);
