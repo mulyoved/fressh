@@ -36,6 +36,8 @@ function routeParam(value: string | string[] | undefined): string | null {
 }
 
 type TerminalSize = Readonly<{ cols: number; rows: number }>;
+type RendererPhase = 'blocked' | 'awaiting-baseline' | 'active';
+type RetryRecovery = 'owner' | 'transport';
 
 export default function HerdrTerminalRoute() {
 	const router = useRouter();
@@ -51,9 +53,14 @@ export default function HerdrTerminalRoute() {
 	const ownerRef = React.useRef<HerdrTerminalOwner | null>(null);
 	const ownerUnsubscribeRef = React.useRef<(() => void) | null>(null);
 	const currentHostRef = React.useRef<HerdrHostState | null>(null);
+	const currentXtermInstanceIdRef = React.useRef<string | null>(null);
 	const initializedRef = React.useRef(false);
 	const sizeRef = React.useRef<TerminalSize | null>(null);
 	const startedOwnerRef = React.useRef<HerdrTerminalOwner | null>(null);
+	const rendererPhaseRef = React.useRef<RendererPhase>('blocked');
+	const reloadPendingRef = React.useRef(false);
+	const retryRecoveryRef = React.useRef<RetryRecovery>('transport');
+	const recoveringTransportRef = React.useRef(false);
 	const visibleRef = React.useRef(false);
 	const suspendedRef = React.useRef(false);
 	const mountedRef = React.useRef(true);
@@ -66,7 +73,7 @@ export default function HerdrTerminalRoute() {
 	);
 	const [agent, setAgent] = React.useState<HerdrAgent | null>(() => {
 		const host = useHerdrProviderStore.getState().host;
-		return host && terminalId
+		return host?.storedConnectionId === storedConnectionId && terminalId
 			? findHerdrAgent(host.snapshot, terminalId)
 			: null;
 	});
@@ -86,7 +93,13 @@ export default function HerdrTerminalRoute() {
 				return;
 			}
 			startedOwnerRef.current = owner;
-			owner.start(size);
+			rendererPhaseRef.current = 'awaiting-baseline';
+			if (reloadPendingRef.current) {
+				reloadPendingRef.current = false;
+				owner.retry(size);
+			} else {
+				owner.start(size);
+			}
 		},
 		[],
 	);
@@ -137,15 +150,33 @@ export default function HerdrTerminalRoute() {
 			}
 
 			ownerUnsubscribeRef.current?.();
-			const owner = createHerdrTerminalOwner({
+			let owner: HerdrTerminalOwner;
+			owner = createHerdrTerminalOwner({
 				terminalId: nextAgent.terminalId,
 				connection,
 				renderer: {
 					replace(bytes) {
+						if (
+							ownerRef.current !== owner ||
+							!initializedRef.current ||
+							currentXtermInstanceIdRef.current === null ||
+							rendererPhaseRef.current === 'blocked'
+						) {
+							return;
+						}
 						xtermRef.current?.clear();
 						xtermRef.current?.write(bytes);
+						rendererPhaseRef.current = 'active';
 					},
 					append(bytes) {
+						if (
+							ownerRef.current !== owner ||
+							!initializedRef.current ||
+							currentXtermInstanceIdRef.current === null ||
+							rendererPhaseRef.current !== 'active'
+						) {
+							return;
+						}
 						xtermRef.current?.write(bytes);
 					},
 				},
@@ -156,8 +187,14 @@ export default function HerdrTerminalRoute() {
 			});
 			ownerRef.current = owner;
 			startedOwnerRef.current = null;
+			rendererPhaseRef.current = 'blocked';
+			retryRecoveryRef.current = 'owner';
 			ownerUnsubscribeRef.current = owner.subscribe((nextState) => {
 				if (mountedRef.current && ownerRef.current === owner) {
+					if (nextState.phase === 'error') {
+						retryRecoveryRef.current =
+							nextState.kind === 'transport' ? 'transport' : 'owner';
+					}
 					setState(nextState);
 				}
 			});
@@ -175,6 +212,7 @@ export default function HerdrTerminalRoute() {
 			reconcileGenerationRef.current = generation;
 			setState({ phase: 'reconnecting' });
 			if (!storedConnectionId || !terminalId) {
+				retryRecoveryRef.current = 'transport';
 				setState({
 					phase: 'error',
 					generation: 0,
@@ -220,10 +258,13 @@ export default function HerdrTerminalRoute() {
 			} catch (error) {
 				if (
 					!mountedRef.current ||
+					!visibleRef.current ||
+					suspendedRef.current ||
 					generation !== reconcileGenerationRef.current
 				) {
 					return;
 				}
+				retryRecoveryRef.current = 'transport';
 				setState({
 					phase: 'error',
 					generation: 0,
@@ -320,6 +361,8 @@ export default function HerdrTerminalRoute() {
 
 	const backgroundOwner = React.useCallback(() => {
 		suspendedRef.current = true;
+		reconcileGenerationRef.current += 1;
+		rendererPhaseRef.current = 'blocked';
 		const owner = ownerRef.current;
 		if (!owner) return;
 		owner.background();
@@ -364,8 +407,19 @@ export default function HerdrTerminalRoute() {
 		};
 	}, []);
 
+	const handleLoadStart = React.useCallback(() => {
+		const restarting = currentXtermInstanceIdRef.current !== null;
+		currentXtermInstanceIdRef.current = null;
+		initializedRef.current = false;
+		sizeRef.current = null;
+		startedOwnerRef.current = null;
+		rendererPhaseRef.current = 'blocked';
+		reloadPendingRef.current = reloadPendingRef.current || restarting;
+		if (restarting) void ownerRef.current?.retire('retry');
+	}, []);
 	const handleInitialized = React.useCallback(
-		(_instanceId: string) => {
+		(instanceId: string) => {
+			currentXtermInstanceIdRef.current = instanceId;
 			initializedRef.current = true;
 			xtermRef.current?.fit();
 			maybeStartOwner(ownerRef.current);
@@ -383,16 +437,52 @@ export default function HerdrTerminalRoute() {
 		},
 		[maybeStartOwner],
 	);
+	const recoverTransport = React.useCallback(async () => {
+		if (recoveringTransportRef.current) return;
+		recoveringTransportRef.current = true;
+		reconcileGenerationRef.current += 1;
+		rendererPhaseRef.current = 'blocked';
+		setState({ phase: 'reconnecting' });
+		const owner = ownerRef.current;
+		ownerUnsubscribeRef.current?.();
+		ownerUnsubscribeRef.current = null;
+		startedOwnerRef.current = null;
+		try {
+			if (owner) await owner.retire('failure');
+			if (
+				!mountedRef.current ||
+				!visibleRef.current ||
+				suspendedRef.current ||
+				ownerRef.current !== owner
+			) {
+				return;
+			}
+			await reconcile(true);
+		} finally {
+			recoveringTransportRef.current = false;
+		}
+	}, [reconcile]);
 	const handleRetry = React.useCallback(() => {
 		const owner = ownerRef.current;
 		const size = sizeRef.current;
-		if (owner && size) owner.retry(size);
-		else void reconcile(true);
-	}, [reconcile]);
+		const host = currentHostRef.current;
+		const registered = host
+			? useSshStore.getState().connections[host.connectionId]
+			: null;
+		if (owner && size && registered && retryRecoveryRef.current === 'owner') {
+			rendererPhaseRef.current = 'awaiting-baseline';
+			owner.retry(size);
+			return;
+		}
+		void recoverTransport();
+	}, [recoverTransport]);
 	const handleTakeOver = React.useCallback(() => {
 		const owner = ownerRef.current;
 		const size = sizeRef.current;
-		if (owner && size) owner.takeOver(size);
+		if (owner && size) {
+			rendererPhaseRef.current = 'awaiting-baseline';
+			owner.takeOver(size);
+		}
 	}, []);
 	const handleBack = React.useCallback(async () => {
 		const owner = ownerRef.current;
@@ -406,12 +496,15 @@ export default function HerdrTerminalRoute() {
 			state={state}
 			xtermRef={xtermRef}
 			keyboardProps={keyboardAdapter.getTerminalKeyboardProps()}
+			onLoadStart={handleLoadStart}
 			onInitialized={handleInitialized}
-			onInput={({ str }) => {
+			onInput={({ str, instanceId }) => {
+				if (instanceId !== currentXtermInstanceIdRef.current) return;
 				ownerRef.current?.sendInput(textEncoder.encode(str));
 			}}
 			onResize={handleResize}
-			onScrollbackBatch={({ direction, lines }) => {
+			onScrollbackBatch={({ direction, lines, instanceId }) => {
+				if (instanceId !== currentXtermInstanceIdRef.current) return;
 				if (lines > 0) ownerRef.current?.scroll(direction, lines);
 			}}
 			onSelectionModeChange={keyboardAdapter.setSelectionModeEnabled}

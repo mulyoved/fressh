@@ -62,6 +62,7 @@ export type HerdrTerminalViewProps = Readonly<{
 	state: HerdrTerminalViewState;
 	xtermRef: React.RefObject<XtermWebViewHandle | null>;
 	keyboardProps: TerminalKeyboardProps;
+	onLoadStart(): void;
 	onInitialized(instanceId: string): void;
 	onInput(input: { str: string; kind: 'typing'; instanceId: string }): void;
 	onResize(cols: number, rows: number): void;
@@ -174,6 +175,7 @@ export function HerdrTerminalView(props: HerdrTerminalViewProps) {
 						webViewOptions={{
 							contentInsetAdjustmentBehavior: 'never',
 							onLayout: () => props.xtermRef.current?.fit(),
+							onLoadStart: props.onLoadStart,
 						}}
 						logger={{
 							log: logger.info,

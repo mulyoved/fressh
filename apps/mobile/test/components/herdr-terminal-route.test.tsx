@@ -1,6 +1,12 @@
 /* eslint-disable @typescript-eslint/consistent-type-imports, @eslint-react/hooks-extra/no-unnecessary-use-prefix, @eslint-react/no-forward-ref, react-compiler/react-compiler -- Hoisted Jest factories keep native dependencies local and capture component boundary props for route integration assertions. */
 import { afterEach, beforeEach, expect, jest, test } from '@jest/globals';
-import { act, render, screen, waitFor } from '@testing-library/react-native';
+import {
+	act,
+	fireEvent,
+	render,
+	screen,
+	waitFor,
+} from '@testing-library/react-native';
 import * as Clipboard from 'expo-clipboard';
 import React from 'react';
 import { AppState, type AppStateStatus } from 'react-native';
@@ -18,6 +24,7 @@ import {
 import { useSshStore } from '@/lib/ssh-store';
 
 type XtermProps = {
+	webViewOptions: { onLoadStart(): void };
 	onInitialized(instanceId: string): void;
 	onInput(input: { str: string; kind: 'typing'; instanceId: string }): void;
 	onResize(cols: number, rows: number): void;
@@ -249,6 +256,9 @@ function createOwnerHarness(): OwnerHarness {
 
 beforeEach(() => {
 	jest.clearAllMocks();
+	mockPrepareHerdrHost.mockReset();
+	mockCreateOwner.mockReset();
+	mockUseSshStore.getState.mockReset();
 	mockXtermProps = null;
 	mockKeyboardProps = null;
 	mockAppStateListener = null;
@@ -365,6 +375,171 @@ test('fits initialized xterm before normal start and adapts renderer, input, res
 	expect(owner.sendInput).toHaveBeenCalledTimes(1);
 });
 
+test('reload starts a fresh baseline generation and rejects stale xterm events', async () => {
+	const { owner, renderer } = await renderReady();
+	act(() => mockXtermProps?.onInitialized('xterm-1'));
+	act(() => mockXtermProps?.onResize(120, 40));
+	owner.sendInput.mockClear();
+	owner.scroll.mockClear();
+	mockXtermHandle.clear.mockClear();
+	mockXtermHandle.write.mockClear();
+
+	act(() => mockXtermProps?.webViewOptions.onLoadStart());
+	act(() => mockXtermProps?.webViewOptions.onLoadStart());
+	expect(owner.retire).toHaveBeenCalledWith('retry');
+	renderer.append(new Uint8Array([9]));
+	act(() =>
+		mockXtermProps?.onInput({
+			str: 'stale',
+			kind: 'typing',
+			instanceId: 'xterm-1',
+		}),
+	);
+	act(() =>
+		mockXtermProps?.onScrollbackBatch({
+			direction: 'up',
+			pages: 0,
+			lines: 2,
+			pageStep: 1,
+			instanceId: 'xterm-1',
+		}),
+	);
+	expect(owner.sendInput).not.toHaveBeenCalled();
+	expect(owner.scroll).not.toHaveBeenCalled();
+	expect(mockXtermHandle.write).not.toHaveBeenCalled();
+
+	act(() => mockXtermProps?.onInitialized('xterm-2'));
+	act(() => mockXtermProps?.onResize(90, 28));
+	expect(owner.retry).toHaveBeenCalledWith({ cols: 90, rows: 28 });
+	renderer.append(new Uint8Array([10]));
+	expect(mockXtermHandle.write).not.toHaveBeenCalled();
+	renderer.replace(new Uint8Array([11, 12]));
+	renderer.append(new Uint8Array([13]));
+	expect(mockXtermHandle.clear).toHaveBeenCalledTimes(1);
+	expect(mockXtermHandle.write.mock.calls).toEqual([
+		[new Uint8Array([11, 12])],
+		[new Uint8Array([13])],
+	]);
+
+	act(() =>
+		mockXtermProps?.onInput({
+			str: 'current',
+			kind: 'typing',
+			instanceId: 'xterm-2',
+		}),
+	);
+	act(() =>
+		mockXtermProps?.onScrollbackBatch({
+			direction: 'down',
+			pages: 0,
+			lines: 3,
+			pageStep: 1,
+			instanceId: 'xterm-2',
+		}),
+	);
+	expect(owner.sendInput).toHaveBeenCalledWith(
+		new TextEncoder().encode('current'),
+	);
+	expect(owner.scroll).toHaveBeenCalledWith('down', 3);
+});
+
+test('Take Over and owner-local Retry invoke only their exact normal owner actions', async () => {
+	const { owner } = await renderReady();
+	act(() => mockXtermProps?.onInitialized('xterm-1'));
+	act(() => mockXtermProps?.onResize(120, 40));
+
+	act(() =>
+		owner.publish({
+			phase: 'owned-elsewhere',
+			generation: 1,
+			reason: 'Owned by another client.',
+		}),
+	);
+	fireEvent.press(screen.getByRole('button', { name: 'Take Over' }));
+	expect(owner.takeOver).toHaveBeenCalledWith({ cols: 120, rows: 40 });
+	expect(owner.retry).not.toHaveBeenCalled();
+
+	act(() =>
+		owner.publish({
+			phase: 'error',
+			generation: 2,
+			kind: 'synchronization',
+			reason: 'Output lost synchronization.',
+		}),
+	);
+	fireEvent.press(screen.getByRole('button', { name: 'Retry' }));
+	expect(owner.retry).toHaveBeenCalledWith({ cols: 120, rows: 40 });
+	expect(owner.takeOver).toHaveBeenCalledTimes(1);
+	expect(mockPrepareHerdrHost).not.toHaveBeenCalled();
+});
+
+test('transport Retry retires the dead owner and reconnects without takeover', async () => {
+	const { owner } = await renderReady();
+	act(() => mockXtermProps?.onInitialized('xterm-1'));
+	act(() => mockXtermProps?.onResize(120, 40));
+	act(() =>
+		owner.publish({
+			phase: 'error',
+			generation: 1,
+			kind: 'transport',
+			reason: 'SSH transport failed.',
+		}),
+	);
+
+	fireEvent.press(screen.getByRole('button', { name: 'Retry' }));
+	await waitFor(() => expect(owner.retire).toHaveBeenCalledWith('failure'));
+	await waitFor(() => expect(mockPrepareHerdrHost).toHaveBeenCalledTimes(1));
+	await waitFor(() => expect(mockCreateOwner).toHaveBeenCalledTimes(2));
+	expect(owner.retry).not.toHaveBeenCalled();
+	expect(owner.takeOver).not.toHaveBeenCalled();
+	const freshOwner = mockCreateOwner.mock.results[1]!.value as OwnerHarness;
+	expect(freshOwner.takeOver).not.toHaveBeenCalled();
+});
+
+test('reconciliation Retry reconnects through prepareHerdrHost instead of retrying the old owner', async () => {
+	const { owner } = await renderReady();
+	act(() => mockXtermProps?.onInitialized('xterm-1'));
+	act(() => mockXtermProps?.onResize(120, 40));
+	mockPrepareHerdrHost.mockRejectedValueOnce(new Error('Reload failed.'));
+	act(() => mockAppStateListener?.('background'));
+	await act(async () => mockAppStateListener?.('active'));
+	await waitFor(() =>
+		expect(screen.getByText('Reload failed.')).toBeOnTheScreen(),
+	);
+
+	mockPrepareHerdrHost.mockResolvedValueOnce(HOST);
+	fireEvent.press(screen.getByRole('button', { name: 'Retry' }));
+	await waitFor(() => expect(owner.retire).toHaveBeenCalledWith('failure'));
+	await waitFor(() => expect(mockPrepareHerdrHost).toHaveBeenCalledTimes(2));
+	await waitFor(() => expect(mockCreateOwner).toHaveBeenCalledTimes(2));
+	expect(owner.retry).not.toHaveBeenCalled();
+	expect(owner.takeOver).not.toHaveBeenCalled();
+});
+
+test('Retry reconnects when the registered SSH connection disappeared', async () => {
+	const { owner } = await renderReady();
+	act(() => mockXtermProps?.onInitialized('xterm-1'));
+	act(() => mockXtermProps?.onResize(120, 40));
+	act(() =>
+		owner.publish({
+			phase: 'error',
+			generation: 1,
+			kind: 'synchronization',
+			reason: 'Output lost synchronization.',
+		}),
+	);
+	mockUseSshStore.getState.mockReturnValue({
+		connections: {},
+		connect: jest.fn(),
+	} as never);
+
+	fireEvent.press(screen.getByRole('button', { name: 'Retry' }));
+	await waitFor(() => expect(owner.retire).toHaveBeenCalledWith('failure'));
+	await waitFor(() => expect(mockPrepareHerdrHost).toHaveBeenCalledTimes(1));
+	expect(owner.retry).not.toHaveBeenCalled();
+	expect(owner.takeOver).not.toHaveBeenCalled();
+});
+
 test('waits for bounded switch retirement before replacing with next and previous wrapped stable ids', async () => {
 	let finishRetire!: () => void;
 	const retirement = new Promise<void>((resolve) => {
@@ -479,6 +654,40 @@ test('an async restored-host reload cannot install an owner after background', a
 	await waitFor(() => expect(mockCreateOwner).toHaveBeenCalledTimes(1));
 });
 
+test('a rejected restored-host reload cannot publish an error after background', async () => {
+	useHerdrProviderStore.getState().clearHost();
+	let failReload!: (error: Error) => void;
+	mockPrepareHerdrHost.mockReturnValueOnce(
+		new Promise<HerdrHostState>((_resolve, reject) => {
+			failReload = reject;
+		}),
+	);
+	render(<HerdrTerminalRoute />);
+	await waitFor(() => expect(mockPrepareHerdrHost).toHaveBeenCalledTimes(1));
+
+	act(() => mockAppStateListener?.('background'));
+	await act(async () => failReload(new Error('Must remain hidden.')));
+	expect(screen.queryByText('Must remain hidden.')).not.toBeOnTheScreen();
+	expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeOnTheScreen();
+});
+
+test('a rejected restored-host reload cannot publish an error after focus loss', async () => {
+	useHerdrProviderStore.getState().clearHost();
+	let failReload!: (error: Error) => void;
+	mockPrepareHerdrHost.mockReturnValueOnce(
+		new Promise<HerdrHostState>((_resolve, reject) => {
+			failReload = reject;
+		}),
+	);
+	render(<HerdrTerminalRoute />);
+	await waitFor(() => expect(mockPrepareHerdrHost).toHaveBeenCalledTimes(1));
+
+	act(() => mockFocusCleanup?.());
+	await act(async () => failReload(new Error('Must remain unfocused.')));
+	expect(screen.queryByText('Must remain unfocused.')).not.toBeOnTheScreen();
+	expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeOnTheScreen();
+});
+
 test('React effect replay keeps the current owner subscription live', async () => {
 	render(
 		<React.StrictMode>
@@ -525,6 +734,26 @@ test('direct restored routes reload the host and start only when the stable targ
 		}),
 	);
 	expect(mockCreateOwner).not.toHaveBeenCalled();
+});
+
+test('does not present an agent cached for a different stored connection', async () => {
+	useHerdrProviderStore.getState().setHost({
+		...HOST,
+		storedConnectionId: 'different-saved-host',
+	});
+	let finishReload!: (host: HerdrHostState) => void;
+	mockPrepareHerdrHost.mockReturnValueOnce(
+		new Promise<HerdrHostState>((resolve) => {
+			finishReload = resolve;
+		}),
+	);
+	render(<HerdrTerminalRoute />);
+	await waitFor(() => expect(mockPrepareHerdrHost).toHaveBeenCalledTimes(1));
+	expect(screen.queryByText('Codex')).not.toBeOnTheScreen();
+	expect(screen.getByText('Herdr terminal')).toBeOnTheScreen();
+
+	await act(async () => finishReload(HOST));
+	await waitFor(() => expect(screen.getByText('Codex')).toBeOnTheScreen());
 });
 
 /* eslint-enable @typescript-eslint/consistent-type-imports, @eslint-react/hooks-extra/no-unnecessary-use-prefix, @eslint-react/no-forward-ref, react-compiler/react-compiler */

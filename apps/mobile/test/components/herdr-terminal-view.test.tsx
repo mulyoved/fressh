@@ -66,6 +66,7 @@ function renderState(
 			selectionModeEnabled: false,
 			onCopySelection: jest.fn(),
 		},
+		onLoadStart: jest.fn(),
 		onInitialized: jest.fn(),
 		onInput: jest.fn(),
 		onResize: jest.fn(),
