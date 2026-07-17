@@ -1,4 +1,5 @@
 import { type SshConnectionProgress } from '@fressh/react-native-uniffi-russh';
+import { useIsFocused } from '@react-navigation/native';
 import { useStore } from '@tanstack/react-form';
 import { useQuery } from '@tanstack/react-query';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -61,6 +62,7 @@ const defaultValues: InputConnectionDetails = {
 
 function Host() {
 	const theme = useTheme();
+	const routeFocused = useIsFocused();
 	const tailscaleRecoveryUiState = useTailscaleRecoveryUiStore(
 		(state) => state.recoveryState,
 	);
@@ -317,7 +319,10 @@ function Host() {
 							) : null}
 						</connectionForm.AppForm>
 					</View>
-					<PreviousConnectionsSection onFillForm={applyConnectionToForm} />
+					<PreviousConnectionsSection
+						onFillForm={applyConnectionToForm}
+						routeFocused={routeFocused}
+					/>
 				</View>
 			</ScrollView>
 		</SafeAreaView>
@@ -435,6 +440,7 @@ function KeyIdPickerField() {
 
 function PreviousConnectionsSection(props: {
 	onFillForm: (connection: StoredConnectionDetails) => void;
+	routeFocused: boolean;
 }) {
 	const theme = useTheme();
 	const listConnectionsQuery = useQuery(secretsManager.connections.query.list);
@@ -468,6 +474,7 @@ function PreviousConnectionsSection(props: {
 							key={conn.id}
 							id={conn.id}
 							onFillForm={props.onFillForm}
+							routeFocused={props.routeFocused}
 						/>
 					))}
 				</View>
@@ -483,6 +490,7 @@ function PreviousConnectionsSection(props: {
 export function ConnectionRow(props: {
 	id: string;
 	onFillForm: (connection: StoredConnectionDetails) => void;
+	routeFocused: boolean;
 }) {
 	const router = useRouter();
 	const theme = useTheme();
@@ -496,23 +504,50 @@ export function ConnectionRow(props: {
 	>('idle');
 	const [herdrError, setHerdrError] = React.useState<string | null>(null);
 	const herdrAbortController = React.useRef<AbortController | null>(null);
+	const herdrLaunchGeneration = React.useRef(0);
+	const routeFocused = React.useRef(props.routeFocused);
 	const listQuery = useQuery(secretsManager.connections.query.list);
 
 	React.useEffect(
 		() => () => {
+			routeFocused.current = false;
+			herdrLaunchGeneration.current += 1;
 			herdrAbortController.current?.abort(new Error('Saved host row closed.'));
+			herdrAbortController.current = null;
 		},
 		[],
 	);
 
+	React.useLayoutEffect(() => {
+		routeFocused.current = props.routeFocused;
+		herdrLaunchGeneration.current += 1;
+		if (props.routeFocused) return;
+		herdrAbortController.current?.abort(
+			new Error('Saved host route lost focus.'),
+		);
+		herdrAbortController.current = null;
+		setHerdrError(null);
+		setHerdrPhase('idle');
+	}, [props.routeFocused]);
+
 	const openHerdr = React.useCallback(async () => {
-		if (herdrPhase === 'loading') return;
+		if (
+			!routeFocused.current ||
+			herdrPhase === 'loading' ||
+			herdrAbortController.current
+		)
+			return;
 		setOpen(false);
 		setHerdrError(null);
 		setHerdrPhase('loading');
-		herdrAbortController.current?.abort(new Error('Herdr launch replaced.'));
 		const abortController = new AbortController();
 		herdrAbortController.current = abortController;
+		const launchGeneration = ++herdrLaunchGeneration.current;
+		const launchIsCurrent = () =>
+			routeFocused.current &&
+			herdrLaunchGeneration.current === launchGeneration &&
+			herdrAbortController.current === abortController &&
+			!abortController.signal.aborted;
 
 		try {
 			const host = await prepareHerdrHost({
@@ -533,7 +568,8 @@ export function ConnectionRow(props: {
 				},
 				abortSignal: abortController.signal,
 			});
-			if (abortController.signal.aborted) return;
+			if (!launchIsCurrent()) return;
+			herdrAbortController.current = null;
 			useHerdrProviderStore.getState().setHost(host);
 			setHerdrPhase('idle');
 			router.push({
@@ -544,7 +580,8 @@ export function ConnectionRow(props: {
 				},
 			});
 		} catch (error) {
-			if (abortController.signal.aborted) return;
+			if (!launchIsCurrent()) return;
+			herdrAbortController.current = null;
 			setHerdrError(
 				error instanceof Error ? error.message : 'Unable to open Herdr.',
 			);

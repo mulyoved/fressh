@@ -147,9 +147,19 @@ function deferred<T>() {
 }
 
 function renderRow(onFillForm = jest.fn()) {
+	const renderConnectionRow = (routeFocused: boolean) => (
+		<ConnectionRow
+			id="saved-host"
+			onFillForm={onFillForm}
+			routeFocused={routeFocused}
+		/>
+	);
+	const view = render(renderConnectionRow(true));
 	return {
 		onFillForm,
-		...render(<ConnectionRow id="saved-host" onFillForm={onFillForm} />),
+		...view,
+		setRouteFocused: (routeFocused: boolean) =>
+			view.rerender(renderConnectionRow(routeFocused)),
 	};
 }
 
@@ -244,6 +254,72 @@ test('keeps launch failures on the host screen and offers an explicit retry', as
 
 	fireEvent.press(screen.getByRole('button', { name: 'Retry Open Herdr' }));
 	await waitFor(() => expect(mockPush).toHaveBeenCalledTimes(1));
+	expect(useHerdrProviderStore.getState().host).toEqual(HOST);
+});
+
+test('focus loss without unmount aborts a pending launch and suppresses its deferred success', async () => {
+	const launch = deferred<HerdrHostState>();
+	mockPrepareHerdrHost.mockReturnValueOnce(launch.promise);
+	const row = renderRow();
+
+	openActions();
+	fireEvent.press(screen.getByRole('button', { name: 'Open Herdr' }));
+	const abortSignal = mockPrepareHerdrHost.mock.calls[0]?.[0].abortSignal;
+	expect(abortSignal?.aborted).toBe(false);
+	expect(screen.getByText('Opening Herdr…')).toBeOnTheScreen();
+
+	row.setRouteFocused(false);
+	expect(abortSignal?.aborted).toBe(true);
+	expect(screen.queryByText('Opening Herdr…')).not.toBeOnTheScreen();
+
+	await act(async () => launch.resolve(HOST));
+	expect(useHerdrProviderStore.getState().host).toBeNull();
+	expect(screen.queryByText('Opening Herdr…')).not.toBeOnTheScreen();
+	expect(mockPush).not.toHaveBeenCalled();
+});
+
+test('focus loss without unmount suppresses a pending launch rejection', async () => {
+	const launch = deferred<HerdrHostState>();
+	mockPrepareHerdrHost.mockReturnValueOnce(launch.promise);
+	const row = renderRow();
+
+	openActions();
+	fireEvent.press(screen.getByRole('button', { name: 'Open Herdr' }));
+	row.setRouteFocused(false);
+
+	await act(async () => launch.reject(new Error('Must remain unfocused.')));
+	expect(screen.queryByText('Must remain unfocused.')).not.toBeOnTheScreen();
+	expect(
+		screen.queryByRole('button', { name: 'Retry Open Herdr' }),
+	).not.toBeOnTheScreen();
+	expect(useHerdrProviderStore.getState().host).toBeNull();
+	expect(mockPush).not.toHaveBeenCalled();
+});
+
+test('refocus returns the row to idle and permits a fresh successful launch', async () => {
+	const staleLaunch = deferred<HerdrHostState>();
+	mockPrepareHerdrHost
+		.mockReturnValueOnce(staleLaunch.promise)
+		.mockResolvedValueOnce(HOST);
+	const row = renderRow();
+
+	openActions();
+	fireEvent.press(screen.getByRole('button', { name: 'Open Herdr' }));
+	const staleSignal = mockPrepareHerdrHost.mock.calls[0]?.[0].abortSignal;
+	row.setRouteFocused(false);
+	expect(staleSignal?.aborted).toBe(true);
+
+	row.setRouteFocused(true);
+	expect(screen.queryByText('Opening Herdr…')).not.toBeOnTheScreen();
+	openActions();
+	fireEvent.press(screen.getByRole('button', { name: 'Open Herdr' }));
+
+	await waitFor(() => expect(mockPush).toHaveBeenCalledTimes(1));
+	expect(mockPrepareHerdrHost).toHaveBeenCalledTimes(2);
+	expect(useHerdrProviderStore.getState().host).toEqual(HOST);
+
+	await act(async () => staleLaunch.reject(new Error('Stale rejection.')));
+	expect(screen.queryByText('Stale rejection.')).not.toBeOnTheScreen();
 	expect(useHerdrProviderStore.getState().host).toEqual(HOST);
 });
 
