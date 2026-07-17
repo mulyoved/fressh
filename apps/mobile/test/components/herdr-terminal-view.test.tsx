@@ -10,6 +10,11 @@ import { type HerdrAgent } from '@/lib/herdr/contracts';
 import { type HerdrTerminalState } from '@/lib/herdr/terminal-owner';
 
 let mockXtermProps: {
+	webViewOptions?: {
+		onError?: (...args: unknown[]) => void;
+		onRenderProcessGone?: (...args: unknown[]) => void;
+		onContentProcessDidTerminate?: (...args: unknown[]) => void;
+	};
 	logger?: {
 		log?: (...args: unknown[]) => void;
 		warn?: (...args: unknown[]) => void;
@@ -71,6 +76,7 @@ function renderState(
 	const props: HerdrTerminalViewProps = {
 		agent: AGENT,
 		state,
+		rendererGeneration: 0,
 		xtermRef: { current: null },
 		keyboardProps: {
 			keyboard: null,
@@ -80,6 +86,7 @@ function renderState(
 			onCopySelection: jest.fn(),
 		},
 		onLoadStart: jest.fn(),
+		onRendererFailure: jest.fn(),
 		onInitialized: jest.fn(),
 		onInput: jest.fn(),
 		onResize: jest.fn(),
@@ -148,6 +155,24 @@ test('does not provide the raw general xterm bridge logger', () => {
 	expect(mockXtermProps?.logger?.log).toBeUndefined();
 	expect(mockXtermProps?.logger?.warn).toBeDefined();
 	expect(mockXtermProps?.logger?.error).toBeDefined();
+});
+
+test('reports every native WebView renderer failure through one bounded callback', () => {
+	const onRendererFailure = jest.fn();
+	renderState({ phase: 'active', generation: 1 }, { onRendererFailure });
+
+	mockXtermProps?.webViewOptions?.onError?.({
+		nativeEvent: { description: 'raw terminal document diagnostic' },
+	});
+	mockXtermProps?.webViewOptions?.onRenderProcessGone?.({
+		nativeEvent: { didCrash: true },
+	});
+	mockXtermProps?.webViewOptions?.onContentProcessDidTerminate?.({
+		nativeEvent: { secret: 'raw terminal document diagnostic' },
+	});
+
+	expect(onRendererFailure).toHaveBeenCalledTimes(3);
+	expect(onRendererFailure.mock.calls).toEqual([[], [], []]);
 });
 
 test.each<HerdrTerminalState & { phase: 'error' }>([

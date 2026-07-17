@@ -60,9 +60,11 @@ export type HerdrTerminalViewState =
 export type HerdrTerminalViewProps = Readonly<{
 	agent: HerdrAgent | null;
 	state: HerdrTerminalViewState;
+	rendererGeneration: number;
 	xtermRef: React.RefObject<XtermWebViewHandle | null>;
 	keyboardProps: TerminalKeyboardProps;
 	onLoadStart(): void;
+	onRendererFailure(): void;
 	onInitialized(instanceId: string): void;
 	onInput(input: { str: string; kind: 'typing'; instanceId: string }): void;
 	onResize(cols: number, rows: number): void;
@@ -170,12 +172,16 @@ export function HerdrTerminalView(props: HerdrTerminalViewProps) {
 				</View>
 				<View style={{ flex: 1 }}>
 					<XtermJsWebView
+						key={props.rendererGeneration}
 						ref={props.xtermRef}
 						style={{ flex: 1 }}
 						webViewOptions={{
 							contentInsetAdjustmentBehavior: 'never',
 							onLayout: () => props.xtermRef.current?.fit(),
 							onLoadStart: props.onLoadStart,
+							onError: () => props.onRendererFailure(),
+							onRenderProcessGone: () => props.onRendererFailure(),
+							onContentProcessDidTerminate: () => props.onRendererFailure(),
 						}}
 						logger={{
 							warn: logger.warn,

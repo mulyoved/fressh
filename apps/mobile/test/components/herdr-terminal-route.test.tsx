@@ -24,7 +24,12 @@ import {
 import { useSshStore } from '@/lib/ssh-store';
 
 type XtermProps = {
-	webViewOptions: { onLoadStart(): void };
+	webViewOptions: {
+		onLoadStart(): void;
+		onError(): void;
+		onRenderProcessGone(): void;
+		onContentProcessDidTerminate(): void;
+	};
 	onInitialized(instanceId: string): void;
 	onInput(input: { str: string; kind: 'typing'; instanceId: string }): void;
 	onResize(cols: number, rows: number): void;
@@ -70,6 +75,7 @@ const mockXtermHandle = {
 	setSelectionModeEnabled: jest.fn(),
 };
 let mockXtermProps: XtermProps | null = null;
+let mockXtermMountCount = 0;
 let mockKeyboardProps: KeyboardProps | null = null;
 let mockAppStateListener: ((state: AppStateStatus) => void) | null = null;
 let mockFocusCleanup: (() => void) | null = null;
@@ -133,6 +139,9 @@ jest.mock('@fressh/react-native-xtermjs-webview', () => {
 		XtermJsWebView: React.forwardRef((props: XtermProps, ref) => {
 			mockXtermProps = props;
 			React.useImperativeHandle(ref, () => mockXtermHandle);
+			React.useEffect(() => {
+				mockXtermMountCount += 1;
+			}, []);
 			return <View testID="herdr-xterm" />;
 		}),
 	};
@@ -260,6 +269,7 @@ beforeEach(() => {
 	mockCreateOwner.mockReset();
 	mockUseSshStore.getState.mockReset();
 	mockXtermProps = null;
+	mockXtermMountCount = 0;
 	mockKeyboardProps = null;
 	mockAppStateListener = null;
 	mockFocusCleanup = null;
@@ -451,6 +461,116 @@ test('reload starts a fresh baseline generation and rejects stale xterm events',
 		new TextEncoder().encode('current'),
 	);
 	expect(owner.scroll).toHaveBeenCalledWith('down', 3);
+});
+
+test('renderer failure before activation synchronously retires once and rejects every stale callback', async () => {
+	const { owner, renderer } = await renderReady();
+	const failedRenderer = mockXtermProps!;
+
+	act(() => failedRenderer.webViewOptions.onError());
+	expect(owner.retire).toHaveBeenCalledTimes(1);
+	expect(owner.retire).toHaveBeenCalledWith('failure');
+	expect(
+		screen.getByText('Terminal renderer stopped. Retry to reconnect.'),
+	).toBeOnTheScreen();
+
+	act(() => failedRenderer.webViewOptions.onRenderProcessGone());
+	act(() => failedRenderer.webViewOptions.onContentProcessDidTerminate());
+	act(() =>
+		owner.publish({
+			phase: 'active',
+			generation: 1,
+		}),
+	);
+	act(() => failedRenderer.onInitialized('stale-before-start'));
+	act(() => failedRenderer.onResize(120, 40));
+	act(() =>
+		failedRenderer.onInput({
+			str: 'stale',
+			kind: 'typing',
+			instanceId: 'stale-before-start',
+		}),
+	);
+	renderer.replace(new Uint8Array([1]));
+
+	expect(owner.retire).toHaveBeenCalledTimes(1);
+	expect(owner.start).not.toHaveBeenCalled();
+	expect(owner.sendInput).not.toHaveBeenCalled();
+	expect(mockXtermHandle.write).not.toHaveBeenCalled();
+	expect(
+		screen.getByText('Terminal renderer stopped. Retry to reconnect.'),
+	).toBeOnTheScreen();
+	expect(screen.getAllByRole('button', { name: 'Retry' })).toHaveLength(1);
+});
+
+test('renderer Retry remounts, reconciles after retirement, and gates the fresh owner on a full baseline', async () => {
+	const retirement = deferred<void>();
+	const { owner, renderer } = await renderReady();
+	act(() => mockXtermProps?.onInitialized('xterm-1'));
+	act(() => mockXtermProps?.onResize(120, 40));
+	renderer.replace(new Uint8Array([1]));
+	owner.sendInput.mockClear();
+	mockXtermHandle.clear.mockClear();
+	mockXtermHandle.write.mockClear();
+	owner.retire.mockReturnValueOnce(retirement.promise);
+	const failedRenderer = mockXtermProps!;
+
+	act(() => failedRenderer.webViewOptions.onRenderProcessGone());
+	act(() =>
+		failedRenderer.onInput({
+			str: 'stale-active',
+			kind: 'typing',
+			instanceId: 'xterm-1',
+		}),
+	);
+	renderer.append(new Uint8Array([2]));
+	expect(owner.sendInput).not.toHaveBeenCalled();
+	expect(mockXtermHandle.write).not.toHaveBeenCalled();
+
+	fireEvent.press(screen.getByRole('button', { name: 'Retry' }));
+	await waitFor(() => expect(mockXtermMountCount).toBe(2));
+	expect(mockPrepareHerdrHost).not.toHaveBeenCalled();
+
+	await act(async () => retirement.resolve());
+	await waitFor(() => expect(mockPrepareHerdrHost).toHaveBeenCalledTimes(1));
+	await waitFor(() => expect(mockCreateOwner).toHaveBeenCalledTimes(2));
+	const freshOwner = mockCreateOwner.mock.results[1]!.value as OwnerHarness;
+	const freshRenderer = mockCreateOwner.mock.calls[1]![0]
+		.renderer as HerdrRendererPort;
+	const replacementRenderer = mockXtermProps!;
+
+	act(() => failedRenderer.webViewOptions.onError());
+	act(() => failedRenderer.onInitialized('stale-after-retry'));
+	act(() => failedRenderer.onResize(200, 60));
+	expect(freshOwner.retire).not.toHaveBeenCalled();
+	expect(freshOwner.start).not.toHaveBeenCalled();
+
+	act(() => replacementRenderer.onInitialized('xterm-2'));
+	act(() => replacementRenderer.onResize(90, 28));
+	expect(freshOwner.start).toHaveBeenCalledWith({ cols: 90, rows: 28 });
+	act(() =>
+		replacementRenderer.onInput({
+			str: 'too-early',
+			kind: 'typing',
+			instanceId: 'xterm-2',
+		}),
+	);
+	freshRenderer.append(new Uint8Array([3]));
+	expect(freshOwner.sendInput).not.toHaveBeenCalled();
+	expect(mockXtermHandle.write).not.toHaveBeenCalled();
+
+	freshRenderer.replace(new Uint8Array([4]));
+	act(() =>
+		replacementRenderer.onInput({
+			str: 'current',
+			kind: 'typing',
+			instanceId: 'xterm-2',
+		}),
+	);
+	expect(mockXtermHandle.write).toHaveBeenCalledWith(new Uint8Array([4]));
+	expect(freshOwner.sendInput).toHaveBeenCalledWith(
+		new TextEncoder().encode('current'),
+	);
 });
 
 test('background before first xterm readiness never starts the suspended owner', async () => {

@@ -40,8 +40,11 @@ function routeParam(value: string | string[] | undefined): string | null {
 
 type TerminalSize = Readonly<{ cols: number; rows: number }>;
 type RendererPhase = 'blocked' | 'awaiting-baseline' | 'active';
-type RetryRecovery = 'owner' | 'transport';
+type RetryRecovery = 'owner' | 'renderer' | 'transport';
 type RouteOperation = Readonly<{ generation: number; routeIdentity: string }>;
+type RendererRecovery = Readonly<{
+	retirement: Promise<void>;
+}>;
 
 export default function HerdrTerminalRoute() {
 	const router = useRouter();
@@ -67,6 +70,10 @@ export default function HerdrTerminalRoute() {
 	const reloadOwnerRef = React.useRef<HerdrTerminalOwner | null>(null);
 	const retryRecoveryRef = React.useRef<RetryRecovery>('transport');
 	const recoveringTransportRef = React.useRef(false);
+	const recoveringRendererRef = React.useRef(false);
+	const rendererGenerationRef = React.useRef(0);
+	const failedRendererGenerationRef = React.useRef<number | null>(null);
+	const rendererRecoveryRef = React.useRef<RendererRecovery | null>(null);
 	const visibleRef = React.useRef(false);
 	const suspendedRef = React.useRef(false);
 	const mountedRef = React.useRef(true);
@@ -87,6 +94,7 @@ export default function HerdrTerminalRoute() {
 	const [state, setState] = React.useState<HerdrTerminalViewState>({
 		phase: 'reconnecting',
 	});
+	const [rendererGeneration, setRendererGeneration] = React.useState(0);
 	const routeIdentity = JSON.stringify([
 		storedConnectionId,
 		routeConnectionId,
@@ -407,9 +415,10 @@ export default function HerdrTerminalRoute() {
 			terminalInput: {
 				captureSender: () => {
 					const owner = ownerRef.current;
-					if (!owner) return null;
+					if (!owner || rendererPhaseRef.current !== 'active') return null;
 					return (bytes) =>
 						ownerRef.current === owner &&
+						rendererPhaseRef.current === 'active' &&
 						mountedRef.current &&
 						visibleRef.current &&
 						!suspendedRef.current &&
@@ -460,7 +469,13 @@ export default function HerdrTerminalRoute() {
 			visibleRef.current = true;
 			const reacquiring = suspendedRef.current;
 			suspendedRef.current = false;
-			void reconcile(reacquiring);
+			if (
+				!reacquiring ||
+				retryRecoveryRef.current !== 'renderer' ||
+				failedRendererGenerationRef.current === null
+			) {
+				void reconcile(reacquiring);
+			}
 			return () => {
 				visibleRef.current = false;
 				backgroundOwner();
@@ -476,7 +491,12 @@ export default function HerdrTerminalRoute() {
 				backgroundOwner();
 				return;
 			}
-			if (suspendedRef.current && visibleRef.current) {
+			if (
+				suspendedRef.current &&
+				visibleRef.current &&
+				(retryRecoveryRef.current !== 'renderer' ||
+					failedRendererGenerationRef.current === null)
+			) {
 				suspendedRef.current = false;
 				void reconcile(true);
 			}
@@ -498,7 +518,8 @@ export default function HerdrTerminalRoute() {
 		};
 	}, [invalidateRouteOperations]);
 
-	const handleLoadStart = React.useCallback(() => {
+	const handleLoadStart = React.useCallback((generation: number) => {
+		if (generation !== rendererGenerationRef.current) return;
 		keyboardAdapterRef.current?.invalidatePending();
 		const owner = ownerRef.current;
 		const restarting = currentXtermInstanceIdRef.current !== null;
@@ -525,7 +546,8 @@ export default function HerdrTerminalRoute() {
 		}
 	}, []);
 	const handleInitialized = React.useCallback(
-		(instanceId: string) => {
+		(generation: number, instanceId: string) => {
+			if (generation !== rendererGenerationRef.current) return;
 			currentXtermInstanceIdRef.current = instanceId;
 			initializedRef.current = true;
 			xtermRef.current?.fit();
@@ -534,7 +556,8 @@ export default function HerdrTerminalRoute() {
 		[maybeStartOwner],
 	);
 	const handleResize = React.useCallback(
-		(cols: number, rows: number) => {
+		(generation: number, cols: number, rows: number) => {
+			if (generation !== rendererGenerationRef.current) return;
 			if (!Number.isSafeInteger(cols) || cols <= 0) return;
 			if (!Number.isSafeInteger(rows) || rows <= 0) return;
 			sizeRef.current = { cols, rows };
@@ -551,6 +574,74 @@ export default function HerdrTerminalRoute() {
 		},
 		[maybeStartOwner],
 	);
+	const handleRendererFailure = React.useCallback(
+		(generation: number) => {
+			if (
+				generation !== rendererGenerationRef.current ||
+				failedRendererGenerationRef.current === generation
+			) {
+				return;
+			}
+			failedRendererGenerationRef.current = generation;
+			keyboardAdapterRef.current?.invalidatePending();
+			reconcileGenerationRef.current += 1;
+			invalidateRouteOperations();
+			currentXtermInstanceIdRef.current = null;
+			initializedRef.current = false;
+			sizeRef.current = null;
+			startAdmittedOwnerRef.current = null;
+			startedOwnerRef.current = null;
+			reloadOwnerRef.current = null;
+			rendererPhaseRef.current = 'blocked';
+			const owner = ownerRef.current;
+			ownerRef.current = null;
+			ownerUnsubscribeRef.current?.();
+			ownerUnsubscribeRef.current = null;
+			const priorRetirement = rendererRecoveryRef.current?.retirement;
+			const currentRetirement = owner
+				? owner.retire('failure').catch(() => undefined)
+				: Promise.resolve();
+			rendererRecoveryRef.current = {
+				retirement: Promise.all([priorRetirement, currentRetirement]).then(
+					() => undefined,
+				),
+			};
+			retryRecoveryRef.current = 'renderer';
+			setState({
+				phase: 'error',
+				generation: 0,
+				kind: 'transport',
+				reason: 'Terminal renderer stopped. Retry to reconnect.',
+			});
+		},
+		[invalidateRouteOperations],
+	);
+	const recoverRenderer = React.useCallback(async () => {
+		const recovery = rendererRecoveryRef.current;
+		if (!recovery || recoveringRendererRef.current) return;
+		recoveringRendererRef.current = true;
+		keyboardAdapterRef.current?.invalidatePending();
+		const nextGeneration = rendererGenerationRef.current + 1;
+		rendererGenerationRef.current = nextGeneration;
+		failedRendererGenerationRef.current = null;
+		setRendererGeneration(nextGeneration);
+		setState({ phase: 'reconnecting' });
+		try {
+			await recovery.retirement;
+			if (
+				rendererRecoveryRef.current !== recovery ||
+				!mountedRef.current ||
+				!visibleRef.current ||
+				suspendedRef.current
+			) {
+				return;
+			}
+			rendererRecoveryRef.current = null;
+			await reconcile(true);
+		} finally {
+			recoveringRendererRef.current = false;
+		}
+	}, [reconcile]);
 	const recoverTransport = React.useCallback(async () => {
 		if (recoveringTransportRef.current) return;
 		keyboardAdapterRef.current?.invalidatePending();
@@ -581,6 +672,10 @@ export default function HerdrTerminalRoute() {
 	}, [reconcile]);
 	const handleRetry = React.useCallback(() => {
 		keyboardAdapterRef.current?.invalidatePending();
+		if (retryRecoveryRef.current === 'renderer') {
+			void recoverRenderer();
+			return;
+		}
 		const owner = ownerRef.current;
 		const size = sizeRef.current;
 		const host = currentHostRef.current;
@@ -601,7 +696,7 @@ export default function HerdrTerminalRoute() {
 			return;
 		}
 		void recoverTransport();
-	}, [recoverTransport]);
+	}, [recoverRenderer, recoverTransport]);
 	const handleTakeOver = React.useCallback(() => {
 		keyboardAdapterRef.current?.invalidatePending();
 		const owner = ownerRef.current;
@@ -638,21 +733,32 @@ export default function HerdrTerminalRoute() {
 		<HerdrTerminalView
 			agent={agent}
 			state={state}
+			rendererGeneration={rendererGeneration}
 			xtermRef={xtermRef}
 			keyboardProps={keyboardAdapter.getTerminalKeyboardProps()}
-			onLoadStart={handleLoadStart}
-			onInitialized={handleInitialized}
+			onLoadStart={() => handleLoadStart(rendererGeneration)}
+			onRendererFailure={() => handleRendererFailure(rendererGeneration)}
+			onInitialized={(instanceId) =>
+				handleInitialized(rendererGeneration, instanceId)
+			}
 			onInput={({ str, instanceId }) => {
+				if (rendererGeneration !== rendererGenerationRef.current) return;
 				if (instanceId !== currentXtermInstanceIdRef.current) return;
+				if (rendererPhaseRef.current !== 'active') return;
 				keyboardAdapter.invalidatePending();
 				ownerRef.current?.sendInput(textEncoder.encode(str));
 			}}
-			onResize={handleResize}
+			onResize={(cols, rows) => handleResize(rendererGeneration, cols, rows)}
 			onScrollbackBatch={({ direction, lines, instanceId }) => {
+				if (rendererGeneration !== rendererGenerationRef.current) return;
 				if (instanceId !== currentXtermInstanceIdRef.current) return;
+				if (rendererPhaseRef.current !== 'active') return;
 				if (lines > 0) ownerRef.current?.scroll(direction, lines);
 			}}
-			onSelectionModeChange={keyboardAdapter.setSelectionModeEnabled}
+			onSelectionModeChange={(enabled) => {
+				if (rendererGeneration !== rendererGenerationRef.current) return;
+				keyboardAdapter.setSelectionModeEnabled(enabled);
+			}}
 			onTakeOver={handleTakeOver}
 			onRetry={handleRetry}
 			onBack={() => void handleBack()}
