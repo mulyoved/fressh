@@ -1,4 +1,8 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
 
 import {
@@ -172,9 +176,13 @@ void test('loadHerdrSnapshot runs the compound capability probe and sanitizes av
 	assert.deepEqual(commands, [HERDR_SNAPSHOT_COMMAND]);
 	assert.equal(
 		HERDR_SNAPSHOT_COMMAND,
-		'command -v herdr >/dev/null 2>&1 && ' +
-			'herdr terminal session control --help >/dev/null 2>&1 && ' +
-			'herdr api snapshot',
+		'herdr_bin="$(command -v herdr 2>/dev/null || true)"; ' +
+			'if [ -z "$herdr_bin" ] && [ -x "$HOME/.local/bin/herdr" ]; then ' +
+			'herdr_bin="$HOME/.local/bin/herdr"; ' +
+			'fi; ' +
+			'[ -n "$herdr_bin" ] && ' +
+			'"$herdr_bin" terminal session control --help >/dev/null 2>&1 && ' +
+			'"$herdr_bin" api snapshot',
 	);
 	assert.equal(snapshot.version, '0.7.2');
 
@@ -191,6 +199,35 @@ void test('loadHerdrSnapshot runs the compound capability probe and sanitizes av
 				'Herdr 0.7.2 or newer is required on the selected host.' &&
 			!error.message.includes(rawFailure),
 	);
+});
+
+void test('snapshot probe uses executable user-local Herdr when command lookup fails', (t) => {
+	const home = mkdtempSync(join(tmpdir(), 'herdr snapshot '));
+	t.after(() => rmSync(home, { recursive: true, force: true }));
+	const userBin = join(home, '.local', 'bin');
+	mkdirSync(userBin, { recursive: true });
+	writeFileSync(join(home, 'snapshot.json'), JSON.stringify(baseResponse()));
+	writeFileSync(
+		join(userBin, 'herdr'),
+		'#!/bin/sh\n' +
+			'case "$*" in\n' +
+			'  "terminal session control --help") exit 0 ;;\n' +
+			'  "api snapshot") exec /bin/cat "$HOME/snapshot.json" ;;\n' +
+			'  *) exit 64 ;;\n' +
+			'esac\n',
+		{ mode: 0o755 },
+	);
+	const env = { ...process.env, HOME: home, PATH: '/usr/bin:/bin' };
+
+	assert.throws(() =>
+		execFileSync('/bin/sh', ['-c', 'command -v herdr'], { env }),
+	);
+	const output = execFileSync('/bin/sh', ['-c', HERDR_SNAPSHOT_COMMAND], {
+		env,
+		encoding: 'utf8',
+	});
+
+	assert.equal(parseHerdrSnapshot(output).version, '0.7.2');
 });
 
 void test('snapshot agents and groups use status then workspace, tab, and pane order', () => {

@@ -228,9 +228,13 @@ function normalizeSnapshot(
 }
 
 export const HERDR_SNAPSHOT_COMMAND =
-	'command -v herdr >/dev/null 2>&1 && ' +
-	'herdr terminal session control --help >/dev/null 2>&1 && ' +
-	'herdr api snapshot';
+	'herdr_bin="$(command -v herdr 2>/dev/null || true)"; ' +
+	'if [ -z "$herdr_bin" ] && [ -x "$HOME/.local/bin/herdr" ]; then ' +
+	'herdr_bin="$HOME/.local/bin/herdr"; ' +
+	'fi; ' +
+	'[ -n "$herdr_bin" ] && ' +
+	'"$herdr_bin" terminal session control --help >/dev/null 2>&1 && ' +
+	'"$herdr_bin" api snapshot';
 
 export function parseHerdrSnapshot(output: string): HerdrSnapshot {
 	let parsed: unknown;
